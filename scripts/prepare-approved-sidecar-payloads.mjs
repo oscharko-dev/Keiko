@@ -30,9 +30,10 @@ const ARCHIVE_FINAL_HOSTS = Object.freeze([
   "github.com",
   "release-assets.githubusercontent.com",
   "objects.githubusercontent.com",
+  "opencode.ai",
 ]);
 const RAW_EVIDENCE_FINAL_HOSTS = Object.freeze(["raw.githubusercontent.com"]);
-const SPEC_EXECUTABLE_DIR = "bin";
+export const SPEC_EXECUTABLE_DIR = "bin";
 const SPEC_EVIDENCE_DIR = "evidence";
 const DEFAULT_PREPARE_DEPS = Object.freeze({ fetchFn: globalThis.fetch });
 
@@ -211,12 +212,13 @@ export function extractApprovedExecutable(
   archivePath,
   executableName,
   destination,
-  archiveAdapter = createPortableZipAdapter(process.platform, runResolvedHostExecutable),
+  archiveAdapter,
 ) {
-  assertSafeSingleExecutableEntry(archiveAdapter.list(archivePath), executableName);
+  const adapter = archiveAdapter ?? approvedArchiveAdapter(archivePath);
+  assertSafeSingleExecutableEntry(adapter.list(archivePath), executableName);
   const extractRoot = mkdtempSync(join(tmpdir(), "keiko-sidecar-extract-"));
   try {
-    archiveAdapter.extract(archivePath, extractRoot);
+    adapter.extract(archivePath, extractRoot);
     const extracted = join(extractRoot, executableName);
     if (!existsSync(extracted) || !statSync(extracted).isFile()) {
       fail("approved archive did not produce the expected executable");
@@ -227,6 +229,45 @@ export function extractApprovedExecutable(
   } finally {
     rmSync(extractRoot, { recursive: true, force: true });
   }
+}
+
+function approvedArchiveAdapter(archivePath) {
+  return archivePath.endsWith(".tar.gz")
+    ? createPortableTarAdapter(runResolvedHostExecutable)
+    : createPortableZipAdapter(process.platform, runResolvedHostExecutable);
+}
+
+export function createPortableTarAdapter(commandRunner = runResolvedHostExecutable) {
+  return {
+    list(archivePath) {
+      const names = tarLines(runTarCommand(commandRunner, ["-tzf", archivePath]));
+      const details = tarLines(runTarCommand(commandRunner, ["-tvzf", archivePath]));
+      if (names.length !== details.length || details.some((line) => line[0] !== "-")) {
+        fail("approved tar archive must contain only regular files");
+      }
+      return names;
+    },
+    extract(archivePath, extractRoot) {
+      runTarCommand(commandRunner, ["-xzf", archivePath, "-C", extractRoot, "--no-same-owner"]);
+    },
+  };
+}
+
+function runTarCommand(commandRunner, args) {
+  try {
+    const result = commandRunner("tar", args);
+    if (typeof result?.stdout !== "string") fail("approved tar command returned invalid output");
+    return result.stdout;
+  } catch {
+    fail("approved tar archive command failed");
+  }
+}
+
+function tarLines(output) {
+  return output
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function chmodExecutable(path) {
@@ -287,10 +328,12 @@ async function extractVerifiedRuntimeExecutable(runtime, target, sourceRoot, arc
 }
 
 function writeSidecarSbom(runtime, target, sourceRoot, executableSha256) {
-  writeFileSync(
-    join(sourceRoot, SPEC_EVIDENCE_DIR, "sbom.cdx.json"),
-    `${JSON.stringify(sidecarSbomDocument(runtime, target, executableSha256), null, 2)}\n`,
-  );
+  const document = `${JSON.stringify(sidecarSbomDocument(runtime, target, executableSha256), null, 2)}\n`;
+  const generatedSha256 = createHash("sha256").update(document, "utf8").digest("hex");
+  if (generatedSha256 !== runtime.archives[target].sbomSha256) {
+    fail("generated sidecar SBOM digest does not match approved catalog");
+  }
+  writeFileSync(join(sourceRoot, SPEC_EVIDENCE_DIR, "sbom.cdx.json"), document);
 }
 
 export function sidecarSpecDocument(runtime, target, sourceRoot, executableRelative) {
@@ -381,20 +424,18 @@ export async function prepareApprovedSidecarPayloads(
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  prepareApprovedSidecarPayloads(process.argv.slice(2)).then(
-    (summary) => {
-      for (const entry of summary.results) {
-        console.log(
-          `prepared ${entry.name} for ${summary.target}: payload ${entry.payloadSha256.slice(0, 12)} spec ${entry.specPath}`,
-        );
-      }
-      if (summary.results.length === 0) {
-        console.log(`no approved sidecar runtimes configured for ${summary.target}`);
-      }
-    },
-    (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    },
-  );
+  try {
+    const summary = await prepareApprovedSidecarPayloads(process.argv.slice(2));
+    for (const entry of summary.results) {
+      console.log(
+        `prepared ${entry.name} for ${summary.target}: payload ${entry.payloadSha256.slice(0, 12)} spec ${entry.specPath}`,
+      );
+    }
+    if (summary.results.length === 0) {
+      console.log(`no approved sidecar runtimes configured for ${summary.target}`);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

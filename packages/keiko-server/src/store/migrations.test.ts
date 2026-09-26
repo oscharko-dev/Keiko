@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { runMigrations, SCHEMA_VERSION } from "./index.js";
+import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 
 function openMem(): DatabaseSync {
   return new DatabaseSync(":memory:");
@@ -24,32 +25,16 @@ function tableNames(db: DatabaseSync): string[] {
   return rows.map((r) => r.name);
 }
 
+// Builds a real v16-shape database: fully migrate a fresh in-memory database, then rewind it with
+// the shared fixture (legacySchemaTestFixture.ts) instead of hand-writing a second, independent
+// CREATE TABLE set. A hand-written stand-in silently stops covering a table/column a later
+// migration adds or rebuilds (schema.ts's V28 rebuild of `relationships` is exactly such a case —
+// #3400/#3401) the moment that migration lands; composing from the same rollback fragments every
+// other legacy-schema fixture uses means a future migration is covered the moment its own fragment
+// is appended to `ROLLBACKS`.
 function seedV16WorkspaceTables(db: DatabaseSync): void {
-  db.exec(`
-    CREATE TABLE chat_messages (
-      id TEXT NOT NULL PRIMARY KEY
-    ) STRICT;
-    CREATE TABLE coding_runtime_snapshots (
-      run_id TEXT NOT NULL PRIMARY KEY
-    ) STRICT;
-    CREATE TABLE workspace_manifest_roots (
-      workspace_id TEXT NOT NULL,
-      root_ref TEXT NOT NULL UNIQUE,
-      position INTEGER NOT NULL,
-      project_path TEXT NOT NULL UNIQUE,
-      canonical_root TEXT NOT NULL UNIQUE,
-      identity_digest TEXT NOT NULL UNIQUE,
-      PRIMARY KEY (workspace_id, root_ref)
-    ) STRICT;
-    CREATE TABLE workspace_trust_records (
-      root_ref TEXT NOT NULL PRIMARY KEY,
-      revision INTEGER NOT NULL,
-      trust TEXT NOT NULL,
-      record_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-    PRAGMA user_version = 16;
-  `);
+  runMigrations(db);
+  rewindSchemaFixture(db, 16);
 }
 
 interface V16RootSeed {
@@ -59,7 +44,25 @@ interface V16RootSeed {
   readonly identityDigest: string;
 }
 
+// node:sqlite's DatabaseSync enforces FOREIGN KEY constraints by default (unlike the SQLite C
+// library's own off-by-default), so the real, migration-built workspace_manifest_roots row (its
+// `workspace_id` and `project_path` columns each carry a live REFERENCES clause, V15_SQL) needs a
+// matching parent row in both `projects` and `workspace_manifests` before an insert can succeed —
+// the hand-rolled stand-in this fixture replaced omitted both FKs entirely and never exercised this.
+function seedV16ManifestParents(db: DatabaseSync, workspaceId: string, projectPath: string): void {
+  db.prepare(
+    "INSERT INTO projects (path, name, favorite, created_at, last_opened_at) VALUES (?, ?, 0, 1, 1)",
+  ).run(projectPath, projectPath);
+  db.prepare(
+    `INSERT INTO workspace_manifests (
+       workspace_id, schema_version, manifest_ref, revision, manifest_digest, focused_root_ref,
+       record_json, updated_at
+     ) VALUES (?, 1, ?, 0, ?, 'root-focused', '{}', 1)`,
+  ).run(workspaceId, `manifest-${workspaceId}`, "0".repeat(64));
+}
+
 function insertV16Root(db: DatabaseSync, seed: V16RootSeed): void {
+  seedV16ManifestParents(db, seed.workspaceId, seed.canonicalRoot);
   db.prepare(
     `INSERT INTO workspace_manifest_roots (
        workspace_id, root_ref, position, project_path, canonical_root, identity_digest
@@ -128,6 +131,7 @@ describe("runMigrations", () => {
     const db = openMem();
     try {
       seedV16WorkspaceTables(db);
+      seedV16ManifestParents(db, "workspace-1", root);
       db.prepare(
         `INSERT INTO workspace_manifest_roots (
            workspace_id, root_ref, position, project_path, canonical_root, identity_digest
@@ -159,6 +163,8 @@ describe("runMigrations", () => {
     try {
       seedV16WorkspaceTables(db);
       runMigrations(db);
+      seedV16ManifestParents(db, "workspace-1", "/project-a");
+      seedV16ManifestParents(db, "workspace-2", "/project-b");
       const insert = db.prepare(
         `INSERT INTO workspace_manifest_roots (
            workspace_id, root_ref, position, project_path, canonical_root, identity_digest,
@@ -373,21 +379,15 @@ describe("runMigrations", () => {
   });
 
   it("v16 gives an existing memory autonomy policy a zero revision", () => {
+    // Rewind to v15 (before V16's own ADD COLUMN) rather than v16: memory_autonomy_policy already
+    // carries `revision` at v16, so re-creating it by hand here would collide with the real table
+    // the shared fixture already produces at that version.
     const db = openMem();
-    seedV16WorkspaceTables(db);
-    db.exec(`
-      CREATE TABLE memory_autonomy_policy (
-        id TEXT NOT NULL PRIMARY KEY,
-        requested_mode TEXT NOT NULL,
-        CHECK (
-          id = 'capture'
-          AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
-        )
-      ) STRICT;
-      INSERT INTO memory_autonomy_policy (id, requested_mode)
-        VALUES ('capture', 'supervised-coding');
-      PRAGMA user_version = 15;
-    `);
+    runMigrations(db);
+    rewindSchemaFixture(db, 15);
+    db.exec(
+      "INSERT INTO memory_autonomy_policy (id, requested_mode) VALUES ('capture', 'supervised-coding')",
+    );
 
     runMigrations(db);
 
@@ -418,13 +418,10 @@ describe("runMigrations", () => {
     expect(index.sql).toContain("WHERE terminal_at IS NULL");
   });
 
-  it("migrates a v17 database through chat v18 and body-free runtime-result v19", () => {
+  it("migrates a v17 database through chat v18, body-free runtime-result v19, and widened failure_code v20", () => {
     const db = openMem();
-    db.exec(`
-      CREATE TABLE chat_messages (id TEXT PRIMARY KEY) STRICT;
-      CREATE TABLE coding_runtime_snapshots (run_id TEXT PRIMARY KEY) STRICT;
-      PRAGMA user_version = 17;
-    `);
+    runMigrations(db);
+    rewindSchemaFixture(db, 17);
 
     runMigrations(db);
 
@@ -448,6 +445,26 @@ describe("runMigrations", () => {
     );
     expect(runtimeColumns).not.toContain("stdout_body");
     expect(runtimeColumns).not.toContain("stderr_body");
+
+    // #2906 round-3 review (KEIKO-0532): v20 rebuilds the table to widen the failure_code CHECK.
+    // A database that migrated forward through the rebuild -- not only a fresh from-empty one --
+    // must accept a literal the pre-v20 constraint rejected, proving the rebuild (not just a fresh
+    // CREATE TABLE) carries the widened list for real, already-provisioned installs.
+    const digest = "a".repeat(64);
+    expect(() => {
+      db.exec(`
+        INSERT INTO coding_runtime_snapshots (
+          run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+          failure_code, created_at, updated_at, task_digest, workspace_digest, operator_digest,
+          authority_digest, binding_digest, provenance_digest
+        ) VALUES (
+          'run-migrated-v20', '1', 'failed', 1, 'governed-assist', 'keiko-sidecar',
+          'keiko-model-gateway', 'replay-cap-exhausted', '2026-01-01T00:00:00.000Z',
+          '2026-01-01T00:00:00.000Z', '${digest}', '${digest}', '${digest}', '${digest}',
+          '${digest}', '${digest}'
+        );
+      `);
+    }).not.toThrow();
   });
 
   it("creates the v1 schema and bumps user_version", () => {

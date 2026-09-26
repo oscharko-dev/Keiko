@@ -14,9 +14,22 @@
 
 export { KEIKO_LOCAL_KNOWLEDGE_VERSION } from "./version.js";
 export { KnowledgeStoreError, KnowledgePathError, KnowledgeNotFoundError } from "./errors.js";
+// Content-free activity-log seam (ADR-0019 direction: this package may not import the server's
+// logger, so the composition root passes its own structurally-compatible sink in).
+export {
+  knowledgeErrorKind,
+  nullKnowledgeLogSink,
+  startKnowledgeLogTimer,
+  type KnowledgeLogCategory,
+  type KnowledgeLogEvent,
+  type KnowledgeLogLevel,
+  type KnowledgeLogSink,
+} from "./knowledge-log.js";
 export { resolveKnowledgeStorePath, type ResolveKnowledgeStorePathOptions } from "./store-paths.js";
 export {
+  computeStoreFingerprint,
   openKnowledgeStore,
+  openKnowledgeStoreReadOnly,
   type KnowledgeStoreKeyProvider,
   type KnowledgeStoreKeyProviderContext,
   type KnowledgeStoreProtectionOptions,

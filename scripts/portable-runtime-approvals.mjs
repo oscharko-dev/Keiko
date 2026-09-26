@@ -2,11 +2,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { URL } from "node:url";
 
-import { PORTABLE_TARGET_NAMES } from "./portable-runtime.mjs";
+import { PORTABLE_TARGET_NAMES, portableTargetByName } from "./portable-runtime.mjs";
 
 export const PORTABLE_RUNTIME_APPROVALS_FILE = "portable-runtime-approvals.json";
 export const APPROVED_NODE_ARCHIVE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
 export const APPROVED_SIDECAR_ARCHIVE_HOSTS = Object.freeze([
+  "opencode.ai",
   "github.com",
   "release-assets.githubusercontent.com",
   "objects.githubusercontent.com",
@@ -26,11 +27,11 @@ const OPENCODE_PIN = Object.freeze({
   owner: "anomalyco",
   repository: "opencode",
   name: "opencode",
-  version: "1.17.17",
-  tag: "v1.17.17",
-  commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
-  schemaPath: "packages/sdk/openapi.json",
-  schemaSha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+  version: "2.0.10",
+  tag: "v2.0.10",
+  commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
+  schemaPath: "packages/protocol/openapi.json",
+  schemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
 });
 
 class ApprovalsError extends Error {}
@@ -88,7 +89,7 @@ function validateApprovedUrl(rawUrl, allowedHosts, context) {
 
 function validateArchiveEntry(entry, allowedHosts, context, sidecar) {
   const keys = sidecar
-    ? ["url", "sha256", "sizeBytes", "executableName", "executableTreeSha256"]
+    ? ["url", "sha256", "sizeBytes", "executableName", "executableTreeSha256", "sbomSha256"]
     : ["url", "sha256"];
   exactKeys(entry, keys, context);
   const result = {
@@ -117,11 +118,11 @@ function validateArchiveEntry(entry, allowedHosts, context, sidecar) {
       requiredString(entry, "executableTreeSha256", context),
       `${context}.executableTreeSha256`,
     ),
+    sbomSha256: validateSha256(
+      requiredString(entry, "sbomSha256", context),
+      `${context}.sbomSha256`,
+    ),
   };
-}
-
-function darwinArchiveSlug(target) {
-  return target === "macos-arm64" ? "darwin-arm64" : "darwin-x64";
 }
 
 function validateArchives(record, allowedHosts, context, sidecar = false) {
@@ -149,8 +150,8 @@ function validateNodeSection(node) {
     `${context}.archives`,
   );
   for (const target of PORTABLE_TARGET_NAMES) {
-    const expectedName =
-      target === "windows-x64" ? "win-x64.zip" : `${darwinArchiveSlug(target)}.tar.gz`;
+    const portable = portableTargetByName(target);
+    const expectedName = `${portable.nodeArchiveTarget}.${portable.nodeArchiveExtension}`;
     const expectedUrl = `https://nodejs.org/dist/v${version}/node-v${version}-${expectedName}`;
     validateLiteral(archives[target].url, expectedUrl, `${context}.archives.${target}.url`);
   }
@@ -232,7 +233,7 @@ function validateAdapter(adapter, context) {
       "keiko-coding-sidecar",
       `${context}.adapterName`,
     ),
-    adapterVersion: validateLiteral(adapter.adapterVersion, "1", `${context}.adapterVersion`),
+    adapterVersion: validateLiteral(adapter.adapterVersion, "2", `${context}.adapterVersion`),
     transport: validateLiteral(adapter.transport, "http-sse", `${context}.transport`),
   };
 }
@@ -274,13 +275,10 @@ function validateLicense(license, context) {
 function validateSidecarArchives(rawArchives, context) {
   const archives = validateArchives(rawArchives, APPROVED_SIDECAR_ARCHIVE_HOSTS, context, true);
   for (const target of PORTABLE_TARGET_NAMES) {
-    const asset =
-      target === "windows-x64"
-        ? "opencode-windows-x64.zip"
-        : `opencode-${darwinArchiveSlug(target)}.zip`;
+    const asset = portableTargetByName(target).sidecarArchiveName;
     validateLiteral(
       archives[target].url,
-      `https://github.com/anomalyco/opencode/releases/download/${OPENCODE_PIN.tag}/${asset}`,
+      `https://opencode.ai/files/bin/${OPENCODE_PIN.version}/${asset}`,
       `${context}.${target}.url`,
     );
   }

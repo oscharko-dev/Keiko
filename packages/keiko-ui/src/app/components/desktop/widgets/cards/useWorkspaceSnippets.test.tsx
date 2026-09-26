@@ -1,11 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  EDITOR_M7_SNIPPET_COLLECTION_VERSION,
-  type EditorM7WorkspaceSnippetInput,
-  type EditorM7WorkspaceSnippetSnapshot,
+import type {
+  EditorM7WorkspaceSnippetInput,
+  EditorM7WorkspaceSnippetSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SNIPPET_COLLECTION_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { useWorkspaceSnippets } from "./useWorkspaceSnippets";

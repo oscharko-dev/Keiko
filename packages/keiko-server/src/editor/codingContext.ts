@@ -1,17 +1,20 @@
 // Closed coding-context wrapper over the pillar-neutral assembly pipeline (Issue #2570,
 // ADR-0152 D6). Provider behavior and the public assembleCodingContext signature stay unchanged.
 
+import type {
+  CodingContextExcerpt,
+  CodingContextPack,
+  CodingContextRequest,
+  CodingContextSourceKind,
+  RetrievalContextBudget,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_BUDGETS,
   embeddingProvidersAllowed,
   tierForCodingContextSource,
-  type CodingContextExcerpt,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type CodingContextSourceKind,
-  type RetrievalContextBudget,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { rerankSelection } from "../grounded-rerank-facade.js";
 import {
@@ -44,12 +47,19 @@ const DEFERRED_CONTEXT_ORDER_BASE = 6;
 export interface AssembleCodingContextDeps {
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly currentTimeMs?: (() => number) | undefined;
   readonly budgetBytes?: number | undefined;
   readonly allowEmbeddingProviders?: boolean | undefined;
   readonly gitContextReader?: GitContextReader | undefined;
+  /**
+   * The originating request's correlation id; see ProviderContext for why the git context
+   * needs it. REQUIRED: this field being optional is what let a fourth entry point
+   * (`inlineCompletionRoutes.ts`) omit it silently and still type-check.
+   */
+  readonly correlationId: string | undefined;
 }
 
 function buildProviderContext(
@@ -60,11 +70,13 @@ function buildProviderContext(
   return {
     deps: context.deps,
     realRoot: context.realRoot,
+    fs: context.fs,
     signal: context.signal,
     maxBytesPerExcerpt: budget.maxBytesPerSource,
     currentTimeMs,
     nowMs: context.nowMs,
     gitContextReader: context.gitContextReader,
+    correlationId: context.correlationId,
   };
 }
 

@@ -96,7 +96,45 @@ function buildCentralEntry(name: Uint8Array, size: number, crc: number, offset: 
  * already brand-validated (no "/", "\\", ".." — see keiko-contracts ids.ts) before it reaches this
  * helper, but the ZIP writer must not depend on its caller for containment. Strips any directory
  * component, collapses traversal dot-runs, and rejects an empty result.
+ *
+ * KEIKO-0828: this function REDUCES two distinct inputs to the same basename when they differ
+ * only by directory component (e.g. `a/report.json` and `b/report.json` both reduce to
+ * `report.json`). Callers holding multiple such entries MUST disambiguate deterministically
+ * before packing into a single ZIP -- assembleZipBundle now does this by suffixing colliding
+ * basenames with `-1`, `-2`, ... in stable input order. Uniqueness across the ZIP is now the
+ * bundle assembler's contract, not this helper's.
  */
+// KEIKO-0828: given a candidate basename (already reduced by safeZipEntryName) and a running
+// usage map, return a unique basename by appending a numeric suffix before the extension when
+// the base is already used. `-1`, `-2`, ... are stable given the same input order; the map is
+// updated in place so subsequent calls see the incremented counter. Deterministic and does not
+// depend on wall time, so the byte-stable-output invariant is preserved.
+export function disambiguateEntryName(candidate: string, usedNames: Map<string, number>): string {
+  const used = usedNames.get(candidate);
+  if (used === undefined) {
+    usedNames.set(candidate, 0);
+    return candidate;
+  }
+  const next = used + 1;
+  usedNames.set(candidate, next);
+  const dotIndex = candidate.lastIndexOf(".");
+  // Only treat as extension if the dot is not the first character (matches Node's basename
+  // convention: a leading-dot file like `.gitkeep` has no extension).
+  const hasExtension = dotIndex > 0;
+  const stem = hasExtension ? candidate.slice(0, dotIndex) : candidate;
+  const extension = hasExtension ? candidate.slice(dotIndex) : "";
+  let disambiguated = `${stem}-${String(next)}${extension}`;
+  // Guard against the ambiguous edge case where `stem-1.ext` was itself an original entry:
+  // keep incrementing until we find a truly unused name so no two entries can ever collide.
+  while (usedNames.has(disambiguated)) {
+    const bumped = (usedNames.get(candidate) ?? next) + 1;
+    usedNames.set(candidate, bumped);
+    disambiguated = `${stem}-${String(bumped)}${extension}`;
+  }
+  usedNames.set(disambiguated, 0);
+  return disambiguated;
+}
+
 export function safeZipEntryName(name: string): string {
   const base = name
     .replace(/^.*[\\/]/u, "") // drop any directory prefix (POSIX or Windows separators)
@@ -117,9 +155,17 @@ export function assembleZipBundle(
   const dataChunks: Uint8Array[] = [];
   const offsets: number[] = [];
   let offset = 0;
+  // KEIKO-0828: disambiguate colliding basenames. safeZipEntryName reduces two distinct entry
+  // names to the same basename when they differ only by directory component; without this
+  // suffixing pass the second collision would either shadow the first on extraction (last-
+  // wins central-directory record) or, worse, silently corrupt an audit bundle. Suffixing is
+  // stable across input order and deterministic given the same input sequence, so
+  // exportAssembly's byte-stable-output invariant is preserved.
+  const usedNames = new Map<string, number>();
 
   for (const entry of entries) {
-    const nameBytes = TEXT_ENC.encode(safeZipEntryName(entry.name));
+    const uniqueName = disambiguateEntryName(safeZipEntryName(entry.name), usedNames);
+    const nameBytes = TEXT_ENC.encode(uniqueName);
     const crc = crc32(entry.bytes);
     const local = buildLocalHeader(nameBytes, entry.bytes.length, crc);
     offsets.push(offset);

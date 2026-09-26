@@ -97,14 +97,21 @@ export function buildEditorProblemsSnapshot(
   perFileCap: number = EDITOR_PROBLEMS_PER_FILE_CAP,
   totalCap: number = EDITOR_PROBLEMS_TOTAL_CAP,
 ): EditorProblemsSnapshot {
+  // KEIKO-0800: clamp caps into [1, EDITOR_PROBLEMS_*_CAP] and floor them to an integer BEFORE
+  // using them to iterate and BEFORE writing them onto the snapshot, so every snapshot this
+  // builder returns satisfies hasValidSnapshotCaps (and therefore isEditorProblemsSnapshot).
+  // Without this, `buildEditorProblemsSnapshot(problems, 0, 0)` produced a snapshot the guard
+  // rejected — a build-then-fail-your-own-guard shape the panel then discarded silently.
+  const clampedPerFileCap = clampCap(perFileCap, EDITOR_PROBLEMS_PER_FILE_CAP);
+  const clampedTotalCap = clampCap(totalCap, EDITOR_PROBLEMS_TOTAL_CAP);
   const totalCount = problems.length;
   const sorted = [...problems].sort(compareEditorProblems);
   const perFile = new Map<string, number>();
   const capped: EditorProblem[] = [];
   for (const problem of sorted) {
-    if (capped.length >= totalCap) break;
+    if (capped.length >= clampedTotalCap) break;
     const seen = perFile.get(problem.file) ?? 0;
-    if (seen >= perFileCap) continue;
+    if (seen >= clampedPerFileCap) continue;
     perFile.set(problem.file, seen + 1);
     capped.push(problem);
   }
@@ -113,9 +120,17 @@ export function buildEditorProblemsSnapshot(
     problems: capped,
     totalCount,
     truncated: capped.length < totalCount,
-    perFileCap,
-    totalCap,
+    perFileCap: clampedPerFileCap,
+    totalCap: clampedTotalCap,
   };
+}
+
+function clampCap(requested: number, ceiling: number): number {
+  if (!Number.isFinite(requested)) return ceiling;
+  const floored = Math.floor(requested);
+  if (floored < 1) return 1;
+  if (floored > ceiling) return ceiling;
+  return floored;
 }
 
 // ─── Guards ────────────────────────────────────────────────────────────────────────

@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyContentWheelZoom,
   fitWorkspaceViewToWindows,
   fitWindowToViewport,
   fitWindowsToViewport,
   normalizeWheelDelta,
-  nextContentZoomFromWheel,
 } from "./useWorkspace";
 import {
   WINDOW_RECOVERY_TITLEBAR_HEIGHT_PX,
@@ -109,39 +107,6 @@ describe("fitWindowsToViewport — array-identity preservation (GEN-PERF-WORKSPA
     expect(next.find((w) => w.id === "stranded")?.x).toBe(
       vp.x + vp.w - WINDOW_RECOVERY_VISIBLE_WIDTH_PX,
     );
-  });
-});
-
-describe("content wheel zoom", () => {
-  it("maps Command/Ctrl wheel deltas to the same clamped content zoom scale", () => {
-    expect(nextContentZoomFromWheel(1, -100)).toBe(1.2);
-    expect(nextContentZoomFromWheel(1, 100)).toBe(0.9);
-    expect(nextContentZoomFromWheel(1.9, -1000)).toBe(2);
-    expect(nextContentZoomFromWheel(0.6, 1000)).toBe(0.5);
-  });
-
-  it("updates only window content zoom and preserves frame geometry", () => {
-    const win = appWindow({
-      x: 123,
-      y: 234,
-      w: 456,
-      h: 345,
-      max: false,
-      zoom: 1,
-    });
-
-    const next = applyContentWheelZoom(win, -100);
-
-    expect(next).toMatchObject({
-      id: win.id,
-      type: win.type,
-      x: win.x,
-      y: win.y,
-      w: win.w,
-      h: win.h,
-      max: win.max,
-      zoom: 1.2,
-    });
   });
 });
 

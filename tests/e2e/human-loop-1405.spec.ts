@@ -12,7 +12,7 @@ const ARTIFACT_NAMES = ["human-loop-1405.png", "manifest.json"] as const;
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
 interface EvidenceManifest {
-  readonly issue: "#1405";
+  readonly issue: 1405;
   readonly harness: "tests/e2e/config/playwright.issue-1405-human-loop.config.ts";
   readonly productCss: "packages/keiko-ui/src/app/globals.css";
   readonly generatedAt: string;
@@ -223,7 +223,7 @@ test("Issue #1405 human-loop authority browser evidence", async ({ page }) => {
     .screenshot({ path: artifactPath("human-loop-1405.png") });
 
   const manifest: EvidenceManifest = {
-    issue: "#1405",
+    issue: 1405,
     harness: "tests/e2e/config/playwright.issue-1405-human-loop.config.ts",
     productCss: "packages/keiko-ui/src/app/globals.css",
     generatedAt: new Date().toISOString(),

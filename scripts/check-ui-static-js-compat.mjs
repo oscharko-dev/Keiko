@@ -20,6 +20,8 @@ const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
 const PARSE_ECMASCRIPT_VERSION = 2020;
 const COMPATIBILITY_BASELINE = "ES2019-compatible syntax plus dynamic import";
+const STATIC_MEDIA_MODULE_WORKER_RE =
+  /\/_next\/static\/media\/(?:[^/\r\n]+\.worker\.[A-Za-z0-9_-]+|editorWebWorkerMain\.[A-Za-z0-9_-]+)\.js$/u;
 const SYNTAX_VIOLATION_CHECKS = [
   {
     matches: (node) => node.type === "ChainExpression",
@@ -100,9 +102,7 @@ function normalizedPath(value) {
 }
 
 function sourceTypeForStaticFile(file) {
-  return /\/_next\/static\/media\/[^/]+\.worker\.[^/]+\.js$/u.test(normalizedPath(file))
-    ? "module"
-    : "script";
+  return STATIC_MEDIA_MODULE_WORKER_RE.test(normalizedPath(file)) ? "module" : "script";
 }
 
 function parseJavaScript(source, sourceType) {

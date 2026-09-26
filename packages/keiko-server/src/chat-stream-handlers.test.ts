@@ -10,7 +10,7 @@
 // emits "aborted"; `res` captures writeHead/write/end. The fake ModelPort records the prompt it was
 // streamed and yields a `delta` then a `done` chunk.
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -32,9 +32,18 @@ import type { ConversationMemoryRuntimeContext } from "./memory-conversation-con
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
+import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
+  GatewayCallRequest,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
@@ -52,8 +61,13 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ConversationId, ProjectId, WorkspaceId } from "@oscharko-dev/keiko-contracts/memory";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 const CHAT_MODEL = "example-chat-model";
+// A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
+const CHAT_MODEL_DIGEST = modelIdEvidence(CHAT_MODEL).modelIdDigest;
 const ALTERNATE_CHAT_MODEL = "alternate-chat-model";
 
 let tmp: string;
@@ -182,6 +196,7 @@ function makeReq(body: Record<string, unknown>): IncomingMessage {
 
 function routeContext(req: IncomingMessage, res: ServerResponse): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res,
     params: {},
@@ -282,7 +297,7 @@ function deferred<T>(): {
 
 interface StreamingModel {
   readonly model: ModelPort;
-  readonly recorded: { request: GatewayRequest | undefined };
+  readonly recorded: { request: GatewayCallRequest | undefined };
   readonly calls: { count: number };
 }
 
@@ -290,13 +305,13 @@ interface StreamingModel {
 // terminal done chunk. `onFirstDelta` (used by the cancel test) runs after the first delta is yielded
 // so the test can abort the controller deterministically before the done chunk arrives.
 function streamingModel(content: string, onFirstDelta?: () => void): StreamingModel {
-  const recorded: { request: GatewayRequest | undefined } = { request: undefined };
+  const recorded: { request: GatewayCallRequest | undefined } = { request: undefined };
   const calls = { count: 0 };
   const model: ModelPort = {
     call(): Promise<NormalizedResponse> {
       return Promise.resolve(normalizedResponse(content));
     },
-    async *callStream(request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+    async *callStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
       calls.count += 1;
       recorded.request = request;
       yield { type: "delta", token: "hi" };
@@ -322,6 +337,52 @@ function deps(model: ModelPort, overrides: Partial<UiHandlerDeps> = {}): UiHandl
     store,
     ...overrides,
   };
+}
+
+function readyRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
+  let current = config;
+  let generation = 0;
+  const observations = new Map<string, ReturnType<RuntimeGatewayConfig["verifiedCapability"]>>();
+  const holder: RuntimeGatewayConfig = {
+    storagePath: join(tmp, "gateway.json"),
+    current: () => current,
+    present: () => true,
+    set(next): void {
+      if (next === undefined) throw new Error("test runtime config must stay configured");
+      current = next;
+      generation += 1;
+      observations.clear();
+    },
+    generation: () => generation,
+    verification: () => UNVERIFIED_GATEWAY,
+    recordVerification: () => undefined,
+    verifiedCapability: (modelId) => observations.get(modelId),
+    recordVerifiedCapability(modelId, fields, checkedAt, observedGeneration): void {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      observations.set(modelId, { modelId, generation, checkedAt, fields: { ...fields } });
+    },
+    clearVerifiedCapability(modelId, observedGeneration): boolean {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
+      return observations.delete(modelId);
+    },
+  };
+  holder.recordVerifiedCapability(
+    CHAT_MODEL,
+    { conversationReady: true },
+    "2026-08-16T00:00:00.000Z",
+    holder.generation(),
+  );
+  return holder;
+}
+
+function replaceWithReadyRuntimeConfig(holder: RuntimeGatewayConfig): void {
+  holder.set(chatAndEmbeddingConfig(), true);
+  holder.recordVerifiedCapability(
+    CHAT_MODEL,
+    { conversationReady: true },
+    "2026-08-16T00:01:00.000Z",
+    holder.generation(),
+  );
 }
 
 function customModelConfig(modelId: string): GatewayConfig {
@@ -466,7 +527,7 @@ function lastRecordedContent(recorded: { request: GatewayRequest | undefined }):
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "keiko-stream-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-stream-"));
   projectDir = join(tmp, "repo");
   mkdirSync(projectDir);
   store = createInMemoryUiStore();
@@ -474,6 +535,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -642,6 +704,32 @@ describe("desktop chat SSE streaming handler", () => {
       { role: "user", content: "fallback without a client turn id" },
       { role: "assistant", content: "buffered fallback" },
     ]);
+  });
+
+  it("rejects a legacy buffered send without a provider before persisting", async () => {
+    const chatId = seedChat();
+    const sharedDeps = deps(
+      { call: () => Promise.resolve(normalizedResponse("unused")) },
+      { modelPortFactory: () => undefined },
+    );
+
+    const result = await handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "legacy buffered without provider",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+
+    // NO_MODEL for a legacy request cannot settle a turn (no clientTurnId), so it must be
+    // rejected BEFORE admission persists the user message — no orphan in the conversation.
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "NO_MODEL" } } });
+    expect(store.listMessages(chatId)).toEqual([]);
   });
 
   it("shares one canonical turn identity across SSE fallback and buffered replay", async () => {
@@ -1271,6 +1359,705 @@ describe("desktop chat SSE streaming handler", () => {
         }),
       ).kind,
     ).toBe("retryable");
+    memoryVault.close();
+  });
+
+  it("logs a streamed send rejected by the admission-time readiness observation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+    holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+    const streaming = streamingModel("must not run");
+    const captured = captureRes();
+    const outcome = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, content: "private user turn" }),
+          captured.res,
+        ),
+        correlationId: "corr-stream-admission-unready",
+      },
+      deps(streaming.model, { gatewayConfig: holder }),
+    );
+
+    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(streaming.calls.count).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-stream-admission-unready",
+        errorKind: "unavailable",
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("private user turn");
+  });
+
+  it("logs regeneration rejected by the admission-time readiness observation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "private regeneration question");
+    seedMessage(chatId, "assistant", "private regeneration answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+    holder.recordVerifiedCapability(
+      CHAT_MODEL,
+      { conversationReady: false },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    const outcome = await handleRegenerateDesktopChat(
+      {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, assistantMessageId: assistant.id }),
+          captureRes().res,
+        ),
+        correlationId: "corr-regeneration-admission-unready",
+      },
+      deps(streamingModel("must not run").model, { gatewayConfig: holder }),
+    );
+
+    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.regeneration.rejected",
+        correlationId: "corr-regeneration-admission-unready",
+        errorKind: "unavailable",
+        // A check ran for this model in this process and failed: the refusal says so, so it never
+        // reads like a refusal without any check (#3557, the live dev log after a BFF restart).
+        extra: expect.objectContaining({
+          reason: "readiness",
+          modelIdDigest: CHAT_MODEL_DIGEST,
+          readinessObservation: "not-ready",
+        }) as unknown,
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
+  });
+
+  it("verifies an unknown chat model before regenerating without exposing the original turn", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "private regeneration question");
+    seedMessage(chatId, "assistant", "private regeneration answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+    holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
+        {
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    ) as typeof fetch;
+    const activityEvents: ServerLogEvent[] = [];
+    const outcome = await handleRegenerateDesktopChat(
+      {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, assistantMessageId: assistant.id }),
+          captureRes().res,
+        ),
+        correlationId: "corr-regeneration-on-demand-ready",
+      },
+      deps(streamingModel("replacement answer").model, {
+        gatewayConfig: holder,
+        gatewayReadinessFetch: fetchImpl,
+        activityLog: { write: (event): void => void activityEvents.push(event) },
+      }),
+    );
+
+    expect(outcome.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(holder.verifiedCapability(CHAT_MODEL)?.fields.conversationReady).toBe(true);
+    const started = activityEvents.find(
+      (event) => event.op === "gateway.readiness.automatic.started",
+    );
+    const completed = activityEvents.find(
+      (event) => event.op === "gateway.readiness.automatic.completed",
+    );
+    // The model appears only as its digest on readiness lines (#3557 review).
+    expect(started).toMatchObject({
+      correlationId: "corr-regeneration-on-demand-ready",
+      extra: { modelIdDigest: CHAT_MODEL_DIGEST, probeCount: 1 },
+    });
+    expect(completed).toMatchObject({
+      correlationId: "corr-regeneration-on-demand-ready",
+      extra: { modelIdDigest: CHAT_MODEL_DIGEST, overallStatus: "ready", probeCount: 1 },
+    });
+    expect(started?.extra).not.toHaveProperty("modelId");
+    expect(completed?.extra).not.toHaveProperty("modelId");
+    expect(JSON.stringify(vi.mocked(fetchImpl).mock.calls)).not.toContain(
+      "private regeneration question",
+    );
+  });
+
+  it("rejects a buffered turn when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "buffered-readiness-generation-race");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "buffered generation race candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    let factoryCalls = 0;
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        providerCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault,
+      modelPortFactory: () => {
+        factoryCalls += 1;
+        return model;
+      },
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const secretContent = "BUFFERED_GENERATION_RACE_SECRET_7A12";
+    const outcome = handleSendDesktopChat(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: secretContent,
+            clientTurnId: "buffered-readiness-generation-race",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captureRes().res,
+        ),
+        correlationId: "corr-buffered-readiness-race",
+      },
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+    replaceWithReadyRuntimeConfig(holder);
+    embedding.resolve({
+      ok: true,
+      value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+    });
+
+    const rejected = await outcome;
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
+    expect(JSON.stringify(rejected.body)).not.toContain(secretContent);
+    expect(factoryCalls).toBe(0);
+    expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-buffered-readiness-race",
+        status: 409,
+        errorKind: "internal",
+        extra: {
+          reason: "generation",
+          modelKind: "chat",
+          modelIdDigest: CHAT_MODEL_DIGEST,
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain(secretContent);
+    memoryVault.close();
+  });
+
+  it("settles the admitted turn when pre-stream memory resolution rejects", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "streamed-memory-rejection-settles");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "memory rejection settle candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        providerCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("retry succeeded") };
+      },
+    };
+    // Retrieval-time vault failure (index/SQLite class): every vault operation throws. The
+    // embedding seam is deliberately self-contained, so the vault is the uncontained boundary
+    // this regression pins.
+    const explodingVault = new Proxy(memoryVault, {
+      get(target, prop, receiver): unknown {
+        if (prop === "close") return Reflect.get(target, prop, receiver);
+        return (): never => {
+          throw new Error("vault exploded");
+        };
+      },
+    });
+    const embeddingOk = (): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.resolve({
+        ok: true,
+        value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+      });
+    const failingDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault: explodingVault,
+      localKnowledgeEmbeddingRequest: embeddingOk,
+    });
+    const healthyDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault,
+      localKnowledgeEmbeddingRequest: embeddingOk,
+    });
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      content: "memory rejection must settle the turn",
+      clientTurnId: "memory-rejection-settles",
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    };
+
+    // First attempt: memory retrieval throws AFTER admission. The turn MUST be settled —
+    // an unsettled "pending" turn would answer every retry with CHAT_TURN_IN_PROGRESS forever.
+    await expect(
+      handleSendDesktopChatStream(routeContext(makeReq(request), captureRes().res), failingDeps),
+    ).rejects.toThrow("vault exploded");
+    expect(providerCalls).toBe(0);
+
+    const retry = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), captureRes().res),
+      healthyDeps,
+    );
+    expect(retry).toBe(STREAMING);
+    expect(providerCalls).toBe(1);
+    memoryVault.close();
+  });
+
+  it("rejects a legacy stream on a call-only port before persisting, with a ready gateway", async () => {
+    const chatId = seedChat();
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("buffered only")),
+    };
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+    });
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "legacy stream with a configured gateway",
+    };
+
+    const streamResult = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), captureRes().res),
+      sharedDeps,
+    );
+
+    // A legacy rejection cannot settle a turn (no clientTurnId), so it must happen BEFORE
+    // admission persists the user message — otherwise the buffered fallback duplicates it.
+    expect(streamResult).toMatchObject({ status: 400 });
+    expect(store.listMessages(chatId)).toEqual([]);
+  });
+
+  it("rejects a streamed turn when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "streamed-readiness-generation-race");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "streamed generation race candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    let factoryCalls = 0;
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        providerCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault,
+      modelPortFactory: () => {
+        factoryCalls += 1;
+        return model;
+      },
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const secretContent = "STREAMED_GENERATION_RACE_SECRET_8B23";
+    const captured = captureRes();
+    const outcome = handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            content: secretContent,
+            clientTurnId: "streamed-readiness-generation-race",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captured.res,
+        ),
+        correlationId: "corr-streamed-readiness-race",
+      },
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+    replaceWithReadyRuntimeConfig(holder);
+    embedding.resolve({
+      ok: true,
+      value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+    });
+
+    const rejected = await outcome;
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
+    expect(JSON.stringify(rejected)).not.toContain(secretContent);
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(factoryCalls).toBe(0);
+    expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.send.rejected",
+        correlationId: "corr-streamed-readiness-race",
+        status: 409,
+        errorKind: "internal",
+        extra: {
+          reason: "generation",
+          modelKind: "chat",
+          modelIdDigest: CHAT_MODEL_DIGEST,
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain(secretContent);
+    memoryVault.close();
+  });
+
+  it("discards the persisted legacy user row when the stream is rejected after memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-streamed-readiness-generation-race");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "legacy streamed race candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault,
+      modelPortFactory: () => model,
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const messagesBefore = sharedDeps.store.countMessages(chatId);
+    const captured = captureRes();
+    // No clientTurnId: the ledger cannot settle this turn, so the post-admission readiness
+    // rejection must discard the just-admitted user row — otherwise the rejected request
+    // leaves an orphaned message and every client retry duplicates it.
+    const outcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "legacy row must not survive rejection",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+    replaceWithReadyRuntimeConfig(holder);
+    embedding.resolve({
+      ok: true,
+      value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+    });
+
+    const rejected = await outcome;
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
+    expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
+    expect(
+      sharedDeps.store
+        .listMessages(chatId)
+        .some((message) => message.content === "legacy row must not survive rejection"),
+    ).toBe(false);
+    memoryVault.close();
+  });
+
+  it("discards the persisted legacy user row when a buffered memory failure rejects the turn", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-buffered-memory-failure");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => {
+        providerCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    // Retrieval-time vault failure, same class as the streamed settle pin above — but for a
+    // LEGACY request the ledger cannot settle, so the just-admitted user row must be discarded.
+    const explodingVault = new Proxy(memoryVault, {
+      get(target, prop, receiver): unknown {
+        if (prop === "close") return Reflect.get(target, prop, receiver);
+        return (): never => {
+          throw new Error("vault exploded");
+        };
+      },
+    });
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault: explodingVault,
+      modelPortFactory: () => model,
+      localKnowledgeEmbeddingRequest: () =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+        }),
+    });
+    const messagesBefore = sharedDeps.store.countMessages(chatId);
+    const send = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "legacy buffered row must not survive rejection",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    const outcome = await send.then(
+      (result) => result.status,
+      () => "rejected" as const,
+    );
+    expect(outcome === "rejected" || outcome >= 500).toBe(true);
+    expect(providerCalls).toBe(0);
+    expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
+    memoryVault.close();
+  });
+
+  it("discards the legacy user row when cancellation lands during buffered memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-buffered-cancel-during-memory");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "legacy buffered cancel candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => {
+        providerCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    const captured = captureResWithEvents();
+    // The client disconnects DURING retrieval, and retrieval then completes NORMALLY: the
+    // vault read itself fires the close event and continues, so the abort is guaranteed to
+    // land inside the memory window regardless of the semantic-gate embedding path.
+    const abortingVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        const original = Reflect.get(target, property, receiver) as unknown;
+        if (property === "listMemoriesByScope" && typeof original === "function") {
+          return (...args: unknown[]): unknown => {
+            captured.emitClose();
+            return (original as (...inner: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return original;
+      },
+    });
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: readyRuntimeGatewayConfig(chatAndEmbeddingConfig()),
+      memoryVault: abortingVault,
+      modelPortFactory: () => model,
+      localKnowledgeEmbeddingRequest: () =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+        }),
+    });
+    const messagesBefore = sharedDeps.store.countMessages(chatId);
+    const result = await handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "legacy cancel during memory must discard the row",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    expect(result.status).toBe(499);
+    expect(providerCalls).toBe(0);
+    expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
+    memoryVault.close();
+  });
+
+  it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "original regeneration question");
+    seedMessage(chatId, "assistant", "original regeneration answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const memoryDir = join(tmp, "regenerate-readiness-generation-race");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "regeneration generation race candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    let factoryCalls = 0;
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        providerCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault,
+      modelPortFactory: () => {
+        factoryCalls += 1;
+        return model;
+      },
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const outcome = handleRegenerateDesktopChat(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            assistantMessageId: assistant.id,
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captureRes().res,
+        ),
+        correlationId: "corr-regeneration-readiness-race",
+      },
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+    replaceWithReadyRuntimeConfig(holder);
+    embedding.resolve({
+      ok: true,
+      value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+    });
+
+    const rejected = await outcome;
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CONFIG_CHANGED" } },
+    });
+    expect(JSON.stringify(rejected.body)).not.toContain("original regeneration question");
+    expect(factoryCalls).toBe(0);
+    expect(providerCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.regeneration.rejected",
+        correlationId: "corr-regeneration-readiness-race",
+        status: 409,
+        errorKind: "internal",
+        extra: {
+          reason: "generation",
+          modelKind: "chat",
+          modelIdDigest: CHAT_MODEL_DIGEST,
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
     memoryVault.close();
   });
 
@@ -2275,6 +3062,70 @@ describe("desktop chat SSE streaming handler", () => {
     expect(JSON.stringify(record)).not.toContain("boom-unexpected-mid-stream");
   });
 
+  // ADR-0173 D5: the streaming call site (streamAndPersist) must stamp the request's correlation id
+  // into GatewayCallRequest.logContext, mirroring the buffered path, so a gateway retry line for a
+  // streamed turn joins the same trail as the rest of the request.
+  it.each(["buffered", "streamed", "regenerated"])(
+    "joins %s assistant rendering to its request",
+    async (mode) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "original question");
+      seedMessage(chatId, "assistant", "original answer");
+      const original = store.listMessages(chatId).at(-1);
+      const model = streamingModel("continued list");
+      const ctx: RouteContext = {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "hello",
+            assistantMessageId: original?.id,
+          }),
+          captureRes().res,
+        ),
+        correlationId: "request-list-render-bridge",
+      };
+      const handlers = {
+        buffered: handleSendDesktopChat,
+        streamed: handleSendDesktopChatStream,
+        regenerated: handleRegenerateDesktopChat,
+      };
+      const handler = handlers[mode as keyof typeof handlers];
+      await handler(ctx, deps(model.model));
+      const assistant = store.listMessages(chatId).at(-1);
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          op: "chat.response.message",
+          correlationId: assistant?.id,
+          parentCorrelationId: ctx.correlationId,
+        }),
+      );
+    },
+  );
+
+  it("threads the request correlation id into the streaming model gateway call's logContext", async () => {
+    const chatId = seedChat();
+    const streaming = streamingModel("hi");
+    const res = captureRes();
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        res.res,
+      ),
+      correlationId: "cid-stream-logcontext-000001",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(streaming.model));
+
+    expect(streaming.calls.count).toBe(1);
+    expect(streaming.recorded.request?.logContext?.correlationId).toBe(
+      "cid-stream-logcontext-000001",
+    );
+  });
+
   it("persists the user message but NO assistant message when the stream is cancelled", async () => {
     const chatId = seedChat();
     // captureResWithEvents is required here so the res.on("close") listener registered by
@@ -2575,6 +3426,192 @@ describe("desktop chat SSE streaming handler", () => {
   });
 });
 
+// Issue #3400 (epic #3384, contract correction 4) — the SSE streaming send is the transport the
+// desktop client actually uses (packages/keiko-ui/src/lib/api.ts posts to
+// /api/desktop/chat/stream, not the buffered /api/desktop/chat), so the git-change
+// description-authority gate proven against the buffered path in chat-handlers.test.ts must ALSO
+// gate this path. Before admitGitChangeScopedTurn was wired into prepareDesktopChatStream /
+// runAdmittedDesktopChatStream, a git-change-connected chat sent over the stream endpoint reached
+// the Model Gateway (callStream invoked) with no re-derivation of the description authority at all.
+describe("git-change description-authority admission on the streaming send path (#3400)", () => {
+  function attachGitChangeScope(chatId: string): void {
+    store.updateChat(chatId, {
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-stream-1",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/stream",
+          baseRef: "main",
+          headRef: "feature/stream",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+  }
+
+  it("denies the streamed turn before any callStream when no description authority port is wired", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    attachGitChangeScope(chatId);
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("must not run")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        streamCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const captured = captureRes();
+
+    const result = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "refine the description",
+          }),
+          captured.res,
+        ),
+        correlationId: "corr-stream-git-change-1",
+      },
+      deps(model),
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED" } },
+    });
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(streamCalls).toBe(0);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        op: "pr-description.chat.turn.denied",
+        correlationId: "corr-stream-git-change-1",
+        errorKind: "authority-denied",
+        extra: {
+          relationshipId: "rel-stream-1",
+          reason: "model-egress-denied",
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
+  });
+
+  it("admits the streamed turn once a live description authority record exists for the exact scope", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const description = await initializeGitChangeDescriptionFixture(projectDir);
+    store.updateChat(chatId, { gitChangeScopes: [description.scope] });
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        streamCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("streamed description turn") };
+      },
+    };
+    const mintDescriptionAuthority =
+      vi.fn<NonNullable<UiHandlerDeps["mintDescriptionAuthority"]>>();
+    const admittingDeps = {
+      ...deps(model),
+      ...description.deps,
+      codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      mintDescriptionAuthority,
+      gitChangeDescriptionAuthorityPort: {
+        current: (): { readonly effectiveMode: string } => ({ effectiveMode: "governed-assist" }),
+      },
+    } as unknown as UiHandlerDeps;
+    const captured = captureRes();
+
+    const result = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "refine the description",
+            memory: {
+              enabled: false,
+              budgetTokens: 0,
+              mode: "supervised-coding",
+              context: {},
+            },
+          }),
+          captured.res,
+        ),
+        correlationId: "corr-stream-git-change-2",
+      },
+      admittingDeps,
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(streamCalls).toBe(0);
+    expect(captured.writes.join("\n")).toContain("Update the exported value.");
+    const mintRequest = mintDescriptionAuthority.mock.calls.at(-1)?.[0];
+    expect(mintRequest).toMatchObject({
+      scope: { snapshotDigest: description.scope.snapshotDigest },
+      requestedMode: "supervised-coding",
+      correlationId: "corr-stream-git-change-2",
+    });
+    expect(Date.parse(mintRequest?.nowIso ?? "")).not.toBeNaN();
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        op: "pr-description.chat.turn.admitted",
+        correlationId: "corr-stream-git-change-2",
+        extra: {
+          relationshipId: "rel-description",
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
+  });
+
+  it("never gates a streamed turn on a chat with no connected git-change scope", async () => {
+    const chatId = seedChat();
+    let streamCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        streamCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("ordinary streamed turn") };
+      },
+    };
+    const result = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captureRes().res,
+      ),
+      deps(model),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(streamCalls).toBe(1);
+  });
+});
+
 // GEN-PERF-CHATSTREAM-001 — the chat SSE route was the only stream type without a
 // concurrency bulkhead (agent runs cap at 16, QI at 2, voice at 64). Above the cap the
 // route must reject with a JSON 429 BEFORE any SSE header (so the client degrades to the
@@ -2712,5 +3749,87 @@ describe("concurrent chat stream bulkhead", () => {
     );
     expect(accepted).toBe(STREAMING);
     expect(parseSse(second.writes).some((record) => record.event === "done")).toBe(true);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line on the desktop chat stream. The heartbeat's own write is deferred to
+// its interval timer, so in practice the first model token — written via streamConversation's
+// writeOrDestroy call — is the write that actually attaches it first.
+describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const { model } = streamingModel("answer");
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      correlationId: "corr-chat-stream-1",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(model));
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-chat-stream-1");
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const { model } = streamingModel("answer");
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBeUndefined();
+  });
+
+  it("attaches the correlationId to sse.stream.closed even when the model throws before the first chunk", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const failing: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      // eslint-disable-next-line require-yield -- fails before any chunk by design
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        throw new Error("upstream exploded before first token");
+      },
+    };
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      correlationId: "corr-chat-stream-early-failure",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(failing));
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-chat-stream-early-failure");
   });
 });

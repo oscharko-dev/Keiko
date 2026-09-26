@@ -61,7 +61,10 @@ accessibility, evidence, and CI gates established by ADR-0049 and the upstream a
    family, both the `✓` (must implement) and the `·` (not applicable, by design) sets from the
    applicability matrix must be recorded explicitly in [state-matrix.md](../design-system/state-matrix.md),
    together with the component token source and the accessibility expectation governing its interaction
-   states. Screenshot evidence across Dark, Light, and High Contrast (seven canonical modes) is
+   states. Screenshot evidence across Dark, Light, and High Contrast (seven canonical modes — see
+   [docs/design-system/state-matrix.md](../design-system/state-matrix.md) for the full seven-item list:
+   `01-dark`, `02-light`, `03-dark-hc`, `04-light-hc`, `05-prefers-contrast`, `06-forced-colors`,
+   `07-reduced-motion`) is
    required for every state marked `✓`; the evidence path is recorded in the per-family mapping table.
    A missing `·` row is a documentation error, not a silent omission: a future contributor must know
    that a state was deliberately excluded, not forgotten.

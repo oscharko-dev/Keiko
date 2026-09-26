@@ -14,16 +14,19 @@
 // are content-free no-ops (AC5).
 
 import type { VoiceProfile, VoiceCapabilityResolution } from "@/lib/types";
+import type {
+  VoiceControlMessage,
+  VoiceControlMessageKind,
+  VoiceRedactionClass,
+  VoiceMediaTrackState,
+  VoicePlaybackState,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type VoiceControlMessage,
-  type VoiceControlMessageKind,
-  type VoiceRedactionClass,
-  type VoiceMediaTrackState,
-  type VoicePlaybackState,
+  VOICE_REPLAY_CAPACITY,
   voiceMessageAllowedForProfile,
   isVoiceReplayEligible,
   voiceControlMessageRedactionClass,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 
 // ─── Clock seam (D2) ───────────────────────────────────────────────────────────
 // Monotonic milliseconds. Production uses `performance.now()`; tests inject a scripted, deterministic
@@ -39,7 +42,10 @@ export function createBrowserVoiceClock(): VoiceClock {
 // ─── Capacity / threshold constants (D4/D5) ────────────────────────────────────
 // The replay ring is the bounded reconnect system-of-record; the partial log is a tiny ephemeral timing
 // window; backpressure goes "elevated" at 80% of replay capacity (the partial log is never counted).
-export const VOICE_TIMEBASE_REPLAY_CAPACITY = 200;
+// The replay capacity is owned by @oscharko-dev/keiko-contracts (`VOICE_REPLAY_CAPACITY`) — the
+// keiko-server realtime session and the keiko-evaluations voice-twin model bind to the same value, so
+// drift is structurally impossible (KEIKO-0380).
+export const VOICE_TIMEBASE_REPLAY_CAPACITY: typeof VOICE_REPLAY_CAPACITY = VOICE_REPLAY_CAPACITY;
 const VOICE_TIMEBASE_PARTIAL_CAPACITY = 32;
 export const VOICE_TIMEBASE_BACKPRESSURE_HIGH = 160;
 

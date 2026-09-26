@@ -28,6 +28,7 @@ import {
 } from "../diagnostics-log.js";
 import { runMigrations } from "../store/schema.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { createVerificationRunnerManager } from "../editor/verificationRunner.js";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../task-workspace/active-store.js";
@@ -37,6 +38,7 @@ import { createWorkspaceProvisioningService } from "../task-workspace/provisioni
 import { reconcileSingleInstance } from "../task-workspace/reconciliation.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "../task-workspace/store.js";
 import { createCodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import { createCodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { resolveProductionRuntimeContext } from "./productionRuntimeWorkspaceAuthority.js";
 import { readProductionWorkspaceHead } from "./productionWorkspaceHeadReader.js";
@@ -59,8 +61,6 @@ import {
   productionDiscoveryBffDeps,
   FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
   FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
-  FUNCTIONAL_PLAN_DROPPED_CANARY,
-  FUNCTIONAL_PLAN_STEP_EDIT,
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
   type ScriptState,
@@ -162,6 +162,39 @@ describe("production OpenCode backend functional pipeline", () => {
     await stopRun(pipeline.baseUrl, run.runId);
   }, 120_000);
 
+  it("keeps the coding-runtime control plane when a store is injected with its snapshot companion", async () => {
+    // The shared Playwright journey (tests/e2e/servers/coding-runtime-server-shared.mts) injects
+    // its own UiStore into this assembly. Injection suppresses the assembly's own persistence
+    // composition, and until the snapshot-store companion was wired through, that silently
+    // dropped the ENTIRE coding-runtime control plane: the scheduled real-binary lane refused
+    // daily as `real-binary-journey-unqualified:undefined` for two weeks after #2835. This pin
+    // runs in ordinary CI so that composition class can never again survive only in a
+    // scheduled lane.
+    const fixture = await setupWorkspace();
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const deps = productionDiscoveryBffDeps({
+      stateRoot: join(fixture.root, "bff-state-injected"),
+      store: createInMemoryUiStore(),
+      codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(db),
+      workspaceLifecycle: fixture.lifecycle,
+      script: fixture.script,
+      uiPort: await reserveLoopbackPort(),
+    });
+    disposers.push(async () => {
+      await deps.codingRuntimeOrchestrator?.shutdown();
+      await deps.dispose?.();
+    });
+    // The control plane must exist: qualification is answered as a boolean, and an unqualified
+    // answer must carry its reason. An absent orchestrator next to an undefined reason is the
+    // silent no-control-plane state this pin forbids.
+    expect(deps.codingRuntimeOrchestrator).toBeDefined();
+    expect(typeof deps.codingRuntimeHostQualified).toBe("boolean");
+    if (deps.codingRuntimeHostQualified === false) {
+      expect(deps.codingRuntimeUnavailableReason).toBeDefined();
+    }
+  }, 60_000);
+
   it("drives the managed OpenCode composition end to end with a scripted child and model gateway", async () => {
     const fixture = await setupWorkspace();
     const scripted = createScriptedOpenCodeHarness();
@@ -178,7 +211,7 @@ describe("production OpenCode backend functional pipeline", () => {
         throw new Error(
           `functional-scenario-failed:${scripted.children
             .flatMap((child) => child.fixtureFailures())
-            .join(",")}`,
+            .join(",")};diagnostics=${pipeline.diagnostics.map((record) => record.code).join(",")}`,
           { cause: error },
         );
       }
@@ -310,6 +343,7 @@ async function assertLiveReadiness(baseUrl: string): Promise<void> {
     deploymentCeiling: "autonomous-delivery",
     effectiveMode: "autonomous-delivery",
     runtimeAvailable: true,
+    runtimeEvidenceClass: "functional-not-platform-qualified",
   });
 }
 
@@ -323,7 +357,11 @@ async function runDiscoveryProductiveScenario(
     "/api/coding-workbench/runtime/runs",
     startBody("discovery-productive"),
   );
-  expect(started.status).toBe(200);
+  const startedBody = await started.clone().text();
+  expect(
+    started.status,
+    `${startedBody}; diagnostics: ${JSON.stringify(pipeline.diagnostics)}`,
+  ).toBe(200);
   const run = (await started.json()) as { runId: string; state: string; failureCode?: string };
   pipeline.subscribeTimeline(run.runId);
   // Snapshot and timeline are content-free by contract; on failure they are the diagnostic.
@@ -368,6 +406,7 @@ async function bootPipeline(
     },
   };
   const port = await reserveLoopbackPort();
+  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createFunctionalRuntimeResolver({
     portable,
     runtimeStateRoot: join(fixture.root, "runtime-state"),
@@ -382,6 +421,7 @@ async function bootPipeline(
     runtimeEvidence,
     createSupervisor,
     diagnostics,
+    runtimeMutationLeaseBroker,
   });
   const deps = functionalBffDeps({
     stateRoot: join(fixture.root, "bff-state"),
@@ -392,6 +432,7 @@ async function bootPipeline(
   disposers.push(async () => {
     await deps.codingRuntimeOrchestrator?.shutdown();
     await deps.dispose?.();
+    runtimeMutationLeaseBroker.dispose();
   });
   const server = createUiServer({
     staticRoot: fixture.root,
@@ -488,13 +529,11 @@ async function runProductiveScenario(
   expect(activity).not.toContain(NEW);
   expect(activity).toContain('"state":"succeeded"');
   expect(activity).toContain('"truncated":true');
-  // #2480: the plan snapshot updated live — revision 2 carries the added verify step and the
-  // state flips, while unprojected todo fields and the plan tool never surface as tool activity.
-  expect(activity).toContain('"revision":2');
+  // V2 exposes progress as assistant text, without V1's native todowrite tool. The paired-only
+  // visibility and redaction invariant remains here; structured-plan bounds stay in
+  // opencodeSafeActivity.test.ts, at the projection layer that owns them.
   expect(activity).toContain(FUNCTIONAL_PLAN_STEP_READ);
   expect(activity).toContain(FUNCTIONAL_PLAN_STEP_VERIFY);
-  expect(activity).toContain('"state":"active"');
-  expect(activity).not.toContain(FUNCTIONAL_PLAN_DROPPED_CANARY);
   expect(activity).not.toContain('"todowrite"');
   const unpaired = await codingAppSessionSnapshot(pipeline.baseUrl);
   expect(unpaired).toEqual({ schemaVersion: "1", content: null });
@@ -565,9 +604,17 @@ async function runAuthorityScenarios(
     }),
   ).resolves.toMatchObject({ status: 400 });
   fixture.drifted = true;
-  await expect(
-    post(pipeline.baseUrl, "/api/coding-workbench/runtime/runs", startBody("drifted")),
-  ).resolves.toMatchObject({ status: 403 });
+  // #3565 Observation 17: a drifted workspace is refused as `workspace-unqualified` (409) with the
+  // refusing check named, no longer as the generic authority failure (403).
+  const drifted = await post(
+    pipeline.baseUrl,
+    "/api/coding-workbench/runtime/runs",
+    startBody("drifted"),
+  );
+  expect(drifted.status).toBe(409);
+  expect(await drifted.json()).toMatchObject({
+    error: { code: "CODING_RUNTIME_WORKSPACE_UNQUALIFIED" },
+  });
   fixture.drifted = false;
   expect(fixture.lifecycle.getActive()?.instance.lastVerifiedHead).toBe(
     readProductionWorkspaceHead(fixture.workspace, fixture.repository),
@@ -687,9 +734,7 @@ function rawActivityCanaries(): readonly string[] {
     FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
     OVERSIZED_CALL_ID,
     FUNCTIONAL_PLAN_STEP_READ,
-    FUNCTIONAL_PLAN_STEP_EDIT,
     FUNCTIONAL_PLAN_STEP_VERIFY,
-    FUNCTIONAL_PLAN_DROPPED_CANARY,
   ];
 }
 
@@ -788,6 +833,7 @@ function setupWorkspace(
           redactString: (value) => value,
           now: () => 1_700_000_000_000,
           newId: () => "functional-reconcile-id",
+          mutex,
         },
         provisioned.instance,
         1_700_000_000_000,
@@ -913,7 +959,10 @@ async function waitForQuestion(
         requestId: `${tag}-${String(questionPollSequence)}`,
         expectedRevision: snapshot?.revision ?? -1,
       });
-      expect(listed.ok, `question listing failed for ${tag}`).toBe(true);
+      expect(
+        listed.ok,
+        `question listing failed for ${tag}: ${listed.ok ? "ok" : listed.failureCode}`,
+      ).toBe(true);
       if (listed.ok) found = listed.questions.questions;
       expect(found).toHaveLength(1);
     },

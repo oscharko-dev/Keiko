@@ -60,11 +60,22 @@ export const RETRIEVAL_CONTEXT_SOURCE_KINDS: readonly RetrievalContextSourceKind
   "entailment-evidence",
 ] as const;
 
+// `external-connected` exists because connected-context carries GitHub/Jira content that anyone with
+// issue- or PR-creation rights on a tracked repository can author. Bucketing it with the user's own
+// files under `first-party-workspace` destroyed the one structured governance signal that tells the
+// two apart, so an auditor reading an evidence manifest's tierCounts could not say how much of the
+// first-party count actually originated outside the workspace. The item-level `untrusted: true`
+// labelling the connector applies is a separate, additive signal — this tier does not replace it.
 export type RetrievalContextSourceTier =
-  "first-party-workspace" | "indexed-knowledge" | "retained-memory" | "derived-evidence";
+  | "first-party-workspace"
+  | "external-connected"
+  | "indexed-knowledge"
+  | "retained-memory"
+  | "derived-evidence";
 
 export const RETRIEVAL_CONTEXT_SOURCE_TIERS: readonly RetrievalContextSourceTier[] = [
   "first-party-workspace",
+  "external-connected",
   "indexed-knowledge",
   "retained-memory",
   "derived-evidence",
@@ -77,7 +88,7 @@ export const RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
   "files-focus": "first-party-workspace",
   "editor-state": "first-party-workspace",
   "git-context": "first-party-workspace",
-  "connected-context": "first-party-workspace",
+  "connected-context": "external-connected",
   "local-knowledge": "indexed-knowledge",
   memory: "retained-memory",
   "quality-intelligence": "derived-evidence",
@@ -86,19 +97,47 @@ export const RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
   "entailment-evidence": "derived-evidence",
 } as const;
 
-export const CODING_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
-  Record<CodingContextSourceKind, RetrievalContextSourceTier>
-> = {
-  "repo-search": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["repo-search"],
-  "files-focus": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["files-focus"],
-  "editor-state": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["editor-state"],
-  "git-context": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["git-context"],
-  "connected-context": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["connected-context"],
-  "local-knowledge": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["local-knowledge"],
-  memory: RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND.memory,
-  "quality-intelligence": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["quality-intelligence"],
-  "workflow-context": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["workflow-context"],
-} as const;
+// ADR-0152 D6: coding-context.ts "re-bases its existing exports on aliases and CLOSED REFINEMENTS"
+// of the neutral base — a closed refinement pins its own values; it does not blindly re-derive
+// every entry from the neutral table, because that lets a neutral-table edit ripple into the
+// existing coding wire unreviewed. `connected-context` is the one entry that must diverge: the
+// neutral table below classifies it as "external-connected" for governance auditability (correct
+// for new retrieval purposes), but the CODING tier for the exact same source kind crosses the
+// EXISTING coding wire (RetrievalContextCitation.sourceTier via toCodingContextWirePack, and the
+// codingContextEvidence.ts persisted manifest) under a schemaVersion that has not changed, so D6
+// requires it to stay "first-party-workspace" until promoting it is made its own lockstep decision.
+//
+// Every entry below is a literal, not a reference into RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND: this
+// table is typed via `satisfies` rather than the wide `Record<CodingContextSourceKind,
+// RetrievalContextSourceTier>` annotation so TypeScript infers each property's own literal type
+// instead of widening every value to the full neutral union — the earlier version referenced the
+// neutral table for the non-diverging entries, which is why widening happened. That inferred,
+// per-key-literal object type is what CodingContextSourceTier and CODING_CONTEXT_SOURCE_TIERS below
+// derive from directly (Codex finding, ADR-0152 D6 follow-on): deriving the coding profile's tier
+// union and catalog from this table's actual values — instead of hand-listing them, or aliasing
+// RetrievalContextSourceTier / RETRIEVAL_CONTEXT_SOURCE_TIERS as coding-context.ts previously did —
+// is what stops a neutral-only tier (external-connected) from silently widening the coding profile's
+// type AND wire output the next time the neutral vocabulary grows.
+export const CODING_CONTEXT_SOURCE_TIER_BY_KIND = {
+  "repo-search": "first-party-workspace",
+  "files-focus": "first-party-workspace",
+  "editor-state": "first-party-workspace",
+  "git-context": "first-party-workspace",
+  "connected-context": "first-party-workspace",
+  "local-knowledge": "indexed-knowledge",
+  memory: "retained-memory",
+  "quality-intelligence": "derived-evidence",
+  "workflow-context": "derived-evidence",
+} as const satisfies Readonly<Record<CodingContextSourceKind, RetrievalContextSourceTier>>;
+
+/** The tier union CODING_CONTEXT_SOURCE_TIER_BY_KIND's values actually use — see the table above. */
+export type CodingContextSourceTier =
+  (typeof CODING_CONTEXT_SOURCE_TIER_BY_KIND)[CodingContextSourceKind];
+
+/** Deduplicated, declaration-ordered catalog derived from CODING_CONTEXT_SOURCE_TIER_BY_KIND. */
+export const CODING_CONTEXT_SOURCE_TIERS: readonly CodingContextSourceTier[] = [
+  ...new Set(Object.values(CODING_CONTEXT_SOURCE_TIER_BY_KIND)),
+];
 
 export type RetrievalContextOmissionReason =
   "unavailable" | "not-ready" | "denied" | "too-expensive" | "out-of-budget";
@@ -118,11 +157,22 @@ export interface RetrievalContextOmission<
   readonly reason: RetrievalContextOmissionReason;
 }
 
+// Codex follow-on (ADR-0152 D6): SourceTier is a second, independent type parameter — not derived
+// from SourceKind — because a profile's tier authority is its own table
+// (RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND vs. CODING_CONTEXT_SOURCE_TIER_BY_KIND), and the two are
+// deliberately allowed to map the SAME sourceKind to DIFFERENT tiers (connected-context). Before
+// this, sourceTier was hard-coded to the wide RetrievalContextSourceTier regardless of which
+// profile instantiated these generics, so CodingContextCitation (etc., in coding-context.ts) typed
+// as though it could carry the neutral-only "external-connected" even though no coding kind is ever
+// mapped to it and the runtime guard (isValidContextCitation) already rejected it. Threading a real
+// SourceTier parameter here — and through packCandidates / assembleRetrievalContext in
+// keiko-server/src/retrieval/contextAssembly.ts — makes the type agree with the guard.
 export interface RetrievalContextCitation<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
   readonly sourceKind: SourceKind;
-  readonly sourceTier: RetrievalContextSourceTier;
+  readonly sourceTier: SourceTier;
   readonly id: string;
   readonly score: number;
   readonly rank: number;
@@ -133,18 +183,20 @@ export interface RetrievalContextCitation<
 
 export interface RetrievalContextExcerpt<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
-  readonly citation: RetrievalContextCitation<SourceKind>;
+  readonly citation: RetrievalContextCitation<SourceKind, SourceTier>;
   readonly text: string;
 }
 
 export interface RetrievalContextPack<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose = RetrievalPurpose,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
   readonly schemaVersion: typeof RETRIEVAL_CONTEXT_SCHEMA_VERSION;
   readonly purpose: Purpose;
-  readonly excerpts: readonly RetrievalContextExcerpt<SourceKind>[];
+  readonly excerpts: readonly RetrievalContextExcerpt<SourceKind, SourceTier>[];
   readonly usedBytes: number;
   readonly budgetBytes: number;
   readonly droppedForBudget: number;
@@ -154,10 +206,11 @@ export interface RetrievalContextPack<
 export interface RetrievalContextWirePack<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose = RetrievalPurpose,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
   readonly schemaVersion: typeof RETRIEVAL_CONTEXT_SCHEMA_VERSION;
   readonly purpose: Purpose;
-  readonly entries: readonly RetrievalContextCitation<SourceKind>[];
+  readonly entries: readonly RetrievalContextCitation<SourceKind, SourceTier>[];
   readonly usedBytes: number;
   readonly budgetBytes: number;
   readonly droppedForBudget: number;
@@ -216,10 +269,37 @@ function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
-function retrievalCitationShapeValid(value: Record<string, unknown>): boolean {
+// Shared citation-shape validator, parameterized by which PROFILE's sourceKind set and tier
+// authority apply — the neutral profile supplies RETRIEVAL_CONTEXT_SOURCE_KINDS /
+// RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND, the coding profile supplies its own narrower kind set and
+// CODING_CONTEXT_SOURCE_TIER_BY_KIND (coding-context.ts). This exists because the two profiles'
+// tier tables DELIBERATELY diverge for one shared source kind (connected-context: "external-
+// connected" for neutral purposes vs. "first-party-workspace" to keep the existing coding wire
+// byte-identical, ADR-0152 D6) — a single hard-coded tier table here would make one profile's
+// citations fail the other profile's validator for a tier they never claimed to have. Each caller
+// enforces its OWN tier mapping instead of inheriting the neutral one. Exported so a closed
+// profile over this contract (e.g. coding-context.ts) can validate its own citations against its
+// own sourceKind set and tier table, instead of inheriting the neutral profile's via
+// isRetrievalContextCitation.
+export function isValidContextCitation<
+  Kind extends RetrievalContextSourceKind,
+  Tier extends RetrievalContextSourceTier,
+>(
+  value: unknown,
+  sourceKinds: readonly Kind[],
+  tierByKind: Readonly<Record<Kind, Tier>>,
+): value is RetrievalContextCitation<Kind, Tier> {
+  if (!isRecord(value)) return false;
+  if ("text" in value || "excerpt" in value || "content" in value) return false;
+  const sourceKindValid = sourceKinds.includes(value.sourceKind as Kind);
   return [
-    RETRIEVAL_CONTEXT_SOURCE_KINDS.includes(value.sourceKind as RetrievalContextSourceKind),
+    sourceKindValid,
     RETRIEVAL_CONTEXT_SOURCE_TIERS.includes(value.sourceTier as RetrievalContextSourceTier),
+    // The two membership checks above are independent, so a citation could claim a sourceKind whose
+    // canonical tier is `retained-memory` while carrying `first-party-workspace` — misrepresenting
+    // its own trust tier to any consumer that reads sourceTier instead of re-deriving it. The tier
+    // is not an independent field: the caller's own `tierByKind` is its only authority.
+    !sourceKindValid || value.sourceTier === tierByKind[value.sourceKind as Kind],
     typeof value.id === "string",
     typeof value.score === "number",
     typeof value.rank === "number",
@@ -246,15 +326,20 @@ export function embeddingProvidersAllowed(purpose: RetrievalPurpose): boolean {
 }
 
 export function isRetrievalContextCitation(value: unknown): value is RetrievalContextCitation {
-  if (!isRecord(value)) return false;
-  if ("text" in value || "excerpt" in value || "content" in value) return false;
-  return retrievalCitationShapeValid(value);
+  return isValidContextCitation(
+    value,
+    RETRIEVAL_CONTEXT_SOURCE_KINDS,
+    RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND,
+  );
 }
 
 export function toRetrievalContextWirePack<
   SourceKind extends RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose,
->(pack: RetrievalContextPack<SourceKind, Purpose>): RetrievalContextWirePack<SourceKind, Purpose> {
+  SourceTier extends RetrievalContextSourceTier,
+>(
+  pack: RetrievalContextPack<SourceKind, Purpose, SourceTier>,
+): RetrievalContextWirePack<SourceKind, Purpose, SourceTier> {
   return {
     schemaVersion: pack.schemaVersion,
     purpose: pack.purpose,

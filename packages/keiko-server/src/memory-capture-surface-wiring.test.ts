@@ -11,7 +11,7 @@
 // settled spoken final is answered by this same canonical chat pipeline, so the origin cannot be
 // inferred server-side and must be declared on the request.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -98,7 +98,7 @@ function context(): ConversationMemoryRuntimeContext {
 function makeVault(
   evidenceStore: ReturnType<typeof createInMemoryEvidenceStore>,
 ): MemoryVaultStore {
-  const memoryDir = mkdtempSync(join(tmpdir(), "keiko-capture-surface-"));
+  const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-capture-surface-"));
   temporaryDirectories.push(memoryDir);
   const redactString = (value: string): string => value;
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
@@ -149,6 +149,7 @@ function depsFor(
 function makeRouteContext(path: string): RouteContext {
   const req = new IncomingMessage(new Socket());
   return {
+    correlationId: undefined,
     req,
     res: new ServerResponse(req),
     params: {},
@@ -224,7 +225,7 @@ describe("post-commit capture-surface attribution", () => {
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("Let's keep doing morning stand-ups.", "voice"),
+      sendRequest("The user prefers stand-ups at 9am.", "voice"),
       context(),
       "gpt-test",
       EMPTY_MEMORY_RESULT,
@@ -242,7 +243,7 @@ describe("post-commit capture-surface attribution", () => {
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("I'm on UTC+1 this week."),
+      sendRequest("The user's timezone is UTC+1."),
       context(),
       "gpt-test",
       EMPTY_MEMORY_RESULT,
@@ -264,7 +265,7 @@ describe("post-commit capture-surface attribution", () => {
         chatId: "conversation-a",
         projectPath: "project-a",
         messages: [
-          { role: "user", content: "We ship on Fridays." },
+          { role: "user", content: "The user ships on Fridays." },
           { role: "assistant", content: "Noted." },
         ],
         modelId: "gpt-test",

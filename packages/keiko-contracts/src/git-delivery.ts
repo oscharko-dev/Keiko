@@ -7,10 +7,11 @@
 // This is the CORE atom module for the git-delivery surface. It imports NOTHING from its two
 // siblings (git-delivery-policy.ts / git-delivery-provider.ts). The siblings import FROM here, so
 // the dependency graph is a one-directional DAG with no cycles (verified by arch:check). The only
-// internal import is `./workflow-handoff.js` for `isApprovalTokenShape` (a legal intra-package
-// relative import; keiko-contracts modules may reference each other).
+// internal helpers come from workflow-handoff (approval shape) and git-repository (Git identity);
+// both are legal intra-package relative imports.
 
 import { isApprovalTokenShape } from "./workflow-handoff.js";
+import { isGitObjectId } from "./git-repository.js";
 
 export const GIT_DELIVERY_SCHEMA_VERSION = "1" as const;
 
@@ -25,6 +26,8 @@ export type GitDeliveryActionKind =
   | "push"
   | "pr-create"
   | "pr-update"
+  | "pr-description-apply"
+  | "pr-mark-ready"
   | "merge"
   | "abort"
   | "recovery";
@@ -38,6 +41,8 @@ export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
   "push",
   "pr-create",
   "pr-update",
+  "pr-description-apply",
+  "pr-mark-ready",
   "merge",
   "abort",
   "recovery",
@@ -58,19 +63,22 @@ export const GIT_DELIVERY_RISK_CLASSES: readonly GitDeliveryRiskClass[] = [
 ] as const;
 
 // Ordinal severity. Higher ordinal = higher risk. Never compare ordinals by action name string.
-export const GIT_DELIVERY_RISK_CLASS_SEVERITY: Readonly<Record<GitDeliveryRiskClass, number>> = {
-  "local-mutation": 1,
-  publish: 2,
-  "protected-or-merge": 3,
-  "recovery-or-rewrite": 4,
-} as const;
+// Object.freeze (KEIKO-0879): the `Readonly<Record<...>>` annotation is compile-time only.
+export const GIT_DELIVERY_RISK_CLASS_SEVERITY: Readonly<Record<GitDeliveryRiskClass, number>> =
+  Object.freeze({
+    "local-mutation": 1,
+    publish: 2,
+    "protected-or-merge": 3,
+    "recovery-or-rewrite": 4,
+  } as const);
 
 // Default risk class per action kind. Keys are ordered to match GIT_DELIVERY_ACTION_KINDS exactly.
 // Unknown kinds (post-deserialization) default to the highest class via gitDeliveryDefaultRiskClass
 // — this table covers all known kinds exactly.
+// Object.freeze (KEIKO-0879): the `Readonly<Record<...>>` annotation is compile-time only.
 export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   Record<GitDeliveryActionKind, GitDeliveryRiskClass>
-> = {
+> = Object.freeze({
   "branch-create": "local-mutation",
   "branch-switch": "local-mutation",
   stage: "local-mutation",
@@ -79,10 +87,12 @@ export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   push: "publish",
   "pr-create": "protected-or-merge",
   "pr-update": "protected-or-merge",
+  "pr-description-apply": "protected-or-merge",
+  "pr-mark-ready": "protected-or-merge",
   merge: "protected-or-merge",
   abort: "local-mutation",
   recovery: "recovery-or-rewrite",
-} as const;
+} as const);
 
 // ─── Per-kind resolved inputs (discriminated union) ─────────────────────────────
 // Each member is a separate readonly interface. Only fields semantically required for that kind
@@ -122,6 +132,11 @@ export interface GitDeliveryCommitInputs {
 
 export interface GitDeliveryPushInputs {
   readonly kind: "push";
+  // The head commit a caller previewed/approved before this push was dispatched. Mandatory (#3394
+  // review, finding 1): the interactive route used to accept a branch-name-only push with no pinned
+  // commit at all; every push now carries the exact object id the approval was minted against, so an
+  // approval can never be silently redeemed against a branch that has since moved.
+  readonly verifiedCommitSha: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -131,6 +146,10 @@ export interface GitDeliveryPushInputs {
 
 export interface GitDeliveryPrCreateInputs {
   readonly kind: "pr-create";
+  // PR analogue of GitDeliveryPushInputs.verifiedCommitSha above (#3394 review, finding 2): the head
+  // commit a caller previewed/approved. Mandatory for the same reason and for evidence/risk
+  // projection parity with push.
+  readonly verifiedCommitSha: string;
   readonly headBranchName: string;
   readonly baseBranchName: string;
   readonly titleByteLength: number;
@@ -140,6 +159,7 @@ export interface GitDeliveryPrCreateInputs {
 
 export interface GitDeliveryPrUpdateInputs {
   readonly kind: "pr-update";
+  readonly verifiedCommitSha: string;
   readonly prExternalId: string; // opaque provider-assigned ID
   readonly headBranchName: string;
   readonly baseBranchName: string;
@@ -147,6 +167,35 @@ export interface GitDeliveryPrUpdateInputs {
   readonly bodyByteLength: number;
   readonly convertToDraft: boolean;
   readonly convertFromDraft: boolean;
+}
+
+// #3399 (epic #3384 correction 4): a body-only managed-description apply, deliberately a separate
+// action kind from "pr-update" so the policy-pack layer can hold a distinct decision for it — title,
+// base, and draft-state are never part of this kind's inputs, matching the body-only command the
+// gateway dispatches.
+export interface GitDeliveryPrDescriptionApplyInputs {
+  readonly kind: "pr-description-apply";
+  readonly prExternalId: string; // opaque provider-assigned ID
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly finalBodyByteLength: number;
+}
+
+// #3389 (epic #3384 correction 7): the draft->ready transition, deliberately a separate action kind
+// from "pr-update" so the transition is approval-gated to a dedicated `pr-mark-ready` claim and never
+// widened to a title/body/base mutation. The bound facts are exactly the ones re-checked immediately
+// before the transition executes: the exact commit SHAs the approval was minted against (a mismatch
+// against the live PR is drift), a digest over the readiness snapshot that justified the proposal, the
+// invariant that the PR was observed as a draft at mint time, and a digest over the transition payload
+// itself so a claim minted for one PR revision can never be redeemed against a different one.
+export interface GitDeliveryPrMarkReadyInputs {
+  readonly kind: "pr-mark-ready";
+  readonly prExternalId: string; // opaque provider-assigned ID
+  readonly headSha: string; // opaque commit SHA, re-verified immediately before execution
+  readonly baseSha: string; // opaque commit SHA, re-verified immediately before execution
+  readonly readinessDigest: string;
+  readonly currentDraftState: boolean; // must be true (still draft) for the transition to apply
+  readonly transitionPayloadDigest: string;
 }
 
 export type GitDeliveryMergeStrategyHint =
@@ -212,6 +261,8 @@ export type GitDeliveryResolvedInputs =
   | GitDeliveryPushInputs
   | GitDeliveryPrCreateInputs
   | GitDeliveryPrUpdateInputs
+  | GitDeliveryPrDescriptionApplyInputs
+  | GitDeliveryPrMarkReadyInputs
   | GitDeliveryMergeInputs
   | GitDeliveryAbortInputs
   | GitDeliveryRecoveryInputs;
@@ -320,18 +371,34 @@ export type GitDeliveryNonEmptyConstraints = readonly [
 
 export type GitDeliveryBlockReason =
   | "policy-pack-blocked"
+  // The server-owned accepted-run Authority Envelope denied an operation after the governed
+  // lifecycle had already started (for example, continuity changed immediately before dispatch).
+  // This is distinct from a repository policy-pack denial: both are policy-forbidden retrospective
+  // outcomes, but only this code proves that no remote process was permitted to start.
+  | "authority-denied"
   | "protected-branch"
   | "provider-capability-absent"
   | "approval-expired"
+  // KEIKO-0147: the approval is valid and unexpired but the user who granted it is not in the
+  // decision's requiredApprovers set. Distinct from "approval-expired" so operators can tell a
+  // stale approval apart from an unauthorized approver.
+  | "approver-not-authorized"
   | "risk-class-ceiling"
+  // KEIKO-0154: the merge command carried an expectedHeadRefHash and the readiness re-read of the
+  // provider PR head disagreed (or the command omitted the guard entirely — fail-closed). Distinct
+  // from the generic providerError so the head-raced case surfaces its own operator message.
+  | "head-hash-mismatch"
   | "no-applicable-rule"; // fail-closed when neither level has a rule or defaultRule
 
 export const GIT_DELIVERY_BLOCK_REASONS: readonly GitDeliveryBlockReason[] = [
   "policy-pack-blocked",
+  "authority-denied",
   "protected-branch",
   "provider-capability-absent",
   "approval-expired",
+  "approver-not-authorized",
   "risk-class-ceiling",
+  "head-hash-mismatch",
   "no-applicable-rule",
 ] as const;
 
@@ -389,6 +456,7 @@ export type GitDeliveryExecutionErrorCode =
   | "network-failure"
   | "conflict"
   | "precondition-failed"
+  | "signature-failed"
   | "timeout"
   | "internal-error";
 
@@ -397,6 +465,7 @@ export const GIT_DELIVERY_EXECUTION_ERROR_CODES: readonly GitDeliveryExecutionEr
   "network-failure",
   "conflict",
   "precondition-failed",
+  "signature-failed",
   "timeout",
   "internal-error",
 ] as const;
@@ -426,7 +495,7 @@ export interface GitDeliveryEvidenceRef {
 // ─── Lifecycle envelope (AC1) ───────────────────────────────────────────────────
 // Sound discriminated union: kind === resolvedInputs.kind holds by construction. Each member is
 // parameterised by its per-kind resolved-input type; GitDeliveryActionEnvelope is the union over
-// all ten members.
+// all thirteen GitDeliveryActionKind members.
 
 export interface GitDeliveryActionEnvelopeFor<I extends GitDeliveryResolvedInputs> {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
@@ -449,6 +518,8 @@ export type GitDeliveryActionEnvelope =
   | GitDeliveryActionEnvelopeFor<GitDeliveryPushInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrCreateInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryPrUpdateInputs>
+  | GitDeliveryActionEnvelopeFor<GitDeliveryPrDescriptionApplyInputs>
+  | GitDeliveryActionEnvelopeFor<GitDeliveryPrMarkReadyInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryMergeInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryAbortInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryRecoveryInputs>;
@@ -720,6 +791,7 @@ function isCommitInputs(value: Record<string, unknown>): boolean {
 
 function isPushInputs(value: Record<string, unknown>): boolean {
   return (
+    isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.sourceBranchName) &&
     isNonEmptyString(value.remoteAlias) &&
     isNonEmptyString(value.remoteBranchName) &&
@@ -730,6 +802,7 @@ function isPushInputs(value: Record<string, unknown>): boolean {
 
 function isPrCreateInputs(value: Record<string, unknown>): boolean {
   return (
+    isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.headBranchName) &&
     isNonEmptyString(value.baseBranchName) &&
     isNonNegativeInteger(value.titleByteLength) &&
@@ -740,13 +813,38 @@ function isPrCreateInputs(value: Record<string, unknown>): boolean {
 
 function isPrUpdateInputs(value: Record<string, unknown>): boolean {
   return (
+    isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.prExternalId) &&
     isNonEmptyString(value.headBranchName) &&
     isNonEmptyString(value.baseBranchName) &&
     isNonNegativeInteger(value.titleByteLength) &&
     isNonNegativeInteger(value.bodyByteLength) &&
     isBoolean(value.convertToDraft) &&
-    isBoolean(value.convertFromDraft)
+    isBoolean(value.convertFromDraft) &&
+    // KEIKO-0805: convertToDraft and convertFromDraft are mutually exclusive — a single pr-update
+    // action cannot simultaneously ask to convert a PR to a draft and out of one. Both operands are
+    // already boolean-narrowed by the two isBoolean() guards above.
+    !(value.convertToDraft && value.convertFromDraft)
+  );
+}
+
+function isPrDescriptionApplyInputs(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.prExternalId) &&
+    isNonEmptyString(value.headBranchName) &&
+    isNonEmptyString(value.baseBranchName) &&
+    isNonNegativeInteger(value.finalBodyByteLength)
+  );
+}
+
+function isPrMarkReadyInputs(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.prExternalId) &&
+    isGitObjectId(value.headSha) &&
+    isGitObjectId(value.baseSha) &&
+    isNonEmptyString(value.readinessDigest) &&
+    isBoolean(value.currentDraftState) &&
+    isNonEmptyString(value.transitionPayloadDigest)
   );
 }
 
@@ -783,6 +881,8 @@ const RESOLVED_INPUT_GUARDS: Readonly<
   push: isPushInputs,
   "pr-create": isPrCreateInputs,
   "pr-update": isPrUpdateInputs,
+  "pr-description-apply": isPrDescriptionApplyInputs,
+  "pr-mark-ready": isPrMarkReadyInputs,
   merge: isMergeInputs,
   abort: isAbortInputs,
   recovery: isRecoveryInputs,
@@ -873,14 +973,12 @@ export function gitDeliveryRiskClassForInputs(
   return gitDeliveryDefaultRiskClass(inputs.kind);
 }
 
-// True when the action kind's default risk severity is at or below the ceiling severity.
-export function gitDeliveryRiskClassWithinCeiling(
-  actionKind: GitDeliveryActionKind,
-  ceiling: GitDeliveryRiskClass,
-): boolean {
-  const actionSeverity = GIT_DELIVERY_RISK_CLASS_SEVERITY[gitDeliveryDefaultRiskClass(actionKind)];
-  return actionSeverity <= GIT_DELIVERY_RISK_CLASS_SEVERITY[ceiling];
-}
+// KEIKO-0925: the ceiling comparison itself (severity <= GIT_DELIVERY_RISK_CLASS_SEVERITY[ceiling])
+// has exactly one implementation, in git-delivery-policy.ts's risk-class-ceiling constraint
+// evaluator, which reads GIT_DELIVERY_RISK_CLASS_SEVERITY directly. A same-shaped
+// gitDeliveryRiskClassWithinCeiling(actionKind, ceiling) export used to duplicate that comparison
+// here but was never called from it or from anywhere else outside its own test — removed rather
+// than kept as a second, unused way to ask the same question.
 
 // ─── Branch matchers ─────────────────────────────────────────────────────────────
 

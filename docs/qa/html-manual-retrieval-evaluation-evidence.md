@@ -18,7 +18,7 @@ to HTML manuals.
    (`docs/local-knowledge/knowledge-pod-retrieval-goldset-ledger.md`) gains seven HTML-manual query
    classes not previously scored — table-row lookup, frameset navigation, code-block, malformed-page
    salvage, denied-link vs citation-open, index-page, and HTML-manual-scoped multilingual — added as
-   `html-manual-*` fixtures in `packages/keiko-local-knowledge/src/evaluations/fixtures.ts`. The
+   `html-manual-*` fixtures in `packages/keiko-evaluations/src/local-knowledge/fixtures.ts`. The
    fixtures test enforces that every registered fixture id also appears in the ledger taxonomy, so
    the two cannot drift.
 2. **Retrieval, grounding, and citation scorecards (#1903).** The new fixtures run inside the

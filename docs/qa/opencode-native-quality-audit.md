@@ -1,0 +1,91 @@
+# OpenCode 1.17.17 native quality audit
+
+This audit compares Keiko's managed coding runtime with the exact pinned OpenCode source at
+commit [`474abdd7`](https://github.com/anomalyco/opencode/tree/474abdd7ee60f4b67476cfcef7e5311beff4a824).
+It identifies small native quality features that fit the existing governed runtime and records
+where Keiko's authority, recovery, or evidence contract remains authoritative.
+
+## Confirmed native features used by Keiko
+
+| Native feature                                   | Keiko integration and benefit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Boundary                                                                                                                                                                                                  |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Todo plan (`todowrite`)                          | The built-in tool is model-visible, and completed snapshots are projected into the bounded safe-activity plan. Operators can follow the model's current plan. [Upstream tool](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/tool/todo.ts), [Keiko projection](../../packages/keiko-server/src/coding-runtime/opencodeSafeActivity.ts)                                                                                                                                                                                                                                                                  | It is a display-only plan carrier. It does not authorize work or replace Keiko's governed tools.                                                                                                          |
+| Native question                                  | Keiko admits list/reply/reject, validates the fixed-session owner and answer shape, and emits a body-free live re-list signal. A model blocked on an operator decision can resume through the normal Workbench question UI. [Upstream state](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/question/index.ts), [Keiko question port](../../packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts)                                                                                                                                                                                     | OpenCode stores pending questions in instance memory and rejects them when the child shuts down. Recovery therefore uses Keiko's run state. Questions remain distinct from governed permission approvals. |
+| Provider model limits                            | Keiko publishes admitted per-run context, input, and output token limits in the fixed provider model. OpenCode uses these values when building the native request and calculating the usable pre-compaction window. [Upstream native request](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/llm/native-request.ts), [upstream overflow calculation](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/overflow.ts), [Keiko launch profile](../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts)            | Native limits provide early context control. Keiko's gateway request-size, prompt, output, and budget checks remain the hard boundary.                                                                    |
+| Automatic compaction, pruning, and retained tail | Keiko enables native auto-compaction and pruning and derives `reserved`, `tail_turns`, and `preserve_recent_tokens` from admitted context geometry. OpenCode uses those values to select the retained recent turns. [Upstream selection](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/compaction.ts), [Keiko geometry](../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts)                                                                                                                                                                                               | Compaction is lossy. The retained tail and server-owned recovery snapshot remain necessary; a summary alone is not completion evidence.                                                                   |
+| Custom compaction prompt                         | Keiko overrides the native `compaction` agent prompt with explicit requirements to retain the accepted task, verified edits and checks, unresolved failures, and next actions. OpenCode uses an agent prompt as the compaction model's system prompt. [Upstream prompt wiring](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/llm/request.ts), [Keiko prompt](../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts)                                                                                                                                                          | The prompt improves summary quality but cannot manufacture missing evidence or expand authority.                                                                                                          |
+| Tool-output truncation                           | OpenCode applies its truncation service to every custom plugin tool. Keiko now sets native `tool_output.max_bytes` to the existing 262,144-byte governed IPC response ceiling, preserving a valid JSON result's continuation and diagnostic fields. [Upstream truncation](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/tool/truncate.ts), [upstream custom-tool wrapper](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/tool/registry.ts), [Keiko launch profile](../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts) | Keiko's per-tool bounds and continuations remain authoritative. Native Read/Grep/Task stay denied, so the native saved-output hint is not a recovery path.                                                |
+| Provider retries                                 | OpenCode retries retryable provider failures and publishes `retry` session status; Keiko validates that status and keeps the turn active. [Upstream retry policy](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/retry.ts), [Keiko status parser](../../packages/keiko-server/src/coding-runtime/opencodeHttpClient.ts)                                                                                                                                                                                                                                                                         | Retry timing stays inside Keiko's outer turn, authority, and model budgets. Policy denials and budget refusals are not retryable.                                                                         |
+| Native lifecycle status                          | Keiko consumes health, SSE lifecycle/history, session status, process exit, and bounded stderr counts. [Upstream status service](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/status.ts), [Keiko runtime manager](../../packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts)                                                                                                                                                                                                                                                                                                     | Operator evidence still comes from Keiko's body-free activity and diagnostic logs.                                                                                                                        |
+
+## Verified Keiko integration gap and fix
+
+The verification runner already creates redacted, capped output metadata and validated
+workspace-relative failure locations. Before this audit, a failed run reached the model only as
+`VERIFICATION_FAILED`. The model projection now carries a deterministic summary plus at most eight
+revalidated locations for an actually executed failed verifier. Refused, skipped, denied,
+cancelled, timed-out, and resource-exceeded outcomes retain their distinct closed reason codes.
+The activity projection also records the body-free failure-location count and truncation flag;
+raw diagnostic output remains excluded. [Verification report
+contract](../../packages/keiko-contracts/src/verification.ts), [model
+projection](../../packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts)
+
+The existing parser already retained bounded TypeScript and ESLint messages and Vitest titles and
+locations. This audit added the actual Node test-runner `AssertionError` form: it carries a bounded,
+re-redacted assertion message, simple expected/actual comparison, rule ID, and a decoded,
+workspace-contained file URL. Unrecognized formats still fail closed to zero locations rather than
+exposing raw tool output. [Failure parser](../../packages/keiko-verification/src/failure-location.ts)
+
+Native overflow recovery was exercised with the actual pinned OpenCode binary and a deterministic
+provider: an oversized message history receives the typed context-overflow response, OpenCode
+compacts the history, and the retry completes. An uncompactable oversized turn instead terminates
+with the native overflow error. These tests prove native protocol integration; they are not real
+model issue-to-merge qualification. The gateway retains its independent hard limits and never
+relabels authority or budget refusals as retryable context errors.
+
+The audit also found two integration defects outside native configuration. Targeted verification
+must retain its path through the generated native tool, provider schema, IPC, canonical catalog,
+and actual verifier. Delivery instructions must come from the provider-visible canonical catalog:
+changing only the generated native description leaves the model with stale instructions. Keiko
+now uses the shared Git descriptions and explicitly distinguishes a fresh `approvalDisposition`
+from an immutable proposal receipt. Both paths have regressions across the production integration.
+
+The same provider-description loss affected bounded reads and changesets. The native plugin now
+uses the canonical catalog descriptions for every managed tool. The provider receives the whole-file
+hash and read-continuation instructions, the required nested changeset fields, and the existing
+new-file convention (a `/dev/null` source diff with the empty-content SHA-256). Five regressions
+failed against the previous actual provider request body and pass with the shared descriptions.
+These instructions do not relax content-hash validation or admit a rejected edit.
+
+An actual model run also exposed unchanged-context retries after a schema-rejected changeset.
+The existing gateway retry now supplies one fixed correction for a safely captured, offered tool
+whose response arguments failed schema validation. Repeated attempts replace that correction
+instead of growing the transcript. Invalid argument bodies are never retained or dispatched; the
+corrected request is recounted against model context/output capacity and the existing spend,
+deadline, and retry limits still apply. Production provider-request tests cover repair, exhaustion,
+secret exclusion, noneligible rejection, and output-headroom refusal before another provider call.
+
+## Additional native capabilities assessed
+
+OpenCode's LSP tool provides definitions, references, symbols, and call hierarchy. Keiko already
+owns a managed language-service lifecycle and provider policy under `keiko-server/src/editor/lsp`.
+Enabling OpenCode's separate LSP lifecycle would introduce a second process and file-access path.
+Any future model-facing semantic lookup should reuse Keiko's existing service through its governed
+catalog. It is not a configuration-only improvement for the current issue-to-PR acceptance scope.
+[Pinned native LSP tool](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/tool/lsp.ts)
+
+Native general/explore agents use OpenCode's `task` tool and their own tool permissions. Keiko
+already exposes a bounded, read-only `keiko_child_agent` when the accepted run has a resolvable
+profile and authority. Retain that owning path: advertising an unavailable child or enabling native
+`task` would not supply Keiko's authority and evidence bindings. Todo plans, operator questions,
+compaction, pruning, bounded outputs, and typed retry handling remain the immediately reusable
+native features for this epic.
+[Keiko optional-tool admission](../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts)
+
+## Verified native features not admitted
+
+| Native feature             | Finding and decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Session persistence / fork | Keiko uses one fixed native session while a run is live, and the native fork endpoint is not admitted. Do not use native fork/resume as a recovery shortcut: it lacks Keiko predecessor receipts and could copy stale authority context. Keiko's persisted snapshot, workspace binding, authority digest, and explicit Retry flow carry the run. [Upstream fork](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/session.ts), [Keiko endpoint allowlist](../../packages/keiko-server/src/coding-runtime/opencodeHttpClient.ts) |
+| Structured output          | OpenCode supports `json_schema`, but Keiko does not request it. Coding completion is proven by governed tool results, verification, Git state, and delivery receipts. A model-authored JSON answer would be a competing completion signal without a current typed consumer. [Upstream structured-output path](https://github.com/anomalyco/opencode/blob/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/opencode/src/session/prompt.ts), [Keiko prompt client](../../packages/keiko-server/src/coding-runtime/opencodeHttpClient.ts)                                                          |
+| Native diagnostic logs     | Native logs can contain paths, request details, or model/tool bodies. They are useful only as private producer diagnostics and are not admissible activity or evidence. Keiko's structured, body-free log remains the reconstruction contract. [Keiko diagnostics](../../packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts)                                                                                                                                                                                                                                                       |

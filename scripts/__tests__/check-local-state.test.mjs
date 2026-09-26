@@ -27,7 +27,7 @@ import { runRepairCli } from "@oscharko-dev/keiko-cli";
 import {
   isAtlassianConnectorProvider,
   isSafeAtlassianDisplayName,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { sealString } from "@oscharko-dev/keiko-security";
 
 import {
@@ -206,16 +206,21 @@ describe("auditLocalState — genuinely-encrypted fixture (#1325 AC3)", () => {
     expect(classById(result, "evidence-qi").findings.join(" ")).toContain(
       "1 candidate artifact(s)",
     );
+    expect(classById(result, "observability-stores").status).toBe("pass");
   });
 
-  it("detects a plaintext credential and a loosened file mode on a drifted fixture", () => {
+  it("detects a plaintext credential, a loosened file mode, and a foreign observability-store file on a drifted fixture", () => {
     const result = auditLocalState(createDriftedFixture(join(root, "drifted", ".keiko")));
     expect(result.ok).toBe(false);
     expect(classById(result, "credentials").status).toBe("fail");
     expect(classById(result, "file-modes").status).toBe(
       process.platform === "win32" ? "skip" : "fail",
     );
-    // The drift is confined to those two classes; encryption of Memory/LK content still holds.
+    expect(classById(result, "observability-stores").status).toBe("fail");
+    expect(classById(result, "observability-stores").findings.join(" ")).toContain(
+      "support-incidents/notes.txt",
+    );
+    // The drift is confined to those classes; encryption of Memory/LK content still holds.
     expect(classById(result, "memory-encryption").status).toBe("pass");
     expect(classById(result, "local-knowledge-encryption").status).toBe("pass");
   });
@@ -231,6 +236,7 @@ describe("auditLocalState — focused class behaviour", () => {
     expect(classById(result, "local-knowledge-encryption").status).toBe("skip");
     expect(classById(result, "evidence-qi").status).toBe("skip");
     expect(classById(result, "editor-hot-exit").status).toBe("skip");
+    expect(classById(result, "observability-stores").status).toBe("skip");
   });
 
   it("fails when the gateway config carries a plaintext apiKey", () => {
@@ -1018,6 +1024,136 @@ describe("auditLocalState — per-class failure detection", () => {
     const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("sealed");
+  });
+});
+
+describe("observability-stores: closed grammar and bounded size (#3533 audit)", () => {
+  it("passes a well-formed incident record, its dedup/quota claims, and a manifest", () => {
+    const stateDir = freshStateDir("observability-healthy");
+    const incidentsDir = join(stateDir, "support-incidents");
+    mkdirSync(incidentsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(incidentsDir, `incident-${"0".repeat(32)}.json`), "{}", { mode: 0o600 });
+    writeFileSync(join(incidentsDir, `fingerprint-${"a".repeat(64)}.claim`), "0".repeat(32), {
+      mode: 0o600,
+    });
+    writeFileSync(join(incidentsDir, "slot-00.claim"), "0".repeat(32), { mode: 0o600 });
+    const manifestsDir = join(stateDir, "activity-log-manifests");
+    mkdirSync(manifestsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(manifestsDir, "manifest-20260918T120000000Z-4242-0a1b2c3d-000001.json"),
+      "{}",
+      { mode: 0o600 },
+    );
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "observability-stores").status).toBe("pass");
+  });
+
+  it("fails on a foreign or malformed file name under support-incidents/", () => {
+    const stateDir = freshStateDir("observability-foreign-incident");
+    const dir = join(stateDir, "support-incidents");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, "not-a-keiko-file.json"), "{}", { mode: 0o600 });
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "observability-stores").status).toBe("fail");
+    expect(classById(result, "observability-stores").findings.join(" ")).toContain(
+      "does not match the closed grammar",
+    );
+  });
+
+  it("fails on a foreign or malformed file name under activity-log-manifests/", () => {
+    const stateDir = freshStateDir("observability-foreign-manifest");
+    const dir = join(stateDir, "activity-log-manifests");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, "manifest-not-a-segment-id.json"), "{}", { mode: 0o600 });
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "observability-stores").status).toBe("fail");
+    expect(classById(result, "observability-stores").findings.join(" ")).toContain(
+      "activity-log-manifests/manifest-not-a-segment-id.json",
+    );
+  });
+
+  it("fails when an incident record exceeds the contract's stated byte bound", () => {
+    const stateDir = freshStateDir("observability-oversized-incident");
+    const dir = join(stateDir, "support-incidents");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, `incident-${"0".repeat(32)}.json`), "x".repeat(4097), {
+      mode: 0o600,
+    });
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "observability-stores").status).toBe("fail");
+    expect(classById(result, "observability-stores").findings.join(" ")).toContain(
+      "expected at most 4096",
+    );
+  });
+
+  it("fails when a manifest exceeds the contract's stated byte bound", () => {
+    const stateDir = freshStateDir("observability-oversized-manifest");
+    const dir = join(stateDir, "activity-log-manifests");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(dir, "manifest-20260918T120000000Z-4242-0a1b2c3d-000001.json"),
+      "x".repeat(256 * 1024 + 1),
+      { mode: 0o600 },
+    );
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "observability-stores").status).toBe("fail");
+    expect(classById(result, "observability-stores").findings.join(" ")).toContain(
+      "expected at most 262144",
+    );
+  });
+
+  it("refuses a symlinked support-incidents directory without reporting its target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = freshStateDir("observability-symlinked-store");
+    const secretDir = join(root, "secret-target");
+    mkdirSync(secretDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(secretDir, "leak.txt"), "STRENG-VERTRAULICH", { mode: 0o600 });
+    symlinkSync(secretDir, join(stateDir, "support-incidents"));
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "observability-stores").status).toBe("fail");
+    const findings = classById(result, "observability-stores").findings.join(" ");
+    expect(findings).toContain("symbolic link");
+    expect(findings).not.toContain(secretDir);
+    expect(findings).not.toContain("leak.txt");
+  });
+
+  it("flags loose permissions on a support-incidents file as a real failure, not informational", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = freshStateDir("observability-loose-incident");
+    const dir = join(stateDir, "support-incidents");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const incidentPath = join(dir, `incident-${"0".repeat(32)}.json`);
+    writeFileSync(incidentPath, "{}", { mode: 0o600 });
+    chmodSync(incidentPath, 0o644);
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "file-modes").status).toBe("fail");
+    expect(classById(result, "file-modes").findings.join(" ")).toContain("support-incidents/");
+  });
+
+  it("flags loose permissions on an Activity Log file as a real failure, not informational", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = freshStateDir("observability-loose-activity-log");
+    const dir = join(stateDir, "logs");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const segmentPath = join(dir, "activity-20260918T120000000Z-4242-0a1b2c3d-000001.jsonl");
+    writeFileSync(segmentPath, "{}\n", { mode: 0o600 });
+    chmodSync(segmentPath, 0o644);
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "file-modes").status).toBe("fail");
+    expect(classById(result, "file-modes").findings.join(" ")).toContain("logs/");
+  });
+
+  it("flags loose permissions on an activity-log-manifests file as a real failure, not informational", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = freshStateDir("observability-loose-manifest");
+    const dir = join(stateDir, "activity-log-manifests");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const manifestPath = join(dir, "manifest-20260918T120000000Z-4242-0a1b2c3d-000001.json");
+    writeFileSync(manifestPath, "{}", { mode: 0o600 });
+    chmodSync(manifestPath, 0o644);
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "file-modes").status).toBe("fail");
+    expect(classById(result, "file-modes").findings.join(" ")).toContain("activity-log-manifests/");
   });
 });
 

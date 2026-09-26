@@ -15,8 +15,13 @@ the confirmed audit gaps: an explicit LLM10 token-window ceiling, reserve-before
 that ceiling, and prompt redaction on both live editor model surfaces.
 
 Maintenance update (2026-07-22): the independent PR #2665 audit advanced the root DOMPurify
-override from 3.4.11 to the current patched 3.x release, 3.4.12. The Monaco version, closed Markdown
-sinks, CSP posture, and durable upgrade requirement are unchanged.
+override from 3.4.11 to the then-current patched 3.x release, 3.4.12. The Monaco version, closed
+Markdown sinks, CSP posture, and durable upgrade requirement were unchanged.
+
+Maintenance update (2026-08-16): the 0.3.8 release updates Monaco to 0.56.0 and the root DOMPurify
+override to 3.4.13. Monaco 0.56.0 declares and vendors DOMPurify 3.4.8, so the patched npm tree and
+the closed/inert Markdown sink controls remain the active interim controls until Monaco vendors a
+DOMPurify release above the affected `<= 3.4.10` range.
 
 ## 1. Method
 
@@ -125,12 +130,12 @@ it before bounding prefix/suffix, and `completionRoutes.ts` passes the same
 
 ### 6.1 Editor dependency closure
 
-| Package                 | Version                   | License               | Notes                                                                          |
-| ----------------------- | ------------------------- | --------------------- | ------------------------------------------------------------------------------ |
-| `monaco-editor`         | 0.55.1                    | MIT                   | Editor core + language workers, served same-origin; no CDN.                    |
-| `@monaco-editor/react`  | 4.7.0                     | MIT                   | React wrapper; single-maintainer community package (bus-factor note below).    |
-| `@monaco-editor/loader` | 1.7.0 (root `overrides`)  | MIT                   | Pinned to neutralize the wrapper's default CDN loader.                         |
-| `dompurify`             | 3.4.12 (root `overrides`) | MPL-2.0 OR Apache-2.0 | npm-resolved version, patched for CVE-2026-0540 (≥ 3.3.2). See DOMPurify note. |
+| Package                 | Version                   | License               | Notes                                                                                   |
+| ----------------------- | ------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
+| `monaco-editor`         | 0.56.0                    | MIT                   | Editor core + language workers, served same-origin; no CDN.                             |
+| `@monaco-editor/react`  | 4.7.0                     | MIT                   | React wrapper; single-maintainer community package (bus-factor note below).             |
+| `@monaco-editor/loader` | 1.7.0 (root `overrides`)  | MIT                   | Pinned to neutralize the wrapper's default CDN loader.                                  |
+| `dompurify`             | 3.4.13 (root `overrides`) | MPL-2.0 OR Apache-2.0 | npm-resolved version, patched above the affected `<= 3.4.10` range. See DOMPurify note. |
 
 All four are permissive, OSI-approved licenses. The workspace license gate
 (`scripts/check-workspace-supply-chain.mjs`) emits a per-workspace SBOM for every package and confirms
@@ -141,18 +146,17 @@ test-intelligence dependency entered the closure.
 
 There are two DOMPurify copies, and the review records both:
 
-- **npm-resolved**: `dompurify@3.4.12`, pinned by the root `overrides` (`package.json`). This is on the
-  patched 3.x line (≥ 3.3.2) and is what `npm ls dompurify` reports.
-- **Vendored inside `monaco-editor`**: `monaco-editor@0.55.1` bundles its own DOMPurify 3.2.7 relatively
-  (`node_modules/monaco-editor/esm/vs/base/browser/dompurify/dompurify.js`), which the npm override
-  cannot replace. The advisories against 3.2.7 are rated moderate (below the `--audit-level=high` CI
-  gate). The current editor no longer disables every assistance surface: governed bridges can enable
-  parameter hints, code-action lightbulbs, and inlay hints. Those mappers expose primitive strings
-  only, completion has no documentation field, and runtime guards drop non-string
+- **npm-resolved**: `dompurify@3.4.13`, pinned by the root `overrides` (`package.json`). This is on
+  the patched 3.x line above the affected `<= 3.4.10` range and is what `npm ls dompurify` reports.
+- **Vendored inside `monaco-editor`**: `monaco-editor@0.56.0` bundles its own DOMPurify 3.4.8
+  relatively (`node_modules/monaco-editor/esm/vs/base/browser/dompurify/dompurify.js`), which the npm
+  override cannot replace. The current editor no longer disables every assistance surface: governed
+  bridges can enable parameter hints, code-action lightbulbs, and inlay hints. Those mappers expose
+  primitive strings only, completion has no documentation field, and runtime guards drop non-string
   completion/signature metadata. Suggest documentation and other `IMarkdownString` paths stay off;
   hover is inert-fenced before Monaco sees it. The vendored sanitizer therefore never receives active
-  markup. The durable fix remains upgrading `monaco-editor` to a release that vendors DOMPurify ≥
-  3.3.2 once one exists.
+  markup. The durable fix remains upgrading `monaco-editor` to a release that vendors DOMPurify
+  `> 3.4.10` once one exists.
 
 `npm audit --audit-level=high` reports zero high/critical advisories for the closure.
 
@@ -193,8 +197,8 @@ editor package is `private` and does not ship in the published `@oscharko-dev/ke
 
 ## 8. Residual and accepted items
 
-- **Vendored DOMPurify 3.2.7** — accepted interim; sink closed (§6.2); durable fix is a Monaco upgrade
-  once a release vendors ≥ 3.3.2.
+- **Vendored DOMPurify 3.4.8** — accepted interim; sink closed (§6.2); durable fix is a Monaco upgrade
+  once a release vendors `> 3.4.10`.
 - **`@monaco-editor/react` single maintainer** — accepted, mitigated (§6.3).
 - **AI-provenance prompt reconstruction** — by design the evidence store keeps only a prompt hash, not
   the prompt; full prompt reconstruction is intentionally unsupported (ADR-0042 redaction). Not a

@@ -1,21 +1,42 @@
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// The memory-vault path guard refuses any ancestor symlink, so macOS `os.tmpdir()`
+// (which sits under `/var/folders/...` → `/private/var/...`) must be resolved once
+// before every mkdtemp call whose result flows into a KEIKO_*_DIR.
+const REAL_TMPDIR = realpathSync(tmpdir());
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  armProcessExitFallback,
   createLiveCspSource,
+  createPortableHandoffShutdownTrigger,
   parseUiArgs,
+  ProcessExitLatch,
   runUiCli,
+  startProcessHeartbeat,
   waitForShutdown,
   type UiCliArgs,
   type UiCliDeps,
 } from "./ui.js";
-import { DEFAULT_UI_PORT, extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
-import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import { buildUiHandlerDeps, extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
+import type {
+  BuildHandlerDepsOptions,
+  ServerLogEvent,
+  ServerLogSink,
+  UiHandlerDeps,
+} from "@oscharko-dev/keiko-server";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import type { CliIo } from "./runner.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
+import { peekShutdownRequest } from "./state-paths.js";
 
 function captureIo(): { io: CliIo; out: string[]; err: string[] } {
   const out: string[] = [];
@@ -61,6 +82,33 @@ function expectSingleHandlerDeps(captured: readonly UiHandlerDeps[]): UiHandlerD
 function closeHandlerDeps(handlerDeps: UiHandlerDeps | undefined): void {
   handlerDeps?.store.close();
   handlerDeps?.memoryVault?.close();
+}
+
+// A `ServerLogSink` that records every event in memory and counts `close()` calls, so a test
+// can assert on the process-lifecycle log lines without touching the filesystem or loading the
+// real `createFileServerLogSink`/`closeFileServerLogSinks` machinery.
+interface RecordingSink extends ServerLogSink {
+  readonly events: ServerLogEvent[];
+  closeCallCount: number;
+}
+
+function createRecordingSink(): RecordingSink {
+  const events: ServerLogEvent[] = [];
+  const sink: RecordingSink = {
+    events,
+    closeCallCount: 0,
+    write(event: ServerLogEvent): void {
+      events.push(event);
+    },
+    close(): void {
+      sink.closeCallCount += 1;
+    },
+  };
+  return sink;
+}
+
+function extraOf(event: ServerLogEvent | undefined): Readonly<Record<string, unknown>> {
+  return event?.extra ?? {};
 }
 
 describe("parseUiArgs", () => {
@@ -133,7 +181,7 @@ describe("runUiCli", () => {
   let staticRoot: string;
 
   beforeEach(async () => {
-    staticRoot = await mkdtemp(join(tmpdir(), "keiko-ui-cli-"));
+    staticRoot = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-"));
     await writeFile(join(staticRoot, "index.html"), "<html></html>", "utf8");
   });
 
@@ -179,6 +227,26 @@ describe("runUiCli", () => {
     expect(err.join("")).toContain("UI database path must be absolute");
   });
 
+  // process-guards.ts's fatal-crash handler reads `process.env.KEIKO_STATE_DIR` directly (it has
+  // no other seam into a real, non-injected launch). This drives the REAL (non-injected) launch
+  // path — `deps.createServer` is left undefined — but stops before any socket binds by forcing
+  // the same early `UiStoreError` bail as "fails fast when --ui-db is relative" above, so the
+  // real process.env mutation is observable without ever starting a real server.
+  it("sets the real process.env.KEIKO_STATE_DIR on a direct (non-injected) launch before any crash could occur", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-real-launch-state-env-"));
+    vi.stubEnv("KEIKO_STATE_DIR", "");
+    try {
+      expect(process.env.KEIKO_STATE_DIR).toBe("");
+      const code = await runUiCli(["--ui-db", ".keiko/ui.db"], io, {}, { staticRoot, cwd });
+      expect(code).toBe(2);
+      expect(process.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko"));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("fails fast when --ui-db is inside the current workspace", async () => {
     const { io, err } = captureIo();
     const nested = join(process.cwd(), ".keiko-test-ui", "ui.db");
@@ -189,15 +257,61 @@ describe("runUiCli", () => {
 
   it("returns 1 with a clear error when the static export is missing", async () => {
     const { io, err } = captureIo();
-    const deps: UiCliDeps = { staticRoot: join(staticRoot, "does-not-exist") };
-    const code = await runUiCli([], io, {}, deps);
+    const sink = createRecordingSink();
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const deps: UiCliDeps = {
+      staticRoot: join(staticRoot, "does-not-exist"),
+      activityLog: sink,
+      createServer: () => fakeServer({}),
+    };
+    const code = await runUiCli(
+      [],
+      io,
+      {
+        [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+        [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      },
+      deps,
+    );
     expect(code).toBe(1);
     expect(err.join("")).toContain("build:ui");
+    expect(sink.events).toEqual([
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId,
+        extra: expect.objectContaining({ completeness: "complete", loss: "none" }) as unknown,
+      }),
+    ]);
+  });
+
+  it("records install-layout normalization before static HTML loading fails", async () => {
+    const { io } = captureIo();
+    const sink = createRecordingSink();
+    const invalidStaticRoot = join(staticRoot, "not-a-directory");
+    await writeFile(invalidStaticRoot, "not a directory", "utf8");
+
+    await expect(
+      runUiCli(
+        [],
+        io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
+        {
+          staticRoot: invalidStaticRoot,
+          activityLog: sink,
+          createServer: () => fakeServer({}),
+        },
+      ),
+    ).rejects.toThrow();
+    expect(sink.events.map(({ op }) => op)).toEqual(["cli.install-layout.normalized"]);
+    expect(sink.events[0]?.extra).toMatchObject({ completeness: "complete", loss: "none" });
   });
 
   it("prefers the built workspace checkout over a stale inherited global static root", async () => {
     const { io, out } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-checkout-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-checkout-"));
     const localStaticRoot = join(cwd, "dist", "ui", "static");
     const localCliRoot = join(cwd, "dist", "cli");
     const captured: { staticRoot?: string; handlerDeps?: UiHandlerDeps } = {};
@@ -234,7 +348,7 @@ describe("runUiCli", () => {
 
   it("re-execs through the built workspace checkout instead of a stale parent bin", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-reexec-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-reexec-"));
     const localStaticRoot = join(cwd, "dist", "ui", "static");
     const localCliEntry = join(cwd, "dist", "cli", "index.js");
     const spawned: { command: string; args: readonly string[] }[] = [];
@@ -294,9 +408,532 @@ describe("runUiCli", () => {
     }
   });
 
+  it("lets a process-local harness replace only handler dependency composition", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-handler-deps-"));
+    const stateDir = join(cwd, ".keiko");
+    let input: BuildHandlerDepsOptions | undefined;
+    let built: UiHandlerDeps | undefined;
+    let served: UiHandlerDeps | undefined;
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        {},
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd,
+          buildHandlerDeps: (options) => {
+            input = options;
+            built = buildUiHandlerDeps(options);
+            return built;
+          },
+          createServer: ({ handlerDeps }) => {
+            served = handlerDeps;
+            return fakeServer({});
+          },
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(input).toMatchObject({
+        configPath: undefined,
+        evidenceDir: undefined,
+        uiDbPath: undefined,
+        initialProjectPath: cwd,
+        env: { KEIKO_STATE_DIR: stateDir },
+        updateStartupRecovery: undefined,
+      });
+      expect(typeof input?.portableHandoffShutdown).toBe("function");
+      expect(served).toBe(built);
+    } finally {
+      closeHandlerDeps(built);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps readiness closed through pre-listen and opens only after post-listen recovery", async () => {
+    const { io, out } = captureIo();
+    const launchId = "a".repeat(32);
+    const phases: string[] = [];
+    const readinessDuringListen: boolean[] = [];
+    let handlerDeps: UiHandlerDeps | undefined;
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: launchId },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        updateStartupRecovery: {
+          reconcile: ({ phase, current }) => {
+            phases.push(phase);
+            expect(current).toMatchObject({
+              pid: process.pid,
+              launchId,
+              host: UI_HOST,
+              port: 4399,
+            });
+            return Promise.resolve({ status: "ready" as const });
+          },
+        },
+        createServer: ({ readiness, handlerDeps: createdHandlerDeps }) => {
+          handlerDeps = createdHandlerDeps;
+          return {
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              readinessDuringListen.push(readiness?.() ?? true);
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          } as unknown as Server;
+        },
+      },
+    );
+    try {
+      expect(code).toBe(0);
+      expect(phases).toEqual(["pre-listen", "post-listen"]);
+      expect(readinessDuringListen).toEqual([false]);
+      expect(out.join("")).toContain("http://127.0.0.1:4399");
+    } finally {
+      closeHandlerDeps(handlerDeps);
+    }
+  });
+
+  it("refuses to listen when pre-listen recovery resolves as recovery-required", async () => {
+    const { io } = captureIo();
+    const createServer = vi.fn(() => fakeServer({}));
+    const sink = createRecordingSink();
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        {
+          KEIKO_UI_LAUNCH_ID: "a".repeat(32),
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          activityLog: sink,
+          updateStartupRecovery: {
+            reconcile: () =>
+              Promise.resolve({
+                status: "recovery-required" as const,
+                reason: "corrupt" as const,
+                sessionId: "session-1",
+              }),
+          },
+          createServer,
+        },
+      ),
+    ).rejects.toThrow("Portable update startup recovery is required before listening.");
+    expect(createServer).not.toHaveBeenCalled();
+    expect(sink.events.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "process.fatal",
+    ]);
+    expect(sink.events[0]).toMatchObject({
+      correlationId: "00000000-0000-4000-8000-000000000001",
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        overriddenCount: 1,
+        overriddenKinds: ["ui-static-root"],
+      },
+    });
+    expect(sink.closeCallCount).toBe(1);
+    const event = sink.events.find(({ op }) => op === "process.fatal");
+    expect(event?.errorKind).toBe("validation-failed");
+    expect(extraOf(event)).toMatchObject({
+      kind: "server-error",
+      failureKind: "PORTABLE_UPDATE_RECOVERY_CORRUPT",
+      recoveryReason: "corrupt",
+      sessionId: "session-1",
+    });
+  });
+
+  it("closes the listener when post-listen recovery resolves as recovery-required", async () => {
+    const { io } = captureIo();
+    const phases: string[] = [];
+    const sink = createRecordingSink();
+    const close = vi.fn((done: () => void) => {
+      done();
+    });
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          activityLog: sink,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) => {
+              phases.push(phase);
+              return Promise.resolve(
+                phase === "pre-listen"
+                  ? { status: "ready" as const }
+                  : {
+                      status: "recovery-required" as const,
+                      reason: "persistence-failed" as const,
+                    },
+              );
+            },
+          },
+          createServer: () =>
+            ({
+              once(): Server {
+                return this as unknown as Server;
+              },
+              removeListener(): Server {
+                return this as unknown as Server;
+              },
+              listen(_port: number, _host: string, callback: () => void): Server {
+                callback();
+                return this as unknown as Server;
+              },
+              address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+              close,
+            }) as unknown as Server,
+        },
+      ),
+    ).rejects.toThrow("Portable update startup recovery failed after listening.");
+    expect(phases).toStrictEqual(["pre-listen", "post-listen"]);
+    expect(close).toHaveBeenCalledOnce();
+    const event = sink.events.find(({ op }) => op === "process.fatal");
+    expect(event?.errorKind).toBe("durability-failed");
+    expect(extraOf(event).failureKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
+    expect(extraOf(event).recoveryReason).toBe("persistence-failed");
+  });
+
+  it("imports legacy audit evidence after post-listen recovery and before startup reporting", async () => {
+    const { io } = captureIo();
+    const order: string[] = [];
+    const sink: ServerLogSink = {
+      write: (event) => {
+        if (event.op === "process.started") order.push("process.started");
+      },
+    };
+    const importLegacyUpdateAuditSnapshot = vi.fn(() => {
+      order.push("legacy-import");
+      return { status: "deferred" as const, reason: "source-invalid" as const };
+    });
+
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: sink,
+        importLegacyUpdateAuditSnapshot,
+        updateStartupRecovery: {
+          reconcile: ({ phase }) => {
+            order.push(phase);
+            return Promise.resolve({ status: "ready" as const });
+          },
+        },
+        createServer: () =>
+          ({
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              order.push("listen");
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          }) as unknown as Server,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(order).toStrictEqual([
+      "pre-listen",
+      "listen",
+      "post-listen",
+      "legacy-import",
+      "process.started",
+    ]);
+    expect(importLegacyUpdateAuditSnapshot).toHaveBeenCalledWith({
+      stateDir: join(staticRoot, ".keiko"),
+      level: "info",
+    });
+  });
+
+  it("reports a deferred legacy import without disclosing source data or stopping startup", async () => {
+    const { io, err } = captureIo();
+    const events: ServerLogEvent[] = [];
+    const sink: ServerLogSink = { write: (event) => events.push(event) };
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: sink,
+        importLegacyUpdateAuditSnapshot: () =>
+          Promise.resolve({
+            status: "deferred" as const,
+            reason: "append-failed" as const,
+          }),
+        createServer: () =>
+          ({
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          }) as unknown as Server,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toContainEqual({
+      level: "warn",
+      category: "diagnostic",
+      op: "update.runtime.legacy-import-deferred",
+      errorKind: "unavailable",
+      extra: { completeness: "complete", loss: "none", reason: "append-failed" },
+    });
+    expect(events.some((event) => event.op === "process.started")).toBe(true);
+    expect(err.join("")).toBe(
+      "keiko ui: legacy update audit persistence was deferred; retained source will be retried.\n",
+    );
+  });
+
+  it("does not warn when legacy import is intentionally filtered", async () => {
+    const { io, err } = captureIo();
+    const events: ServerLogEvent[] = [];
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32), KEIKO_LOG_LEVEL: "warn" },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: { write: (event) => events.push(event) },
+        importLegacyUpdateAuditSnapshot: () => ({
+          status: "deferred" as const,
+          reason: "log-level-filtered" as const,
+        }),
+        createServer: () =>
+          ({
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          }) as unknown as Server,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events.some((event) => event.op === "update.runtime.legacy-import-deferred")).toBe(
+      false,
+    );
+    expect(events.some((event) => event.op === "process.started")).toBe(true);
+    expect(err).toStrictEqual([]);
+  });
+
+  it("does not invoke legacy import when post-listen recovery fails", async () => {
+    const { io } = captureIo();
+    const importer = vi.fn(() => ({ status: "absent" as const }));
+    const close = vi.fn((done: () => void) => {
+      done();
+    });
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          importLegacyUpdateAuditSnapshot: importer,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) =>
+              phase === "pre-listen"
+                ? Promise.resolve({ status: "ready" as const })
+                : Promise.reject(new Error("post-listen recovery failed")),
+          },
+          createServer: () =>
+            ({
+              once(): Server {
+                return this as unknown as Server;
+              },
+              removeListener(): Server {
+                return this as unknown as Server;
+              },
+              listen(_port: number, _host: string, callback: () => void): Server {
+                callback();
+                return this as unknown as Server;
+              },
+              address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+              close,
+            }) as unknown as Server,
+        },
+      ),
+    ).rejects.toThrow("post-listen recovery failed");
+    expect(importer).not.toHaveBeenCalled();
+  });
+
+  it("closes the listener when post-listen recovery rejects", async () => {
+    const { io } = captureIo();
+    const launchId = "a".repeat(32);
+    const readinessStates: boolean[] = [];
+    const close = vi.fn((done: () => void) => {
+      done();
+    });
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: launchId },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) =>
+              phase === "pre-listen"
+                ? Promise.resolve({ status: "ready" as const })
+                : Promise.reject(new Error("attestation failed")),
+          },
+          createServer: ({ readiness }) =>
+            ({
+              once(): Server {
+                return this as unknown as Server;
+              },
+              removeListener(): Server {
+                return this as unknown as Server;
+              },
+              listen(_port: number, _host: string, callback: () => void): Server {
+                readinessStates.push(readiness?.() ?? true);
+                callback();
+                return this as unknown as Server;
+              },
+              address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+              close,
+            }) as unknown as Server,
+        },
+      ),
+    ).rejects.toThrow("attestation failed");
+    expect(close).toHaveBeenCalledOnce();
+    expect(readinessStates).toEqual([false]);
+  });
+
+  it("writes an orderly shutdown request only for the exact accepted process identity", async () => {
+    const stateDir = await mkdtemp(join(REAL_TMPDIR, "keiko-handoff-shutdown-"));
+    const launchId = "a".repeat(32);
+    const trigger = createPortableHandoffShutdownTrigger({
+      stateDir,
+      pid: 4242,
+      launchId,
+    });
+    try {
+      await expect(
+        trigger({
+          sessionId: "session-1",
+          activationId: "b".repeat(32),
+          pid: 7,
+          launchId,
+        }),
+      ).rejects.toThrow(/identity/u);
+      expect(peekShutdownRequest(stateDir, 4242, launchId)).toBe(false);
+
+      await trigger({
+        sessionId: "session-1",
+        activationId: "b".repeat(32),
+        pid: 4242,
+        launchId,
+      });
+      expect(peekShutdownRequest(stateDir, 4242, launchId)).toBe(true);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  // Regression pin (KEIKO-0439): runUiCli built a live CspSource + file watcher, then handed the
+  // server a value that was evaluated ONCE at startup. The watcher mutated `current`, nobody ever
+  // read it again, and the server kept serving the stale Content-Security-Policy header after any
+  // rebuild — the browser blocked the new inline scripts and the UI went blank until restart.
+  // The server side already accepts a cspProvider callback; the CLI must forward the accessor,
+  // not the snapshot.
+  it("forwards a live cspProvider to createUiServer", async () => {
+    const { io } = captureIo();
+    interface CapturedCspDeps {
+      csp?: string;
+      cspProvider?: (() => string | Promise<string>) | undefined;
+    }
+    const captured: CapturedCspDeps = {};
+    let handlerDeps: UiHandlerDeps | undefined;
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd: staticRoot,
+      createServer: ({ csp, cspProvider, handlerDeps: createdHandlerDeps }) => {
+        captured.csp = csp;
+        captured.cspProvider = cspProvider;
+        handlerDeps = createdHandlerDeps;
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--port", "4399"], io, {}, deps);
+      expect(code).toBe(0);
+      // The compatibility snapshot is still passed too — server.ts keeps `csp` as a fallback.
+      expect(captured.csp).toContain("script-src");
+      // The load-bearing check: the provider callback was passed through.
+      expect(typeof captured.cspProvider).toBe("function");
+      const live = captured.cspProvider === undefined ? undefined : await captured.cspProvider();
+      expect(live).toContain("script-src");
+    } finally {
+      closeHandlerDeps(handlerDeps);
+    }
+  });
+
   it("defaults UI and memory state to the workspace-local .keiko runtime root", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-state-"));
     const captured: UiHandlerDeps[] = [];
     const deps: UiCliDeps = {
       staticRoot,
@@ -313,6 +950,7 @@ describe("runUiCli", () => {
       expect(captured[0]?.uiDbPath).toBe(join(cwd, ".keiko", "ui", "keiko-ui.db"));
       expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko"));
       expect(captured[0]?.env.KEIKO_MEMORY_DIR).toBe(join(cwd, ".keiko", "memory"));
+      expect(captured[0]?.env.KEIKO_EVIDENCE_DIR).toBe(join(cwd, ".keiko", "evidence"));
       expect(captured[0]?.preferredProjectPath).toBe(cwd);
       expect(captured[0]?.store.listProjects().map((project) => project.path)).toEqual([cwd]);
       captured[0]?.store.close();
@@ -322,9 +960,81 @@ describe("runUiCli", () => {
     }
   });
 
+  it("keeps the ambient UI environment when a local Git mutation environment is injected", async () => {
+    const { io } = captureIo();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      localGitMutationEnv: { HOME: "/private/evaluation-home", PATH: "/usr/bin" },
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, { HOME: "/host/home", PATH: "/usr/bin" }, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.env.HOME).toBe("/host/home");
+    } finally {
+      closeHandlerDeps(captured[0]);
+    }
+  });
+
+  // The lifecycle activity-log sink mkdirs `<stateDir>/logs` the moment it is CONSTRUCTED. Two
+  // things therefore have to hold on the injected-server path: the state directory comes from the
+  // CLI's own resolution (launch cwd + the effective env, NOT `process.env`), and no lifecycle sink
+  // is built at all — otherwise a unit test writes a log directory outside its fixture. Store
+  // evidence emitted while the handler deps are built still goes to the PROCESS-wide Activity Log,
+  // which follows `process.env.KEIKO_STATE_DIR` (a fixture directory here) and never logs to
+  // nowhere (#3532); it must never carry process lifecycle lines.
+  it("resolves the state directory from the launch cwd and opens no lifecycle log under an injected server", async () => {
+    const { io, err } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-state-relative-"));
+    const processStateDir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-process-state-"));
+    vi.stubEnv("KEIKO_STATE_DIR", processStateDir);
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(
+        [],
+        io,
+        {
+          KEIKO_STATE_DIR: ".keiko/runtime",
+          KEIKO_CLI_BIN_PATH: join(cwd, "missing-cli-entry.js"),
+        },
+        deps,
+      );
+      expect(err.join("")).toBe("");
+      expect(code).toBe(0);
+      // Relative, so it resolves against the launch cwd — not against the process working
+      // directory and not against a bare `.keiko`.
+      expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko", "runtime"));
+      const processLog = existsSync(join(processStateDir, "logs"))
+        ? readPersistedActivityLog(processStateDir)
+        : "";
+      expect(processLog).not.toContain('"category":"process"');
+      expect(existsSync(join(cwd, ".keiko", "runtime", "logs"))).toBe(false);
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(cwd, { recursive: true, force: true });
+      await rm(processStateDir, { recursive: true, force: true });
+    }
+  });
+
   it("registers the launch cwd as a project before the server starts", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-launch-project-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-launch-project-"));
     await writeFile(join(cwd, "package.json"), '{"name":"sandbox"}\n', "utf8");
     const captured: UiHandlerDeps[] = [];
     const deps: UiCliDeps = {
@@ -349,7 +1059,7 @@ describe("runUiCli", () => {
 
   it("preserves explicit state overrides while defaulting missing runtime paths", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-override-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-state-override-"));
     const stateDir = join(cwd, "state");
     const uiDbPath = join(cwd, ".keiko", "ui", "custom-ui.db");
     const captured: UiHandlerDeps[] = [];
@@ -369,6 +1079,7 @@ describe("runUiCli", () => {
       expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(stateDir);
       expect(captured[0]?.env.KEIKO_UI_DATA_DIR).toBeUndefined();
       expect(captured[0]?.env.KEIKO_MEMORY_DIR).toBe(join(stateDir, "memory"));
+      expect(captured[0]?.env.KEIKO_EVIDENCE_DIR).toBe(join(stateDir, "evidence"));
       captured[0]?.store.close();
       captured[0]?.memoryVault?.close();
     } finally {
@@ -376,9 +1087,94 @@ describe("runUiCli", () => {
     }
   });
 
+  it("propagates the resolved --evidence-dir into the child env instead of leaving it unset", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-flag-"));
+    const evidenceDir = join(cwd, "custom-evidence");
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--evidence-dir", evidenceDir], io, {}, deps);
+      expect(code).toBe(0);
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      // The explicit flag is passed straight through to `buildUiHandlerDeps`, and the derived env
+      // must carry the SAME resolved directory rather than leaving `KEIKO_EVIDENCE_DIR` unset next
+      // to it — otherwise a child process that reads `KEIKO_EVIDENCE_DIR` directly, rather than
+      // re-deriving `EvidenceStore`'s own precedence, would fall back to its own default and see a
+      // different directory than the one the CLI actually resolved.
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBe(evidenceDir);
+      handlerDeps.store.close();
+      handlerDeps.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a relative --evidence-dir against cwd before propagating it to the child env", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-relative-"));
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--evidence-dir", "relative-evidence"], io, {}, deps);
+      expect(code).toBe(0);
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBe(join(cwd, "relative-evidence"));
+      handlerDeps.store.close();
+      handlerDeps.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // No --evidence-dir flag: the else-if guard must leave an already-set KEIKO_EVIDENCE_DIR alone,
+  // the same way it always has, rather than overwriting it with the `<stateDir>/evidence` default.
+  it("keeps an already-set KEIKO_EVIDENCE_DIR when --evidence-dir is absent", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-preset-"));
+    const presetEvidenceDir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-preset-env-"));
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, { KEIKO_EVIDENCE_DIR: presetEvidenceDir }, deps);
+      expect(code).toBe(0);
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBe(presetEvidenceDir);
+      handlerDeps.store.close();
+      handlerDeps.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(presetEvidenceDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not load trusted KEIKO_* runtime values from a repo-local .env", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-dotenv-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-dotenv-"));
     const configPath = join(cwd, "gateway.json");
     await writeFile(
       configPath,
@@ -418,7 +1214,10 @@ describe("runUiCli", () => {
       expect(handlerDeps.env.KEIKO_CONFIG_FILE).toBeUndefined();
       expect(handlerDeps.env.KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL).toBeUndefined();
       expect(handlerDeps.env.KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY).toBeUndefined();
-      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBeUndefined();
+      // The attacker's injected path must not survive — `withDefaultLocalRuntimeStateEnv` fills
+      // the gap with the SAME safe `<stateDir>/evidence` default it would use had the .env file
+      // never mentioned the variable at all, never with the value the .env file supplied.
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBe(join(cwd, ".keiko", "evidence"));
       expect(handlerDeps.env.NPM_TOKEN).toBeUndefined();
       // FIGMA_ACCESS_TOKEN remains the only repo-local .env exception (#751 connector contract).
       expect(handlerDeps.env.FIGMA_ACCESS_TOKEN).toBe("figd_test_allowlisted");
@@ -428,29 +1227,464 @@ describe("runUiCli", () => {
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
+  // `deps.activityLog` is the seam: injecting a recording sink alongside the fake `createServer`
+  // exercises `process.started` without ever building the real file sink or loading the real
+  // HTTP server graph (the same "must not load the real server module graph" rule the other
+  // injected-server tests in this suite already hold to).
+  it("writes process.started with the documented envelope and fields", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-process-started-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const correlationId = "00000000-0000-4000-8000-000000000001";
+      const code = await runUiCli(
+        [],
+        io,
+        {
+          KEIKO_LOG_LEVEL: "debug",
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin,ui-static-root,local-state-auditor",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        deps,
+      );
+      expect(code).toBe(0);
+      const normalized = sink.events.find((event) => event.op === "cli.install-layout.normalized");
+      expect(normalized).toMatchObject({
+        category: "diagnostic",
+        correlationId,
+        level: "info",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          overriddenCount: 3,
+          overriddenKinds: ["cli-bin", "ui-static-root", "local-state-auditor"],
+        },
+      });
+      const started = sink.events.find((event) => event.op === "process.started");
+      expect(started).toBeDefined();
+      expect(started?.category).toBe("process");
+      expect(started?.level).toBe("info");
+      const extra = extraOf(started);
+      expect(extra.nodeVersion).toBe(process.version);
+      expect(extra.platform).toBe(process.platform);
+      expect(extra.arch).toBe(process.arch);
+      // The sink stamps productVersion on every line; the event itself no longer claims the name.
+      expect(extra).not.toHaveProperty("productVersion");
+      expect(extra.host).toBe(UI_HOST);
+      expect(extra.port).toBe(DEFAULT_UI_PORT);
+      expect(extra.stateDirSource).toBe("default");
+      expect(extra.logLevel).toBe("debug");
+      // Neither is computable without loading the real server module graph (`installMode`) or a
+      // resolved gateway config (`gatewayProviderCount`, and no `--config` was given here) — both
+      // are correctly absent on the injected-server path, never a fabricated placeholder value.
+      expect(extra.installMode).toBeUndefined();
+      expect(extra.gatewayProviderCount).toBeUndefined();
+      // The injected-server path never blocks on `waitForShutdown`, so no heartbeat is scheduled
+      // and the sink is never closed — `runUiCli` resolving at all already proves that.
+      expect(sink.events.some((event) => event.op === "process.heartbeat")).toBe(false);
+      expect(sink.closeCallCount).toBe(0);
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // `reportProcessStarted` runs the install-mode probe AFTER `listen()` has already succeeded and
+  // the CLI has already printed the listening URL — a probe failure (a permission error, an
+  // unreadable parent directory) must never abort a launch whose server is already up.
+  it("omits installMode and records installModeErrorKind when the install-mode probe throws", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-install-mode-probe-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      installModeProbe: () => Promise.reject(new Error("install-mode probe boom")),
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      const started = sink.events.find((event) => event.op === "process.started");
+      expect(started).toBeDefined();
+      const extra = extraOf(started);
+      expect(extra.installMode).toBeUndefined();
+      // The class only — the raw message must never reach the line (it is foreign free text).
+      expect(extra.installModeErrorKind).toBe("Error");
+      expect(JSON.stringify(started)).not.toContain("install-mode probe boom");
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // The class-only fallback (`typeof error` rather than `error.name`) for a probe that rejects
+  // with something other than an Error — still recorded, never swallowed.
+  it("records installModeErrorKind as the thrown value's typeof when the probe rejects a non-Error", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-install-mode-probe-nonerror-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- pinning the non-Error fallback
+      installModeProbe: () => Promise.reject("install-mode probe boom"),
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      const started = sink.events.find((event) => event.op === "process.started");
+      const extra = extraOf(started);
+      expect(extra.installMode).toBeUndefined();
+      expect(extra.installModeErrorKind).toBe("string");
+      expect(JSON.stringify(started)).not.toContain("install-mode probe boom");
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records installMode when the injected install-mode probe resolves a value", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-install-mode-probe-resolved-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      installModeProbe: () => Promise.resolve("package-manager"),
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      const started = sink.events.find((event) => event.op === "process.started");
+      const extra = extraOf(started);
+      expect(extra.installMode).toBe("package-manager");
+      expect(extra.installModeErrorKind).toBeUndefined();
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records gatewayProviderCount on process.started when a gateway config resolves providers", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-gateway-provider-count-"));
+    const configPath = join(cwd, "gateway.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://models.example.invalid/v1",
+            apiKey: "k",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--config", configPath], io, {}, deps);
+      expect(code).toBe(0);
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.config?.providers.length).toBe(1);
+      const started = sink.events.find((event) => event.op === "process.started");
+      expect(extraOf(started).gatewayProviderCount).toBe(1);
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("labels process.started's stateDirSource as env-override when KEIKO_STATE_DIR is set", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-process-started-env-"));
+    // Outside `cwd` entirely: `assertUiDbOutsideProject` (keiko-server store/paths.ts) refuses a
+    // default UI database path nested inside the launch project unless the intervening directory
+    // is the recognised runtime-state root name, which a differently-named override is not.
+    const stateDir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-process-started-env-state-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, { KEIKO_STATE_DIR: stateDir }, deps);
+      expect(code).toBe(0);
+      const started = sink.events.find((event) => event.op === "process.started");
+      expect(extraOf(started).stateDirSource).toBe("env-override");
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("attachDurableServerErrorListener (KEIKO-0858 / #2906 round 3, comment 3865273692)", () => {
+  // A closeable fake Server: an EventEmitter (for `.on("error", ...)`) plus the three methods
+  // `closeServerBounded` calls, mirroring the fake `waitForShutdown` itself is tested against.
+  function fakeCloseableServer(): {
+    readonly server: Server;
+    readonly emitter: EventEmitter;
+    readonly close: ReturnType<typeof vi.fn>;
+    readonly closeIdleConnections: ReturnType<typeof vi.fn>;
+    readonly closeAllConnections: ReturnType<typeof vi.fn>;
+  } {
+    const emitter = new EventEmitter();
+    const close = vi.fn((cb?: () => void) => cb?.());
+    const closeIdleConnections = vi.fn();
+    const closeAllConnections = vi.fn();
+    const server = Object.assign(emitter, {
+      close,
+      closeIdleConnections,
+      closeAllConnections,
+    }) as unknown as Server;
+    return { server, emitter, close, closeIdleConnections, closeAllConnections };
+  }
+
+  it("surfaces a server error raised after listen with a body-free redacted line", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter } = fakeCloseableServer();
+    let stderr = "";
+    const io: CliIo = {
+      out: (): void => undefined,
+      err: (text: string): void => {
+        stderr += text;
+      },
+    };
+    const exit = vi.fn();
+    // A REAL sink (undefined) — never inject the production process.exit into a test.
+    attachDurableServerErrorListener(server, io, undefined, exit);
+    // A body-carrying error with a distinctive message; the listener must NOT echo the
+    // message text — only the class name — so the redacted-diagnostics rule holds.
+    emitter.emit(
+      "error",
+      Object.assign(new TypeError("sensitive-message-do-not-leak"), {
+        name: "TypeError",
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(stderr).toContain("server error (TypeError)");
+    });
+    expect(stderr).not.toContain("sensitive-message-do-not-leak");
+  });
+
+  // `Error.name` is a writable own property: a hostile or buggy thrown value can set it to
+  // anything, including content that would inject a fake log line or leak data if echoed
+  // verbatim. A plain `Error` is NOT one of contentFreeErrorClass's specific-built-in names, so
+  // the classifier must fall back to the DECLARED class ("Error") and never surface the planted
+  // name.
+  it("never surfaces a hostile custom .name — only the declared, content-free class", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter } = fakeCloseableServer();
+    let stderr = "";
+    const io: CliIo = {
+      out: (): void => undefined,
+      err: (text: string): void => {
+        stderr += text;
+      },
+    };
+    const exit = vi.fn();
+    attachDurableServerErrorListener(server, io, undefined, exit);
+    const hostile = Object.assign(new Error("do-not-leak"), {
+      name: "INJECTED\nfake-log-line: sensitive-token",
+    });
+    emitter.emit("error", hostile);
+    await vi.waitFor(() => {
+      expect(stderr).toContain("server error (Error)");
+    });
+    expect(stderr).not.toContain("INJECTED");
+    expect(stderr).not.toContain("sensitive-token");
+    expect(stderr).not.toContain("do-not-leak");
+  });
+
+  // The core of this finding: a fatal post-listen error must not be logged-and-continued. The
+  // process must be driven toward a bounded, non-zero exit — never left running as a falsely
+  // healthy process — and the sanitized class/code must reach the existing activity log.
+  it("routes the error through the activity log and drives a bounded fatal exit(1)", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter, close, closeIdleConnections } = fakeCloseableServer();
+    const io: CliIo = { out: (): void => undefined, err: (): void => undefined };
+    const exit = vi.fn();
+    const sink = createRecordingSink();
+    attachDurableServerErrorListener(server, io, sink, exit);
+    emitter.emit("error", new RangeError("descriptor exhaustion"));
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+    // The process must actually be torn down, not merely logged about: idle connections drop
+    // immediately and close() is invoked as part of the same fatal sequence.
+    expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(sink.events).toHaveLength(1);
+    const [event] = sink.events;
+    // Only the specific fields this finding is about: the real classifier also attaches
+    // dist/src-anchored stack frames (ADR-0173 D3), which is expected but not this test's
+    // concern and would make an exact deep-equal brittle against call-site line numbers.
+    expect(event?.level).toBe("error");
+    expect(event?.category).toBe("process");
+    expect(event?.op).toBe("process.fatal");
+    expect(event?.errorKind).toBe("internal");
+    expect(extraOf(event).kind).toBe("server-error");
+    expect(extraOf(event).failureKind).toBe("RangeError");
+  });
+
+  // #3532: the fatal server-error branch ends the process too, so it records the process's one
+  // exit line as `fatal-exception` BEFORE the bounded close — the close it triggers can no longer
+  // relabel the crash as an ordinary `server-close`.
+  it("records the fatal exit before the bounded close", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter, close } = fakeCloseableServer();
+    const io: CliIo = { out: (): void => undefined, err: (): void => undefined };
+    const exit = vi.fn();
+    const order: string[] = [];
+    close.mockImplementation((callback?: () => void) => {
+      order.push("close");
+      callback?.();
+    });
+    attachDurableServerErrorListener(server, io, createRecordingSink(), exit, 3_000, () => {
+      order.push("fatal-exit");
+    });
+    emitter.emit("error", new RangeError("descriptor exhaustion"));
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+    expect(order).toEqual(["fatal-exit", "close"]);
+  });
+
+  // A sink whose write never settles, or a close() that never calls back, must not hang the
+  // fatal path forever — the bounded grace timer forces the exit exactly like the SIGINT/SIGTERM
+  // path already does for a lingering connection.
+  it("still exits(1) on a bounded grace timeout when close() never calls back", async () => {
+    vi.useFakeTimers();
+    try {
+      const { attachDurableServerErrorListener } = await import("./ui.js");
+      const emitter = new EventEmitter();
+      const closeIdleConnections = vi.fn();
+      const closeAllConnections = vi.fn();
+      const close = vi.fn(); // never invokes its callback
+      const server = Object.assign(emitter, {
+        close,
+        closeIdleConnections,
+        closeAllConnections,
+      }) as unknown as Server;
+      const io: CliIo = { out: (): void => undefined, err: (): void => undefined };
+      const exit = vi.fn();
+      attachDurableServerErrorListener(server, io, undefined, exit, 3_000);
+      emitter.emit("error", new Error("stuck"));
+      // Let the classifier's microtask chain resolve before advancing the grace timer.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(closeAllConnections).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("createLiveCspSource", () => {
+  // Regression pin (KEIKO-0439): the original assertions were identical before and after the
+  // watcher was supposed to fire — both reads landed in the runtime-hash fallback branch of
+  // loadCspMaterial because the stored hash list never matched the runtime hashes, so the test
+  // could not detect a broken reload. Rewrite BOTH the static export's inline script AND the
+  // csp-hashes.json to a mutually-matching new hash, wait past the 500ms watch interval, and
+  // assert the header actually changed from the old hash to the new one.
   it("reloads the CSP when csp-hashes.json changes after startup", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "keiko-ui-csp-live-"));
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-csp-live-"));
     const staticRoot = join(dir, "static");
     const hashesFile = join(dir, "csp-hashes.json");
+    const indexHtml = join(staticRoot, "index.html");
     const { io } = captureIo();
     try {
       await mkdir(staticRoot, { recursive: true });
-      const html = "<html><body><script>window.__TEST__='new';</script></body></html>";
-      await writeFile(join(staticRoot, "index.html"), html, "utf8");
-      const [expectedHash] = extractInlineScriptHashes([html]);
-      await writeFile(hashesFile, JSON.stringify(["'sha256-old'"]), "utf8");
+      const initialHtml = "<html><body><script>window.__TEST__='before';</script></body></html>";
+      await writeFile(indexHtml, initialHtml, "utf8");
+      const [initialHash] = extractInlineScriptHashes([initialHtml]);
+      expect(initialHash).toBeDefined();
+      if (initialHash === undefined) throw new Error("expected initial inline script hash");
+      // Match runtime + stored so loadCspMaterial's stored-hash branch (not the fallback) runs.
+      await writeFile(hashesFile, JSON.stringify([initialHash]), "utf8");
       const runtime = await createLiveCspSource(staticRoot, hashesFile, io);
-      expect(expectedHash).toBeDefined();
-      if (expectedHash === undefined) throw new Error("expected inline script hash");
-      expect(runtime.csp()).toContain(expectedHash);
-      expect(runtime.csp()).not.toContain("'sha256-old'");
-      await writeFile(hashesFile, JSON.stringify(["'sha256-new'"]), "utf8");
-      await sleep(700);
-      expect(runtime.csp()).toContain(expectedHash);
-      expect(runtime.csp()).not.toContain("'sha256-new'");
+      expect(runtime.csp()).toContain(initialHash);
+
+      // Rewrite BOTH the exported HTML and the stored hash list so they still match, but to a
+      // different inline script → different hash. The watcher on csp-hashes.json fires reload(),
+      // which re-reads static/index.html and recomputes the runtime hashes.
+      const nextHtml = "<html><body><script>window.__TEST__='after';</script></body></html>";
+      await writeFile(indexHtml, nextHtml, "utf8");
+      const [nextHash] = extractInlineScriptHashes([nextHtml]);
+      expect(nextHash).toBeDefined();
+      if (nextHash === undefined) throw new Error("expected next inline script hash");
+      expect(nextHash).not.toBe(initialHash);
+      await writeFile(hashesFile, JSON.stringify([nextHash]), "utf8");
+
+      // KEIKO-0842: poll for the CSP to actually reflect the new hash, up to a generous
+      // multi-second cap. The previous fixed `await sleep(700)` raced the watcher's
+      // 500ms watchFile interval and produced flakes when the OS scheduler happened to
+      // delay the callback. Poll on the meaningful post-condition (csp() reports the new
+      // hash) rather than on a wall-clock guess.
+      const deadline = Date.now() + 5_000;
+      while (!runtime.csp().includes(nextHash) && Date.now() < deadline) {
+        await sleep(50);
+      }
+
+      // The header must have actually changed — before/after assertions differ.
+      expect(runtime.csp()).toContain(nextHash);
+      expect(runtime.csp()).not.toContain(initialHash);
       runtime.dispose();
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -505,6 +1739,8 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     child.kill = (): void => {
       /* no-op */
     };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
     queueMicrotask(() => {
       child.emit("error", new Error("spawn EMFILE"));
     });
@@ -519,36 +1755,105 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
       },
     );
     expect(code).toBe(1);
-    // The signal forwarders must be gone (no listener leak after the failure).
-    expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
+    // The signal forwarders must be gone (no listener leak after the failure): the
+    // process-level SIGINT/SIGTERM listener counts must be back to their pre-call baseline.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
   });
 
-  it("does not re-exec when sqlite is already importable", async () => {
-    const { io, err } = captureIo();
-    let spawned = 0;
-    const code = await runUiCli(
-      ["--host", "0.0.0.0"], // invalid → returns 2 after the (no-op) guard
+  // Without these forwarders, a Ctrl-C during re-exec kills the PARENT (whose own SIGINT
+  // listeners are the default Node behaviour: terminate) while the re-exec'd CHILD — the process
+  // actually doing the work — keeps running orphaned. The parent must relay the signal instead.
+  it("forwards SIGINT and SIGTERM to the re-exec'd child instead of leaving it orphaned", async () => {
+    const { io } = captureIo();
+    const child = new EventEmitter() as EventEmitter & {
+      kill: (signal?: NodeJS.Signals) => boolean;
+    };
+    const killedWith: (NodeJS.Signals | undefined)[] = [];
+    child.kill = (signal?: NodeJS.Signals): boolean => {
+      killedWith.push(signal);
+      return true;
+    };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
+
+    const promise = runUiCli(
+      [],
       io,
       {},
       {
         currentExecArgv: () => [],
-        sqliteProbe: () => true,
-        spawnFn: () => {
-          spawned += 1;
-          return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
-        },
+        sqliteProbe: () => false,
+        spawnFn: () => child as unknown as import("node:child_process").ChildProcess,
       },
     );
-    expect(code).toBe(2);
-    expect(err.join("")).toContain("Usage:");
-    expect(spawned).toBe(0);
+
+    // Everything up to and including `process.on("SIGINT"/"SIGTERM", ...)` inside the re-exec
+    // guard runs synchronously (spawnFn is called synchronously, and nothing awaits before the
+    // listeners are registered) — so both are already attached the instant `runUiCli` yields its
+    // pending promise back to this line, with no need to wait a tick first.
+    // The forwarders are registered: one SIGINT and one SIGTERM listener added on `process`.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore + 1);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore + 1);
+    process.emit("SIGINT");
+    process.emit("SIGTERM");
+    expect(killedWith).toEqual(["SIGINT", "SIGTERM"]);
+
+    child.emit("exit", 0, null);
+    expect(await promise).toBe(0);
+    // The forwarders must be gone once the child has exited (no listener leak): the
+    // process-level SIGINT/SIGTERM listener counts must be back to their pre-call baseline.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
+  });
+
+  // Regression pin (KEIKO-0443): the three "does not re-exec" tests below previously used the
+  // invalid `["--host", "0.0.0.0"]` args, so parseUiArgsOrExit returned 2 *before* the sqlite
+  // guard ran and neither `sqliteProbe`, the NODE_OPTIONS branch of `alreadyFlagged`, nor the
+  // execArgv branch was ever exercised. They now pass valid args and stub `createServer` via the
+  // same pattern as "does not re-exec when an injected createServer is supplied", so the guard
+  // actually runs. `spawned === 0` is the load-bearing assertion.
+  it("does not re-exec when sqlite is already importable", async () => {
+    const { io } = captureIo();
+    let spawned = 0;
+    const record: { port?: number } = {};
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-probe-"));
+    let handlerDeps: UiHandlerDeps | undefined;
+    await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        {},
+        {
+          staticRoot: dir,
+          hashesFile: join(dir, "csp-hashes.json"),
+          cwd: dir,
+          createServer: ({ handlerDeps: createdHandlerDeps }) => {
+            handlerDeps = createdHandlerDeps;
+            return fakeServer(record);
+          },
+          currentExecArgv: () => [],
+          sqliteProbe: () => true,
+          spawnFn: () => {
+            spawned += 1;
+            return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(spawned).toBe(0);
+    } finally {
+      closeHandlerDeps(handlerDeps);
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not re-exec when an injected createServer is supplied (test path)", async () => {
     const { io } = captureIo();
     let spawned = 0;
     const record: { port?: number } = {};
-    const dir = await mkdtemp(join(tmpdir(), "keiko-ui-cli-noexec-"));
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-"));
     let handlerDeps: UiHandlerDeps | undefined;
     await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
     try {
@@ -583,22 +1888,78 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
   it("does not re-exec when --experimental-sqlite is already on NODE_OPTIONS", async () => {
     const { io } = captureIo();
     let spawned = 0;
-    const code = await runUiCli(
-      ["--host", "0.0.0.0"],
-      io,
-      { NODE_OPTIONS: "--experimental-sqlite" },
-      {
-        currentExecArgv: () => [],
-        sqliteProbe: () => false,
-        spawnFn: () => {
-          spawned += 1;
-          return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+    const record: { port?: number } = {};
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-nodeopt-"));
+    let handlerDeps: UiHandlerDeps | undefined;
+    await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        { NODE_OPTIONS: "--experimental-sqlite" },
+        {
+          staticRoot: dir,
+          hashesFile: join(dir, "csp-hashes.json"),
+          cwd: dir,
+          createServer: ({ handlerDeps: createdHandlerDeps }) => {
+            handlerDeps = createdHandlerDeps;
+            return fakeServer(record);
+          },
+          currentExecArgv: () => [],
+          sqliteProbe: () => false,
+          spawnFn: () => {
+            spawned += 1;
+            return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+          },
         },
-      },
-    );
-    // alreadyFlagged short-circuits the guard → falls through to flag parsing → 2.
-    expect(code).toBe(2);
-    expect(spawned).toBe(0);
+      );
+      // alreadyFlagged short-circuits via the NODE_OPTIONS branch; server startup then proceeds.
+      expect(code).toBe(0);
+      expect(spawned).toBe(0);
+    } finally {
+      closeHandlerDeps(handlerDeps);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Regression pin (KEIKO-0443): the execArgv branch of `alreadyFlagged` had zero coverage — every
+  // pre-existing test set currentExecArgv to `() => []`. A regression that dropped the execArgv
+  // check would go unnoticed by this suite even though it is the branch that stops the re-exec
+  // guard from looping when the CLI is already inside the child.
+  it("does not re-exec when --experimental-sqlite is already on currentExecArgv", async () => {
+    const { io } = captureIo();
+    let spawned = 0;
+    const record: { port?: number } = {};
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-execargv-"));
+    let handlerDeps: UiHandlerDeps | undefined;
+    await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        {},
+        {
+          staticRoot: dir,
+          hashesFile: join(dir, "csp-hashes.json"),
+          cwd: dir,
+          createServer: ({ handlerDeps: createdHandlerDeps }) => {
+            handlerDeps = createdHandlerDeps;
+            return fakeServer(record);
+          },
+          currentExecArgv: () => ["--experimental-sqlite"],
+          sqliteProbe: () => false,
+          spawnFn: () => {
+            spawned += 1;
+            return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(spawned).toBe(0);
+    } finally {
+      closeHandlerDeps(handlerDeps);
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -619,15 +1980,14 @@ describe("waitForShutdown", () => {
   // Emitting a real signal event would also invoke the test runner's own handlers,
   // so each signal test detaches every pre-existing listener and restores it after.
   function withIsolatedSignalListeners<T>(run: () => Promise<T>): Promise<T> {
-    const priorSigint = process.rawListeners("SIGINT");
-    const priorSigterm = process.rawListeners("SIGTERM");
-    process.removeAllListeners("SIGINT");
-    process.removeAllListeners("SIGTERM");
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const prior = signals.map((signal) => [signal, process.rawListeners(signal)] as const);
+    for (const signal of signals) process.removeAllListeners(signal);
     return run().finally(() => {
-      process.removeAllListeners("SIGINT");
-      process.removeAllListeners("SIGTERM");
-      for (const listener of priorSigint) process.on("SIGINT", listener as () => void);
-      for (const listener of priorSigterm) process.on("SIGTERM", listener as () => void);
+      for (const [signal, listeners] of prior) {
+        process.removeAllListeners(signal);
+        for (const listener of listeners) process.on(signal, listener);
+      }
     });
   }
 
@@ -701,5 +2061,427 @@ describe("waitForShutdown", () => {
         vi.useRealTimers();
       }
     });
+  });
+
+  // process.exiting must land on EVERY shutdown branch, before the sink is closed, carrying the
+  // reason that branch actually took and the elapsed time since `startedAt` — and the heartbeat's
+  // stop callback must fire on every one of them too, never only on the happy path.
+  describe("process.exiting", () => {
+    function fakeClosingServer(): {
+      readonly server: Server;
+      readonly emitter: EventEmitter;
+      readonly closeIdleConnections: ReturnType<typeof vi.fn>;
+    } {
+      const emitter = new EventEmitter();
+      const closeIdleConnections = vi.fn();
+      const server = Object.assign(emitter, {
+        close: vi.fn((cb?: () => void) => cb?.()),
+        closeIdleConnections,
+        closeAllConnections: vi.fn(),
+      }) as unknown as Server;
+      return { server, emitter, closeIdleConnections };
+    }
+
+    it("reports reason 'sigint', stops the heartbeat, and closes the sink", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn();
+        const startedAt = Date.now() - 5_000;
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt,
+          onShutdown,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(exiting?.category).toBe("process");
+        const extra = extraOf(exiting);
+        expect(extra.reason).toBe("sigint");
+        expect(extra.uptimeMs).toBeGreaterThanOrEqual(5_000);
+        expect(sink.closeCallCount).toBe(1);
+      });
+    });
+
+    it("reports reason 'sighup' for a closed terminal instead of dying silently", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+        });
+        process.emit("SIGHUP");
+        await expect(promise).resolves.toBeUndefined();
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("sighup");
+      });
+    });
+
+    // #3532 review finding (PR #3554): a throwing heartbeat stop used to short-circuit the exit
+    // evidence hook, dropping the exit loss summary and the BFF's trailing suppressed counts.
+    it("always runs the exit evidence hook, even when the heartbeat stop throws", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const beforeExitEvidence = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown: () => {
+            throw new RangeError("heartbeat teardown failed");
+          },
+          beforeExitEvidence,
+        });
+        process.emit("SIGTERM");
+        await expect(promise).resolves.toBeUndefined();
+        expect(beforeExitEvidence).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).onShutdownErrorKind).toBe("RangeError");
+      });
+    });
+
+    it("writes exactly one exit line per process through the shared latch", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const exitLatch = new ProcessExitLatch();
+        expect(exitLatch.claim()).toBe(true);
+        const beforeExitEvidence = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          exitLatch,
+          beforeExitEvidence,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        expect(sink.events.filter((event) => event.op === "process.exiting")).toEqual([]);
+        expect(beforeExitEvidence).not.toHaveBeenCalled();
+      });
+    });
+
+    it("records an exit no shutdown branch observed from the process exit event", () => {
+      const sink = createRecordingSink();
+      const priorExit = process.rawListeners("exit");
+      const disarm = armProcessExitFallback({ activityLog: sink, startedAt: Date.now() });
+      try {
+        const added = process
+          .rawListeners("exit")
+          .filter((listener) => !priorExit.includes(listener));
+        expect(added).toHaveLength(1);
+        (added[0] as (code: number) => void)(0);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("process-exit");
+      } finally {
+        disarm();
+      }
+      expect(process.rawListeners("exit")).toHaveLength(priorExit.length);
+    });
+
+    it("reports reason 'sigterm'", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown,
+        });
+        process.emit("SIGTERM");
+        await expect(promise).resolves.toBeUndefined();
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("sigterm");
+        expect(sink.closeCallCount).toBe(1);
+      });
+    });
+
+    it("reports reason 'shutdown-request' and drains the same way as SIGTERM", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server, closeIdleConnections } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown,
+          peekShutdownRequest: () => true,
+        });
+        await expect(promise).resolves.toBeUndefined();
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("shutdown-request");
+        expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+        expect(sink.closeCallCount).toBe(1);
+      });
+    });
+
+    it("begins drain on the next sentinel poll once peek flips true", async () => {
+      await withIsolatedSignalListeners(async () => {
+        vi.useFakeTimers();
+        try {
+          const { server, closeIdleConnections } = fakeClosingServer();
+          const sink = createRecordingSink();
+          let peek = false;
+          const promise = waitForShutdown(server, 3_000, {
+            activityLog: sink,
+            startedAt: Date.now(),
+            peekShutdownRequest: () => peek,
+          });
+          peek = true;
+          await vi.advanceTimersByTimeAsync(250);
+          await promise;
+          expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+          const exiting: ServerLogEvent | undefined = sink.events.find(
+            (event: ServerLogEvent): boolean => event.op === "process.exiting",
+          );
+          expect(extraOf(exiting).reason).toBe("shutdown-request");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    it("reports reason 'server-close' when the server closes without a prior signal", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const emitter = new EventEmitter();
+        const server = emitter as unknown as Server;
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown,
+        });
+        emitter.emit("close");
+        await expect(promise).resolves.toBeUndefined();
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("server-close");
+        expect(sink.closeCallCount).toBe(1);
+      });
+    });
+
+    // A throwing onShutdown must not suppress the line — the doc comment on
+    // WaitForShutdownActivity.onShutdown states this guarantee explicitly, and an unguarded call
+    // would let the throw propagate out of the SIGINT listener itself, aborting shutdown before
+    // the sink closes.
+    it("still writes the line and closes the sink when onShutdown throws", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn(() => {
+          throw new Error("heartbeat teardown boom");
+        });
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("sigint");
+        // The class only — the raw message must never reach the line (it is foreign free text).
+        expect(extraOf(exiting).onShutdownErrorKind).toBe("Error");
+        expect(JSON.stringify(exiting)).not.toContain("heartbeat teardown boom");
+        expect(sink.closeCallCount).toBe(1);
+      });
+    });
+
+    // The class-only fallback (`typeof error` rather than `error.name`) for an onShutdown that
+    // throws something other than an Error — still recorded, never swallowed.
+    it("records onShutdownErrorKind as the thrown value's typeof when onShutdown throws a non-Error", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn(() => {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- pinning the non-Error fallback
+          throw "heartbeat teardown boom";
+        });
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).onShutdownErrorKind).toBe("string");
+        expect(JSON.stringify(exiting)).not.toContain("heartbeat teardown boom");
+      });
+    });
+
+    // `closeActivityLog` (threaded from `startUiServer`'s real-launch path) is the module's own
+    // `closeFileServerLogSinks`, reached directly rather than through `activityLog.close?.()` —
+    // when supplied, it must be the one actually called, not the sink's own `close`.
+    it("calls closeActivityLog instead of activityLog.close() when both are supplied", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const closeActivityLog = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          closeActivityLog,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        expect(closeActivityLog).toHaveBeenCalledTimes(1);
+        expect(sink.closeCallCount).toBe(0);
+      });
+    });
+
+    // Regression: this workspace's vitest config does not enable `restoreMocks`/`mockReset`, so a
+    // `vi.spyOn(process, "emitWarning")` left unrestored here would leak into every later test in
+    // this file — not just the next one. The spy is restored in a `finally` (so a failed assertion
+    // inside cannot skip the restore), and this test proves that restore actually happened by
+    // checking the global right after, rather than relying on a separate, later, order-dependent
+    // test to notice the leak (that proof only fires when tests run in file order and a focused
+    // run of the leak-check test alone would trivially pass against a pre-fix implementation).
+    it("does nothing and never warns when no activity log was supplied and onShutdown succeeds", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+        try {
+          const { server } = fakeClosingServer();
+          const onShutdown = vi.fn();
+          const promise = waitForShutdown(server, 3_000, { onShutdown });
+          process.emit("SIGINT");
+          await expect(promise).resolves.toBeUndefined();
+          expect(onShutdown).toHaveBeenCalledTimes(1);
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      });
+      // Read via the property descriptor, not `process.emitWarning` directly: the latter is a
+      // bound-`this` method reference (flagged by `@typescript-eslint/unbound-method` the moment
+      // it is used as a value rather than called), and this check only needs the current function
+      // value's identity, never to invoke it with `process` as `this`.
+      const emitWarning: unknown = Object.getOwnPropertyDescriptor(process, "emitWarning")?.value;
+      expect(vi.isMockFunction(emitWarning)).toBe(false);
+    });
+
+    // No activity-log line can carry the failure kind on this path (no log in scope), so it must
+    // still reach an operator on the independent process-warning channel — the same idiom
+    // `knowledge-log.ts`'s dead-sink report uses — instead of vanishing with the shutdown path
+    // that produced it (#2902 PR review).
+    //
+    // Also proves, order-independently, that the `emitWarning` spy above is restored: see the
+    // comment on the previous test for why this assertion lives here rather than in a separate,
+    // later, order-dependent test.
+    it("warns via process.emitWarning when onShutdown throws and no activity log is in scope", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+        try {
+          const { server } = fakeClosingServer();
+          const onShutdown = vi.fn(() => {
+            throw new Error("heartbeat teardown boom");
+          });
+          const promise = waitForShutdown(server, 3_000, { onShutdown });
+          process.emit("SIGINT");
+          await expect(promise).resolves.toBeUndefined();
+          expect(onShutdown).toHaveBeenCalledTimes(1);
+          expect(warn).toHaveBeenCalledTimes(1);
+          const calls: readonly (readonly unknown[])[] = warn.mock.calls;
+          expect(calls[0]?.[1]).toMatchObject({
+            code: "KEIKO_SHUTDOWN_HOOK_FAILED",
+            detail: "errorKind=Error",
+          });
+          // The class only — the raw message must never reach the warning (it is foreign free text).
+          expect(JSON.stringify(warn.mock.calls)).not.toContain("heartbeat teardown boom");
+        } finally {
+          warn.mockRestore();
+        }
+      });
+      const emitWarning: unknown = Object.getOwnPropertyDescriptor(process, "emitWarning")?.value;
+      expect(vi.isMockFunction(emitWarning)).toBe(false);
+    });
+  });
+});
+
+describe("startProcessHeartbeat", () => {
+  // Proves the fix for the leak this work item's spec calls out by name: an unref()'d interval
+  // that is never cleared would keep ticking (and, in production, keep writing lines) forever
+  // past shutdown. `vi.getTimerCount()` dropping to zero after `stop()` is the direct assertion
+  // that no interval survives.
+  it("writes process.heartbeat while running and leaves no timer behind once stopped", () => {
+    vi.useFakeTimers();
+    try {
+      const sink = createRecordingSink();
+      const stop = startProcessHeartbeat(sink, 1_000);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(1_000);
+      const heartbeat = sink.events.find((event) => event.op === "process.heartbeat");
+      expect(heartbeat).toBeDefined();
+      expect(heartbeat?.category).toBe("process");
+      const extra = extraOf(heartbeat);
+      expect(typeof extra.rssBytes).toBe("number");
+      expect(typeof extra.heapUsedBytes).toBe("number");
+      expect(typeof extra.heapTotalBytes).toBe("number");
+      expect(typeof extra.externalBytes).toBe("number");
+      expect(typeof extra.eventLoopDelayP99Ms).toBe("number");
+      stop();
+      expect(vi.getTimerCount()).toBe(0);
+      // A tick after `stop()` must not produce another line — the interval is really gone, not
+      // merely unreferenced.
+      const countAfterStop = sink.events.filter((event) => event.op === "process.heartbeat").length;
+      vi.advanceTimersByTime(5_000);
+      expect(sink.events.filter((event) => event.op === "process.heartbeat")).toHaveLength(
+        countAfterStop,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // `monitorEventLoopDelay()` accumulates samples cumulatively until `reset()` is called (Node
+  // docs), so each heartbeat must read the percentile and THEN reset the histogram — otherwise a
+  // delay recorded during one interval keeps showing up in every later heartbeat's p99, long after
+  // the event loop that caused it recovered. A deterministic histogram double injected through
+  // `createHistogram` pins this without depending on real event-loop timing (#2902 PR review).
+  it("scopes eventLoopDelayP99Ms to the interval since the previous heartbeat", () => {
+    vi.useFakeTimers();
+    try {
+      let cumulativeNs = 0;
+      let resetCount = 0;
+      const histogram = {
+        enable: vi.fn(),
+        disable: vi.fn(),
+        percentile: (): number => cumulativeNs,
+        reset: (): void => {
+          resetCount += 1;
+          cumulativeNs = 0;
+        },
+      };
+      const sink = createRecordingSink();
+      const stop = startProcessHeartbeat(sink, 1_000, () => histogram);
+
+      // A delay accumulates during the first interval only.
+      cumulativeNs = 5_000_000; // 5ms, in the nanoseconds `percentile()` reports
+      vi.advanceTimersByTime(1_000);
+      const heartbeats = (): readonly ServerLogEvent[] =>
+        sink.events.filter((event) => event.op === "process.heartbeat");
+      expect(heartbeats()).toHaveLength(1);
+      expect(extraOf(heartbeats()[0]).eventLoopDelayP99Ms).toBe(5);
+      expect(resetCount).toBe(1);
+
+      // No further delay is simulated before the second tick — a fix that resets the histogram
+      // after reading it reports 0 here; a fix that never resets would still report 5, carrying
+      // the first interval's delay into the second.
+      vi.advanceTimersByTime(1_000);
+      expect(heartbeats()).toHaveLength(2);
+      expect(extraOf(heartbeats()[1]).eventLoopDelayP99Ms).toBe(0);
+      expect(resetCount).toBe(2);
+
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

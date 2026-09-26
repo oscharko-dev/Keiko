@@ -1,21 +1,39 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { maxUtf8BytesForTokenBudget, UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   EMBEDDING_EVIDENCE_PATTERN,
   TESTED_CONTEXT_TOKENS_PATTERN,
+  WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
   handleGatewayReadiness,
+  longContextTokens,
   runGatewayReadiness,
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
+
+// A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
+const CODING_CHAT_DIGEST = modelIdEvidence("coding-chat").modelIdDigest;
+const TEST_CHAT_MODEL_DIGEST = modelIdEvidence("test-chat-model").modelIdDigest;
+import {
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
+  QUALIFICATION_SPEND_LEDGER_PATH_ENV,
+} from "./gateway-spend-budget.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -71,12 +89,13 @@ function depsWith(
   config: GatewayConfig | undefined,
   fetchImpl: typeof fetch = vi.fn(),
   diagnostics?: ServerDiagnosticSink,
+  env: Readonly<Record<string, string | undefined>> = {},
 ): UiHandlerDeps {
   return {
     config,
     configPresent: config !== undefined,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: {},
+    env,
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -108,6 +127,7 @@ function ctx(body: unknown): RouteContext {
 
 function rawCtx(body: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(body, "utf8")]) as IncomingMessage,
     res: {} as RouteContext["res"],
     params: {},
@@ -179,6 +199,439 @@ afterEach(() => {
 });
 
 describe("gateway readiness route", () => {
+  it("automatically targets the structurally eligible Coding Workbench model and logs the run", async () => {
+    const generalChat = {
+      ...createDefaultChatCapability("general-chat"),
+      preferredUseCases: ["Chat"],
+      workflowEligible: true,
+    };
+    const codingChat = {
+      ...createDefaultChatCapability("coding-chat"),
+      preferredUseCases: ["Coding"],
+      workflowEligible: true,
+    };
+    const config: GatewayConfig = {
+      ...gatewayConfig("general-chat"),
+      providers: [
+        ...gatewayConfig("general-chat").providers,
+        {
+          modelId: "coding-chat",
+          baseUrl: "https://llm-gateway.internal/v1",
+          apiKey: "secret-token",
+          timeoutMs: 30_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 0,
+        },
+      ],
+      capabilities: [generalChat, codingChat, embeddingCapability("text-embedding-3-small")],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    type: "function",
+                    function: { name: "report_readiness", arguments: '{"status":"ok"}' },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ) as typeof fetch;
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    const result = await handleGatewayReadiness(
+      {
+        ...ctx({
+          options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+        }),
+        correlationId: "coding-readiness-0001",
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200, body: { modelId: "coding-chat" } });
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      op: "gateway.readiness.automatic.started",
+      correlationId: "coding-readiness-0001",
+      // #3591: the bound the automatic probes ran under — the Workbench floor, not the 30 s configured.
+      extra: {
+        modelIdDigest: CODING_CHAT_DIGEST,
+        probeCount: 2,
+        chatProbeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
+      },
+    });
+    expect(events[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
+    expect(events[1]).toMatchObject({
+      op: "gateway.readiness.automatic.completed",
+      correlationId: "coding-readiness-0001",
+      extra: {
+        modelIdDigest: CODING_CHAT_DIGEST,
+        overallStatus: "ready",
+        probeCount: 2,
+        inconclusiveProbeCount: 0,
+      },
+    });
+    const startedProof = expectActivityLogProof(
+      "gateway.readiness.automatic.started.line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(startedProof).toMatchObject({
+      correlationId: "coding-readiness-0001",
+      modelIdDigest: CODING_CHAT_DIGEST,
+      probeCount: 2,
+    });
+    const completedProof = expectActivityLogProof(
+      "gateway.readiness.automatic.completed.line",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(completedProof).toMatchObject({
+      correlationId: "coding-readiness-0001",
+      modelIdDigest: CODING_CHAT_DIGEST,
+      overallStatus: "ready",
+      probeCount: 2,
+    });
+    deps.store.close();
+  });
+
+  // #3557: only the automatic run used to leave a line. A settings check now does too, under the
+  // request's correlation id, with its outcome, so a later refusal can name what the check found.
+  // The completed line also counts probes that ended without a verdict (a 503 is transient, #3591
+  // review), so the short re-probe cooldown a Workbench run applies is reconstructable.
+  it.each([
+    ["passes", chatPayload("OK"), 200, "ready", 0],
+    ["fails", { error: { message: "upstream unavailable" } }, 503, "failed", 1],
+  ] as const)(
+    "logs a settings check that %s under the request's correlation id",
+    async (_label, payload, status, overallStatus, inconclusiveProbeCount) => {
+      const events: ServerLogEvent[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsWith(
+          gatewayConfig(),
+          vi.fn(() => Promise.resolve(jsonResponse(payload, status))),
+        ),
+        activityLog: { write: (event): void => void events.push(event) },
+      };
+
+      await runGatewayReadiness(
+        { modelId: "test-chat-model", options: { probes: [] } },
+        deps,
+        "corr-settings-readiness-0001",
+        "settings",
+      );
+
+      const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+      expect(readiness.map((event) => [event.op, event.correlationId])).toEqual([
+        ["gateway.readiness.started", "corr-settings-readiness-0001"],
+        ["gateway.readiness.completed", "corr-settings-readiness-0001"],
+      ]);
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.started.line",
+          formatActivityLogProofLine(readiness[0] ?? {}),
+        ),
+      ).toMatchObject({
+        modelIdDigest: TEST_CHAT_MODEL_DIGEST,
+        trigger: "settings",
+        probeCount: 1,
+        // A settings check runs its chat probe on the configured timeout; no floor applies.
+        chatProbeTimeoutMs: 30_000,
+      });
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.completed.line",
+          formatActivityLogProofLine(readiness[1] ?? {}),
+        ),
+      ).toMatchObject({
+        modelIdDigest: TEST_CHAT_MODEL_DIGEST,
+        trigger: "settings",
+        overallStatus,
+        probeCount: 1,
+        inconclusiveProbeCount,
+      });
+      expect(JSON.stringify(readiness)).not.toContain("upstream unavailable");
+      deps.store.close();
+    },
+  );
+
+  // The settings dialog reaches readiness through this route, so the route names the settings
+  // trigger; the on-demand probe records its lifecycle with the automatic lines instead (#3559).
+  it("logs a check the settings dialog runs through the route as a settings check", async () => {
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(
+        gatewayConfig(),
+        vi.fn(() => Promise.resolve(jsonResponse(chatPayload("OK"), 200))),
+      ),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    await handleGatewayReadiness(
+      {
+        ...ctx({ modelId: "test-chat-model", options: { probes: [] } }),
+        correlationId: "corr-settings-route-0001",
+      },
+      deps,
+    );
+
+    const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+    expect(readiness.map((event) => [event.op, event.correlationId, event.extra?.trigger])).toEqual(
+      [
+        ["gateway.readiness.started", "corr-settings-route-0001", "settings"],
+        ["gateway.readiness.completed", "corr-settings-route-0001", "settings"],
+      ],
+    );
+  });
+
+  // The full id serves provider selection and the response; the log carries only the digest of the
+  // whole id, never a truncated prefix that two long ids could share (#3557 review).
+  it("logs a long configured model id only as a whole-id digest", async () => {
+    const modelId = `coding-${"x".repeat(250)}`;
+    const config: GatewayConfig = {
+      ...gatewayConfig(modelId),
+      capabilities: [
+        {
+          ...createDefaultChatCapability(modelId),
+          preferredUseCases: ["Coding"],
+          workflowEligible: true,
+        },
+        embeddingCapability("text-embedding-3-small"),
+      ],
+    };
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(
+        config,
+        vi.fn().mockResolvedValue(jsonResponse(chatPayload("OK"))) as typeof fetch,
+      ),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    const result = await runGatewayReadiness(
+      { options: { probes: [], purpose: "coding-workbench-auto" } },
+      deps,
+      "coding-readiness-long-model",
+    );
+
+    expect("status" in result).toBe(false);
+    if ("status" in result) return;
+    expect(result.modelId).toBe(modelId);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.extra?.modelId)).toEqual([undefined, undefined]);
+    const digests = events.map((event) => event.extra?.modelIdDigest);
+    expect(digests[0]).toMatch(/^[a-f0-9]{16}$/u);
+    expect(digests[1]).toBe(digests[0]);
+    expect(JSON.stringify(events)).not.toContain("xxxxxxxxxx");
+    deps.store.close();
+  });
+
+  // Every chat model is a Workbench candidate since 1.1.1, so the non-candidate is a non-chat model.
+  it("rejects an automatic probe for a non-chat model without dispatching or logging", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(gatewayConfig("general-chat"), fetchImpl),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    const result = await handleGatewayReadiness(
+      {
+        ...ctx({
+          modelId: "text-embedding-3-small",
+          options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+        }),
+        correlationId: "coding-readiness-0002",
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "NO_MODEL" } } });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    deps.store.close();
+  });
+
+  it("reserves the shared spend ceiling before chat probe dispatch", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-readiness-budget-"));
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) => ({
+        ...capability,
+        ...(capability.kind === "chat" ? { maxOutputTokens: 20 } : {}),
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      })),
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([["chat", "failed"]]);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reserves the shared spend ceiling before embedding probe dispatch", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-embedding-probe-budget-"));
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { role: "assistant", content: "OK" } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+      ),
+    ) as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) => ({
+        ...capability,
+        ...(capability.kind === "chat" ? { maxOutputTokens: 20 } : {}),
+        pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+      })),
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.008",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness(
+        { options: { probes: ["chat", "embedding"] } },
+        deps,
+      );
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([
+        ["chat", "passed"],
+        ["embedding", "failed"],
+      ]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(requestBodyAt(fetchImpl, 0).max_tokens).toBe(20);
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records a failed tool probe when the preceding chat consumes the remaining ceiling", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-tool-runner-budget-"));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK"))) as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) =>
+        capability.kind === "chat"
+          ? {
+              ...capability,
+              contextWindow: 100,
+              maxOutputTokens: 20,
+              pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+            }
+          : capability,
+      ),
+    };
+    const recordVerification = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl, undefined, {
+        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.00012",
+        [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+      }),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 3,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
+      },
+    };
+    try {
+      const report = await runGatewayReadiness(
+        { options: { probes: ["chat", "tool_calling"] } },
+        deps,
+      );
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([
+        ["chat", "passed"],
+        ["tool_calling", "failed"],
+      ]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(recordVerification).toHaveBeenCalledWith("partial", 3);
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not dispatch a reranker probe after chat consumes the remaining ceiling", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-reranker-runner-budget-"));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK"))) as typeof fetch;
+    const base = gatewayConfig();
+    const pricedCapability = {
+      ...createDefaultChatCapability("test-chat-model"),
+      contextWindow: 100,
+      maxOutputTokens: 20,
+      pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+    };
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: [
+        pricedCapability,
+        embeddingCapability("text-embedding-3-small"),
+        { ...pricedCapability, id: "qwen3-reranker" },
+      ],
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://reranker.internal/v1",
+        apiKey: "reranker-secret",
+        timeoutMs: 10_000,
+      },
+    };
+    const deps = depsWith(config, fetchImpl, undefined, {
+      [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.00012",
+      [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+    });
+    try {
+      const report = await runGatewayReadiness({ options: { probes: ["chat", "reranker"] } }, deps);
+      if ("status" in report) throw new Error("expected readiness report");
+      expect(report.probes.map(({ name, status }) => [name, status])).toEqual([
+        ["chat", "passed"],
+        ["reranker", "failed"],
+      ]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps credentialed chat completion transport inside the model gateway package", () => {
     const source = readFileSync(join(CURRENT_DIR, "gateway-readiness.ts"), "utf8");
 
@@ -410,9 +863,7 @@ describe("gateway readiness route", () => {
   });
 
   it("skips requested feature probes when basic chat is not verified", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse({ choices: [] })) as typeof fetch;
     const config = gatewayConfig();
     const clearVerifiedCapability = vi.fn(() => true);
     const deps: UiHandlerDeps = {
@@ -446,6 +897,52 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ name: "tool_calling", status: "skipped" }),
     ]);
     expect(clearVerifiedCapability).toHaveBeenCalledWith("test-chat-model", 0);
+    deps.store.close();
+  });
+
+  it("does not preserve a previous tool observation when the forced tool probe executes and fails", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockRejectedValueOnce(new Error("tool probe transport failure")) as typeof fetch;
+    const config = gatewayConfig();
+    const clearVerifiedCapability = vi.fn(() => true);
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => ({
+          modelId: "test-chat-model",
+          generation: 0,
+          checkedAt: "2026-08-28T10:00:00.000Z",
+          fields: { toolCalling: true },
+        }),
+        recordVerifiedCapability,
+        clearVerifiedCapability,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["tool_calling"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.probes).toContainEqual(
+      expect.objectContaining({ name: "tool_calling", status: "failed" }),
+    );
+    expect(clearVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      0,
+    );
     deps.store.close();
   });
 
@@ -612,13 +1109,12 @@ describe("gateway readiness route", () => {
     expect(report.overallStatus).toBe("partial");
     const toolProbe = report.probes.find((probe) => probe.name === "tool_calling");
     expect(toolProbe?.status).toBe("unsupported");
-    expect(toolProbe?.warning).toMatch(/qwen3_coder tool parser/i);
-    expect(config.capabilities?.[0]?.toolCalling).toBe(true);
+    expect(config.capabilities?.[0]?.toolCalling).toBe(false);
     expect(observedToolCalling).toBe(false);
     deps.store.close();
   });
 
-  it("does not persist a negative capability from an inconclusive semantic probe", async () => {
+  it("records only chat readiness from an inconclusive semantic probe", async () => {
     const config = gatewayConfig();
     const recordVerifiedCapability = vi.fn();
     const fetchImpl = vi
@@ -648,7 +1144,12 @@ describe("gateway readiness route", () => {
     expect(report.probes.find((probe) => probe.name === "streaming")).toMatchObject({
       status: "unsupported",
     });
-    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      0,
+    );
     deps.store.close();
   });
 
@@ -720,7 +1221,22 @@ describe("gateway readiness route", () => {
         },
       ],
     };
-    const deps = depsWith(config, fetchImpl);
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => true,
+      },
+    };
     const report = await runGatewayReadiness(
       { options: { probes: ["image_input", "document_input", "long_context"] } },
       deps,
@@ -734,6 +1250,14 @@ describe("gateway readiness route", () => {
       documentInput: true,
       testedContextTokens: 64_000,
     });
+    // The proven token count is recorded as an applicable observation, so Settings can write it
+    // back; before 1.1.1 it was display-only and a 4,096 placeholder could never be corrected.
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      expect.objectContaining({ contextWindow: 64_000 }),
+      expect.any(String),
+      0,
+    );
     expect(report.probes).toEqual([
       expect.objectContaining({ name: "chat", status: "passed" }),
       expect.objectContaining({ name: "image_input", status: "passed" }),
@@ -817,7 +1341,117 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
-  it("does not record negative capabilities for probes the request did not execute", async () => {
+  it("fails the basic-chat probe on an empty assistant response like the production adapter", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(chatPayload(""))) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 7,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    // The production adapter rejects empty assistant responses (assertUsableAssistantResponse),
+    // so readiness must too — a probe looser than the adapter exposes models whose every real
+    // turn fails.
+    expect(report.probes).toEqual([expect.objectContaining({ name: "chat", status: "failed" })]);
+    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    deps.store.close();
+  });
+
+  it("passes the basic-chat probe for content-part arrays production normalization accepts", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const arrayPayload = {
+      choices: [{ message: { role: "assistant", content: [{ type: "text", text: "OK" }] } }],
+    };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(arrayPayload)) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 7,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.probes).toEqual([expect.objectContaining({ name: "chat", status: "passed" })]);
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      expect.objectContaining({ conversationReady: true }),
+      report.checkedAt,
+      7,
+    );
+    deps.store.close();
+  });
+
+  it("drops stale feature observations when the feature probe executed and failed", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(jsonResponse({ error: "boom" }, 500)) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 4,
+        recordVerification: () => undefined,
+        verifiedCapability: () => ({
+          modelId: "test-chat-model",
+          generation: 4,
+          checkedAt: "2026-08-15T00:00:00.000Z",
+          fields: { streaming: true },
+        }),
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat", "streaming"] } }, deps);
+
+    // The streaming probe RAN and failed: this is not a chat-only refresh, so the stale
+    // streaming: true from the previous observation must not be re-stamped as current.
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      4,
+    );
+    deps.store.close();
+  });
+
+  it("records only conversation readiness when feature probes did not execute", async () => {
     const config = gatewayConfig();
     const recordVerifiedCapability = vi.fn();
     const deps: UiHandlerDeps = {
@@ -838,16 +1472,54 @@ describe("gateway readiness route", () => {
 
     await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
 
-    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      0,
+    );
+    deps.store.close();
+  });
+
+  it("preserves same-generation feature observations during a chat-only refresh", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchForDefaultSuccess()),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 4,
+        recordVerification: () => undefined,
+        verifiedCapability: () => ({
+          modelId: "test-chat-model",
+          generation: 4,
+          checkedAt: "2026-08-15T00:00:00.000Z",
+          fields: { streaming: true },
+        }),
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { streaming: true, conversationReady: true },
+      expect.any(String),
+      4,
+    );
     deps.store.close();
   });
 
   it("records a failed chat probe as a failed verification, never as unverified", async () => {
     const recorded: string[] = [];
     const config = gatewayConfig();
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse({ choices: [] })) as typeof fetch;
     const deps: UiHandlerDeps = {
       ...depsWith(config, fetchImpl),
       gatewayConfig: {
@@ -870,6 +1542,30 @@ describe("gateway readiness route", () => {
 
     expect(recorded).toEqual(["failed"]);
     deps.store.close();
+  });
+});
+
+describe("longContextTokens (KEIKO-0358)", () => {
+  it("returns the extended long-context budget for an unknown contextWindow", () => {
+    // Before the fix, contextWindow=0 (a placeholder / not-yet-probed capability) fell
+    // through to DEFAULT_LONG_CONTEXT_TOKENS (32_000). That capped the deep-probe test
+    // token budget at 32k for the very model shapes it was meant to expose. Assume the
+    // extended budget for the unknown case so a genuinely long-context model can be
+    // probed near its real ceiling instead of silently being tested short.
+    const capability = { ...createDefaultChatCapability("probe-model"), contextWindow: 0 };
+    expect(longContextTokens(undefined, capability)).toBe(64_000);
+    expect(longContextTokens(undefined, capability)).toBeGreaterThan(32_000);
+    // An absent capability arrives from the same fallback path (contextWindow ??= 0),
+    // so it must yield the extended budget too — pin both branches.
+    expect(longContextTokens(undefined, undefined)).toBe(64_000);
+  });
+
+  it("still caps a genuinely small window at the default budget", () => {
+    // Fix must be scoped to the 0 sentinel. A model that reports a small but positive
+    // window (e.g. 16k) still probes only up to DEFAULT_LONG_CONTEXT_TOKENS so the probe
+    // never asks past the model's real ceiling.
+    const capability = { ...createDefaultChatCapability("probe-model"), contextWindow: 16_000 };
+    expect(longContextTokens(undefined, capability)).toBe(32_000);
   });
 });
 

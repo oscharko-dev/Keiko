@@ -143,10 +143,20 @@ export interface PromptQualityDimensionResult {
   readonly rationale: string;
 }
 
+// This invariant is deliberately outside the scored dimensions. Every fixture declares an analyzer
+// oracle, so it must hold even when the fixture does not exercise the task-success dimension.
+export interface TaskClassInvariantResult {
+  readonly outcome: "pass" | "fail";
+  readonly expectedTaskClasses: readonly PromptTaskClass[];
+  readonly actualTaskClass: PromptTaskClass;
+  readonly rationale: string;
+}
+
 export interface PromptEnhancerFixtureResult {
   readonly fixtureName: string;
   readonly category: PromptEnhancerFixtureCategory;
   readonly observation: EnhancementObservation;
+  readonly taskClassInvariant: TaskClassInvariantResult;
   readonly dimensionResults: readonly PromptQualityDimensionResult[];
   readonly fullyPassed: boolean;
 }
@@ -163,6 +173,8 @@ export interface PromptQualityScorecardEntry {
 export interface PromptEnhancerEvalSummary {
   readonly totalFixtures: number;
   readonly fullyPassedFixtures: number;
+  readonly taskClassInvariantPassed: boolean;
+  readonly taskClassInvariantFailureCount: number;
   // Every dimension a fixture exercised must have a 1.0 pass rate, and the safety gate must hold.
   readonly safetyGatePassed: boolean;
   readonly goNoGo: "GO" | "NO-GO";

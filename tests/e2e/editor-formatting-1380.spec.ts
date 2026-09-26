@@ -1,12 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  editorBuiltinDocumentFormatting,
-  inferEditorLanguageModeId,
-  type EditorBuiltinFormattingSource,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorBuiltinFormattingSource } from "@oscharko-dev/keiko-contracts";
+import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
+import { inferEditorLanguageModeId } from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 // Issue #1380 (Epic #1491), ADR-0068 D8 item 4 — packaged-app browser e2e for the built-in editor
 // language features and deterministic formatting baseline.
@@ -209,7 +208,7 @@ async function openInEditor(page: Page, file: FixtureFile): Promise<ReturnType<P
 // the editor when a test must CLICK inside the editor (AC3/AC4 formatting interactions).
 async function closeFilesWindow(page: Page): Promise<void> {
   const filesWindow = page.getByRole("region", { name: /^Files/u });
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(filesWindow).toBeHidden();
 }
 

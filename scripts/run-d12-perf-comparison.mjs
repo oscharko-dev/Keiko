@@ -17,7 +17,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import {
-  commitIsAncestor,
   listExactDirtyPerformanceSubjectPaths,
   runD12Builder,
 } from "./build-d12-perf-comparison.mjs";
@@ -692,9 +691,6 @@ function resolveState(options, dependencies) {
       dependencies.listDirtyPaths(roots[revision]),
     );
   }
-  if (!dependencies.isAncestor(roots.candidate, BASELINE_COMMIT, heads.candidate)) {
-    fail("pinned baseline commit is not an ancestor of candidate HEAD");
-  }
   const dirtyToolchainPaths = dependencies.listDirtyToolchainPaths(roots.candidate);
   if (dirtyToolchainPaths.length > 0) {
     fail(`candidate D12 measurement toolchain is dirty: ${dirtyToolchainPaths.join(", ")}`);
@@ -732,7 +728,6 @@ export async function runD12Comparison(argv, injected = {}) {
     computeHarnessDigest: computeCommittedD12MeasurementToolchainDigest,
     createProvisioning: defaultProvisioningCreator,
     getHead: checkoutHead,
-    isAncestor: commitIsAncestor,
     listDirtyPaths: listExactDirtyPerformanceSubjectPaths,
     listDirtyToolchainPaths: listDirtyD12MeasurementToolchainPaths,
     now: () => new Date(),

@@ -1,13 +1,16 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode, useEffect, useRef, type ReactNode } from "react";
+import { StrictMode, useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { Chat } from "@/lib/types";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
 import {
+  discardEditorSelectionHandoff,
   inspectEditorSelectionHandoff,
+  registerEditorSelectionHandoff,
   type EditorSelectionHandoff,
 } from "./cards/editorSelectionHandoff";
+import { registerChatWindowRuntime } from "../windows/chatWindowActivity";
 
 type UpdateCfg = (patch: AppWindow["cfg"]) => void;
 
@@ -38,6 +41,8 @@ const chatSessionMock = vi.hoisted(() => ({
     readonly available: boolean;
   }[],
   loading: false,
+  error: undefined as string | undefined,
+  memoryEnabled: true,
   noEligibleModels: false,
   openChat: vi.fn<(chat: { readonly id: string }) => Promise<void>>(() => Promise.resolve()),
   openNewChat: vi.fn<
@@ -62,6 +67,7 @@ const chatSessionMock = vi.hoisted(() => ({
     Promise.resolve(),
   ),
   replaceChat: vi.fn<(chat: Chat) => void>(),
+  setMemoryEnabled: vi.fn<(enabled: boolean) => void>(),
   sending: false,
 }));
 
@@ -102,7 +108,7 @@ vi.mock("../ChatWindow", () => ({
       readonly workflowId: string;
       readonly taskType?: string | undefined;
     }) => void;
-  }) => (
+  }): ReactNode => (
     <div data-testid="chat-window">
       {`${String(mini)}:${linkedRoot ?? ""}:${(linkedRoots ?? []).join("|")}:${String(openEditorFile?.({ root: "/repo", path: "src/app.ts" }).ok ?? false)}`}
       <button
@@ -128,6 +134,8 @@ vi.mock("../context/ChatSessionContext", () => ({
     chats: chatSessionMock.chats,
     projects: chatSessionMock.projects,
     loading: chatSessionMock.loading,
+    error: chatSessionMock.error,
+    memoryEnabled: chatSessionMock.memoryEnabled,
     models: [{ id: "model-1" }],
     noEligibleModels: chatSessionMock.noEligibleModels,
     openChat: chatSessionMock.openChat,
@@ -136,18 +144,33 @@ vi.mock("../context/ChatSessionContext", () => ({
     selectedModel: chatSessionMock.selectedModel,
     sendMessage: chatSessionMock.sendMessage,
     replaceChat: chatSessionMock.replaceChat,
+    setMemoryEnabled: chatSessionMock.setMemoryEnabled,
     sending: chatSessionMock.sending,
   }),
 }));
+
+vi.mock("../hooks/useChatSession", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../hooks/useChatSession")>();
+  return {
+    ...actual,
+    useChatSession: (): typeof chatSessionMock => chatSessionMock,
+  };
+});
 
 // These cases assert widget prop mapping, not workspace membership, but every execution surface
 // resolves its root through useWorkspaceManifest. Without a stub the real hook fetches, fails in
 // jsdom, and the window is denied for want of a provable root — correct product behaviour, and not
 // what these cases are about. A settled "this workspace has no V2 manifest" is the legacy state they
 // have always meant, stated explicitly instead of arriving via a failed request.
+// The paired read authority the real hook reports for a loaded workspace is "available"; a case that
+// needs the managed task workspace unpaired says so.
+const manifestAccess = vi.hoisted(() => ({
+  current: "available" as "available" | "checking" | "unpaired" | "unavailable",
+}));
 vi.mock("../hooks/useWorkspaceManifest", () => ({
   useWorkspaceManifest: () => ({
     manifest: null,
+    pathReadAuthority: manifestAccess.current,
     loading: false,
     mutating: false,
     issue: null,
@@ -164,9 +187,16 @@ vi.mock("./panels/ChatHistoryPanel", () => ({
   ChatHistoryPanel: ({
     openChatWindow,
   }: {
-    readonly openChatWindow: (chat: { readonly id: string; readonly title: string }) => void;
+    readonly openChatWindow: (chat: {
+      readonly id: string;
+      readonly projectPath: string;
+      readonly title: string;
+    }) => void;
   }) => (
-    <button type="button" onClick={() => openChatWindow({ id: "chat-2", title: "Chat 2" })}>
+    <button
+      type="button"
+      onClick={() => openChatWindow({ id: "chat-2", projectPath: "/repo", title: "Chat 2" })}
+    >
       Open history chat
     </button>
   ),
@@ -202,7 +232,6 @@ vi.mock("./panels/NotificationsPanel", () => ({
 }));
 vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>ResourcesPanel</div> }));
 vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
-vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
 vi.mock("./panels/SettingsPanel", () => ({
   SettingsPanel: ({
     openUpdatesWindow,
@@ -415,7 +444,127 @@ vi.mock("./cards/RuntimeHubWidget", () => ({
   ),
 }));
 vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
-  CodingWorkbenchWindow: () => <div data-testid="coding-workbench-window">Coding Workbench</div>,
+  CodingWorkbenchWindow: ({
+    selectedRoot,
+    onOpenGit,
+  }: {
+    readonly selectedRoot?: string;
+    readonly onOpenGit?: (target: {
+      readonly root: string | null;
+      readonly binding: "repository" | "task-workspace";
+      readonly repositoryDialog?: "clone";
+      readonly descriptionReview?: {
+        readonly ownerAndRepo: string;
+        readonly prNumber: number;
+        readonly proposalId?: string;
+        readonly snapshotDigest?: string;
+      };
+    }) => void;
+  }) => (
+    <div data-testid="coding-workbench-window">
+      Coding Workbench
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({ root: null, binding: "repository", repositoryDialog: "clone" })
+        }
+      >
+        Clone for issue
+      </button>
+      <button
+        type="button"
+        onClick={() => onOpenGit?.({ root: selectedRoot ?? null, binding: "repository" })}
+      >
+        Open coding repository Git
+      </button>
+      <button
+        type="button"
+        onClick={() => onOpenGit?.({ root: "/worktrees/active-task", binding: "task-workspace" })}
+      >
+        Open coding task Git
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({
+            root: "/repo",
+            binding: "repository",
+            descriptionReview: {
+              ownerAndRepo: "oscharko/Wegwerf-Repo",
+              prNumber: 7,
+              proposalId: "prop-1",
+              snapshotDigest: "d".repeat(64),
+            },
+          })
+        }
+      >
+        Review exact draft
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({
+            root: "/repo",
+            binding: "repository",
+            descriptionReview: { ownerAndRepo: "oscharko/Wegwerf-Repo", prNumber: 7 },
+          })
+        }
+      >
+        Write the description
+      </button>
+    </div>
+  ),
+}));
+vi.mock("./cards/git-client/GitClientWindow", () => ({
+  GitClientWindow: ({
+    projectId,
+    lockedToActiveRoot,
+    lockedRepositoryLabel,
+    onOpenFiles,
+    onOpenEditor,
+    onOpenEditorFile,
+    initialRepositoryDialog,
+    onRepositoryConnected,
+  }: {
+    readonly projectId?: string;
+    readonly lockedToActiveRoot?: boolean;
+    readonly lockedRepositoryLabel?: string;
+    readonly onOpenFiles?: (root: string) => void;
+    readonly onOpenEditor?: (root: string) => void;
+    readonly initialRepositoryDialog?: string;
+    readonly onRepositoryConnected?: (root: string) => void;
+    readonly onOpenEditorFile?:
+      | ((request: {
+          readonly root: string;
+          readonly path: string;
+          readonly lineStart: number;
+        }) => void)
+      | undefined;
+  }): ReactNode => (
+    <div data-testid="git-client-window" data-locked={String(lockedToActiveRoot ?? false)}>
+      {projectId ?? "unbound"}
+      {lockedRepositoryLabel ?? ""}
+      {initialRepositoryDialog === "clone" ? (
+        <button type="button" onClick={() => onRepositoryConnected?.("/repos/cloned")}>
+          Complete issue clone
+        </button>
+      ) : null}
+      <button type="button" onClick={() => onOpenFiles?.(projectId ?? "")}>
+        Open Git files
+      </button>
+      <button type="button" onClick={() => onOpenEditor?.(projectId ?? "")}>
+        Open Git editor
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenEditorFile?.({ root: projectId ?? "", path: "src/app.ts", lineStart: 7 })
+        }
+      >
+        Reveal Git file
+      </button>
+    </div>
+  ),
 }));
 vi.mock("./cards/ReviewWidget", () => ({
   ReviewWidget: ({
@@ -443,8 +592,8 @@ vi.mock("./cards/AgentRunWidget", () => ({
     <div data-testid="agent-widget">{`${String(cfg.workflow)}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}`}</div>
   ),
 }));
-vi.mock("./cards/IntegrationsWidget", () => ({
-  IntegrationsWidget: () => <div>IntegrationsWidget</div>,
+vi.mock("./connectors/AtlassianConnectorsPanel", () => ({
+  AtlassianConnectorsPanel: (): ReactElement => <div>AtlassianConnectorsPanel</div>,
 }));
 vi.mock("./cards/ConnectorPickerWidget", () => ({
   ConnectorPickerWidget: ({
@@ -642,6 +791,8 @@ beforeEach((): void => {
   chatSessionMock.chats = [chatSessionMock.activeChat];
   chatSessionMock.projects = [chatSessionMock.activeProject];
   chatSessionMock.loading = false;
+  chatSessionMock.error = undefined;
+  chatSessionMock.memoryEnabled = true;
   chatSessionMock.noEligibleModels = false;
   chatSessionMock.selectedModel = "model-1";
   chatSessionMock.sending = false;
@@ -650,6 +801,7 @@ beforeEach((): void => {
   chatSessionMock.openProject.mockReset().mockResolvedValue(undefined);
   chatSessionMock.sendMessage.mockReset().mockResolvedValue(undefined);
   chatSessionMock.replaceChat.mockReset();
+  chatSessionMock.setMemoryEnabled.mockReset();
   apiMock.updateChat.mockReset();
 });
 
@@ -677,10 +829,132 @@ describe("workspace widget renderer registry", () => {
     // 0.3.0 release audit — strengthened: a rename also clears the structural "still untitled"
     // marker, so the workspace surfaces the new name instead of asking display copy whether the
     // chat was ever named (which missed under `de`).
-    await waitFor(() => {
-      expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1", titleIsDefault: false });
-    });
+    await waitFor(
+      () => {
+        expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1", titleIsDefault: false });
+      },
+      { timeout: 5_000 },
+    );
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
+  });
+
+  it("renders one actionable error when initial chat creation and target lookup fail together", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    const view = render(<>{WIN_TYPES.chat.render({ newChatRequestId: "initial-chat" }, ctx)}</>);
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat."),
+    );
+    chatSessionMock.error =
+      "The selected model failed its live readiness check. Open Settings > Models for details.";
+    view.rerender(<>{WIN_TYPES.chat.render({ newChatRequestId: "initial-chat" }, ctx)}</>);
+
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("failed its live readiness check");
+    expect(alerts[0]).toHaveTextContent("Settings > Models");
+  });
+
+  it("renders exactly one fallback alert for a creation-only failure", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    render(<>{WIN_TYPES.chat.render({ newChatRequestId: "creation-only" }, ctx)}</>);
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat.");
+  });
+
+  it("renders exactly one fallback alert for a lookup-only failure", async () => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    render(
+      <>
+        {WIN_TYPES.chat.render({ chatId: "missing-chat", projectPath: "/missing-project" }, ctx)}
+      </>,
+    );
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not open chat.");
+  });
+
+  it.each([
+    ["empty", "", "Could not open chat."],
+    ["malformed", "{", "{"],
+    [
+      "hostile",
+      "<script>window.__unsafe = true</script>",
+      "<script>window.__unsafe = true</script>",
+    ],
+  ])("renders one safe alert for a %s combined failure", async (_case, error, expected) => {
+    const ctx = makeCtx();
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    const view = render(
+      <>{WIN_TYPES.chat.render({ newChatRequestId: `combined-${_case}` }, ctx)}</>,
+    );
+    await screen.findByRole("alert");
+
+    chatSessionMock.error = error;
+    view.rerender(<>{WIN_TYPES.chat.render({ newChatRequestId: `combined-${_case}` }, ctx)}</>);
+
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent(expected);
+    expect(alerts[0]?.querySelector("script")).toBeNull();
+    expect(window).not.toHaveProperty("__unsafe");
+  });
+
+  it("routes an editor selection into an existing project chat without opening a duplicate", async () => {
+    const ctx = makeCtx();
+    const acceptSelectionHandoff = vi.fn<(selectionHandoffId: string) => void>();
+    const unregister = registerChatWindowRuntime("existing-chat-window", {
+      conversationId: "chat-origin",
+      projectPath: "/workspace/origin",
+      acceptSelectionHandoff,
+    });
+
+    render(<>{WIN_TYPES.editor.render({ root: "/workspace/origin", file: "src/app.ts" }, ctx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+
+    expect(ctx.openWindow).not.toHaveBeenCalled();
+    expect(acceptSelectionHandoff).toHaveBeenCalledOnce();
+    const handoffId = acceptSelectionHandoff.mock.calls[0]?.[0];
+    expect(typeof handoffId).toBe("string");
+    if (handoffId !== undefined) {
+      expect(inspectEditorSelectionHandoff(handoffId)?.workspaceRoot).toBe("/workspace/origin");
+      discardEditorSelectionHandoff(handoffId);
+    }
+    unregister();
+  });
+
+  it("preserves ordinary project ownership when an existing chat consumes a selection", async () => {
+    const ctx = makeCtx();
+    const selectionHandoffId = registerEditorSelectionHandoff("/repo", {
+      file: "src/app.ts",
+      range: {
+        start: { line: 1, column: 2 },
+        end: { line: 2, column: 4 },
+      },
+      text: "const selected = true;\r\n",
+      truncated: false,
+    });
+    if (selectionHandoffId === null) throw new Error("selection handoff registration failed");
+
+    render(
+      <>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Chat 1", selectionHandoffId }, ctx)}</>,
+    );
+
+    await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "chat-1",
+      title: "Chat 1",
+      selectionHandoffId: undefined,
+      newChatRequestId: undefined,
+    });
   });
 
   it("routes a selection to its exact originating project before one-use send", async () => {
@@ -722,6 +996,7 @@ describe("workspace widget renderer registry", () => {
     const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
     const selectionHandoffId = openCfg?.["selectionHandoffId"];
     expect(ctx.openWindow).toHaveBeenCalledWith("chat", {
+      projectPathPrivacy: "omit",
       selectionHandoffId: expect.any(String),
     });
     expect(typeof selectionHandoffId).toBe("string");
@@ -729,7 +1004,11 @@ describe("workspace widget renderer registry", () => {
     expect(JSON.stringify(openCfg)).not.toContain(originRoot);
     if (typeof selectionHandoffId !== "string") return;
 
-    const chatCfg = { chatId: "chat-wrong", selectionHandoffId };
+    const chatCfg = {
+      chatId: "chat-wrong",
+      projectPathPrivacy: "omit" as const,
+      selectionHandoffId,
+    };
     view.rerender(<>{WIN_TYPES.chat.render(chatCfg, ctx)}</>);
     await waitFor(() => expect(chatSessionMock.openProject).toHaveBeenCalledWith(originProject));
     await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
@@ -745,11 +1024,61 @@ describe("workspace widget renderer registry", () => {
       newChatRequestId: undefined,
     });
     expect(ctx.focusWindow).toHaveBeenCalledWith("ctx-window");
-    expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain(originRoot);
     expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain("const selected = true");
+    expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain(originRoot);
 
     view.rerender(<>{WIN_TYPES.chat.render(chatCfg, ctx)}</>);
     await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+  });
+
+  it("creates a chat after routing a selection into an empty originating project", async () => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/empty-origin";
+    const wrongProject = { path: "/workspace/wrong", available: true };
+    const originProject = { path: originRoot, available: true };
+    const createdChat = {
+      id: "chat-created-after-routing",
+      title: "Created chat",
+      status: "open" as const,
+      projectPath: originRoot,
+    };
+    chatSessionMock.activeProject = wrongProject;
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.projects = [wrongProject, originProject];
+    chatSessionMock.chats = [];
+    chatSessionMock.openProject.mockImplementation(async (project) => {
+      chatSessionMock.activeProject = project;
+      chatSessionMock.activeChat = undefined;
+      chatSessionMock.chats = [];
+    });
+    chatSessionMock.openNewChat.mockImplementation(async () => {
+      chatSessionMock.activeChat = createdChat;
+      chatSessionMock.chats = [createdChat];
+      return createdChat;
+    });
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(<>{WIN_TYPES.chat.render({ selectionHandoffId }, ctx)}</>);
+
+    await waitFor((): void =>
+      expect(chatSessionMock.openProject).toHaveBeenCalledWith(originProject),
+    );
+    await waitFor((): void =>
+      expect(chatSessionMock.openNewChat).toHaveBeenCalledWith(originProject, undefined),
+    );
+    await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: createdChat.id,
+      title: createdChat.title,
+      selectionHandoffId: undefined,
+      newChatRequestId: undefined,
+    });
   });
 
   it("keeps an asynchronous selection handoff through a StrictMode effect remount", async (): Promise<void> => {
@@ -958,7 +1287,7 @@ describe("workspace widget renderer registry", () => {
     });
   });
 
-  it("adopts an in-flight selection chat when the singleton is reset", async (): Promise<void> => {
+  it("keeps a fresh window request independent from an in-flight selection chat", async (): Promise<void> => {
     const ctx = makeCtx();
     const originRoot = "/workspace/origin";
     const originProject = { path: originRoot, available: true };
@@ -968,24 +1297,20 @@ describe("workspace widget renderer registry", () => {
       status: "open",
       projectPath: originRoot,
     };
-    const renamedChat: Chat = {
+    const renamedChat = {
       ...createdChat,
-      status: "open",
+      id: "chat-replacement",
       title: "Replacement chat",
-      selectedModel: "model-1",
-      branchLabel: undefined,
-      connectedScope: undefined,
-      localKnowledgeScope: undefined,
-      createdAt: 1,
-      updatedAt: 2,
     };
-    const creation = deferred<typeof createdChat>();
+    const creation = deferred<typeof createdChat | undefined>();
+    const replacement = deferred<typeof renamedChat | undefined>();
     chatSessionMock.activeProject = originProject;
     chatSessionMock.activeChat = undefined;
     chatSessionMock.projects = [originProject];
     chatSessionMock.chats = [];
-    chatSessionMock.openNewChat.mockReturnValue(creation.promise);
-    apiMock.updateChat.mockResolvedValue({ chat: renamedChat });
+    chatSessionMock.openNewChat
+      .mockReturnValueOnce(creation.promise)
+      .mockReturnValueOnce(replacement.promise);
     const view = render(
       <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
     );
@@ -1005,70 +1330,66 @@ describe("workspace widget renderer registry", () => {
         )}
       </>,
     );
-    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledTimes(2);
 
     await act(async (): Promise<void> => {
       creation.resolve(createdChat);
       await creation.promise;
     });
 
-    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledTimes(2);
     expect(chatSessionMock.sendMessage).not.toHaveBeenCalled();
-    expect(apiMock.updateChat).toHaveBeenCalledWith("chat-created", {
-      title: "Replacement chat",
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+
+    await act(async (): Promise<void> => {
+      replacement.resolve(renamedChat);
+      await replacement.promise;
     });
-    expect(chatSessionMock.replaceChat).toHaveBeenCalledWith(renamedChat);
-    expect(ctx.updateCfg).toHaveBeenCalledWith({
-      chatId: "chat-created",
-      title: "Replacement chat",
-      newChatRequestId: undefined,
-    });
+
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        chatId: "chat-replacement",
+        projectPath: originRoot,
+        title: "Replacement chat",
+        newChatRequestId: undefined,
+      }),
+    );
+    expect(apiMock.updateChat).not.toHaveBeenCalled();
+    expect(chatSessionMock.replaceChat).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("adopts an in-flight window chat when an editor handoff arrives", async (): Promise<void> => {
+  it("keeps an editor handoff independent from an in-flight window chat", async (): Promise<void> => {
     const ctx = makeCtx();
     const originRoot = "/workspace/origin";
     const originProject = { path: originRoot, available: true };
-    const createdChat = {
-      id: "chat-created",
+    const windowChat = {
+      id: "window-chat",
       title: "Window chat",
       status: "open" as const,
       projectPath: originRoot,
     };
-    const renamedChat: Chat = {
-      ...createdChat,
-      title: "Latest window chat",
-      selectedModel: "model-1",
-      branchLabel: undefined,
-      connectedScope: undefined,
-      localKnowledgeScope: undefined,
-      createdAt: 1,
-      updatedAt: 2,
+    const handoffChat = {
+      id: "handoff-chat",
+      title: "Selection chat",
+      status: "open" as const,
+      projectPath: originRoot,
     };
-    const creation = deferred<typeof createdChat>();
+    const windowCreation = deferred<typeof windowChat>();
+    const handoffCreation = deferred<typeof handoffChat>();
     chatSessionMock.activeProject = originProject;
     chatSessionMock.activeChat = undefined;
     chatSessionMock.projects = [originProject];
     chatSessionMock.chats = [];
-    chatSessionMock.openNewChat.mockImplementation((): Promise<typeof createdChat> =>
-      creation.promise.then((created): typeof createdChat => {
-        chatSessionMock.activeChat = created;
-        chatSessionMock.chats = [created];
-        return created;
-      }),
-    );
-    chatSessionMock.replaceChat.mockImplementation((chat): void => {
-      const sessionChat = {
-        id: chat.id,
-        title: chat.title,
-        status: chat.status ?? "open",
-        projectPath: chat.projectPath ?? originRoot,
-      };
-      chatSessionMock.activeChat = sessionChat;
-      chatSessionMock.chats = [sessionChat];
-    });
-    apiMock.updateChat.mockResolvedValue({ chat: renamedChat });
+    chatSessionMock.openNewChat
+      .mockReturnValueOnce(windowCreation.promise)
+      .mockImplementationOnce((): Promise<typeof handoffChat> =>
+        handoffCreation.promise.then((created): typeof handoffChat => {
+          chatSessionMock.activeChat = created;
+          chatSessionMock.chats = [created];
+          return created;
+        }),
+      );
     const view = render(
       <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
     );
@@ -1087,41 +1408,32 @@ describe("workspace widget renderer registry", () => {
     view.rerender(
       <>
         {WIN_TYPES.chat.render(
-          { title: renamedChat.title, newChatRequestId: "window-request-latest" },
+          { title: "Window chat", newChatRequestId: "window-request", selectionHandoffId },
           ctx,
         )}
       </>,
     );
-    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
-
-    view.rerender(
-      <>
-        {WIN_TYPES.chat.render(
-          {
-            title: renamedChat.title,
-            newChatRequestId: "window-request-latest",
-            selectionHandoffId,
-          },
-          ctx,
-        )}
-      </>,
-    );
-    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledTimes(2);
 
     await act(async (): Promise<void> => {
-      creation.resolve(createdChat);
-      await creation.promise;
+      windowCreation.resolve(windowChat);
+      await windowCreation.promise;
+    });
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+    expect(chatSessionMock.sendMessage).not.toHaveBeenCalled();
+
+    await act(async (): Promise<void> => {
+      handoffCreation.resolve(handoffChat);
+      await handoffCreation.promise;
     });
 
     await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
-    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
-    expect(apiMock.updateChat).toHaveBeenCalledWith(createdChat.id, {
-      title: renamedChat.title,
-    });
-    expect(chatSessionMock.replaceChat).toHaveBeenCalledWith(renamedChat);
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledTimes(2);
+    expect(apiMock.updateChat).not.toHaveBeenCalled();
+    expect(chatSessionMock.replaceChat).not.toHaveBeenCalled();
     expect(ctx.updateCfg).toHaveBeenCalledWith({
-      chatId: "chat-created",
-      title: renamedChat.title,
+      chatId: "handoff-chat",
+      title: "Selection chat",
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
     });
@@ -1203,6 +1515,7 @@ describe("workspace widget renderer registry", () => {
     await waitFor((): void => {
       expect(ctx.updateCfg).toHaveBeenCalledWith({
         chatId: "chat-created",
+        projectPath: "/repo",
         title: "Created chat",
         newChatRequestId: undefined,
       });
@@ -1342,10 +1655,61 @@ describe("workspace widget renderer registry", () => {
 
   it("renders the Coding Workbench singleton through the workspace registry", async () => {
     const ctx = makeCtx();
+    expect(WIN_TYPES.coding.icon).toBe("codingWorkbench");
+    expect(WIN_TYPES.terminal.icon).toBe("terminal");
     render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
 
     expect(await screen.findByTestId("coding-workbench-window")).toHaveTextContent(
       "Coding Workbench",
+    );
+  });
+
+  // #3390 — the Workbench hands the description over in two degrees of knowledge: the retained
+  // proposal while its holder still has it, and the pull request alone once that holder has let it
+  // lapse. Both must arrive at the pull request window; the second is the one that used to leave the
+  // operator on an empty form with no way back to the description they were just offered.
+  it("hands both a retained description proposal and a bare pull request to the PR window", async () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+    await screen.findByTestId("coding-workbench-window");
+
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedPullRequest", {
+      projectPath: "/repo",
+      descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+      descriptionPrNumber: 7,
+      descriptionProposalId: "prop-1",
+      descriptionSnapshotDigest: "d".repeat(64),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Write the description" }));
+    expect(ctx.openWindow).toHaveBeenLastCalledWith("governedPullRequest", {
+      projectPath: "/repo",
+      descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+      descriptionPrNumber: 7,
+      descriptionProposalId: undefined,
+      descriptionSnapshotDigest: undefined,
+    });
+  });
+
+  it("opens the PR window on the handed-over pull request even without a retained proposal", async () => {
+    const ctx = makeCtx();
+    render(
+      <>
+        {WIN_TYPES.governedPullRequest.render(
+          {
+            projectPath: "/repo",
+            descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+            descriptionPrNumber: 7,
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByLabelText("Description pull request number")).toHaveValue("7");
+    expect(screen.getByLabelText("Description repository (owner/repo)")).toHaveValue(
+      "oscharko/Wegwerf-Repo",
     );
   });
 
@@ -1447,7 +1811,11 @@ describe("workspace widget renderer registry", () => {
 
     view.rerender(<>{WIN_TYPES.chatHistory.render({}, ctx)}</>);
     fireEvent.click(await screen.findByRole("button", { name: "Open history chat" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("chat", { chatId: "chat-2", title: "Chat 2" });
+    expect(ctx.openWindow).toHaveBeenCalledWith("chat", {
+      chatId: "chat-2",
+      projectPath: "/repo",
+      title: "Chat 2",
+    });
 
     view.rerender(
       <>
@@ -1468,9 +1836,10 @@ describe("workspace widget renderer registry", () => {
   });
 });
 
-// Issue #446 (ADR-0090) — prove the active-workspace root is actually WIRED into each bound-surface
-// renderer (not just the resolveBoundRoot helper): a mutation removing the override from a renderer
-// must fail here. Covers AC1/AC2 + the SC "no surface remains pointed at the previous workspace".
+// Issue #446 (ADR-0090) — prove the active-workspace root is actually WIRED into each task-bound
+// surface renderer (not just the resolveBoundRoot helper): a mutation removing the override from a
+// renderer must fail here. Repository-control Git is the deliberate exception: it must stay on the
+// selected repository and never borrow the managed task worktree.
 describe("active workspace binding override (Issue #446)", () => {
   function boundCtx(
     activeRoot: string | null,
@@ -1487,14 +1856,279 @@ describe("active workspace binding override (Issue #446)", () => {
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent(`${selectedRoot}:`);
   });
 
+  it("hands issue cloning to Git and selects the registered checkout in its originating Coding window", async () => {
+    const ctx = makeCtx();
+    const view = render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Clone for issue" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      rootBinding: "coding-repository",
+      repositoryDialog: "clone",
+      repositoryReturnWindow: ctx.windowId,
+    });
+    view.rerender(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { repositoryDialog: "clone", repositoryReturnWindow: "coding-source" },
+          ctx,
+        )}
+      </>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Complete issue clone" }));
+    expect(ctx.updateWindow).toHaveBeenCalledWith("coding-source", {
+      cfg: { repositoryPath: "/repos/cloned" },
+    });
+    expect(ctx.focusWindow).toHaveBeenCalledWith("coding-source");
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ repositoryReturnWindow: "" });
+  });
+
+  it("preserves an explicit dormant Coding Workbench repository selection for Git", async () => {
+    const ctx = boundCtx(null, "/repos/keiko");
+    const view = render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open coding repository Git" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repos/keiko",
+      rootBinding: "coding-repository",
+    });
+
+    view.rerender(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { projectPath: "/repos/keiko", rootBinding: "coding-repository" },
+          ctx,
+        )}
+      </>,
+    );
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+    fireEvent.click(screen.getByRole("button", { name: "Open Git files" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("files", {
+      root: "/repos/keiko",
+      rootBinding: "coding-repository",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open Git editor" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("editor", {
+      root: "/repos/keiko",
+      rootBinding: "coding-repository",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Git file" }));
+    expect(ctx.openEditorFile).toHaveBeenCalledWith({
+      root: "/repos/keiko",
+      path: "src/app.ts",
+      lineStart: 7,
+    });
+  });
+
+  // PR #3452 review: the Git window shares the editor's and Files' managed-access gate, so an
+  // explicitly task-worktree-bound browser on an unpaired managed workspace is told why instead of
+  // shown raw denials. A configured repository-root Git window is intentionally not in this case:
+  // repository Git is the central control surface and must not inherit a task worktree by accident.
+  it("shows the paired-session note, not the Git window, on an explicit managed task workspace", async () => {
+    const activeRoot = "/repos/keiko/.keiko/dev/ui/task-workspaces/repo/ws-1";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, null),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+    manifestAccess.current = "unpaired";
+    try {
+      render(<>{WIN_TYPES.governedGit.render({ projectPath: activeRoot }, ctx)}</>);
+
+      expect(
+        await screen.findByRole("note", { name: "Browser session not paired" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("git-client-window")).toBeNull();
+    } finally {
+      manifestAccess.current = "available";
+    }
+  });
+
+  it("uses the selected repository root before the active task worktree", async () => {
+    const activeRoot = "/worktrees/active-task";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, "/repos/keiko"),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+
+    render(<>{WIN_TYPES.governedGit.render({}, ctx)}</>);
+
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("/worktrees/active-task");
+    expect(screen.getByTestId("git-client-window")).toHaveAttribute("data-locked", "false");
+  });
+
+  it("repairs a persisted Git window that points at a managed task worktree", async () => {
+    const ctx = boundCtx(
+      "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-active",
+      "/repos/product",
+    );
+
+    render(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { projectPath: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-old" },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/product");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("ws-old");
+    await waitFor(() =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        projectPath: "/repos/product",
+        rootBinding: "coding-repository",
+      }),
+    );
+  });
+
+  it("keeps Git unbound instead of borrowing an active task worktree", async () => {
+    const activeRoot = "/worktrees/active-task";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, null),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+
+    render(<>{WIN_TYPES.governedGit.render({}, ctx)}</>);
+
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("unbound");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("/worktrees/active-task");
+    expect(screen.getByTestId("git-client-window")).toHaveAttribute("data-locked", "false");
+  });
+
+  it("keeps an explicit Coding Workbench repository Git window on the repository during an active run", async () => {
+    const activeRoot = "/worktrees/active-task";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, "/repos/keiko"),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+
+    render(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { projectPath: "/repos/keiko", rootBinding: "coding-repository" },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("/worktrees/active-task");
+    expect(screen.getByTestId("git-client-window")).toHaveAttribute("data-locked", "false");
+  });
+
   it("files renderer uses the active root, overriding the per-window cfg root", async () => {
     render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
     expect(await screen.findByTestId("files-root")).toHaveTextContent("/wt/active");
   });
 
+  it("keeps repository-bound Files windows on the repository during an active run", async () => {
+    render(
+      <>
+        {WIN_TYPES.files.render(
+          { root: "/repos/keiko", rootBinding: "coding-repository" },
+          boundCtx("/wt/active"),
+        )}
+      </>,
+    );
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/repos/keiko");
+  });
+
+  it("repairs legacy repository Files windows with stale task-workspace resolved roots", async () => {
+    // The stale-resolvedRoot repair fires only in unbound mode. During an active bind the Files
+    // widget legitimately reports the managed task-workspace root as `resolvedRoot`, and treating
+    // that as drift would pin the window to the repository and disable the active-root override
+    // for the surface (#3506 review).
+    const ctx = boundCtx(null);
+    render(
+      <>
+        {WIN_TYPES.files.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/repos/product");
+    await waitFor(() =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        root: "/repos/product",
+        rootBinding: "coding-repository",
+      }),
+    );
+  });
+
+  it("does not treat an active-bind resolvedRoot as drift for repository Files windows", async () => {
+    // #3506 review — with an active task binding, `resolveBoundRoot` returns `ctx.activeRoot`,
+    // FilesWidget correctly persists that root as `resolvedRoot`, and the resulting cfg carries a
+    // managed-worktree resolvedRoot alongside a repository `root`. The drift repair must NOT
+    // interpret this legitimate state as stale — otherwise the window is pinned to the repository
+    // and the active-root override stops working for it.
+    const ctx = boundCtx("/wt/active");
+    render(
+      <>
+        {WIN_TYPES.files.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/wt/active");
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootBinding: "coding-repository" }),
+    );
+  });
+
   it("files renderer falls back to the cfg root in unbound mode", async () => {
     render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx(null))}</>);
     expect(await screen.findByTestId("files-root")).toHaveTextContent("/cfg/old");
+  });
+
+  it("files renderer preserves an explicitly selected folder in unbound mode", async () => {
+    render(
+      <>
+        {WIN_TYPES.files.render({ root: "/picked/folder" }, boundCtx(null, "/workbench/default"))}
+      </>,
+    );
+
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/picked/folder");
   });
 
   it("terminal renderer scopes projectPath + cwd to the active root", async () => {
@@ -1548,6 +2182,66 @@ describe("active workspace binding override (Issue #446)", () => {
       key: string | null;
     };
     expect(host.key).toBeNull();
+  });
+
+  it("keeps repository-bound editor windows on the repository during an active run", async () => {
+    editorWidgetMounts.length = 0;
+    editorWidgetUnmounts.length = 0;
+    render(
+      <>
+        {WIN_TYPES.editor.render(
+          { root: "/repos/keiko", rootBinding: "coding-repository" },
+          boundCtx("/wt/active"),
+        )}
+      </>,
+    );
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/repos/keiko:");
+  });
+
+  it("repairs legacy repository editor windows with stale task-workspace resolved roots", async () => {
+    // See the sibling Files test: the stale-resolvedRoot repair fires only in unbound mode.
+    const ctx = boundCtx(null);
+    render(
+      <>
+        {WIN_TYPES.editor.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/repos/product:");
+    await waitFor(() =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        root: "/repos/product",
+        rootBinding: "coding-repository",
+      }),
+    );
+  });
+
+  it("does not treat an active-bind resolvedRoot as drift for repository editor windows", async () => {
+    editorWidgetMounts.length = 0;
+    editorWidgetUnmounts.length = 0;
+    const ctx = boundCtx("/wt/active");
+    render(
+      <>
+        {WIN_TYPES.editor.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/active:");
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootBinding: "coding-repository" }),
+    );
   });
 
   it("search renderer uses the active root before linked or active-project fallbacks", async () => {

@@ -1,8 +1,8 @@
 // Public barrel for the Voice Action Governance evaluation suite (Epic #491, Issue #503; ADR-0108).
 // Exposes the deterministic observation derivation, the six-dimension scorer, the suite runner, the
-// scorecard renderer, the fixture registry, and the result/fixture types. Self-contained: it is NOT
-// re-exported from the package barrel (the discussion suite is likewise self-contained), so this
-// security suite stands alone and is proven by suite.test.ts.
+// scorecard renderer, the fixture registry, and the result/fixture types. Re-exported from the
+// package barrel as the `VoiceActionEval` namespace (KEIKO-0313 — before that fix this security
+// suite was unreachable through the public package entry), and proven by suite.test.ts.
 
 export { deriveVoiceActionObservation, runVoiceActionEvaluation } from "./runner.js";
 export { scoreVoiceActionQuality, aggregateVoiceActionQuality } from "./scorer.js";

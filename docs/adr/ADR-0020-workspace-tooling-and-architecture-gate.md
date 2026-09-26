@@ -10,7 +10,7 @@ Accepted
 
 ## Version
 
-1.2
+1.3
 
 ## Context
 
@@ -22,12 +22,14 @@ Nothing in this ADR migrates domain source files. It only establishes the skelet
 
 ### D1 — Workspace Manager: npm workspaces
 
-We will use **npm workspaces** (currently pinned to the Node.js 24.18.0 bundled `npm@11.16.0` in
-`package.json`).
+We will use **npm workspaces**. Host execution supports Node.js
+`>=24.18.0 <25 || >=26.3.0 <27` with npm `>=11.16.0 <12`; `packageManager` and reproducible
+publish/portable inputs remain pinned to `npm@11.16.0`.
 
 The `package.json` `packageManager` field is pinned to `npm@11.16.0`. CI uses
-`actions/setup-node` with the exact approved Node.js 24.18.0 patch, verifies the bundled npm version,
-and then runs `npm ci`. Switching to pnpm would require updating every CI job, regenerating
+`actions/setup-node` with approved exact Node/npm pairs, verifies the selected pair, and then runs
+`npm ci`. Node 24.18.0/npm 11.16.0 remains the artifact baseline and Node 26.8.1/npm 11.19.0 is the
+compatibility baseline. Switching to pnpm would require updating every CI job, regenerating
 lockfiles, validating equivalent workspace behaviour, and re-auditing supply-chain tooling — a scope
 expansion orthogonal to this decision. npm workspaces satisfy the stated requirements: reproducible
 installs (`npm ci` plus the committed `package-lock.json`), workspace package references
@@ -228,3 +230,11 @@ If workspace manager, layout, gate tooling, or stub strategy changes materially,
 | 1.0 | 2026-06-03 | Initial operational addendum to ADR-0019: workspace manager, layout, TS references, architecture gate, stub strategy, and script topology for Issue #157. |
 | 1.1 | 2026-06-03 | D3 clarification: root tsconfig uses direct `packages/*/src/**/*.ts` include rather than `references` entries to avoid TS6305 under `tsc -p ... --noEmit`. Same one-pass typecheck intent; project references remain inside each package and become load-bearing when the build migrates to `tsc -b`. |
 | 1.2 | 2026-06-03 | D6 script-topology table updated to match D3's direct-include strategy (drift caught in review). No behaviour change. |
+
+## Node 26 package-manager compatibility clarification (2026-09-04)
+
+Node 26 does not bundle Corepack. Its compatibility lane therefore copies the `npm ci`-verified,
+lockfile-pinned Corepack package tree into the Node runtime trust root and creates its fixed
+executable shim there before provisioning the existing digest-pinned Yarn smoke. This preserves
+the trusted-executable boundary and does not widen the network, registry, or package-manager
+authority of the install smoke.

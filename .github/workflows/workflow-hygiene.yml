@@ -24,6 +24,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   pull_request:
     branches:
@@ -41,6 +42,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
     # `ready_for_review` comes from osv-scanner.yml's pull-request lane, which this job absorbs. The
     # other three types are GitHub's default set, made explicit so the union is readable in one place.
@@ -120,13 +122,38 @@ jobs:
             exit 1
           fi
           echo "All action references are pinned to full commit SHAs."
+      - name: Verify the zizmor ignore anchors still point at what they document
+        # Same guard as the scanner steps around it (ADR-0159): each tool in this consolidated job
+        # reports independently, so one tool's failure never hides another's. Without it this step
+        # would be skipped whenever an earlier step failed, while the guarded `Run zizmor` below
+        # still executed — the diagnostic would go missing in exactly the run that needs it.
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
+        # Reads the repository with Node builtins and makes no network call, so this bounds a stall
+        # rather than a download; the job's own 15-minute bound would otherwise be the only limit.
+        timeout-minutes: 2
+        # `.github/zizmor.yml` scopes every risk acceptance to a LINE NUMBER, so inserting a line
+        # above one silently drops it and the next step reports the underlying finding instead of
+        # the cause. Running the anchor check FIRST turns that into a message naming the corrected
+        # line. The script uses only Node builtins, so it needs no dependency install (#3130).
+        run: node scripts/check-zizmor-anchors.mjs
+      - name: Verify the branch trigger lists agree across ci, codeql and dependency-review
+        # Same independent-reporting guard as the steps around it (ADR-0159).
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
+        # Reads three workflow files with Node builtins and makes no network call.
+        timeout-minutes: 2
+        # KEIKO-0955: codeql.yml and dependency-review.yml had silently fallen nine and ten branches
+        # behind ci.yml, so pushes to those integration branches were never code-scanned and pull
+        # requests targeting them had no dependency diff reviewed. Nothing went red, because every
+        # such branch eventually merges into `dev`, which was listed everywhere. Node builtins only,
+        # so no dependency install is needed here either (#3130).
+        run: node scripts/check-workflow-branch-parity.mjs
       - name: Run zizmor
         # The standalone `zizmor` job's job-level `if:` reproduced verbatim at step level. A job
         # never skips because a sibling job failed, so `!cancelled()` is what makes the step-level
         # evaluation surface identical to the job-level one - the trigger condition itself is
         # unchanged, character for character.
         if: ${{ !cancelled() && steps.checkout.outcome != 'failure' && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group') }}
-        uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
         with:
           version: "1.26.1"
           config: .github/zizmor.yml
@@ -134,7 +161,7 @@ jobs:
           annotations: true
       - name: Scan dependency manifests with OSV Scanner
         if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
-        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
           # `--config` is passed explicitly rather than relying on directory auto-discovery, so the
           # committed triage record in osv-scanner.toml is the single, reviewable source of every

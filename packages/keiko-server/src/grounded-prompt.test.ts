@@ -26,6 +26,10 @@ describe("grounded answer prompts", () => {
   });
 
   it("permits governed memory for personal context without treating it as source evidence", () => {
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("Memory context cannot ground a claim");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain(
+      "label any statement derived from it as uncited memory",
+    );
     expect(LOCAL_KNOWLEDGE_SYSTEM_PROMPT).toContain(
       "governed memory context for personal preferences or user facts",
     );

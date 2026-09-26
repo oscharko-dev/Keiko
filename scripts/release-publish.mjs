@@ -23,17 +23,72 @@ import { basename, dirname, join, resolve } from "node:path";
 import { URL } from "node:url";
 
 import {
+  createPortableReleaseTrust,
+  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS,
+  portableReleaseTrustKeyId,
+  verifyPortableReleaseTrust,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
+
+import {
   findPortableMetadataRedactionFailures,
   PORTABLE_TARGET_NAMES,
   PORTABLE_TARGETS,
   portableVerificationSummaryForManifest,
   readPortableManifest,
   validatePortableCandidateManifest,
+  validatePortableReleaseTrustCandidateManifest,
   validatePortablePublishedManifest,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
 import { parseDotEnvTokenLine } from "./dotenv-token.mjs";
+import {
+  normalizePortableSetupCompanion,
+  portableSetupCompanionRecord,
+} from "./lib/portable-setup-companion.mjs";
+import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
+import { provenancePublishArgs, releaseImpactChildEnv } from "./lib/npm-publish-preflight.mjs";
+import {
+  jsonFromCommand,
+  portableAssetInputFailure,
+  portableDownloadAssetNames,
+  uploadedDownloadSetFailure,
+} from "./lib/portable-release-verification.mjs";
+import { sha256 } from "./lib/digest.mjs";
+import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
+import { readJsonFile } from "./lib/json.mjs";
+import { resolveGithubRepository } from "./lib/github-repository.mjs";
+import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
+import {
+  classifyDistTagResult,
+  classifyRegistryVersionResult,
+  REGISTRY_OBSERVATION_TIMEOUT_MS,
+  registryVersionProbeArgs,
+  resolveDistTagAction,
+  resolveVersionExistence,
+  verificationFailure,
+  verificationObservation,
+  verificationSucceeded,
+  waitForVerifiedPackageState as waitForVerifiedState,
+} from "./lib/npm-registry-observation.mjs";
+import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
+import {
+  checkRemotePortableAsset,
+  openPortableRelease,
+  publishVerifiedPortableRelease,
+  refuseIncompletePublishedRelease,
+  releaseSnapshotPath,
+  releaseTagAtHeadFailure,
+  uploadIntoDraft,
+} from "./lib/portable-release-publication.mjs";
+import {
+  makePublishedPortableSeams,
+  runVerifyPublishedPortableAssets,
+} from "./lib/portable-release-publish-helpers.mjs";
+import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
+import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -55,8 +110,12 @@ const valueArgFields = new Map([
   ["--registry", "registry"],
   ["--tag", "tag"],
 ]);
-const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 13);
-const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 5000);
+// npm Trusted Publishing can acknowledge `npm publish` before the version-specific registry
+// endpoint becomes visible. `verifyAttempts` is the total number of reads, including the initial
+// read; `verifyDelayMs` is the wait between reads.
+const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 1);
+const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 0);
+const prePublishProbeAttempts = 3;
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
@@ -85,10 +144,6 @@ function fail(message) {
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(join(repoRoot, relativePath), "utf8"));
-}
-
-function readJsonFile(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function readReleaseImpactCatalog() {
@@ -177,10 +232,29 @@ function portableUploadEnabled(options) {
   return !options.skipGithubRelease && !options.dryRun;
 }
 
-function stablePortableAssetsRequired(rootManifest, options) {
-  return !options.planOnly && !options.dryRun && stableLatestRelease(rootManifest, options);
+const portableDownloadNames = portableDownloadAssetNames(
+  PORTABLE_TARGETS,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+);
+
+function assertUploadedPortableSetComplete(releaseInfo) {
+  const snapshot = githubReleaseSnapshot(releaseInfo);
+  const failure = uploadedDownloadSetFailure(
+    releaseInfo.tag,
+    snapshot.assets,
+    portableDownloadNames,
+  );
+  if (failure !== undefined) fail(failure);
+  console.log(`release-publish: ${releaseInfo.tag} carries every portable download.`);
 }
 
+/**
+ * Release notes advertise portable downloads exactly when the release is guaranteed to carry them.
+ * For a stable `latest` release that guarantee is now unconditional: ensureStableLatestDownloads
+ * fails the publish before npm learns the dist-tag unless all five downloads are present and
+ * evidence-bound, so the notes can no longer point at downloads that do not exist — the failure
+ * Codex raised on #3051. A prerelease never advertises them; it is not a promotion surface.
+ */
 function portableReleasePromotionEnabled(rootManifest, options) {
   return stableLatestRelease(rootManifest, options);
 }
@@ -202,10 +276,16 @@ function normalizeRegistry(options) {
 
 function commandResult(cmd, args, options = {}) {
   return spawnSync(cmd, args, {
-    cwd: repoRoot,
+    cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
+    maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
+    // `input`, when present, overrides stdio[0] (Node's own documented behaviour) — this is what
+    // lets a caller pipe a JSON body to `gh api --input -` without a separate code path.
+    input: options.input,
     stdio: options.stdio ?? "pipe",
     env: options.env ?? process.env,
+    killSignal: options.killSignal,
+    timeout: options.timeout,
   });
 }
 
@@ -262,6 +342,10 @@ function runGh(args) {
 }
 
 function loadDotEnvToken() {
+  // Hermetic callers (including the real-orchestrator test lane) may explicitly disable the local
+  // credential fallback. Without this, a developer's private `.env` changes which fail-closed
+  // preflight branch the exact same test reaches. The opt-out can only remove an auth source.
+  if (process.env.KEIKO_RELEASE_DISABLE_DOTENV_TOKEN === "1") return undefined;
   const envPath = join(repoRoot, ".env");
   if (!existsSync(envPath)) return undefined;
   const lines = readFileSync(envPath, "utf8").split(/\r?\n/u);
@@ -274,13 +358,6 @@ function loadDotEnvToken() {
   return undefined;
 }
 
-function readNpmStrictSsl() {
-  const configured = commandResult("npm", ["config", "get", "strict-ssl"]);
-  if (configured.status !== 0) return "true";
-  const value = configured.stdout.trim();
-  return value === "false" ? "false" : "true";
-}
-
 function authConfigKey(registry) {
   const url = new URL(registry);
   const path = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
@@ -290,18 +367,16 @@ function authConfigKey(registry) {
 function createNpmEnvironment(registry) {
   const token = process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken();
   const hasToken = token !== undefined && token.length > 0;
-  const strictSsl = process.env.NPM_CONFIG_STRICT_SSL ?? readNpmStrictSsl();
-  if (strictSsl !== "true") {
-    fail(
-      "npm strict-ssl=false is not allowed for release publishing; configure a CA bundle instead.",
-    );
-  }
   const tempDir = mkdtempSync(join(tmpdir(), "keiko-release-npm-"));
   const userConfig = join(tempDir, ".npmrc");
+  // The publish OWNS its transport policy: strict-ssl=true is stated in this temporary
+  // userconfig and re-stated through the environment below, so a user-level strict-ssl=false
+  // can neither weaken TLS for a release nor block one with a refusal an operator has to
+  // decode first (the 0.3.1 publish outage).
   const lines = [
     `registry=${registry}`,
     `${packageRegistryScope}:registry=${registry}`,
-    `strict-ssl=${strictSsl}`,
+    "strict-ssl=true",
   ];
   // No token in CI is expected, not an oversight: the release workflow authenticates
   // `npm publish` via OIDC trusted publishing instead. Leaving no _authToken line here is
@@ -316,6 +391,9 @@ function createNpmEnvironment(registry) {
     env: {
       ...process.env,
       NPM_CONFIG_USERCONFIG: userConfig,
+      // Environment beats userconfig in npm's precedence; without this a hostile or stale
+      // NPM_CONFIG_STRICT_SSL=false in the operator shell would silently override the line above.
+      NPM_CONFIG_STRICT_SSL: "true",
     },
     hasToken,
   };
@@ -429,27 +507,12 @@ function ensureReleaseTag(version) {
   }
 }
 
-function githubRepositoryFromRemote(remoteUrl) {
-  const trimmed = remoteUrl.trim();
-  const httpsMatch = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
-  if (httpsMatch !== null) return httpsMatch[1];
-  const sshMatch = /^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
-  if (sshMatch !== null) return sshMatch[1];
-  return undefined;
-}
-
 function githubRepository() {
-  if (
-    typeof process.env.GITHUB_REPOSITORY === "string" &&
-    process.env.GITHUB_REPOSITORY.includes("/")
-  ) {
-    return process.env.GITHUB_REPOSITORY;
-  }
-  const remote = commandResult("git", ["remote", "get-url", "origin"]);
-  if (remote.status === 0) {
-    const repository = githubRepositoryFromRemote(remote.stdout);
-    if (repository !== undefined) return repository;
-  }
+  const repository = resolveGithubRepository({
+    env: process.env,
+    runGit: (args) => commandResult("git", args),
+  });
+  if (repository !== undefined) return repository;
   fail("could not determine GitHub repository; set GITHUB_REPOSITORY=owner/repo.");
 }
 
@@ -470,10 +533,6 @@ function sha256FileSync(path) {
   } finally {
     closeSync(fd);
   }
-}
-
-function sha256Text(value) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function containedPath(root, path) {
@@ -540,18 +599,27 @@ function containedLocalPath(root, relativePath, label, failures) {
 }
 
 function loadPortableAssets(rootManifest, options) {
-  if (stablePortableAssetsRequired(rootManifest, options) && options.skipGithubRelease) {
-    fail("stable latest publishes must attach portable GitHub Release Assets.");
-  }
-  if (typeof options.portableAssetsManifest !== "string" || options.portableAssetsManifest === "") {
-    if (stablePortableAssetsRequired(rootManifest, options)) {
-      fail("stable latest publishes require --portable-assets-manifest.");
-    }
-    return [];
-  }
-  const qualification = stablePortableAssetsRequired(rootManifest, options)
-    ? requiredPortableQualification(rootManifest)
-    : undefined;
+  const suppliesManifest =
+    typeof options.portableAssetsManifest === "string" && options.portableAssetsManifest !== "";
+  // Supplying assets and then skipping the GitHub Release would publish an npm dist-tag whose
+  // announced downloads do not exist: still refused, for stable and prerelease alike.
+  const stableLatest = stableLatestRelease(rootManifest, options);
+  const live = !options.planOnly && !options.dryRun;
+  const inputFailure = portableAssetInputFailure({
+    suppliesManifest,
+    skipGithubRelease: options.skipGithubRelease === true,
+    stableLatest: stableLatest && live,
+  });
+  if (inputFailure !== undefined) fail(inputFailure);
+  if (!suppliesManifest) return [];
+  // A stable `latest` release that DOES carry assets is still held to the qualified-run
+  // provenance: the same run, attempt, tag, source SHA and workflow that built them. Only a LIVE
+  // publish, though — that provenance lives in `KEIKO_PORTABLE_ASSETS_*`, which exists only inside
+  // the release workflow, so demanding it in plan-only and dry-run modes made a local release
+  // preview fail before it could render its notes even with a perfectly valid manifest (Codex
+  // finding on #3054). Those modes still run the full structural manifest validation below.
+  const qualification =
+    stableLatest && live ? requiredPortableQualification(rootManifest) : undefined;
   return portableAssetsFromManifest(
     resolve(options.portableAssetsManifest),
     rootManifest,
@@ -583,7 +651,10 @@ function portableQualificationFailures(qualification, rootManifest, head) {
   const repositoryMatches =
     typeof qualification.repository === "string" &&
     qualification.repository !== "" &&
-    qualification.repository === process.env.GITHUB_REPOSITORY;
+    // githubRepository() resolves the git remote when GITHUB_REPOSITORY is absent, so a local
+    // stable publish compares against the repository it is actually publishing from instead of
+    // against an empty string (Codex and CodeRabbit findings on #3054).
+    qualification.repository === githubRepository();
   const checks = [
     [/^[a-f0-9]{40}$/u.test(qualification.sourceSha ?? ""), "source SHA must be exact"],
     [qualification.tag === releaseTag(rootManifest.version), "stable tag must match release tag"],
@@ -601,7 +672,7 @@ function portableQualificationFailures(qualification, rootManifest, head) {
 }
 
 // Deliberate defense-in-depth: assemble-portable-release-assets.mjs (validatePortableReleaseSet)
-// enforces this same exact-three/qualification-binding invariant at assembly; keep in sync.
+// enforces this same exact-four/qualification-binding invariant at assembly; keep in sync.
 function portableAssetsFromManifest(inputPath, rootManifest, qualification) {
   const manifest = readJsonFile(inputPath);
   const baseDir = dirname(inputPath);
@@ -612,7 +683,7 @@ function portableAssetsFromManifest(inputPath, rootManifest, qualification) {
   }
   const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];
   if (artifacts.length !== PORTABLE_TARGETS.length) {
-    failures.push("portable assets manifest must list exactly three artifacts.");
+    failures.push("portable assets manifest must list exactly four artifacts.");
   }
   const normalized = normalizePortableAssets(
     artifacts,
@@ -666,8 +737,37 @@ function normalizePortableTargetAsset(
     failures.push(`missing portable asset entry for ${target.platformTarget}.`);
     return [];
   }
+  const context = portableTargetAssetContext(entry, target, baseDir, failures);
+  validatePortableAssetFiles({
+    target,
+    rootManifest,
+    qualification,
+    failures,
+    ...context,
+  });
+  return [
+    portableAssetRecord(
+      target,
+      context.archivePath,
+      context.manifestPath,
+      context.manifest,
+      entry,
+      failures,
+      context.setupPath,
+    ),
+  ];
+}
+
+function portableTargetAssetContext(entry, target, baseDir, failures) {
   const { archivePath, manifestPath } = portableTargetPaths(entry, target, baseDir, failures);
   const stageRoot = dirname(dirname(manifestPath));
+  const setupCompanion = normalizePortableSetupCompanion({
+    baseDir,
+    entry,
+    platformTarget: target.platformTarget,
+    stageRoot,
+  });
+  failures.push(...setupCompanion.failures);
   const archiveStat = regularContainedFile(
     archivePath,
     stageRoot,
@@ -684,19 +784,7 @@ function normalizePortableTargetAsset(
   const manifest = manifestStat
     ? readPortableManifestSafely(manifestPath, target.platformTarget, failures)
     : {};
-  validatePortableAssetFiles({
-    target,
-    archivePath,
-    archiveStat,
-    manifestPath,
-    manifest,
-    rootManifest,
-    qualification,
-    failures,
-  });
-  return [
-    portableAssetRecord(target, archivePath, manifestPath, manifest, entry, baseDir, failures),
-  ];
+  return { archivePath, archiveStat, manifest, manifestPath, setupPath: setupCompanion.setupPath };
 }
 
 function portableTargetPaths(entry, target, baseDir, failures) {
@@ -734,7 +822,11 @@ function validatePortableAssetFiles({
   if (basename(archivePath) !== target.assetName) {
     failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
   }
-  for (const failure of validatePortableCandidateManifest(manifest)) {
+  const manifestFailures =
+    manifest.security?.verificationPolicy === "evaluation"
+      ? validatePortableReleaseTrustCandidateManifest(manifest)
+      : validatePortableCandidateManifest(manifest);
+  for (const failure of manifestFailures) {
     failures.push(`${target.platformTarget}.${failure}`);
   }
   if (manifest.product?.packageVersion !== rootManifest.version) {
@@ -868,7 +960,7 @@ function validateProvenanceStatement(target, stageRoot, manifest, failures) {
   );
   if (path === undefined || !existsSync(path)) return;
   const text = readFileSync(path, "utf8");
-  if (sha256Text(text) !== manifest.provenance?.provenanceStatementSha256) {
+  if (sha256(text) !== manifest.provenance?.provenanceStatementSha256) {
     failures.push(`${target.platformTarget}.provenance statement digest must match.`);
   }
   const statement = readEvidenceJson(
@@ -979,8 +1071,8 @@ function portableAssetRecord(
   manifestPath,
   manifest,
   entry,
-  baseDir,
   failures,
+  setupPath,
 ) {
   const stageRoot = dirname(dirname(manifestPath));
   const requiredEvidence = requiredPortableEvidence(target, stageRoot, manifest, failures);
@@ -989,14 +1081,24 @@ function portableAssetRecord(
     validateEvidenceContent(evidence.sourcePath, evidence.assetName, failures);
   }
   const evidenceFiles = [...requiredEvidence, ...extraEvidence];
-  return {
-    archiveAssetName: target.assetName,
-    archivePath,
-    evidenceFiles,
-    manifest,
-    platformTarget: target.platformTarget,
-    stageRoot,
-  };
+  const record = portableSetupCompanionRecord(
+    {
+      archiveAssetName: target.assetName,
+      archivePath,
+      evidenceFiles,
+      manifest,
+      platformTarget: target.platformTarget,
+      stageRoot,
+    },
+    setupPath,
+  );
+  return setupPath === undefined
+    ? record
+    : {
+        ...record,
+        setupSha256: entry.setupSha256,
+        setupSizeBytes: entry.setupSizeBytes,
+      };
 }
 
 function extraPortableEvidenceFiles(entry, stageRoot, target, failures) {
@@ -1069,6 +1171,42 @@ function printReleaseNotesPreview(notes) {
   console.log("-----END KEIKO RELEASE NOTES-----");
 }
 
+/**
+ * The releases this publisher must never edit over (Codex findings on #3054). An interrupted
+ * `--public-release` leaves a resumable stable-tag DRAFT; editing it would keep it private while
+ * npm publishes. A COMPLETED `--public-release` leaves a published release carrying the
+ * evaluation manifest; uploading qualified production assets over it would clobber only
+ * same-named files and leave that evidence beside foreign bytes — a mixed-provenance surface.
+ * Existing evaluation-owned tags must not be overwritten with a different trust model. A new
+ * release version and tag is required. An unreadable answer refuses: fail closed.
+ */
+function refuseEvaluationOwnedRelease(existing, tag) {
+  const view = jsonFromCommand(existing);
+  if (view?.isDraft !== false) {
+    fail(
+      `GitHub release ${tag} exists as a draft — an interrupted evaluation publish leaves one. Resume or delete it with scripts/release-portable-prerelease.mjs before publishing over this tag.`,
+    );
+  }
+  const assets = Array.isArray(view.assets) ? view.assets : [];
+  if (assets.some((asset) => asset?.name === PORTABLE_EVALUATION_MANIFEST_ASSET_NAME)) {
+    fail(
+      `GitHub release ${tag} was published by the evaluation lane and carries its evidence manifest; editing or uploading over it would mix provenance. A qualified production publish needs its own version and tag.`,
+    );
+  }
+}
+
+// ADR-0177 D8 lets the release candidate move an unpublished tag, and a release binds to wherever its
+// tag points when it is created or published, so the tag is re-read at both moments.
+function assertReleaseTagAtHead(repository, tag) {
+  const failure = releaseTagAtHeadFailure({
+    head: commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
+    repository,
+    runGh: gh,
+    tag,
+  });
+  if (failure !== undefined) fail(failure);
+}
+
 function ensureGithubRelease(rootPackage, options, notes) {
   const tag = releaseTag(rootPackage.version);
   if (options.skipGithubRelease || options.dryRun) {
@@ -1078,13 +1216,15 @@ function ensureGithubRelease(rootPackage, options, notes) {
   }
 
   const repo = githubRepository();
+  assertReleaseTagAtHead(repo, tag);
   const title = `Keiko ${rootPackage.version}`;
   const prerelease = releaseIsPrerelease(rootPackage.version, options.tag);
   const latestArgs = options.tag === "latest" && !prerelease ? ["--latest"] : [];
   const prereleaseArgs = prerelease ? ["--prerelease"] : [];
-  const existing = gh(["release", "view", tag, "--repo", repo]);
+  const existing = gh(["release", "view", tag, "--repo", repo, "--json", "isDraft,assets"]);
 
   if (existing.status === 0) {
+    refuseEvaluationOwnedRelease(existing, tag);
     console.log(`release-publish: GitHub release ${tag} exists; updating metadata.`);
     runGh([
       "release",
@@ -1121,44 +1261,112 @@ function ensureGithubRelease(rootPackage, options, notes) {
   return { repo, tag };
 }
 
+// GitHub immutable releases refuse every asset change once a release is published, and a deleted
+// immutable release burns its tag name: v1.0.0 was lost to create-then-upload on 2026-09-14. A
+// portable release is therefore created as a draft, completed and verified, and only then published.
+// An already published release is never uploaded into again; it is verified or refused.
+function ensurePortableRelease(rootPackage, options, notes) {
+  return openPortableRelease(portablePublisher(), {
+    head: commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
+    latest: options.tag === "latest",
+    notes,
+    prerelease: releaseIsPrerelease(rootPackage.version, options.tag),
+    repo: githubRepository(),
+    tag: releaseTag(rootPackage.version),
+    title: `Keiko ${rootPackage.version}`,
+  });
+}
+
+// The publisher's own seams for scripts/lib/portable-release-publication.mjs.
+function portablePublisher() {
+  return {
+    assertTagAtHead: (tag) => assertReleaseTagAtHead(githubRepository(), tag),
+    evaluationManifestAssetName: PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+    fail,
+    gh,
+    log: (message) => console.log(`release-publish: ${message}`),
+    refuseEvaluationOwnedRelease,
+    runGh,
+    snapshot: githubReleaseSnapshot,
+    verifyAssets: verifyRemotePortableAssets,
+    ...makePublishedPortableSeams({
+      runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
+      verifyReleaseTrust: verifyPortableReleaseTrust,
+      trustedKeys: portableReleaseTrustedKeys(),
+    }),
+  };
+}
+
 function publishPortableReleaseAssets(options, assets, releaseInfo) {
   if (assets.length === 0) return;
   if (!portableUploadEnabled(options)) {
     console.log("release-publish: portable assets validated; upload skipped.");
     return;
   }
+  verifyPortableSetupAttestations(assets, releaseInfo);
   const evidenceUpload = preparePortableEvidenceUploadRoot();
   try {
+    const publisher = portablePublisher();
     const archiveUpload = portableArchiveUploadFiles(assets);
-    runGh([
-      "release",
-      "upload",
-      releaseInfo.tag,
-      "--repo",
-      releaseInfo.repo,
-      "--clobber",
-      ...archiveUpload.paths,
-    ]);
+    uploadIntoDraft(publisher, releaseInfo, archiveUpload.paths);
     const archiveSnapshot = githubReleaseSnapshot(releaseInfo);
+    refuseIncompletePublishedRelease(
+      publisher,
+      releaseInfo,
+      archiveSnapshot.assets,
+      archiveUpload.expected,
+    );
     verifyRemotePortableAssets(archiveSnapshot.assets, archiveUpload.expected, releaseInfo);
+    if (releaseInfo.published === true) {
+      runVerifyPublishedPortableAssets({
+        publisher,
+        releaseInfo,
+        assets,
+        archiveSnapshot,
+        verifyAssets: verifyRemotePortableAssets,
+        headOfCheckout: () => commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
+      });
+      return;
+    }
     const boundAssets = bindPortableAssetsToRemoteRelease(assets, archiveSnapshot);
     const boundEvidence = portableEvidenceUploadFiles(boundAssets, evidenceUpload.root);
-    runGh([
-      "release",
-      "upload",
-      releaseInfo.tag,
-      "--repo",
-      releaseInfo.repo,
-      "--clobber",
-      ...boundEvidence.paths,
-    ]);
+    uploadIntoDraft(publisher, releaseInfo, boundEvidence.paths);
     const finalSnapshot = githubReleaseSnapshot(releaseInfo);
     const expected = [...archiveUpload.expected, ...boundEvidence.expected];
-    verifyRemotePortableAssets(finalSnapshot.assets, expected, releaseInfo);
-    runPortableDownloadSmoke(finalSnapshot.assets, expected);
+    const publicAssets = publishVerifiedPortableRelease(
+      publisher,
+      releaseInfo,
+      finalSnapshot.assets,
+      expected,
+    );
+    runPortableDownloadSmoke(publicAssets, expected);
     console.log(`release-publish: portable assets uploaded and verified for ${releaseInfo.tag}.`);
   } finally {
     rmSync(evidenceUpload.root, { recursive: true, force: true });
+  }
+}
+
+function verifyPortableSetupAttestations(assets, releaseInfo) {
+  const signerWorkflow = `${releaseInfo.repo}/${portableAssetsWorkflowPath}`;
+  const sourceDigest = process.env.KEIKO_PORTABLE_ASSETS_SOURCE_SHA;
+  if (!/^[a-f0-9]{40}$/u.test(sourceDigest ?? "")) {
+    fail("portable setup attestation source SHA must be exact.");
+  }
+  for (const asset of assets) {
+    if (asset.setupPath === undefined) continue;
+    runGh([
+      "attestation",
+      "verify",
+      asset.setupPath,
+      "--repo",
+      releaseInfo.repo,
+      "--signer-workflow",
+      signerWorkflow,
+      "--source-digest",
+      sourceDigest,
+      "--source-ref",
+      `refs/tags/${releaseInfo.tag}`,
+    ]);
   }
 }
 
@@ -1179,6 +1387,15 @@ function portableArchiveUploadFiles(assets) {
       expectedSize: asset.manifest.artifact.sizeBytes,
       firstClassArchive: true,
     });
+    if (asset.setupPath !== undefined) {
+      addUploadPath(asset.setupPath, asset.setupAssetName, names, paths);
+      expected.push({
+        assetName: asset.setupAssetName,
+        expectedSha256: asset.setupSha256,
+        expectedSize: asset.setupSizeBytes,
+        firstClassArchive: false,
+      });
+    }
   }
   return { expected, paths };
 }
@@ -1223,11 +1440,16 @@ function addUploadPath(path, assetName, names, paths) {
 }
 
 function githubReleaseSnapshot(releaseInfo) {
-  const result = runGh(["api", `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`]);
+  const result = runGh(["api", releaseSnapshotPath(releaseInfo)]);
   try {
     const release = JSON.parse(result.stdout);
-    if (isRecord(release) && Number.isSafeInteger(release.id) && Array.isArray(release.assets)) {
-      return { assets: release.assets, id: release.id };
+    if (
+      isRecord(release) &&
+      Number.isSafeInteger(release.id) &&
+      Array.isArray(release.assets) &&
+      canonicalReleaseInstant(release.created_at) !== undefined
+    ) {
+      return { assets: release.assets, createdAt: release.created_at, id: release.id };
     }
   } catch {
     // Fall through to the fail-closed message below.
@@ -1238,19 +1460,30 @@ function githubReleaseSnapshot(releaseInfo) {
 function bindPortableAssetsToRemoteRelease(assets, releaseSnapshot) {
   const remoteByName = new Map(releaseSnapshot.assets.map((asset) => [asset.name, asset]));
   return assets.map((asset) =>
-    bindPortableAssetToRemoteRelease(asset, releaseSnapshot.id, remoteByName),
+    bindPortableAssetToRemoteRelease(
+      asset,
+      releaseSnapshot.id,
+      releaseSnapshot.createdAt,
+      remoteByName,
+    ),
   );
 }
 
-function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
+function bindPortableAssetToRemoteRelease(asset, releaseId, releaseCreatedAt, remoteByName) {
   const remote = remoteByName.get(asset.archiveAssetName);
   if (!isRecord(remote) || !Number.isSafeInteger(remote.id) || remote.id <= 0) {
     fail(`${asset.archiveAssetName} must have a remote GitHub asset id before evidence upload.`);
   }
-  const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id);
+  const setupBinding = remoteSetupBinding(asset, remoteByName);
+  const manifest = signedPortableManifest(
+    boundPortableManifest(asset.manifest, releaseId, remote.id, setupBinding),
+    releaseId,
+    releaseCreatedAt,
+  );
   const failures = validatePortablePublishedManifest(manifest, {
     assetId: remote.id,
     releaseId,
+    ...(setupBinding === undefined ? {} : { setupAsset: setupBinding }),
   }).map((failure) => `${asset.platformTarget}.${failure}`);
   if (failures.length > 0) {
     fail(`portable manifest binding failed:\n  - ${failures.join("\n  - ")}`);
@@ -1258,8 +1491,69 @@ function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
   return { ...asset, manifest };
 }
 
-function boundPortableManifest(source, releaseId, assetId) {
-  const manifest = JSON.parse(JSON.stringify(source));
+function canonicalReleaseInstant(value) {
+  if (typeof value !== "string") return undefined;
+  const instant = new Date(value);
+  return Number.isFinite(instant.valueOf()) ? instant.toISOString() : undefined;
+}
+
+function portableReleaseSigningKey() {
+  const value = process.env.KEIKO_PORTABLE_RELEASE_SIGNING_KEY;
+  if (typeof value !== "string" || value.length === 0) {
+    fail("KEIKO_PORTABLE_RELEASE_SIGNING_KEY is required for portable release publication.");
+  }
+  return value;
+}
+
+function portableReleaseTrustedKeys() {
+  const testPublicKey = process.env.KEIKO_PORTABLE_RELEASE_TEST_PUBLIC_KEY;
+  if (
+    process.env.NODE_ENV === "test" &&
+    process.env.KEIKO_RELEASE_IMPACT_CATALOG_PATH !== undefined &&
+    typeof testPublicKey === "string" &&
+    testPublicKey.length > 0
+  ) {
+    return [{ keyId: portableReleaseTrustKeyId(testPublicKey), publicKeyPem: testPublicKey }];
+  }
+  return KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS;
+}
+
+function signedPortableManifest(manifest, releaseId, releaseCreatedAt) {
+  const signedAt = canonicalReleaseInstant(releaseCreatedAt);
+  if (signedAt === undefined) fail("GitHub release creation time must be a canonical instant.");
+  const expiresAt = new Date(new Date(signedAt).valueOf() + PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS);
+  const signed = createPortableReleaseTrust(manifest, {
+    expiresAt: expiresAt.toISOString(),
+    metadataVersion: releaseId,
+    privateKeyPem: portableReleaseSigningKey(),
+    signedAt,
+  });
+  const verification = verifyPortableReleaseTrust(signed, {
+    now: new Date(signedAt),
+    trustedKeys: portableReleaseTrustedKeys(),
+  });
+  if (!verification.ok) {
+    fail(`portable release signing key is not trusted (${verification.reason}).`);
+  }
+  return signed;
+}
+
+function remoteSetupBinding(asset, remoteByName) {
+  if (asset.setupPath === undefined) return undefined;
+  const remote = remoteByName.get(asset.setupAssetName);
+  if (!isRecord(remote) || !Number.isSafeInteger(remote.id) || remote.id <= 0) {
+    fail(`${asset.setupAssetName} must have a remote GitHub asset id before evidence upload.`);
+  }
+  return {
+    assetId: remote.id,
+    assetName: asset.setupAssetName,
+    sha256: asset.setupSha256,
+    sizeBytes: asset.setupSizeBytes,
+  };
+}
+
+function boundPortableManifest(source, releaseId, assetId, setupBinding) {
+  const manifest = structuredClone(source);
   manifest.release = { ...manifest.release, releaseId };
   manifest.artifact = { ...manifest.artifact, assetId };
   manifest.releaseImpact = {
@@ -1268,6 +1562,7 @@ function boundPortableManifest(source, releaseId, assetId) {
       ...manifest.releaseImpact.reviewedBinding,
       assetId,
       releaseId,
+      ...(setupBinding === undefined ? {} : { setupAsset: setupBinding }),
     },
   };
   return manifest;
@@ -1293,25 +1588,20 @@ function verifyFirstClassArchiveSet(remoteAssets, failures) {
   const actual = remoteAssets
     .map((asset) => asset.name)
     .filter((name) => /^keiko-[a-z0-9-]+\.zip$/u.test(name));
-  if (actual.length !== expected.size || actual.some((name) => !expected.has(name))) {
-    failures.push("stable portable releases must expose exactly the three first-class ZIP assets.");
+  const actualSet = new Set(actual);
+  if (
+    actual.length !== expected.size ||
+    actualSet.size !== actual.length ||
+    actual.some((name) => !expected.has(name))
+  ) {
+    failures.push("stable portable releases must expose exactly the four first-class ZIP assets.");
   }
 }
 
 function verifyRemotePortableAsset(remote, expected, failures) {
-  if (!isRecord(remote)) {
-    failures.push(`${expected.assetName} is missing from the GitHub Release.`);
-    return;
-  }
-  if (!Number.isSafeInteger(remote.id) || remote.id <= 0) {
-    failures.push(`${expected.assetName} must have a non-zero GitHub asset id.`);
-  }
-  if (remote.size !== expected.expectedSize) {
-    failures.push(`${expected.assetName} size does not match the reviewed local asset.`);
-  }
-  if (!validBrowserDownloadUrl(remote.browser_download_url)) {
-    failures.push(`${expected.assetName} must expose an HTTPS browser_download_url.`);
-  }
+  failures.push(
+    ...checkRemotePortableAsset(remote, expected, { isRecord, validBrowserDownloadUrl }),
+  );
 }
 
 function validBrowserDownloadUrl(value) {
@@ -1356,31 +1646,13 @@ function smokePortableDownloadUrl(expected, url) {
   }
 }
 
-function npmViewVersion(pkg, npmEnv, registry) {
-  const result = npmViewVersionResult(pkg, npmEnv, registry);
-  return result.kind === "available" && result.version === pkg.version;
-}
-
-function npmViewVersionResult(pkg, npmEnv, registry) {
-  const result = commandResult("npm", ["view", pkg.spec, "version", "--registry", registry], {
-    env: npmEnv,
+function npmViewVersionResult(pkg, registry) {
+  const result = commandResult("curl", registryVersionProbeArgs(pkg, registry), {
+    env: networkEnvironment(),
   });
-  if (result.status === 0) {
-    return { kind: "available", version: result.stdout.trim() };
-  }
-  const viewOutput = `${result.stdout}\n${result.stderr}`;
-  if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {
-    return { kind: "missing", version: "" };
-  }
-  fail(
-    `could not inspect ${pkg.spec} in ${registry}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-  );
-}
-
-function npmViewDistTag(pkg, npmEnv, registry, tag) {
-  const result = npmViewDistTagResult(pkg, npmEnv, registry, tag);
-  if (result.kind === "available") return result.version;
-  return "";
+  const observation = classifyRegistryVersionResult(pkg, result);
+  if (observation.kind === "fatal") fail(observation.message);
+  return observation;
 }
 
 function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
@@ -1389,17 +1661,30 @@ function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
     ["view", pkg.name, `dist-tags.${tag}`, "--registry", registry],
     {
       env: npmEnv,
+      killSignal: "SIGKILL",
+      timeout: REGISTRY_OBSERVATION_TIMEOUT_MS,
     },
   );
-  if (result.status === 0) {
-    return { kind: "available", version: result.stdout.trim() };
-  }
-  const viewOutput = `${result.stdout}\n${result.stderr}`;
-  if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {
-    return { kind: "missing", version: "" };
-  }
+  return classifyDistTagResult(result);
+}
+
+function versionExistsBeforePublish(pkg, registry) {
+  const decision = resolveVersionExistence({
+    attempts: prePublishProbeAttempts,
+    onPending(result, attempt) {
+      console.log(
+        `release-publish: PREPUBLISH pending ${pkg.spec} ` +
+          `(attempt ${String(attempt)}/${String(prePublishProbeAttempts)}; ` +
+          `version=${result.reason ?? result.kind}).`,
+      );
+    },
+    read: () => npmViewVersionResult(pkg, registry),
+    wait: waitForRegistryPropagation,
+  });
+  if (decision.exists !== undefined) return decision.exists;
   fail(
-    `could not inspect ${pkg.name} dist-tag ${tag}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    `${pkg.spec} registry availability remained transient after ${String(prePublishProbeAttempts)} probes. ` +
+      "Refusing to publish because package existence could not be established safely.",
   );
 }
 
@@ -1418,7 +1703,7 @@ function publishPackage(pkg, npmEnv, options, hasToken) {
     return;
   }
 
-  if (npmViewVersion(pkg, npmEnv, options.registry)) {
+  if (versionExistsBeforePublish(pkg, options.registry)) {
     console.log(`release-publish: SKIP ${pkg.spec} already exists.`);
   } else {
     publishPackageToRegistry(pkg, npmEnv, options);
@@ -1432,7 +1717,7 @@ function publishPackageDryRun(pkg, npmEnv, options) {
     "npm",
     [
       "publish",
-      pkg.packageDir,
+      ".",
       "--access",
       "public",
       "--tag",
@@ -1442,7 +1727,7 @@ function publishPackageDryRun(pkg, npmEnv, options) {
       "--ignore-scripts",
       "--dry-run",
     ],
-    { env: npmEnv, stdio: "inherit" },
+    { cwd: pkg.packageDir, env: npmEnv, stdio: "inherit" },
   );
 }
 
@@ -1452,54 +1737,38 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
     "npm",
     [
       "publish",
-      pkg.packageDir,
+      ".",
       "--access",
       "public",
       "--tag",
       options.tag,
       "--registry",
       options.registry,
-      "--provenance",
+      ...provenancePublishArgs(process.env),
       "--ignore-scripts",
     ],
-    { env: npmEnv, stdio: "inherit" },
+    { cwd: pkg.packageDir, env: npmEnv, stdio: "inherit" },
   );
 }
 
 function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
-  let currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
-  if (currentTag === pkg.version) {
+  const currentTag = npmViewDistTagResult(pkg, npmEnv, options.registry, options.tag);
+  const action = resolveDistTagAction({
+    currentTag,
+    hasToken,
+    pkg,
+    verify: () => waitForVerifiedPackageState(pkg, npmEnv, options.registry, options.tag, "TAG"),
+  });
+  if (action.kind === "verified") {
     console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
     return;
   }
   // npm Trusted Publishing (OIDC) authorizes `npm publish` only, not `npm dist-tag add`. A
   // fresh `npm publish --tag` already sets the tag atomically at the source, but the very
-  // next `npm view` can still race the registry's own read replicas/CDN, so a mismatch here
-  // is usually transient propagation lag rather than a real problem — the same reality
-  // verifyPackage() below already retries for. Only after that same retry budget is
-  // exhausted do we treat it as a genuine idempotent-re-run repair and fail with a recovery
-  // hint, instead of letting an unauthenticated `npm dist-tag add` 401 confusingly.
-  if (!hasToken) {
-    for (let attempt = 2; attempt <= verifyAttempts && currentTag !== pkg.version; attempt += 1) {
-      console.log(
-        `release-publish: TAG pending ${pkg.name}@${options.tag} ` +
-          `(attempt ${String(attempt)}/${String(verifyAttempts)}; observed ${currentTag || "no published version"}).`,
-      );
-      waitForRegistryPropagation();
-      currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
-    }
-    if (currentTag === pkg.version) {
-      console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
-      return;
-    }
-    fail(
-      `${pkg.name}@${options.tag} points to ${currentTag || "no published version"}, expected ` +
-        `${pkg.version}, and no registry credential is configured to correct it. npm Trusted ` +
-        "Publishing does not cover `npm dist-tag add`. Supply NODE_AUTH_TOKEN (or NPM_TOKEN) " +
-        "for a one-off manual fix, or confirm the earlier publish attempt actually completed " +
-        "before retrying.",
-    );
-  }
+  // next registry read can still race npm Trusted Publishing's server-side quarantine, so a
+  // mismatch here is usually transient propagation lag rather than a real problem. Only after the
+  // same total read budget verifyPackage() uses is exhausted do we treat it as actionable.
+  if (action.kind === "failed") failVerification(pkg, action.state, options.registry, options.tag);
   console.log(`release-publish: DIST-TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
   run("npm", ["dist-tag", "add", pkg.spec, options.tag, "--registry", options.registry], {
     env: npmEnv,
@@ -1510,44 +1779,37 @@ function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
 function readVerificationState(pkg, npmEnv, registry, tag) {
   return {
     tag: npmViewDistTagResult(pkg, npmEnv, registry, tag),
-    version: npmViewVersionResult(pkg, npmEnv, registry),
+    version: npmViewVersionResult(pkg, registry),
   };
 }
 
-function verificationSucceeded(pkg, state) {
-  return state.version.version === pkg.version && state.tag.version === pkg.version;
-}
-
-function logPendingVerification(pkg, state, tag, attempt) {
+function logPendingVerification(pkg, state, tag, attempt, label) {
   console.log(
-    `release-publish: VERIFY pending ${pkg.spec} ` +
+    `release-publish: ${label} pending ${pkg.spec} ` +
       `(attempt ${String(attempt)}/${String(verifyAttempts)}; ` +
-      `version=${state.version.version || state.version.kind}; ` +
-      `${tag}=${state.tag.version || state.tag.kind}).`,
+      `version=${verificationObservation(state.version)}; ` +
+      `${tag}=${verificationObservation(state.tag)}).`,
   );
 }
 
 function failVerification(pkg, state, registry, tag) {
-  if (state.version.version !== pkg.version) {
-    const observed = state.version.version || state.version.kind;
-    fail(`${pkg.spec} is not available in ${registry} after publish (observed ${observed}).`);
-  }
-  if (state.tag.version !== pkg.version) {
-    const observed = state.tag.version || state.tag.kind;
-    fail(`${pkg.name}@${tag} points to ${observed}, expected ${pkg.version}.`);
-  }
+  const failure = verificationFailure(pkg, state, registry, tag);
+  if (failure !== undefined) fail(failure);
+}
+
+function waitForVerifiedPackageState(pkg, npmEnv, registry, tag, label) {
+  return waitForVerifiedState({
+    attempts: verifyAttempts,
+    onPending: (state, attempt) => logPendingVerification(pkg, state, tag, attempt, label),
+    pkg,
+    read: () => readVerificationState(pkg, npmEnv, registry, tag),
+    wait: waitForRegistryPropagation,
+  });
 }
 
 function verifyPackage(pkg, npmEnv, registry, tag) {
-  let state = readVerificationState(pkg, npmEnv, registry, tag);
-  for (let attempt = 1; attempt <= verifyAttempts; attempt += 1) {
-    if (verificationSucceeded(pkg, state)) return;
-    if (attempt < verifyAttempts) {
-      logPendingVerification(pkg, state, tag, attempt);
-      waitForRegistryPropagation();
-      state = readVerificationState(pkg, npmEnv, registry, tag);
-    }
-  }
+  const state = waitForVerifiedPackageState(pkg, npmEnv, registry, tag, "VERIFY");
+  if (verificationSucceeded(pkg, state)) return;
   failVerification(pkg, state, registry, tag);
 }
 
@@ -1577,6 +1839,50 @@ function runRegistrySmoke(rootPackage, options, npmEnv) {
   });
 }
 
+// Mirrors readReleaseImpactCatalog's KEIKO_RELEASE_IMPACT_CATALOG_PATH double gate above: the
+// release-publish-pipeline test drives this exact script end-to-end against a fabricated
+// npm/gh/git universe that only answers the questions the orchestrator itself already asks.
+// Wiring the real deployment record and alignment gate through that fiction would prove nothing
+// beyond what scripts/__tests__/npm-publish-deployment.test.mjs and
+// check-release-alignment.test.mjs already cover directly against the real seams, at the cost of
+// synchronizing several more fabricated gh/npm/git endpoints across every scenario in that file.
+// Both flags must be set; a real operator or CI publish never carries both at once.
+function testHarnessSkipsAlignmentProof() {
+  return process.env.NODE_ENV === "test" && process.env.KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF === "1";
+}
+
+// Records the npm-publish deployment (the repair for issue #3252) and then proves the publish
+// left version, tag, GitHub Latest, npm latest and the deployment record aligned — the publish
+// path itself is what must prove alignment, not a separate manual step run later.
+function recordAndVerifyReleaseAlignment(rootPackage, options, npmEnv) {
+  if (testHarnessSkipsAlignmentProof()) return;
+  const repository = githubRepository();
+  const deploymentResult = recordNpmPublishDeployment({
+    env: process.env,
+    log: (message) => console.log(message),
+    pkg: { name: rootPackage.name, version: rootPackage.version },
+    repository,
+    spawnGh: (args, { input } = {}) =>
+      commandResult("gh", args, { env: githubEnvironment(), input }),
+    tag: options.tag,
+  });
+  if (deploymentResult.kind === "failed") fail(deploymentResult.failure);
+
+  const alignment = checkReleaseAlignment({
+    checkoutVersion: rootPackage.version,
+    packageName: rootPackage.name,
+    registry: options.registry,
+    repository,
+    runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
+    runGit: (args) => commandResult("git", args),
+    runNpm: (args) => commandResult("npm", args, { env: npmEnv }),
+  });
+  printAlignmentReport(alignment);
+  if (!alignment.aligned) {
+    fail("release published, but the alignment gate found a divergence (see table above).");
+  }
+}
+
 const options = parseArgs(process.argv.slice(2));
 const rootManifest = readJson("package.json");
 const workspaces = collectWorkspaceManifests();
@@ -1588,18 +1894,33 @@ const publishPlan = [...workspacePackages, rootPackage];
 console.log(
   `release-publish: ${rootPackage.spec} -> ${options.registry} with dist-tag ${options.tag}.`,
 );
-console.log("release-publish: root-only publish; private runtime workspaces are bundled.");
+console.log(
+  "release-publish: root-only publish; private runtime workspaces are staged as file dependencies.",
+);
 for (const pkg of publishPlan) {
   console.log(`release-publish: plan ${pkg.spec} from ${pkg.packageDir}`);
 }
 
 run("npm", ["run", "check:version-consistency"], { stdio: "inherit" });
 run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
+// The publish-time approval verifier refuses every approval over an empty allowlist; resolve it
+// the same way the workflow does before the child runs, so a local operator publish does not
+// abort on an environment value only CI used to carry (the 0.3.1 outage). Resolution failure is
+// only fatal where the approval itself is required — a live publish.
+const preparedChildEnv = releaseImpactChildEnv(options, process.env, {
+  gh,
+  githubRepository,
+  loadDotEnvToken,
+});
+if (preparedChildEnv.env === undefined) fail(preparedChildEnv.failure);
+const releaseImpactEnv = preparedChildEnv.env;
 run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
+  env: releaseImpactEnv,
 });
-const githubReleaseNotes = releaseNotes(rootManifest, options);
+// Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);
+const githubReleaseNotes = releaseNotes(rootManifest, options);
 
 if (options.planOnly) {
   printReleaseNotesPreview(githubReleaseNotes);
@@ -1607,20 +1928,46 @@ if (options.planOnly) {
   process.exit(0);
 }
 
+proveReleaseSigningKeyBeforePublishing({
+  fail,
+  log: console.log,
+  portableAssetCount: portableAssets.length,
+  signingKey: portableReleaseSigningKey,
+  trustedKeys: portableReleaseTrustedKeys,
+  uploadEnabled: portableUploadEnabled(options),
+});
 if (!options.allowUntagged) {
   ensureReleaseTag(rootManifest.version);
 }
 ensureTrackedTreeIsClean();
 
 const { cleanup, env: npmEnv, hasToken } = createNpmEnvironment(options.registry);
+let stagedPackage;
 try {
   runReleaseGates();
+  stagedPackage = createStagedPublishPackage();
+  // The staged tarball carries the vendored workspaces and nothing else: third-party runtime
+  // dependencies are declared, never embedded (#3565). 1.1.2 embedded the external closure to
+  // repair `npm install -g`, which doubled the tarball and embedded 20 third-party packages; a
+  // customer's repository firewall refused to evaluate that artefact, and the release could not
+  // be installed at all. The installable-package smoke stages the same way.
+  rootPackage.packageDir = stagedPackage.packageDir;
+  // Stable publication is one transaction: this run uploads, API-binds and signs the exact
+  // three-target bundle before npm learns the latest dist-tag. A prepublished unsigned evaluation
+  // surface cannot satisfy the release-trust contract.
+  const uploadsAssets = portableAssets.length > 0;
+  if (stableLatestRelease(rootManifest, options) && !uploadsAssets) {
+    fail(
+      "stable latest is missing portable downloads: supply the portable release-trust bundle from the stable-tag workflow.",
+    );
+  }
   const releaseInfo =
-    portableAssets.length > 0 && portableUploadEnabled(options)
-      ? ensureGithubRelease(rootPackage, options, githubReleaseNotes)
+    uploadsAssets && portableUploadEnabled(options)
+      ? ensurePortableRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
   if (releaseInfo !== undefined) {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
+    assertUploadedPortableSetComplete(releaseInfo);
   }
   for (const pkg of workspacePackages) {
     publishPackage(pkg, npmEnv, options, hasToken);
@@ -1637,7 +1984,11 @@ try {
     const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
     publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
   }
+  if (options.tag === "latest" && !options.dryRun) {
+    recordAndVerifyReleaseAlignment(rootPackage, options, npmEnv);
+  }
   console.log(`release-publish: PASS - ${rootPackage.spec} published as ${options.tag}.`);
 } finally {
+  stagedPackage?.cleanup();
   cleanup();
 }

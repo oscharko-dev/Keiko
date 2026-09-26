@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type {
+  EditorAgentAction,
+  EditorAgentActionResult,
+  EditorAgentConflictCode,
+  EditorAgentFailureCode,
+  EditorAgentSessionSnapshot,
+  EditorAgentVerificationResult,
+  ToolCallResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
   EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentAction,
-  type EditorAgentActionResult,
-  type EditorAgentConflictCode,
-  type EditorAgentFailureCode,
-  type EditorAgentSessionSnapshot,
-  type EditorAgentVerificationResult,
-  type ToolCallResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   EditorAgentHttpClient,
   type EditorAgentHttpTransport,

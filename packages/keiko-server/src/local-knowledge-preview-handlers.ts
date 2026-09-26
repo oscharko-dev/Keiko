@@ -7,7 +7,7 @@ import type {
   PdfCitationPreviewSelection,
   PdfCitationPreviewStatusRequest,
 } from "@oscharko-dev/keiko-contracts";
-import { pdfCitationPreviewFailureState } from "@oscharko-dev/keiko-contracts";
+import { pdfCitationPreviewFailureState } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
 import { createSqliteAuditSink } from "@oscharko-dev/keiko-local-knowledge";
 
 import type { UiHandlerDeps } from "./deps.js";

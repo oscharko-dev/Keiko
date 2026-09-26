@@ -7,14 +7,22 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   GitDeliveryRepoPolicyPack,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
-import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createNodeGitMutationAdapter } from "./git-mutation-node.js";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
@@ -22,6 +30,7 @@ import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { createInMemoryGitMutationJournal, runGitMutation } from "./git-mutation-orchestrator.js";
 
 let root: string;
+let signingRoot: string;
 let info: WorkspaceInfo;
 
 function git(args: readonly string[]): string {
@@ -31,6 +40,7 @@ function git(args: readonly string[]): string {
 function workspaceInfo(rootPath: string): WorkspaceInfo {
   return {
     root: rootPath,
+    selectedRoot: rootPath,
     name: "demo",
     version: undefined,
     testFramework: "vitest",
@@ -53,17 +63,50 @@ function adapter(): GitLocalMutationAdapter {
   });
 }
 
+function configureSshCommitSigning(repoRoot: string, signingHome: string, email: string): void {
+  const keyPath = join(signingHome, "keiko-test-signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
+    cwd: signingHome,
+  });
+  const publicKeyPath = `${keyPath}.pub`;
+  const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+  const allowedSigners = join(signingHome, "keiko-test-allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
+  execFileSync("git", ["config", "gpg.format", "ssh"], { cwd: repoRoot });
+  execFileSync("git", ["config", "gpg.ssh.allowedSignersFile", allowedSigners], {
+    cwd: repoRoot,
+  });
+  execFileSync("git", ["config", "user.signingkey", publicKeyPath], { cwd: repoRoot });
+  execFileSync("git", ["config", "commit.gpgsign", "true"], { cwd: repoRoot });
+}
+
+function expectLastCommitSigned(repoRoot: string, home?: string): void {
+  const env =
+    home === undefined
+      ? undefined
+      : { PATH: process.env.PATH ?? "", HOME: home, GIT_CONFIG_NOSYSTEM: "1" };
+  expect(
+    execFileSync("git", ["-c", "gpg.ssh.program=ssh-keygen", "log", "-1", "--format=%G?"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      ...(env === undefined ? {} : { env }),
+    }).trim(),
+  ).toBe("G");
+}
+
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-mutation-")));
+  signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-signing-")));
   git(["init", "-q"]);
   git(["config", "user.email", "test@keiko.example"]);
   git(["config", "user.name", "Keiko Test"]);
-  git(["config", "commit.gpgsign", "false"]);
+  configureSshCommitSigning(root, signingRoot, "test@keiko.example");
   info = workspaceInfo(root);
 });
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
+  rmSync(signingRoot, { recursive: true, force: true });
 });
 
 describe("node git mutation adapter — successful local mutations", () => {
@@ -78,6 +121,7 @@ describe("node git mutation adapter — successful local mutations", () => {
     const committed = await ad.commit({ message: "initial commit", allowEmpty: false });
     expect(committed.outcome).toBe("succeeded");
     expect(git(["log", "--oneline"])).toContain("initial commit");
+    expectLastCommitSigned(root);
   });
 
   it("creates a branch from an existing ref", async () => {
@@ -312,6 +356,21 @@ function writeGlobalGitConfig(body: string): void {
   writeFileSync(join(identityHome, ".gitconfig"), body, "utf8");
 }
 
+function globalSshSigningConfig(email: string): string {
+  const keyPath = join(identityHome, "global-ssh-signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
+    cwd: identityHome,
+  });
+  const publicKey = readFileSync(`${keyPath}.pub`, "utf8").trim();
+  const allowedSigners = join(identityHome, "global-allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
+  return (
+    `[user]\n\tname = Global Dev\n\temail = ${email}\n\tsigningkey = ${keyPath}.pub\n` +
+    `[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n` +
+    `[gpg "ssh"]\n\tallowedSignersFile = ${allowedSigners}\n`
+  );
+}
+
 describe("node git mutation adapter — global identity and signing policy", () => {
   beforeEach(() => {
     identityHome = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-home-")));
@@ -327,9 +386,7 @@ describe("node git mutation adapter — global identity and signing policy", () 
   });
 
   it("commits as the identity in the user's global ~/.gitconfig", async () => {
-    writeGlobalGitConfig(
-      "[user]\n\tname = Global Dev\n\temail = global@example.com\n[commit]\n\tgpgsign = false\n",
-    );
+    writeGlobalGitConfig(globalSshSigningConfig("global@example.com"));
     const ad = identityAdapter();
 
     expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
@@ -339,15 +396,15 @@ describe("node git mutation adapter — global identity and signing policy", () 
     expect(homeGit(["log", "-1", "--format=%an <%ae>"]).trim()).toBe(
       "Global Dev <global@example.com>",
     );
+    expectLastCommitSigned(identityRepo, identityHome);
   });
 
-  it("FAILS the commit when signing is required and the signer cannot sign", async () => {
-    const failingSigner = join(identityHome, "failing-signer.sh");
-    writeFileSync(failingSigner, "#!/bin/sh\nexit 1\n", "utf8");
-    chmodSync(failingSigner, 0o755);
+  it("FAILS the commit when signing is required and the signing key cannot sign", async () => {
     writeGlobalGitConfig(
-      `[user]\n\tname = Global Dev\n\temail = global@example.com\n\tsigningkey = ABCDEF\n` +
-        `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = ${failingSigner}\n`,
+      `[user]\n\tname = Global Dev\n\temail = global@example.com\n\tsigningkey = ${join(
+        identityHome,
+        "missing-key.pub",
+      )}\n[commit]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n`,
     );
     const ad = identityAdapter();
     expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
@@ -357,7 +414,28 @@ describe("node git mutation adapter — global identity and signing policy", () 
     // A commit that cannot carry the required signature must never be reported as succeeded, and
     // must leave no unsigned commit behind.
     expect(committed.outcome).toBe("failed");
-    expect(committed.errorCode).toBe("precondition-failed");
+    expect(committed.errorCode).toBe("signature-failed");
     expect(homeGit(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("ignores repository-local signing executables while retaining the global identity", async () => {
+    const signerMarker = join(identityHome, "repository-signer-invoked");
+    const repositorySigner = join(identityRepo, "repository-signer.sh");
+    writeFileSync(repositorySigner, `#!/bin/sh\ntouch ${signerMarker}\nexit 1\n`, "utf8");
+    chmodSync(repositorySigner, 0o755);
+    writeGlobalGitConfig(globalSshSigningConfig("global@example.com"));
+    execFileSync("git", ["config", "commit.gpgSign", "true"], { cwd: identityRepo });
+    execFileSync("git", ["config", "gpg.ssh.program", repositorySigner], { cwd: identityRepo });
+    const ad = identityAdapter();
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "feat: governed commit", allowEmpty: false });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(existsSync(signerMarker)).toBe(false);
+    expect(homeGit(["log", "-1", "--format=%an <%ae>"]).trim()).toBe(
+      "Global Dev <global@example.com>",
+    );
+    expectLastCommitSigned(identityRepo, identityHome);
   });
 });

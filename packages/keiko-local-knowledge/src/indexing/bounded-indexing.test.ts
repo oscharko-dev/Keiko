@@ -2,10 +2,8 @@
 // Drives the real runIndexingJob with the synthetic streaming extractor injected, so the document
 // takes the progressive page-windowed extraction + bounded chunk/embed pipeline end to end.
 
-import {
-  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-  standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,

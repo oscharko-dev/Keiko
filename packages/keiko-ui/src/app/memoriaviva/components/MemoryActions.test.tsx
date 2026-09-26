@@ -125,10 +125,9 @@ describe("MemoryActions", () => {
 
     await user.click(screen.getByRole("button", { name: /delete record/i }));
     await waitFor(() => {
-      expect(deleteImpl).toHaveBeenCalledWith(
-        "mem-actions-1",
-        "user-initiated delete from MemoriaViva",
-      );
+      // KEIKO-0563: ForgetConfirmDialog (rendered inside MemoryActions) now calls deleteImpl with
+      // only the id — the dead reason-string argument was removed.
+      expect(deleteImpl).toHaveBeenCalledExactlyOnceWith("mem-actions-1");
       expect(onRecordChange).toHaveBeenCalledWith(null);
     });
   });

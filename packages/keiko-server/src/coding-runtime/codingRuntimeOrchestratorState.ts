@@ -1,11 +1,12 @@
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  validateCodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimePendingPermission,
-  type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
+import type {
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchMode,
+  CodingWorkbenchContextUsage,
+  CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
@@ -39,6 +40,8 @@ export class CodingRuntimeOrchestratorState {
         runId: string,
       ) => CodingWorkbenchRuntimePendingPermission | undefined;
       readonly effectiveMode: (runId: string) => CodingWorkbenchMode | undefined;
+      readonly contextUsage?:
+        ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
     },
   ) {}
 
@@ -56,19 +59,36 @@ export class CodingRuntimeOrchestratorState {
       runtimeSource: snapshot.runtimeSource,
       modelSource: snapshot.modelSource,
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
-      ...(snapshot.state === "recovery-required" && snapshot.recoveryAcknowledgedAt
-        ? { recoveryAcknowledged: true as const }
-        : {}),
-      ...(snapshot.state === "awaiting-approval" && this.deps.pendingPermission(snapshot.runId)
-        ? { pendingPermission: this.deps.pendingPermission(snapshot.runId) }
-        : {}),
-      ...(snapshot.result === undefined ? {} : { result: snapshot.result }),
+      ...contextUsageProjection(this.deps.contextUsage?.(snapshot.runId)),
+      ...this.stateBoundDetail(snapshot),
+      ...snapshotDetail(snapshot),
     };
     const validated = validateCodingWorkbenchRuntimeSnapshot(out);
     if (!validated.ok) {
       throw new Error(`invalid runtime snapshot projection: ${validated.errors.join(", ")}`);
     }
     return out;
+  }
+
+  /**
+   * The three fields the contract admits only alongside their own state. Kept together so each one
+   * is written next to the state that licenses it — the snapshot validator rejects any of them on
+   * another state, and reading them from one place makes that pairing visible.
+   */
+  private stateBoundDetail(
+    snapshot: CodingRuntimeSnapshot,
+  ): Partial<Pick<PublicSnapshot, "recoveryAcknowledged" | "pendingPermission" | "pauseReason">> {
+    if (snapshot.state === "recovery-required") {
+      return snapshot.recoveryAcknowledgedAt ? { recoveryAcknowledged: true as const } : {};
+    }
+    if (snapshot.state === "awaiting-approval") {
+      const pendingPermission = this.deps.pendingPermission(snapshot.runId);
+      return pendingPermission === undefined ? {} : { pendingPermission };
+    }
+    if (snapshot.state === "paused") {
+      return snapshot.pauseReason === undefined ? {} : { pauseReason: snapshot.pauseReason };
+    }
+    return {};
   }
 
   public idle(): PublicSnapshot {
@@ -111,4 +131,22 @@ export class CodingRuntimeOrchestratorState {
           },
     ).ok;
   }
+}
+
+function contextUsageProjection(
+  contextUsage: CodingWorkbenchContextUsage | undefined,
+): Partial<Pick<PublicSnapshot, "contextUsage">> {
+  return contextUsage === undefined ? {} : { contextUsage };
+}
+
+function snapshotDetail(snapshot: CodingRuntimeSnapshot): Partial<PublicSnapshot> {
+  return {
+    ...(snapshot.result === undefined ? {} : { result: snapshot.result }),
+    ...(snapshot.issueBinding === undefined ? {} : { issueBinding: snapshot.issueBinding }),
+    ...(snapshot.draftDelivery === undefined ? {} : { draftDelivery: snapshot.draftDelivery }),
+    ...(snapshot.ciReadiness === undefined ? {} : { ciReadiness: snapshot.ciReadiness }),
+    ...(snapshot.verifiedCommitResult === undefined
+      ? {}
+      : { verifiedCommitResult: snapshot.verifiedCommitResult }),
+  };
 }

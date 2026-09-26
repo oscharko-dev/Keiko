@@ -65,7 +65,17 @@ export type { WorkspaceWriter } from "./writer.js";
 
 // ─── Command execution boundary ─────────────────────────────────────────────────────
 export {
+  createWindowsTerminationCapacity,
   runCommand,
+  // Windows process-tree termination (issue #3350 / ADR-0006 D5): once a `.cmd` target is routed
+  // through the hardened cmd.exe wrapper, the immediate child is cmd.exe and the real work is a
+  // grandchild. Exported so every spawn boundary that adopted the wrapper terminates the same way
+  // instead of growing its own tree-kill.
+  isSelfOrParentPid,
+  nodeWindowsTreeKill,
+  windowsTaskkillInvocation,
+  type CommandTerminationEvidence,
+  type CommandTerminationReason,
   type ExecutableResolver,
   type ExecutableResolverDeps,
   type HomeProvider,
@@ -73,7 +83,36 @@ export {
   type RunCommandInput,
   type SpawnFn,
   type SpawnOptions,
+  type WindowsTreeKill,
+  type WindowsTerminationCapacity,
+  type WindowsTerminationReservation,
+  type WindowsTaskkillInvocationResolver,
+  type WindowsTreeKillDisposition,
+  type WindowsTreeKillResult,
 } from "./exec.js";
+
+// ─── Hardened Windows cmd.exe shell invocation (issue #3350, Node CVE-2024-27980) ──
+// Pure decision logic — same category as isCommandAllowed/buildSandboxEnv above — so it lives on
+// the public barrel rather than an ./internal/* subpath. exec.ts's own spawn boundary is the
+// primary consumer; keiko-server's editor-tree Node process adapters (LSP today) are the other
+// consumer, reached through processHardening.ts rather than importing this directly.
+// `resolveWindowsSystemDirectory`/`resolveSystemBinaryPath` are the SAME trusted-System32
+// resolution `buildWindowsShellInvocation` uses internally for `cmd.exe`; exec.ts's
+// `taskkill.exe` lookup is a second consumer of the identical trust boundary (PR #3354 finding 2).
+export {
+  buildWindowsShellInvocation,
+  isWindowsCommandScript,
+  resolveSystemBinaryPath,
+  resolveWindowsSystemDirectory,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  WindowsShellInvocationError,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+  type WindowsBinaryExistsCheck,
+  type WindowsSystemDirectoryIdentityCheck,
+  type WindowsShellInvocation,
+  type WindowsShellInvocationOptions,
+} from "./windows-shell.js";
 
 // ─── Patch workflow ─────────────────────────────────────────────────────────────────
 export {
@@ -94,7 +133,7 @@ export { parseUnifiedDiff, PatchParseError, type ParsedPatch } from "./patch-par
 export { computeFileContent, type ApplyOutcome, type HunkConflict } from "./patch-content.js";
 
 // ─── Tool definitions (model-facing JSON-Schema table) ──────────────────────────────
-export { TOOL_DEFINITIONS } from "./schemas.js";
+export { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "./schemas.js";
 export { EDITOR_AGENT_TOOL_DEFINITIONS } from "./editor-agent-schemas.js";
 
 // ─── Tool host implementation ───────────────────────────────────────────────────────
@@ -250,6 +289,9 @@ export {
   buildPrConvertDraftGraphqlArgv,
   buildPrCreateArgv,
   buildPrMarkReadyGraphqlArgv,
+  buildPrReadArgv,
+  buildPrReadByHeadArgv,
+  buildPrReadBranchHeadArgv,
   buildPrUpdateArgv,
   classifyGitPullRequestRejection,
   evaluateGitPullRequestEffectivePolicy,
@@ -266,12 +308,21 @@ export {
   type GitPrUpdateCommand,
   type GitPrUpdateExecRequest,
   type GitPullRequestAdapter,
+  type GitPullRequestInspectionAdapter,
+  type GitPrInspectionResult,
+  type GitPrReadRequest,
+  type GitPrReadHeadRequest,
   type GitPullRequestCommand,
   type GitPullRequestEffectivePolicy,
   type GitPullRequestLifecycleResult,
   type GitPullRequestOrchestratorDeps,
   type GitPullRequestRejection,
   type GitPullRequestRequest,
+  // #3389: the draft->ready transition port, deliberately isolated from GitPullRequestAdapter — see
+  // git-pr-gateway.ts's GitPullRequestMarkReadyAdapter doc.
+  type GitPrMarkReadyExecRequest,
+  type GitPrMarkReadyExecResult,
+  type GitPullRequestMarkReadyAdapter,
 } from "./git-pr-gateway.js";
 
 // The SEPARATE governed merge authority (Issue #478, ADR-0087). A THIRD parallel gateway to the publish
@@ -356,3 +407,19 @@ export {
 
 // ─── Package version ────────────────────────────────────────────────────────────────
 export { KEIKO_TOOLS_VERSION } from "./version.js";
+
+// ─── Default-branch reader (#3385) ───────────────────────────────────────────────────
+// The read-only `git rev-parse` of `refs/remotes/<alias>/HEAD` the server binds an issue-bound
+// run's base ref to. Same dedicated read allowlist and remote-URL read policy as the worktree
+// snapshot reader; carries the Node spawn effect like `runCommand` above.
+export { readGitDefaultBranch } from "./git-default-branch-node.js";
+
+export {
+  type GitPullRequestBodyAdapter,
+  type GitPrBody,
+  type GitPrBodyUpdateRequest,
+  buildPrBodyReadArgv,
+  buildPrBodyUpdateArgv,
+  validGitPrBodyText,
+  GIT_PR_BODY_MAX_BYTES,
+} from "./git-pr-body.js";

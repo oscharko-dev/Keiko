@@ -131,11 +131,11 @@ function validateManifestShape(parsed: Record<string, unknown>, runId: string): 
   requireOptionalArray(parsed, "compaction", runId);
 }
 
-function parseManifest(json: string, runId: string): EvidenceManifest {
-  const parsed: unknown = parseJson(json, runId);
-  if (!isRecord(parsed)) {
-    throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
-  }
+// Validates an ALREADY-parsed manifest value (schema version + shape) and narrows it to
+// EvidenceManifest. Split out from parseManifest so a caller that already parsed the JSON for its
+// own purposes (listEntryOrSkip's evidenceSchemaVersion pre-check) can reuse that parse instead of
+// paying for a second JSON.parse of the same string (KEIKO-0945).
+function manifestFromParsed(parsed: Record<string, unknown>, runId: string): EvidenceManifest {
   const version = parsed.evidenceSchemaVersion;
   if (version !== EVIDENCE_SCHEMA_VERSION) {
     throw new EvidenceSchemaError(
@@ -145,6 +145,14 @@ function parseManifest(json: string, runId: string): EvidenceManifest {
   }
   validateManifestShape(parsed, runId);
   return parsed as unknown as EvidenceManifest;
+}
+
+function parseManifest(json: string, runId: string): EvidenceManifest {
+  const parsed: unknown = parseJson(json, runId);
+  if (!isRecord(parsed)) {
+    throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
+  }
+  return manifestFromParsed(parsed, runId);
 }
 
 function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {
@@ -161,18 +169,40 @@ function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {
   };
 }
 
+// Enumeration is a per-entry question ("which runs can I show?"), so one unreadable, legacy or
+// shape-invalid manifest is skipped instead of aborting the walk — a single restored backup,
+// truncated write, or the first schema bump would otherwise blank the whole audit ledger. This
+// covers BOTH failure shapes: `store.get` itself can throw EvidenceReadError for a genuine
+// filesystem fault (e.g. an EACCES/read race on the node store), not only a value that reads
+// successfully but fails to parse or validate. Any OTHER error still propagates: the list fails
+// closed rather than passing a partial answer off as a complete one. loadEvidence keeps throwing,
+// because one manifest is its whole answer.
+function listEntryOrSkip(store: EvidenceStore, runId: string): EvidenceListEntry | undefined {
+  try {
+    const json = store.get(runId);
+    if (json === undefined) {
+      return undefined;
+    }
+    const parsed: unknown = parseJson(json, runId);
+    if (!isRecord(parsed) || typeof parsed.evidenceSchemaVersion !== "string") {
+      return undefined;
+    }
+    return toListEntry(manifestFromParsed(parsed, runId));
+  } catch (error) {
+    if (error instanceof EvidenceReadError || error instanceof EvidenceSchemaError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 export function listEvidence(store: EvidenceStore): readonly EvidenceListEntry[] {
   const entries: EvidenceListEntry[] = [];
   for (const runId of store.list()) {
-    const json = store.get(runId);
-    if (json === undefined) {
-      continue;
+    const entry = listEntryOrSkip(store, runId);
+    if (entry !== undefined) {
+      entries.push(entry);
     }
-    const parsed = parseJson(json, runId);
-    if (!isRecord(parsed) || typeof parsed.evidenceSchemaVersion !== "string") {
-      continue;
-    }
-    entries.push(toListEntry(parseManifest(json, runId)));
   }
   return entries;
 }

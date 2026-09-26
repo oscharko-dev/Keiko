@@ -5,12 +5,12 @@
 // and the derived `failureClass` getter, and asserts the contract vocabulary stays in lock-step.
 
 import { describe, expect, it } from "vitest";
+import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
 import {
   isWorkspaceFailureClass,
   WORKSPACE_FAILURE_CLASSES,
-  type WorkspaceFailureClass,
-} from "@oscharko-dev/keiko-contracts";
-import { CodedHttpError } from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { CodedHttpError } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import {
   classifyTaskWorkspaceError,
   TaskWorkspaceError,
@@ -36,6 +36,8 @@ const EXPECTED: Readonly<Record<TaskWorkspaceErrorCode, WorkspaceFailureClass>> 
   REPAIR_FAILED: "terminal",
   CLEANUP_NOT_ELIGIBLE: "blocked",
   CLEANUP_FAILED: "terminal",
+  IDENTITY_PROOF_FAILED: "retryable",
+  REPOSITORY_UNREACHABLE: "retryable",
 };
 
 describe("classifyTaskWorkspaceError", () => {
@@ -90,6 +92,8 @@ const EXPECTED_STATUS: Readonly<Record<TaskWorkspaceErrorCode, number>> = {
   REPAIR_FAILED: 500,
   CLEANUP_NOT_ELIGIBLE: 409,
   CLEANUP_FAILED: 500,
+  IDENTITY_PROOF_FAILED: 503,
+  REPOSITORY_UNREACHABLE: 503,
 };
 
 const EXPECTED_OUTCOME: Readonly<Record<TaskWorkspaceErrorCode, WorkspaceFailureOutcome>> = {
@@ -109,6 +113,8 @@ const EXPECTED_OUTCOME: Readonly<Record<TaskWorkspaceErrorCode, WorkspaceFailure
   REPAIR_FAILED: "failed",
   CLEANUP_NOT_ELIGIBLE: "blocked",
   CLEANUP_FAILED: "failed",
+  IDENTITY_PROOF_FAILED: "retry-required",
+  REPOSITORY_UNREACHABLE: "retry-required",
 };
 
 describe("TaskWorkspaceError status + outcome (GEN-DUP-NEAR-008)", () => {

@@ -32,7 +32,7 @@ import type {
 import {
   KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
   resolveKnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 // ---------------------------------------------------------------------------
 // Wire shapes
@@ -375,6 +375,8 @@ export interface CapsuleDetailResponse {
 export interface CapsuleActionResponse {
   readonly ok: true;
   readonly capsuleId: KnowledgeCapsuleId;
+  /** Job id a 202 indexing admission pinned; the panel settles its watch on this identity. */
+  readonly jobId?: string;
   readonly affectedCapsuleSetIds?: readonly CapsuleSetId[];
   readonly cleanupVerified?: boolean;
 }

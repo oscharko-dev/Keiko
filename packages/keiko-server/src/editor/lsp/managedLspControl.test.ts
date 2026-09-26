@@ -11,12 +11,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  MANAGED_LSP_LANGUAGES,
-  parseManagedLspEvidence,
-  type ManagedLspLanguage,
-  type ManagedLspShellConfiguration,
+import type {
+  ManagedLspLanguage,
+  ManagedLspShellConfiguration,
 } from "@oscharko-dev/keiko-contracts";
+import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+import { parseManagedLspEvidence } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-evidence";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import {
   createManagedLspActivationStore,

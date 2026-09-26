@@ -46,15 +46,19 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   deriveEligibleMergeStrategies,
+  gitMergeReadinessFor,
+  gitMergeRejectionFor,
+} from "@oscharko-dev/keiko-contracts/runtime/git-merge";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
+  gitDeliveryPolicyTargetBranchName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
   GIT_DELIVERY_MERGE_STRATEGY_HINTS,
   GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryDefaultRiskClass,
-  gitDeliveryPolicyTargetBranchName,
-  gitMergeReadinessFor,
-  gitMergeRejectionFor,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -63,6 +67,7 @@ import type {
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
+import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
 
 // ─── Merge command + narrow adapter port (no generic exec) ───────────────────────────────────────────
 // The command carries the structured operands the content-free GitDeliveryMergeInputs deliberately omits
@@ -305,10 +310,8 @@ export function buildPullRequestReviewsArgv(req: GitMergeReadinessRequest): read
 
 // `gh api /repos/{owner}/{repo}/branches/{branch}/protection --jq <projection>`. Reads the base
 // branch's required-approving-review-count so the caller can derive a REAL required-approval count
-// instead of the previously hardcoded 0. This 404s for an unprotected branch and can 403 for a caller
-// without admin on the target repository; both are read failures the caller treats as "no known
-// requirement" (0), never as a hard error — the provider's own merge-time enforcement remains the
-// ultimate authority (Force 2 / ADR-0087) regardless of what this best-effort read could see.
+// instead of the previously hardcoded 0. A 403 or opaque 404 cannot establish absence of requirements;
+// the owning reader preserves unknown visibility and never substitutes a trusted zero count.
 export function buildBranchProtectionRequiredReviewsArgv(
   req: GitBranchProtectionRequest,
 ): readonly string[] {
@@ -332,6 +335,12 @@ export function buildBranchProtectionArgv(req: GitBranchProtectionRequest): read
   const repo = assertOwnerAndRepo(req.ownerAndRepo);
   const branch = assertRef(req.baseBranchName, "baseBranchName");
   return ["api", `/repos/${repo}/branches/${branch}/protection`, "--jq", BRANCH_PROTECTION_JQ];
+}
+
+export function buildBranchMetadataArgv(req: GitBranchProtectionRequest): readonly string[] {
+  const repo = assertOwnerAndRepo(req.ownerAndRepo);
+  const branch = encodeURIComponent(assertRef(req.baseBranchName, "baseBranchName"));
+  return ["api", `/repos/${repo}/branches/${branch}`, "--jq", "{name,protected}"];
 }
 
 // `gh api --method DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}`. The guarded branch deletion
@@ -586,19 +595,10 @@ type MergeGate =
       readonly reason: GitDeliveryBlockReason;
     };
 
-function approvalState(
-  approval: GitDeliveryApprovalRequirement,
-  now: number,
-): "valid" | "absent" | "expired" {
-  if (!approval.required) {
-    return "absent";
-  }
-  if (approval.expiresAtMs !== undefined && approval.expiresAtMs <= now) {
-    return "expired";
-  }
-  return "valid";
-}
-
+// KEIKO-0535: delegates the approval-gated branch to the one shared resolver
+// (git-approval-gate.ts) instead of re-deriving valid/expired/absent + KEIKO-0147's identity check
+// locally, then maps the canonical result onto this file's own MergeGate shape — the same shape
+// every existing caller already consumes, so behavior is unchanged.
 function resolveMergeGate(
   decision: GitDeliveryPolicyDecision,
   approval: GitDeliveryApprovalRequirement,
@@ -613,16 +613,14 @@ function resolveMergeGate(
   if (effective.outcome === "blocked") {
     return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
-  const state = approvalState(approval, now);
-  if (state === "valid") return { proceed: true };
-  if (state === "expired") {
-    return { proceed: false, status: "policy-block", reason: "approval-expired" };
+  const gate = resolveGitDeliveryApprovalGate(decision, approval, now);
+  if (gate.proceed) {
+    return { proceed: true };
   }
-  return {
-    proceed: false,
-    status: "approval-required",
-    approvers: decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
-  };
+  if (gate.status === "approval-required") {
+    return { proceed: false, status: "approval-required", approvers: gate.approvers };
+  }
+  return { proceed: false, status: "policy-block", reason: gate.blockReason };
 }
 
 function mergeOutcomeFor(result: GitDeliveryExecutionResult): GitMutationOutcome {
@@ -714,6 +712,10 @@ async function readReadiness(
     command.mergeStrategy,
     strategyPolicy,
     provider.providerCapableStrategies,
+    // The base branch's own history rule decides whether a merge-commit-shaped strategy can
+    // succeed at all; the gateway already reads it, and an ineligible request now surfaces as the
+    // existing user-actionable `strategy-unavailable` blocker instead of a provider rejection.
+    { linearHistoryRequired: provider.branchProtection?.linearHistoryRequired ?? false },
   );
   const summary = gitMergeReadinessFor({
     ...(provider.pullRequest !== undefined ? { pullRequest: provider.pullRequest } : {}),
@@ -761,6 +763,30 @@ function providerPullRequestMatchesCommand(
     pullRequest.baseBranchName === command.baseBranchName &&
     pullRequest.headBranchName === command.headBranchName
   );
+}
+
+// KEIKO-0154: derive a head-hash mismatch verdict. Fail-closed in two cases:
+//   1) the command carries expectedHeadRefHash and the provider's readiness read reports a
+//      different head — the branch advanced between approval and execute.
+//   2) the provider reports a head hash but the command omits expectedHeadRefHash — the caller
+//      could have pinned the merge and didn't, so we refuse to merge against an unpinned head.
+// A provider that reports no head hash at all leaves this check inert (nothing to compare against);
+// the merge PUT's own -f sha= guard is not offered by the adapter in that case either.
+function mergeHeadHashMismatch(
+  command: GitMergeCommand,
+  provider: GitMergeProviderReadiness,
+): "mismatched" | "unpinned" | undefined {
+  const providerHead = provider.headRefHash;
+  if (providerHead === undefined) return undefined;
+  if (command.expectedHeadRefHash === undefined) return "unpinned";
+  // KEIKO-0154: compare case-insensitively. Git SHAs are hex and the merge route's own request
+  // validator accepts mixed case, while the provider always reports lowercase — so a correct but
+  // upper/mixed-case pin would otherwise be reported as "mismatched" and block a legitimate merge.
+  // Length equality is still required on purpose: prefix-matching an abbreviated SHA would WEAKEN
+  // the guard (a short hex prefix is far easier to collide), and this is a fail-closed gate.
+  return command.expectedHeadRefHash.toLowerCase() === providerHead.toLowerCase()
+    ? undefined
+    : "mismatched";
 }
 
 function providerMismatchReadiness(summary: GitMergeReadinessSummary): GitMergeReadinessSummary {
@@ -842,6 +868,26 @@ async function runReadinessAndMerge(
       readiness: mismatchReadiness,
     };
   }
+  // KEIKO-0154: the readiness re-read of the provider head must match the command's
+  // expectedHeadRefHash before the merge PUT is issued. Before this check the readiness read
+  // fetched provider.headRefHash but never compared it, so the guard on the adapter side
+  // (opportunistic -f sha=…) only bit when the caller happened to set the field — a merge
+  // command without expectedHeadRefHash silently succeeded against whatever head the branch had
+  // acquired since the approval was granted. Ranked AFTER the provider-PR-shape check so a
+  // completely mismatched PR still reports the shape mismatch, not a head-hash mismatch.
+  const headMismatch = mergeHeadHashMismatch(request.command, provider);
+  if (headMismatch !== undefined) {
+    return {
+      lifecycle: lifecycleFor(
+        prep,
+        request.approval,
+        { status: "blocked", category: "policy-block", blockReason: "head-hash-mismatch" },
+        "policy",
+        undefined,
+      ),
+      readiness: summary,
+    };
+  }
 
   const result = await runMergeAdapter(request.command, deps.adapter);
   const lifecycle = lifecycleFor(prep, request.approval, mergeOutcomeFor(result), "result", result);
@@ -892,4 +938,4 @@ export async function runGitMerge(
 
 // Re-export the contract bridge so the server/UI consume the error-code mapping from this gateway,
 // keeping the publish/PR/merge gateway surfaces symmetric.
-export { gitMergeRejectionToErrorCode } from "@oscharko-dev/keiko-contracts";
+export { gitMergeRejectionToErrorCode } from "@oscharko-dev/keiko-contracts/runtime/git-merge";

@@ -41,6 +41,8 @@ single MINOR of this class fails the required `ci` context.
    start reuses the cached volumes and takes seconds. Worktrees of one repository share that
    server, its persisted administrator credential, and its cache.
 2. Provisions a local analysis token. There is no account, no secret and no network dependency.
+   The scanner then joins that already-verified service with Compose dependency startup disabled,
+   so Compose cannot recreate SonarQube between the readiness check and report submission.
 3. Partitions committed branch changes plus staged, unstaged, and untracked working-tree files into
    disjoint main-code and test inventories before analysis. A production path is never also passed
    through `sonar.test.inclusions`, because that would suppress main-code rules on the file.
@@ -59,6 +61,11 @@ npm run gates:sonar:all      # every finding in the project
 npm run gates:sonar:stop     # stop the server, keep its cache
 ./docker/gates/run-sonar.sh --base main   # diff against another base
 ```
+
+The local runner gives the SonarJS bridge 4.5 GiB and caps the scanner coordinator at 768 MiB. This
+keeps enough analyzer headroom while leaving space for the concurrently required SonarQube service
+inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed
+the VM limit and terminate the bridge before it reports findings.
 
 If port 9234 is occupied by another local analyzer, select an unused loopback port. The port is
 part of the Compose-project identity, so this starts an isolated server and leaves the existing
@@ -85,15 +92,34 @@ complete substitute: SonarCloud's `shelldre:S7679` (bind a positional parameter 
 against those two as well.
 
 **It is not the gate.** The verdict stays with SonarCloud on the pull request
-([`local-gates.md`](local-gates.md)). Two things differ by construction:
+([`local-gates.md`](local-gates.md)). Three things differ by construction:
 
 - the quality **profile** is SonarQube's built-in "Sonar way", not the organisation's profile, so a
   rule the organisation activated or silenced may differ;
 - **coverage is not imported**, on purpose — coverage has its own gate
   (`npm run check:coverage:new-code`) and importing it here would double the runtime for no signal.
+- **new-code density conditions are invisible to it.** The cloud gate scores duplication and
+  coverage on the lines a pull request adds, measured against its base. This runs over a file
+  set, not a base diff, so it cannot evaluate that class at all — and a block the repository has
+  carried for years becomes a _new_-code duplication the moment your change touches one line
+  inside it. PR #3468 failed at 6.2% (limit 3%) from two `__fixtures__` twins that had differed
+  by two lines since long before that branch; the repair was a smaller diff, not a reworded one.
 
-So read a clean run as _"no known rule violation on my diff"_ — which is exactly the question you
-need answered before pushing — and never as _"SonarCloud will be green"_.
+So read a clean run as _"no known rule violation on my diff"_ — which is exactly the local question
+you need answered before pushing — and never as _"SonarCloud will be green"_. Required PR CI uses
+the cloud profile and, since incidents #3377 and #3380, disables both the analysis cache and
+Cloud's injected sensor cache. The direct repository validator requires zero cache hits, an exact
+miss receipt for Sonar's eligible JS/TS inventory, and completed fresh inventories covering at
+least 80 percent of all indexed files. It also requires every architecture-UDG receipt to be
+complete and their combined total to match SonarJasmin's own planned-file count when emitted.
+Scanner 8.1 PR logs may omit that plan; in that shape the gate requires the full fresh JS/TS source
+inventory to complete before a closed JavaScript-then-TypeScript architecture lifecycle. Each
+sensor must discover exactly one matching language-specific UDG producer location, read it, load
+its complete positive inventory, and finish before the architecture upload receipt and scanner
+success; additional, off-sensor, malformed, or out-of-order evidence fails closed. No percentage
+approximates UDG breadth because Sonar does not emit a UDG for every analyzed source file. Generic
+scanner success is not a substitute. That hosted-only proof closes the incremental-analysis gap;
+the local analyzer still cannot reproduce the Cloud architecture sensor or authorize a merge.
 
 ## When it disagrees with CI
 

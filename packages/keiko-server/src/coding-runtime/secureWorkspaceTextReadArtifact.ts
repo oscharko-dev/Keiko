@@ -1,6 +1,6 @@
 import type { SecureWorkspaceReadPlatform } from "./secureWorkspaceTextReadProcess.js";
 
-export type SecureWorkspaceReadTarget = "win32-x64" | "darwin-arm64" | "darwin-x64";
+export type SecureWorkspaceReadTarget = "linux-x64" | "win32-x64" | "darwin-arm64" | "darwin-x64";
 
 export interface SecureWorkspaceTextReadArtifact {
   readonly target: string;
@@ -35,6 +35,7 @@ export async function resolveSecureWorkspaceReadArtifact(
 export function secureWorkspaceReadTargetFor(
   platform: SecureWorkspaceReadPlatform,
 ): SecureWorkspaceReadTarget | undefined {
+  if (platform.os === "linux" && platform.arch === "x64") return "linux-x64";
   if (platform.os === "win32" && platform.arch === "x64") return "win32-x64";
   if (platform.os === "darwin" && platform.arch === "arm64") return "darwin-arm64";
   if (platform.os === "darwin" && platform.arch === "x64") return "darwin-x64";

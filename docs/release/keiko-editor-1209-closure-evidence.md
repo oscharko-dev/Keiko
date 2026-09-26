@@ -12,8 +12,12 @@ records release evidence"). It does not add product scope; it is the closure and
 artifact.
 
 Maintenance update (2026-07-22): the independent PR #2665 audit advanced the root DOMPurify
-override to the current patched 3.x release, 3.4.12. This changes no editor trust boundary or Monaco
-pin; it supersedes the dependency version recorded in the table below.
+override to the then-current patched 3.x release, 3.4.12. This changed no editor trust boundary or
+Monaco pin; it superseded the dependency version recorded in the table below.
+
+Maintenance update (2026-08-16): the 0.3.8 release updates Monaco to 0.56.0 and the root DOMPurify
+override to 3.4.13. Monaco 0.56.0 declares and vendors DOMPurify 3.4.8, so the inert Markdown sink
+controls remain active until Monaco vendors a DOMPurify release above the affected `<= 3.4.10` range.
 
 ## 0. Update (2026-06-20) — wave-2 delivered; the deferral statements below are superseded
 
@@ -165,7 +169,7 @@ Each control was re-verified against the PR head. (Threat-model memo:
 | Content-free telemetry / evidence            | Confirmed | Content-free SHA-256 prompt hash only, never the prompt `editorCompletionModel.ts:8`, `editorInlineCompletionModel.ts:14`; redact-before-store (review §, 14 compile-time content-free contracts)                                                                                                                                                                                       |
 | CSP unchanged (no relaxation for Monaco)     | Confirmed | `csp.ts`: `default-src 'none'`, `script-src 'self'` + SHA-256 (no `unsafe-inline`/`unsafe-eval`), `worker-src 'self'`, `connect-src 'self'`                                                                                                                                                                                                                                             |
 | No-CDN, same-origin ESM workers              | Confirmed | `loader.config({monaco})` `runtime.ts:26`; `new Worker(new URL("monaco-editor/esm/…", import.meta.url),{type:"module"})` `worker-entries.ts`; no-CDN scan tests; B1 = 0 (§7)                                                                                                                                                                                                            |
-| DOMPurify supply-chain (CVE-2026-0540)       | Confirmed | Root `overrides.dompurify = "3.4.12"` (≥ 3.3.2), resolved 3.4.12 in `package-lock.json`; Monaco stays `0.55.1`                                                                                                                                                                                                                                                                          |
+| DOMPurify supply-chain (CVE-2026-0540)       | Confirmed | Root `overrides.dompurify = "3.4.13"` (above the affected `<= 3.4.10` range), resolved 3.4.13 in `package-lock.json`; Monaco stays pinned at `0.56.0`                                                                                                                                                                                                                                   |
 | #1204 OS-egress now enforced (ADR-0043, §0)  | Confirmed | Superseded: `network:"none"` is OS/container-enforced via `keiko-sandbox` (`exec.ts` single spawn boundary, fail-closed before spawn); CI-proven by `keiko-sandbox/src/egress.test.ts`; `keiko-contracts/tools.ts` + `keiko-verification/limits.ts` report enforced. The earlier `inherit`/`enforced:false` honesty note applied before the wave-2 enforced-egress boundary landed (§0) |
 | `keiko-editor` enrolled in coverage baseline | Confirmed | `docs/qa/package-coverage-baseline.json` contains a `keiko-editor` entry; `test:mutation:security` (Stryker) is a documented local-only gate                                                                                                                                                                                                                                            |
 

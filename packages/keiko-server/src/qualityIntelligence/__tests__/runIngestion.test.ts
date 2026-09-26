@@ -16,7 +16,7 @@ import {
 } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────

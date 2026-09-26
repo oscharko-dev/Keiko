@@ -5,16 +5,16 @@
 
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, dirname, parse, relative, resolve } from "node:path";
-import {
-  RUNTIME_CAPABILITY_SCHEMA_VERSION,
-  type RuntimeCapabilitiesResponse,
-  type RuntimeCapability,
-  type RuntimeCapabilityKind,
-  type RuntimeCapabilityState,
-  type RuntimeCapabilityUnavailableReason,
-  type RuntimeCommandKind,
-  type RuntimeCommandSource,
+import type {
+  RuntimeCapabilitiesResponse,
+  RuntimeCapability,
+  RuntimeCapabilityKind,
+  RuntimeCapabilityState,
+  RuntimeCapabilityUnavailableReason,
+  RuntimeCommandKind,
+  RuntimeCommandSource,
 } from "@oscharko-dev/keiko-contracts";
+import { RUNTIME_CAPABILITY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/runtime-capabilities";
 import {
   isWithinWorkspace,
   readWorkspaceFile,

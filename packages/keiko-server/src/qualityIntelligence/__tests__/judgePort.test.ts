@@ -4,11 +4,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  GatewayCallRequest,
   GatewayRequest,
   ModelCapability,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { TEST_QUALITY_JUDGE_RESPONSE_SCHEMA } from "@oscharko-dev/keiko-contracts";
+import { TEST_QUALITY_JUDGE_RESPONSE_SCHEMA } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "../../deps.js";
@@ -683,6 +684,24 @@ describe("createQiJudgePort.judge — gateway call", () => {
     expect(verdict.gatewayCallCount).toBe(1);
   });
 
+  // ADR-0173 D5: the caller's correlation id (a run id or an HTTP request id) must reach the
+  // judge's model.call so a gateway retry/circuit-breaker line for this judge stage joins the
+  // same trail as the run/request that triggered it.
+  it("stamps the supplied correlation id into the GatewayCallRequest.logContext", async () => {
+    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
+    const port = createQiJudgePort(deps, "chat-model-1", {
+      correlationId: "cid-qi-judge-000001",
+    });
+    await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    expect(calls).toHaveLength(1);
+    expect((calls[0]?.request as GatewayCallRequest | undefined)?.logContext?.correlationId).toBe(
+      "cid-qi-judge-000001",
+    );
+  });
+
   it("uses stream: false in the gateway request", async () => {
     const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
     const port = createQiJudgePort(deps, "chat-model-1");
@@ -809,7 +828,6 @@ describe("createQiJudgePort.judge — gateway call", () => {
 
   it("propagates AbortError when the model call is cancelled", async () => {
     const controller = new AbortController();
-    const { port: fakePort } = fakeModelPort("");
     const abortingPort: ModelPort = {
       call: (_req: GatewayRequest, _sig: AbortSignal): Promise<NormalizedResponse> => {
         controller.abort();
@@ -818,7 +836,6 @@ describe("createQiJudgePort.judge — gateway call", () => {
     };
     const { deps } = depsFor("chat-model-1", "", {
       portFactory: (_id: string): ModelPort => {
-        void fakePort;
         return abortingPort;
       },
     });

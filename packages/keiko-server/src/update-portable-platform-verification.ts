@@ -1,14 +1,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { dirname } from "node:path";
+import type { Readable } from "node:stream";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import {
   type PortablePlatformVerificationInput,
   PortableUpdateStagingError,
 } from "./update-portable-staging-shared.js";
 import {
-  WINDOWS_SYSTEM_POWERSHELL,
-  windowsAuthenticodeIdentityScript,
-  windowsSystemEnvironment,
+  resolveWindowsAuthenticodeSystem,
+  type WindowsAuthenticodeSystem,
+  type WindowsAuthenticodeSystemOptions,
+  windowsAuthenticodePublisherIdentityScript,
+  windowsAuthenticodeVerifierAssemblyInput,
 } from "./coding-runtime/windowsPortableAuthenticode.js";
+import { discoverQualifiedPortableOpenCode } from "./coding-runtime/productionPortableCodingRuntime.js";
 
 const VERIFY_TIMEOUT_MS = 30_000;
 const MAX_COMMAND_OUTPUT_BYTES = 16_384;
@@ -18,14 +23,18 @@ type PlatformCommandRunner = (
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   signal: AbortSignal | undefined,
+  stdin: string | undefined,
 ) => Promise<string>;
 
 export interface PortablePlatformVerifierOptions {
   readonly hostPlatform?: NodeJS.Platform | undefined;
+  readonly linuxRuntimeVerifier?: ((resourceRoot: string) => boolean) | undefined;
   readonly runCommand?: PlatformCommandRunner | undefined;
+  readonly windowsSystem?: WindowsAuthenticodeSystemOptions | undefined;
 }
 
 function targetHostPlatform(target: UpdatePortableTarget): NodeJS.Platform {
+  if (target === "linux-x64") return "linux";
   return target === "windows-x64" ? "win32" : "darwin";
 }
 
@@ -60,22 +69,51 @@ function cleanup(
   child.stderr?.removeAllListeners();
 }
 
+function spawnPipedCommand(
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  stdin: string | undefined,
+): { readonly child: ChildProcess; readonly stderr: Readable; readonly stdout: Readable } {
+  const child = spawn(command, [...args], {
+    env,
+    stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const { stderr, stdout } = child;
+  if (stdout === null || stderr === null) {
+    child.kill();
+    throw commandFailed(command);
+  }
+  return { child, stderr, stdout };
+}
+
+function writeCommandInput(child: ChildProcess, stdin: string | undefined): void {
+  if (stdin === undefined) return;
+  child.stdin?.once("error", () => child.kill());
+  child.stdin?.end(stdin, "ascii");
+}
+
 function runCommand(
   command: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   signal: AbortSignal | undefined,
+  stdin: string | undefined,
 ): Promise<string> {
   return new Promise((resolveDone, reject) => {
     if (signal?.aborted === true) {
       reject(abortError());
       return;
     }
-    const child = spawn(command, [...args], {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    let spawned: ReturnType<typeof spawnPipedCommand>;
+    try {
+      spawned = spawnPipedCommand(command, args, env, stdin);
+    } catch (error) {
+      reject(error instanceof Error ? error : commandFailed(command));
+      return;
+    }
+    const { child, stderr, stdout } = spawned;
     let output = "";
     let outputBytes = 0;
     const timer = setTimeout(() => child.kill(), VERIFY_TIMEOUT_MS);
@@ -90,8 +128,8 @@ function runCommand(
       }
       output += chunk.toString("utf8");
     };
-    child.stdout.on("data", appendOutput);
-    child.stderr.on("data", appendOutput);
+    stdout.on("data", appendOutput);
+    stderr.on("data", appendOutput);
     signal?.addEventListener("abort", onAbort, { once: true });
     child.once("error", () => {
       cleanup(child, timer, signal, onAbort);
@@ -103,6 +141,7 @@ function runCommand(
       else if (code === 0 && outputBytes <= MAX_COMMAND_OUTPUT_BYTES) resolveDone(output);
       else reject(commandFailed(command));
     });
+    writeCommandInput(child, stdin);
   });
 }
 
@@ -113,12 +152,25 @@ function requireCurrentPath(path: string | undefined): string {
   return path;
 }
 
-function windowsSignerIdentity(output: string): string {
-  const identity = output.trim().toUpperCase();
-  if (!/^[A-F0-9]{40}$/u.test(identity)) {
+interface WindowsPublisherIdentity {
+  readonly subscriberEku: string;
+  readonly rootThumbprint: string;
+}
+
+function windowsSignerIdentity(output: string): WindowsPublisherIdentity {
+  const [subscriberEku, rootThumbprint, leafThumbprint, ...extra] = output.trim().split("|");
+  if (
+    extra.length > 0 ||
+    subscriberEku === undefined ||
+    !/^1\.3\.6\.1\.4\.1\.311\.97\.\d+(?:\.\d+)*$/u.test(subscriberEku) ||
+    rootThumbprint === undefined ||
+    !/^[A-F0-9]{40,128}$/u.test(rootThumbprint) ||
+    leafThumbprint === undefined ||
+    !/^[A-F0-9]{40,128}$/u.test(leafThumbprint)
+  ) {
     throw verifierUnavailable("windows portable signer identity is unavailable");
   }
-  return identity;
+  return { subscriberEku, rootThumbprint };
 }
 
 function macosTeamIdentifier(output: string): string {
@@ -136,23 +188,37 @@ function assertSameSignerIdentity(staged: string, current: string): void {
   }
 }
 
+function assertSameWindowsPublisher(
+  staged: WindowsPublisherIdentity,
+  current: WindowsPublisherIdentity,
+): void {
+  if (
+    staged.subscriberEku !== current.subscriberEku ||
+    staged.rootThumbprint !== current.rootThumbprint
+  ) {
+    throw verifierUnavailable("portable signer identity does not match the active install");
+  }
+}
+
 async function verifyWindowsPath(
   path: string,
   signal: AbortSignal | undefined,
   commandRunner: PlatformCommandRunner,
-): Promise<string> {
+  system: WindowsAuthenticodeSystem,
+): Promise<WindowsPublisherIdentity> {
   const output = await commandRunner(
-    WINDOWS_SYSTEM_POWERSHELL,
+    system.command,
     [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      windowsAuthenticodeIdentityScript(),
+      windowsAuthenticodePublisherIdentityScript(),
       path,
     ],
-    windowsSystemEnvironment(),
+    system.env,
     signal,
+    windowsAuthenticodeVerifierAssemblyInput(),
   );
   return windowsSignerIdentity(output);
 }
@@ -160,14 +226,17 @@ async function verifyWindowsPath(
 async function verifyWindows(
   input: PortablePlatformVerificationInput,
   commandRunner: PlatformCommandRunner,
+  systemOptions: WindowsAuthenticodeSystemOptions | undefined,
 ): Promise<void> {
-  const staged = await verifyWindowsPath(input.launcherPath, input.signal, commandRunner);
+  const system = resolveWindowsAuthenticodeSystem(systemOptions);
+  const staged = await verifyWindowsPath(input.stagedRoot, input.signal, commandRunner, system);
   const current = await verifyWindowsPath(
     requireCurrentPath(input.currentLauncherPath),
     input.signal,
     commandRunner,
+    system,
   );
-  assertSameSignerIdentity(staged, current);
+  assertSameWindowsPublisher(staged, current);
 }
 
 async function verifyMacosBundle(
@@ -175,11 +244,29 @@ async function verifyMacosBundle(
   signal: AbortSignal | undefined,
   commandRunner: PlatformCommandRunner,
 ): Promise<string> {
-  await commandRunner("codesign", ["--verify", "--deep", "--strict", bundlePath], {}, signal);
-  await commandRunner("xcrun", ["stapler", "validate", bundlePath], {}, signal);
-  await commandRunner("spctl", ["--assess", "--type", "execute", bundlePath], {}, signal);
+  await commandRunner(
+    "codesign",
+    ["--verify", "--deep", "--strict", bundlePath],
+    {},
+    signal,
+    undefined,
+  );
+  await commandRunner("xcrun", ["stapler", "validate", bundlePath], {}, signal, undefined);
+  await commandRunner(
+    "spctl",
+    ["--assess", "--type", "execute", bundlePath],
+    {},
+    signal,
+    undefined,
+  );
   return macosTeamIdentifier(
-    await commandRunner("codesign", ["--display", "--verbose=4", bundlePath], {}, signal),
+    await commandRunner(
+      "codesign",
+      ["--display", "--verbose=4", bundlePath],
+      {},
+      signal,
+      undefined,
+    ),
   );
 }
 
@@ -200,6 +287,30 @@ async function verifyMacos(
   assertSameSignerIdentity(staged, current);
 }
 
+function productionLinuxRuntimeVerified(resourceRoot: string): boolean {
+  const runtime = discoverQualifiedPortableOpenCode({
+    env: {},
+    platform: "linux",
+    arch: "x64",
+    installRoot: resourceRoot,
+  });
+  return (
+    runtime?.target === "linux-x64" &&
+    runtime.platformAssurance === "release-qualified" &&
+    runtime.qualification.backend === "linux-namespace-gateway"
+  );
+}
+
+function verifyLinux(
+  input: PortablePlatformVerificationInput,
+  verifier: (resourceRoot: string) => boolean,
+): void {
+  const resourceRoot = dirname(input.launcherPath);
+  if (!verifier(resourceRoot)) {
+    throw verifierUnavailable("Linux qualification and Sigstore evidence did not verify");
+  }
+}
+
 export function createPortablePlatformVerifier(
   options: PortablePlatformVerifierOptions = {},
 ): (input: PortablePlatformVerificationInput) => Promise<void> {
@@ -210,7 +321,11 @@ export function createPortablePlatformVerifier(
       throw verifierUnavailable("local platform verifier does not match the portable target");
     }
     if (input.target === "windows-x64") {
-      await verifyWindows(input, commandRunner);
+      await verifyWindows(input, commandRunner, options.windowsSystem);
+      return;
+    }
+    if (input.target === "linux-x64") {
+      verifyLinux(input, options.linuxRuntimeVerifier ?? productionLinuxRuntimeVerified);
       return;
     }
     await verifyMacos(input, commandRunner);

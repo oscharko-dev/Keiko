@@ -237,6 +237,16 @@ function saveField(input: EditorStatusBarInput): EditorStatusField {
   };
 }
 
+/** The compact, sighted-user label for the diagnostics field. Infos-only (errors===0 &&
+ * warnings===0, infos>0) has no glyph convention in this file, so it falls back to the same
+ * textual form `ariaLabel` already uses (KEIKO-0260) — otherwise the compact label would read the
+ * misleading "0 ⚠ 0" for a diagnostics set that is not actually empty. */
+function diagnosticsLabel(errors: number, warnings: number, infos: number): string {
+  return errors === 0 && warnings === 0
+    ? pluralize(infos, "info")
+    : `${String(errors)} ⚠ ${String(warnings)}`;
+}
+
 function diagnosticsField(summary: EditorDiagnosticsSummary | null): EditorStatusField | null {
   if (summary === null) {
     return null;
@@ -265,7 +275,7 @@ function diagnosticsField(summary: EditorDiagnosticsSummary | null): EditorStatu
   if (warnings > 0) parts.push(pluralize(warnings, "warning"));
   if (infos > 0) parts.push(pluralize(infos, "info"));
   const ariaLabel = `Problems: ${parts.join(", ")}`;
-  const label = `${String(errors)} ⚠ ${String(warnings)}`;
+  const label = diagnosticsLabel(errors, warnings, infos);
   // Diagnostics are informational and announced politely; they never interrupt with an alert.
   return { id: "problems", label, ariaLabel, tone, live: true, assertive: false };
 }

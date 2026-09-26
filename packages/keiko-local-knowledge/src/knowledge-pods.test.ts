@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
 
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-  validateKnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { validateKnowledgePodSummary } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import {
   htmlManualSourceFingerprintTag,
   htmlManualSourceKindTag,
-  type CapsuleSetId,
-  type KnowledgeCapsuleId,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 
 import {
   DEFAULT_EMBEDDING,

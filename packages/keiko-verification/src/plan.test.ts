@@ -125,6 +125,24 @@ describe("resolveTargetedTests", () => {
 });
 
 describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => {
+  it("builds a bounded Node native test invocation for the exact existing target", () => {
+    const ws = makeWorkspace({ testFramework: "node-test" });
+    ws.writeFile("test/average.test.js", "");
+
+    const steps = planDirectTargetedTests(ws.info, ["test/average.test.js"]);
+
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({
+      kind: "targeted-test",
+      command: "node",
+      args: ["--test", "test/average.test.js"],
+      limits: { network: "none" },
+    });
+    expect(isCommandAllowed(VERIFICATION_COMMAND_RULES, "node", steps[0]?.args ?? []).allowed).toBe(
+      true,
+    );
+  });
+
   it("runs exactly the given existing test files, without source→test derivation", () => {
     const ws = makeWorkspace({ testFramework: "vitest" });
     ws.writeFile("src/new.test.ts", "test('x', () => {});");

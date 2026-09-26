@@ -81,6 +81,7 @@ function request(body: Record<string, unknown>): IncomingMessage {
 
 function ctx(path: string, body: Record<string, unknown>): RouteContext {
   return {
+    correlationId: undefined,
     req: request(body),
     res: {} as never,
     params: {},

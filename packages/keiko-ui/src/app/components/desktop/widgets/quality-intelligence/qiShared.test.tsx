@@ -6,7 +6,7 @@
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts";
+import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { StatusBadge, runStatusLabel } from "./qiShared";
 
 const KNOWN: ReadonlyArray<readonly [string, string, string]> = [
@@ -43,5 +43,12 @@ describe("qiShared run-status guard (GEN-DUP-SEMANTIC-010)", () => {
     render(<StatusBadge status="quantum-superposition" />);
     const badge = screen.getByText("quantum-superposition");
     expect(badge).toHaveClass("qi-badge", "qi-badge-default");
+  });
+
+  it("renders degraded succeeded terminal truth instead of a plain Succeeded badge", () => {
+    render(<StatusBadge status="succeeded" degraded />);
+    const badge = screen.getByText("Degraded");
+    expect(badge).toHaveClass("qi-badge", "qi-badge-default");
+    expect(screen.queryByText("Succeeded")).not.toBeInTheDocument();
   });
 });

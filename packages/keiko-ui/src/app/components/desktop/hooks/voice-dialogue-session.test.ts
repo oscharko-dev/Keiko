@@ -42,7 +42,7 @@ const FULL_REALTIME_WEBRTC: VoiceCapabilityResolution = {
   availableVoicePersonas: PERSONAS,
 };
 
-// The load-bearing fallback case (D3): full-realtime deployment in a browser WITHOUT WebRTC media.
+// A full deployment can still use turn-based capture when native media is unavailable.
 const FULL_REALTIME_NO_WEBRTC: VoiceCapabilityResolution = {
   ...FULL_REALTIME_WEBRTC,
   transport: { websocketControl: true, webrtcMedia: false },
@@ -106,6 +106,25 @@ describe("voiceDialogueModeForResolution — fallback matrix (D2/D3, AC4)", () =
       speaks: false,
       canInterrupt: false,
     });
+  });
+
+  it("offers turn-based Digital Twin with STT, chat and mapped speech output", () => {
+    expect(voiceDialogueModeForResolution(STALE_INCOMPLETE_REALTIME, false, true)).toEqual({
+      offered: true,
+      capture: "batch",
+      speaks: true,
+      canInterrupt: false,
+    });
+    expect(voiceDialogueModeForResolution(FULL_REALTIME_WEBRTC, true, true).capture).toBe("webrtc");
+  });
+
+  it("does not offer batch dialogue without browser capture or a mapped output persona", () => {
+    expect(voiceDialogueModeForResolution(STALE_INCOMPLETE_REALTIME, false, false).offered).toBe(
+      false,
+    );
+    expect(voiceDialogueModeForResolution(FULL_REALTIME_NO_PERSONAS, false, true).offered).toBe(
+      false,
+    );
   });
 
   it("is NOT offered when full-realtime advertises zero personas", () => {

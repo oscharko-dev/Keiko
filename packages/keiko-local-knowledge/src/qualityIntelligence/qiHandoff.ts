@@ -14,7 +14,7 @@
 // (@oscharko-dev/keiko-contracts/qualityIntelligence).
 
 import type { RetrievalReference } from "@oscharko-dev/keiko-contracts";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 type CapsuleEnvelope = QualityIntelligence.QualityIntelligenceLocalKnowledgeCapsuleEnvelope;
 const { asQualityIntelligenceSourceEnvelopeId } = QualityIntelligence;

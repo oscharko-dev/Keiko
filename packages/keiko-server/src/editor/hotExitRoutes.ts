@@ -9,11 +9,9 @@ import {
   runFilesHandler,
 } from "../files.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
-import type { EditorHotExitStore } from "./hotExitStore.js";
-import {
-  isEditorHotExitSnapshotV1,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorHotExitStore, EditorHotExitStoredSnapshot } from "./hotExitStore.js";
+import type { EditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts";
+import { isEditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import { containsRedactableSecret } from "@oscharko-dev/keiko-security";
 
 const MAX_HOT_EXIT_BODY_BYTES = 8 * 1024 * 1024 + 32 * 1024;
@@ -38,7 +36,7 @@ async function expectedSnapshotRef(
   if (pathIsDenied(normalizedPath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return store.snapshotRefFor(resolvedRoot.root, normalizedPath);
+  return store.snapshotRefFor(resolvedRoot.access.canonicalRoot, normalizedPath);
 }
 
 async function validateSnapshotBinding(
@@ -73,6 +71,53 @@ function hasStore(deps: UiHandlerDeps): deps is UiHandlerDeps & {
   readonly editorHotExitStore: EditorHotExitStore;
 } {
   return deps.editorHotExitStore !== undefined;
+}
+
+// The declared read-response wire shape for a recovered snapshot (mirrors keiko-ui's
+// EditorHotExitReadResponse in packages/keiko-ui/src/lib/api.ts). Deliberately narrower than
+// EditorHotExitStoredSnapshot: it omits serverReceivedAt, the server-receipt clock used
+// internally for TTL bookkeeping (r6/r8) that was never part of the response contract.
+export interface EditorHotExitWireSnapshot {
+  readonly schemaVersion: EditorHotExitStoredSnapshot["schemaVersion"];
+  readonly content: string;
+  readonly baseVersion: EditorHotExitStoredSnapshot["baseVersion"];
+  readonly contentHash: string;
+  readonly savedContentHash: string | null;
+  readonly contentSizeBytes: number;
+  readonly updatedAt: number;
+  readonly paneId: string;
+  readonly windowId: string;
+}
+
+// Projects the stored (persistence) snapshot onto exactly the declared wire fields. Built by
+// destructuring the declared fields only -- never a spread -- so a future field added to
+// EditorHotExitStoredSnapshot (like serverReceivedAt was) does not silently reach the wire; it
+// must be added here deliberately.
+function projectHotExitSnapshotForWire(
+  snapshot: EditorHotExitStoredSnapshot,
+): EditorHotExitWireSnapshot {
+  const {
+    schemaVersion,
+    content,
+    baseVersion,
+    contentHash,
+    savedContentHash,
+    contentSizeBytes,
+    updatedAt,
+    paneId,
+    windowId,
+  } = snapshot;
+  return {
+    schemaVersion,
+    content,
+    baseVersion,
+    contentHash,
+    savedContentHash,
+    contentSizeBytes,
+    updatedAt,
+    paneId,
+    windowId,
+  };
 }
 
 function snapshotFromBody(body: Record<string, unknown>): EditorHotExitSnapshotV1 | RouteResult {
@@ -110,7 +155,7 @@ export async function handleEditorHotExitWrite(
         body: { snapshotRef, contentSizeBytes: 0, suppressed: true },
       };
     }
-    const result = deps.editorHotExitStore.write(snapshot);
+    const result = deps.editorHotExitStore.write(snapshot, snapshotRef);
     return { status: 200, body: result };
   });
 }
@@ -142,7 +187,13 @@ export async function handleEditorHotExitRead(
       throw new FilesError(403, "HOT_EXIT_REF_MISMATCH", "Recovery snapshot reference mismatch.");
     }
     const snapshot = deps.editorHotExitStore.read(snapshotRef);
-    return { status: 200, body: snapshot === null ? { found: false } : { found: true, snapshot } };
+    return {
+      status: 200,
+      body:
+        snapshot === null
+          ? { found: false }
+          : { found: true, snapshot: projectHotExitSnapshotForWire(snapshot) },
+    };
   });
 }
 

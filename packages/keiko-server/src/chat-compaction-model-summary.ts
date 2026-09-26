@@ -1,15 +1,24 @@
+import type {
+  ContextCompactionModelSummary,
+  ContextCompactionRecord,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+  partitionContextPreservedFacts,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
   containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
-  validateContextCompactionRecord,
-  type ContextCompactionModelSummary,
-  type ContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   findConfiguredCapability,
   type NormalizedResponse,
@@ -23,12 +32,36 @@ import {
   persistChatCompactionEvidence,
   type ChatCompactionEvidenceInput,
 } from "./chat-compaction-evidence.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { getServerLogger } from "./observability/index.js";
 
 const MODEL_SUMMARY_TIMEOUT_MS = 15_000;
 const MAX_SOURCE_TURNS = 16;
 const HEAD_SOURCE_TURNS = 4;
 const MAX_TURN_SOURCE_CHARS = 1_200;
 const MAX_MODEL_SOURCE_CHARS = 14_000;
+
+const CHAT_COMPACTION_FACTS_CLASSIFIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.compaction.facts.classified",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "chat-compaction-model-summary.logInferredFactClassification",
+  fields: {
+    inferredFactCount: { type: "integer", dataClass: "count", required: true },
+    verbatimFactCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["compaction-fact-classification"],
+  proofIds: ["chat.compaction.facts.classified.line"],
+  releaseImpact: "patch",
+});
 
 type ModelSummaryFailureReason = NonNullable<ContextCompactionModelSummary["failureReason"]>;
 type ModelSummaryValidationState = ContextCompactionModelSummary["validationState"];
@@ -134,6 +167,9 @@ const MODEL_SUMMARY_RESPONSE_FORMAT: ResponseFormat = {
 
 export interface ChatCompactionModelSummaryInput extends ChatCompactionEvidenceInput {
   readonly historyPrefix: readonly ChatMessage[];
+  // The originating request correlation survives detached model-summary enrichment so its
+  // successful safety classification remains reconstructable in the activity log.
+  readonly correlationId?: string | undefined;
 }
 
 export async function enrichChatCompactionWithModelSummary(
@@ -145,16 +181,18 @@ export async function enrichChatCompactionWithModelSummary(
     return;
   }
   try {
-    const prompt = buildSummaryPrompt(record, input.historyPrefix, deps.redactor);
+    const facts = partitionContextPreservedFacts(record.preservedFacts);
+    const prompt = buildSummaryPrompt(record, input.historyPrefix, deps.redactor, facts);
     if (prompt === undefined) {
       return;
     }
+    logInferredFactClassification(input.correlationId, facts);
     const model = deps.modelPortFactory(input.modelId);
     const responseMode = modelSummaryResponseMode(deps, input.modelId);
     const modelSummary =
       model === undefined
         ? failureModelSummary(record, input.modelId, "unavailable", "model-unavailable")
-        : await buildModelSummary(model, deps.redactor, input, record, prompt, responseMode);
+        : await buildModelSummary(model, deps, input, record, prompt, responseMode);
     if (modelSummary !== undefined) {
       persistChatCompactionEvidence(deps, {
         ...input,
@@ -162,22 +200,31 @@ export async function enrichChatCompactionWithModelSummary(
       });
     }
   } catch (error) {
-    logSummaryFailure(error);
+    logSummaryFailure(deps, input.chatId, error);
   }
 }
 
 async function buildModelSummary(
   model: ModelPort,
-  redactor: Redactor,
+  deps: UiHandlerDeps,
   input: ChatCompactionModelSummaryInput,
   record: ContextCompactionRecord,
   prompt: string,
   responseMode: ModelSummaryResponseMode,
 ): Promise<ContextCompactionModelSummary | undefined> {
-  const result = await callModelWithTimeout(model, input.modelId, prompt, responseMode);
+  // Background best-effort summarization has no live request correlation id in scope; the chat's
+  // own id is the stable job key an operator greps by, mirroring the `jobId`-as-correlationId
+  // convention background jobs elsewhere in the BFF already use (ADR-0173 D5).
+  const result = await callModelWithTimeout(
+    model,
+    input.modelId,
+    prompt,
+    responseMode,
+    input.chatId,
+  );
   return result.kind === "response"
-    ? modelSummaryFromResponse(record, input.modelId, result.response, redactor, responseMode)
-    : modelSummaryFromCallFailure(record, input.modelId, result);
+    ? modelSummaryFromResponse(record, input.modelId, result.response, deps.redactor, responseMode)
+    : modelSummaryFromCallFailure(deps, input.chatId, record, input.modelId, result);
 }
 
 function modelSummaryFromResponse(
@@ -222,6 +269,8 @@ function modelSummaryFromPayload(
 }
 
 function modelSummaryFromCallFailure(
+  deps: UiHandlerDeps,
+  correlationId: string,
   record: ContextCompactionRecord,
   modelId: string,
   result: Exclude<ModelSummaryCallResult, { readonly kind: "response" }>,
@@ -229,7 +278,7 @@ function modelSummaryFromCallFailure(
   if (result.kind === "timed-out") {
     return failureModelSummary(record, modelId, "timed-out", "timed-out");
   }
-  logSummaryFailure(result.error);
+  logSummaryFailure(deps, correlationId, result.error);
   return failureModelSummary(record, modelId, "unavailable", "model-unavailable");
 }
 
@@ -238,6 +287,7 @@ async function callModelWithTimeout(
   modelId: string,
   prompt: string,
   responseMode: ModelSummaryResponseMode,
+  correlationId: string,
 ): Promise<ModelSummaryCallResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -263,6 +313,7 @@ async function callModelWithTimeout(
           ...(responseMode === "structured"
             ? { responseFormat: MODEL_SUMMARY_RESPONSE_FORMAT }
             : {}),
+          logContext: { correlationId },
         },
         controller.signal,
       ),
@@ -291,11 +342,12 @@ function buildSummaryPrompt(
   record: ContextCompactionRecord,
   historyPrefix: readonly ChatMessage[],
   redactor: Redactor,
+  facts: ReturnType<typeof partitionContextPreservedFacts>,
 ): string | undefined {
   const lines = [
     `Prompt version: ${CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION}`,
     "Summarize the compacted conversation prefix for future turns.",
-    ...recordSignalLines(record),
+    ...recordSignalLines(record, facts),
     ...sourceTurnLines(record, historyPrefix),
   ];
   const redacted = redactedString(lines.join("\n"), redactor);
@@ -305,12 +357,20 @@ function buildSummaryPrompt(
   return clampText(redacted, MAX_MODEL_SOURCE_CHARS);
 }
 
-function recordSignalLines(record: ContextCompactionRecord): string[] {
+function recordSignalLines(
+  record: ContextCompactionRecord,
+  facts: ReturnType<typeof partitionContextPreservedFacts>,
+): string[] {
   const lines = ["Structured deterministic signals:"];
   addList(
     lines,
     "Facts",
-    record.preservedFacts?.map((fact) => fact.statement),
+    facts.verbatim.map((fact) => fact.statement),
+  );
+  addList(
+    lines,
+    "Inferred statements (not facts)",
+    facts.inferred.map((fact) => fact.statement),
   );
   addList(
     lines,
@@ -326,6 +386,30 @@ function recordSignalLines(record: ContextCompactionRecord): string[] {
   addList(lines, "Open questions", record.openQuestions);
   addList(lines, "Errors", record.failingTests);
   return lines;
+}
+
+// ADR-0173 D5 — the fact partition changes the model prompt and later resurfaced context. Record
+// that successful safety branch without preserving any fact body or chat identifier; an operator
+// can join it to the originating chat request and see why inferred entries were not treated as facts.
+function logInferredFactClassification(
+  correlationId: string | undefined,
+  facts: ReturnType<typeof partitionContextPreservedFacts>,
+): void {
+  if (facts.inferred.length === 0) {
+    return;
+  }
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_COMPACTION_FACTS_CLASSIFIED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        inferredFactCount: facts.inferred.length,
+        verbatimFactCount: facts.verbatim.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function sourceTurnLines(
@@ -367,13 +451,18 @@ function selectedSourceIndices(count: number): number[] {
 }
 
 function addList(lines: string[], title: string, values: readonly string[] | undefined): void {
-  if (values === undefined || values.length === 0) {
+  const singleLineValues = values?.filter(isSafeListItem) ?? [];
+  if (singleLineValues.length === 0) {
     return;
   }
   lines.push(`${title}:`);
-  for (const value of values) {
+  for (const value of singleLineValues) {
     lines.push(`- ${value}`);
   }
+}
+
+function isSafeListItem(value: string): boolean {
+  return !/[\r\n]/u.test(value);
 }
 
 function clampSourceTurn(content: string): string {
@@ -663,10 +752,19 @@ function failureModelSummary(
   });
 }
 
-function logSummaryFailure(error: unknown): void {
-  // eslint-disable-next-line no-console
-  console.warn(
-    "chat-compaction-model-summary: enrichment failed (best-effort, send unaffected)",
-    error,
+// Replaces a bare `console.warn` (ADR-0173 D5 g25): a best-effort background enrichment failure
+// (send unaffected — the compaction record itself already persisted) is still an operator-visible
+// event, not a silent one. `correlationId` is the chat id (see `buildModelSummary` above): this
+// background job has no live request id in scope, so the chat's own id is the stable join key.
+function logSummaryFailure(deps: UiHandlerDeps, correlationId: string, error: unknown): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "chat.compaction.summary",
+      source: "chat.compaction.model-summary",
+      error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
   );
 }

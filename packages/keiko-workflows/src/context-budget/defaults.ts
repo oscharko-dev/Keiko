@@ -10,12 +10,11 @@
 // allocator enforces effectiveInputBudget at runtime. The non-evictable minReserved sums
 // (4_000 + 8_000 = 12_000) stay well under 116_000.
 
+import type { ContextBudget, ContextLaneBudget } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
-  type ContextBudget,
-  type ContextLaneBudget,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 const DEFAULT_LANES: readonly ContextLaneBudget[] = [
   {

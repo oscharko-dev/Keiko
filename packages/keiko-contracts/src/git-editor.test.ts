@@ -98,8 +98,10 @@ function blameResponse(overrides: Readonly<Record<string, unknown>> = {}): unkno
   };
 }
 
-// Mirrors the current client declarations in diffParser.ts. The contracts leaf cannot import UI;
-// child issue 6 replaces these mirrors with the real shared types during renderer consolidation.
+// Mirrors the GitEditorDiffLine/Hunk/File family that packages/keiko-ui's diffParser.ts already
+// type-aliases directly (DiffLine = GitEditorDiffLine, DiffFile = GitEditorDiffFile). The contracts
+// leaf cannot import from keiko-ui, so this is a structural compatibility pin, not a guard against
+// an independently-evolving client type.
 interface ClientDiffLine {
   readonly kind: "ctx" | "add" | "del" | "meta";
   readonly oldLine: number | null;

@@ -86,6 +86,80 @@ describe("createLauncherSessionPairingPort", () => {
       computeLauncherPairingClaim(SECRET, "req_x", 6),
     );
   });
+
+  // Regression: PR #3099 R3 KfQ Major. Prune runs at the top of attest so a stream of stale-only
+  // attestations (each rejected at isFresh) does not hoard the cap slots and starve a later
+  // legitimate fresh attestation. Without this, availability degrades over long-lived processes.
+  it("prunes stale entries even when the incoming attestation itself is stale", () => {
+    let currentNow = 1_000;
+    const port = createLauncherSessionPairingPort({
+      secret: SECRET,
+      now: () => currentNow,
+      claimFreshnessMs: 5_000,
+    });
+    // Fill the cap with fresh attestations.
+    for (let index = 0; index < 4_096; index += 1) {
+      const attestation = mintLauncherPairingAttestation({
+        secret: SECRET,
+        requestId: `req_burst_${String(index)}`,
+        issuedAtMs: currentNow,
+      });
+      expect(port.attest(attestation).outcome).toBe("approved");
+    }
+    // Advance past the freshness window; all entries are now prunable.
+    currentNow += 10_000;
+    // Fire a stale attestation. In the old code (prune after isFresh) this would return
+    // "denied" without pruning, leaving the map full. In the new code (prune first) the stale
+    // entries evict, but this stale attestation still returns "denied" via isFresh.
+    const stale = mintLauncherPairingAttestation({
+      secret: SECRET,
+      requestId: "req_stale",
+      issuedAtMs: currentNow - 20_000,
+    });
+    expect(port.attest(stale).outcome).toBe("denied");
+    // Now a legitimate fresh attestation must succeed — before the fix it would be denied by
+    // the cap gate because the stale burst's slots were never pruned.
+    const fresh = mintLauncherPairingAttestation({
+      secret: SECRET,
+      requestId: "req_after_stale_burst",
+      issuedAtMs: currentNow,
+    });
+    expect(port.attest(fresh).outcome).toBe("approved");
+  });
+
+  // Regression: KEIKO-0460. The anti-replay set previously grew unbounded and, once past the cap,
+  // permanently denied every attestation for the rest of the process's life — including ones
+  // whose ids could no longer be replayed under `isFresh`. Prune expired ids before the cap gate.
+  it("prunes anti-replay ids whose freshness window has elapsed so the cap never becomes permanent", () => {
+    let currentNow = 1_000;
+    const port = createLauncherSessionPairingPort({
+      secret: SECRET,
+      now: () => currentNow,
+      claimFreshnessMs: 5_000,
+    });
+    for (let index = 0; index < 4_096; index += 1) {
+      const attestation = mintLauncherPairingAttestation({
+        secret: SECRET,
+        requestId: `req_${String(index)}`,
+        issuedAtMs: currentNow,
+      });
+      expect(port.attest(attestation).outcome).toBe("approved");
+    }
+    const overflow = mintLauncherPairingAttestation({
+      secret: SECRET,
+      requestId: "req_full",
+      issuedAtMs: currentNow,
+    });
+    expect(port.attest(overflow).outcome).toBe("denied");
+    // Advance past the freshness window on every tracked id and try again.
+    currentNow += 10_000;
+    const afterDrain = mintLauncherPairingAttestation({
+      secret: SECRET,
+      requestId: "req_after_drain",
+      issuedAtMs: currentNow,
+    });
+    expect(port.attest(afterDrain).outcome).toBe("approved");
+  });
 });
 
 describe("resolveLauncherSessionPairingPort", () => {

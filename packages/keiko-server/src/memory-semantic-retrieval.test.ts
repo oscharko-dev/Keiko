@@ -9,7 +9,7 @@
 // The gateway is driven by an injected embedding adapter that returns a controllable vector per
 // input string, so the test owns the entire similarity geometry without a network call.
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
@@ -282,8 +282,8 @@ async function createChat(): Promise<string> {
 }
 
 beforeEach(async () => {
-  staticRoot = mkdtempSync(join(tmpdir(), "keiko-sem-static-"));
-  tmp = mkdtempSync(join(tmpdir(), "keiko-sem-"));
+  staticRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-sem-static-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-sem-"));
   projectDir = join(tmp, "repo");
   mkdirSync(projectDir);
   store = createInMemoryUiStore();

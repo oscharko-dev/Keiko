@@ -36,7 +36,7 @@ import type {
 } from "./local-knowledge.js";
 import type { HtmlManualSourceKind } from "./html-manual-source.js";
 import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
-import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
+import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory-contracts.js";
 import type {
   MemoryForget,
   MemoryProposal,
@@ -45,6 +45,11 @@ import type {
 } from "./memory-operations.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
 import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
+// The Chat git-change description-status vocabulary is the SAME frozen outcome vocabulary
+// #3399 owns (epic #3384 correction 3, one outcome-vocabulary table) — imported so the array
+// below is checked at compile time rather than independently restated (see F29 in the epic
+// #3384 final audit: this was previously a bare literal array with no compile-time link).
+import type { PrDescriptionApplicationState } from "./pr-description-application.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
@@ -97,7 +102,9 @@ export interface GroundingLimits {
   readonly hybridMaxExcerptBytes: number; // NEW: shared excerpt-byte budget for the hybrid rerank
 }
 
-export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
+// Frozen at runtime: `as const` is compile-time only, and these are shared singletons a consumer
+// could otherwise mutate in place for the rest of the process.
+export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = Object.freeze({
   maxConnectedSources: 16,
   maxLocalKnowledgeSources: 16,
   maxPromptReferences: 16,
@@ -105,11 +112,11 @@ export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
   referenceBudget: 10,
   hybridMaxCandidates: 100,
   hybridMaxExcerptBytes: 131_072,
-} as const;
+});
 
 // Hard safety ceilings: an operator config may TUNE a limit but never raise it past these
 // (preserves the original DoS-bounding intent of the fan-out caps).
-export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = {
+export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = Object.freeze({
   maxConnectedSources: 64,
   maxLocalKnowledgeSources: 64,
   maxPromptReferences: 64,
@@ -117,7 +124,7 @@ export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = {
   referenceBudget: 256,
   hybridMaxCandidates: 256,
   hybridMaxExcerptBytes: 524_288,
-} as const;
+});
 
 // Pure resolver: fill each field from `partial` when it is a positive integer, else the default;
 // then clamp to the ceiling. Invalid (non-positive / non-integer) present fields fall back to the
@@ -168,6 +175,73 @@ export type ChatLocalKnowledgeScope =
       readonly connectedAtMs: number;
     };
 
+// Issue #3400 (epic #3384) — the FROZEN description-status vocabulary (contract correction 3).
+// `current`: the artifact is complete/partial/fallback AND the snapshot re-check found no drift.
+// `stale`: the re-check found the repository has moved (a different base, head, merge base or
+// snapshot digest) or the snapshot expired — regardless of the underlying artifact outcome.
+// `partial`/`fallback`/`failed`: the artifact outcome itself, on an otherwise-current snapshot.
+// `blocked`: a prerequisite is missing (no resolved PR, no admissible description authority, an
+// unmet approval) — never a `GitChangeSnapshotOutcome` and never persisted on the snapshot itself.
+export const CHAT_GIT_CHANGE_DESCRIPTION_STATUSES = [
+  "current",
+  "stale",
+  "partial",
+  "fallback",
+  "blocked",
+  "failed",
+] as const satisfies readonly PrDescriptionApplicationState[];
+export type ChatGitChangeDescriptionStatus = (typeof CHAT_GIT_CHANGE_DESCRIPTION_STATUSES)[number];
+
+// Issue #3400 (epic #3384) — the closed set of reasons a connect/refresh request may block on,
+// per the issue's Baseline Delta. Never a raw git error string. ONE owner: the browser
+// (`api.ts`) and the server (`gitChangeRoutes.ts`) both import this constant rather than each
+// hand-restating the same set (F30 in the epic #3384 final audit).
+export const GIT_CHANGE_BLOCKED_REASONS = [
+  "detached-head",
+  "unborn-head",
+  "missing-ref",
+  "identical-refs",
+  "no-pull-request",
+  "ambiguous-pull-request",
+  "reader-unauthorized",
+  "remote-unresolved",
+  "repository-unavailable",
+  "snapshot-unavailable",
+  "snapshot-failed",
+  "chat-project-unavailable",
+] as const;
+export type GitChangeBlockedReason = (typeof GIT_CHANGE_BLOCKED_REASONS)[number];
+
+// Issue #3400 (epic #3384, contract corrections 2 and 6) — a THIRD Chat scope list, sibling to
+// `connectedScopes`/`localKnowledgeScopes`, never overloading either. Every field is a
+// server-issued, content-free fact: no raw diff, no filesystem path, no provider payload, no
+// browser-authored repository identity. `remoteDigest` (not `repositoryId`) is the "same
+// repository" key (correction 6). `relationshipId` names the immutable, archive-only
+// `reads-context` edge (relationships.ts) this scope entry projects; a refresh archives it and
+// creates a new one (correction 4) rather than mutating this record in place.
+export interface ChatGitChangeScope {
+  readonly kind: "git-change";
+  readonly relationshipId: string;
+  readonly remoteDigest: string;
+  /** Server-rendered, safe label for display only — e.g. a branch comparison or "PR #123". */
+  readonly comparisonLabel: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly mergeBaseSha: string;
+  readonly snapshotDigest: string;
+  readonly pullRequestNumber?: number;
+  readonly fileCount: number;
+  readonly totalFiles: number;
+  readonly omittedFiles: number;
+  readonly truncatedFiles: number;
+  readonly descriptionStatus: ChatGitChangeDescriptionStatus;
+  /** Server-held exact description proposal selected by the latest successful Chat turn. */
+  readonly descriptionProposalId?: string;
+  readonly connectedAtMs: number;
+}
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -191,6 +265,10 @@ export interface Chat {
   // When both are present, `localKnowledgeScope` equals `localKnowledgeScopes[0]`.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[];
   readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
+  // Issue #3400 (epic #3384) — a THIRD, sibling scope list carrying only server-issued Git-change
+  // facts (contract correction 2). Unlike `connectedScopes`/`localKnowledgeScopes` there is no
+  // single-source legacy field: this scope kind was never overloaded onto an earlier shape.
+  readonly gitChangeScopes?: readonly ChatGitChangeScope[];
   // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
   // scope. Voice queues echo it back so a final captured under one source set cannot later
   // retrieve under another; lifecycle metadata does not alter the token.
@@ -200,6 +278,27 @@ export interface Chat {
 }
 
 export type ChatRole = "user" | "assistant" | "system";
+
+/** A durable coding conversation; workspace references never confer execution authority. */
+export interface CodingHistoryTask {
+  readonly id: string;
+  readonly title: string;
+  readonly projectPath: string;
+  readonly modelId: string;
+  readonly branch: string;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly status: "active" | "completed";
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly latestRunId?: string | undefined;
+}
+
+export interface CodingHistoryDetail {
+  readonly task: CodingHistoryTask;
+  readonly messages: readonly ChatMessage[];
+  readonly truncated: boolean;
+}
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ChatTurnState = "pending" | "completed" | "failed" | "cancelled";
 
@@ -265,6 +364,11 @@ export interface UpdateChatPatch {
   // (absent) leaves the binding untouched while `null` explicitly clears it.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
   readonly localKnowledgeScope?: ChatLocalKnowledgeScope | null;
+  // Issue #3400 — set `gitChangeScopes` to bind a list of Git-change scope entries (null clears
+  // ALL). No legacy single-source field exists for this scope kind. `undefined` (absent) leaves
+  // the binding untouched; every entry is server-issued (git-change route handlers only — never
+  // accepted verbatim from an arbitrary PATCH caller without server-side re-validation).
+  readonly gitChangeScopes?: readonly ChatGitChangeScope[] | null;
 }
 
 export interface NewChatMessage {
@@ -431,6 +535,73 @@ export function parseUpdateMemoryAutonomyPolicyWire(
     Number(candidate.expectedRevision) >= 0
     ? {
         requestedMode: candidate.requestedMode,
+        expectedRevision: Number(candidate.expectedRevision),
+      }
+    : undefined;
+}
+
+/**
+ * The GitHub issue reader's authorization for the currently selected repository (#3385).
+ *
+ * `repositoryId` is the content-free identity the task workspace derives; no path, remote or
+ * credential crosses this boundary. `revision` is the server-owned counter a client echoes back so a
+ * stale grant cannot overwrite a newer revocation.
+ */
+export interface GitHubIssueReaderAuthorizationWire {
+  readonly repositoryId: string;
+  readonly authorized: boolean;
+  readonly revision: number;
+}
+
+export interface UpdateGitHubIssueReaderAuthorizationWire {
+  /**
+   * Which repository the grant applies to, as its registered project path.
+   *
+   * The caller names it because the server has no reliable notion of "the current repository": the
+   * launch path is a start-up snapshot that opening another repository never updates, so resolving
+   * from it stored a grant against the wrong repository. It is intent, not authority — the server
+   * accepts the value only if it is already a registered project, and derives the content-free
+   * repository identity itself, so a request can neither invent a path nor reach a repository the
+   * user has not opened.
+   */
+  readonly repositoryPath: string;
+  readonly authorized: boolean;
+  readonly expectedRevision: number;
+}
+
+const AUTHORIZATION_UPDATE_KEYS: ReadonlySet<string> = new Set([
+  "repositoryPath",
+  "authorized",
+  "expectedRevision",
+]);
+
+// Transport bound only: a non-empty, NUL-free string of at most this many UTF-16 code units.
+// Whether the value is an absolute, registered project path is deliberately not judged here — the
+// server's registration check owns path semantics (#3385).
+export const MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS = 4096;
+
+function isBoundedRepositoryPath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS &&
+    !value.includes("\0")
+  );
+}
+
+export function parseUpdateGitHubIssueReaderAuthorizationWire(
+  value: unknown,
+): UpdateGitHubIssueReaderAuthorizationWire | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const extra = Object.keys(candidate).filter((key) => !AUTHORIZATION_UPDATE_KEYS.has(key));
+  if (extra.length > 0 || !isBoundedRepositoryPath(candidate.repositoryPath)) return undefined;
+  return typeof candidate.authorized === "boolean" &&
+    Number.isSafeInteger(candidate.expectedRevision) &&
+    Number(candidate.expectedRevision) >= 0
+    ? {
+        repositoryPath: candidate.repositoryPath,
+        authorized: candidate.authorized,
         expectedRevision: Number(candidate.expectedRevision),
       }
     : undefined;
@@ -816,11 +987,34 @@ export interface SafeCircuitBreakerConfig {
   readonly halfOpenProbes: number;
 }
 
+// #2906 round 3 (KEIKO-0572 follow-up): the single source of VALUES for the gateway's default
+// circuit breaker, not just its shape. keiko-model-gateway/src/config.ts's own
+// DEFAULT_CIRCUIT_BREAKER_CONFIG derives its three exported numbers from this constant, and
+// keiko-ui's gatewayConfigParsing.ts (which cannot import keiko-model-gateway directly -- ADR-0019
+// reserves it for provider-SDK isolation) imports this SAME constant for its REBUILT_CIRCUIT_BREAKER
+// literal instead of hand-copying the numbers. Previously each package independently restated
+// `{ failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 }`, typed against
+// SafeCircuitBreakerConfig so the SHAPE stayed compiler-checked while the VALUES could silently
+// drift apart with no error anywhere.
+export const DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG: SafeCircuitBreakerConfig = Object.freeze({
+  failureThreshold: 5,
+  cooldownMs: 30_000,
+  halfOpenProbes: 2,
+});
+
+/** Wire mirror of the gateway's credential-free reranker projection (model-gateway config.ts). */
+export interface SafeRerankerConfig {
+  readonly modelId: string;
+  readonly credentialHeaderName: string;
+  readonly timeoutMs: number;
+}
+
 export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: SafeCircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[];
   readonly grounding?: GroundingLimits;
+  readonly reranker?: SafeRerankerConfig;
 }
 
 // ─── Workflow descriptor wire shapes (BFF /api/workflows) ─────────────────────────
@@ -1329,6 +1523,9 @@ export type BffErrorCode =
   | "CONVERSATION_UNSUPPORTED_MODALITY"
   | "CONVERSATION_UNSUPPORTED_FILE_TYPE"
   | "CONVERSATION_OVERSIZED_CONTEXT"
+  // A GitHub-issue operation on a repository the workspace has not opened (409): the issue preview
+  // and the GitHub issue reader authorization routes answer it, and the Coding Workbench names it.
+  | "UNKNOWN_REPOSITORY"
   | "INTERNAL";
 
 // The wire shape carries `code: string` — the BFF can emit codes outside the BffErrorCode union
@@ -1336,6 +1533,14 @@ export type BffErrorCode =
 export interface BffError {
   readonly error: { readonly code: string; readonly message: string };
 }
+
+/**
+ * The one definition of the `UNKNOWN_REPOSITORY` code for its producers (the issue preview and the
+ * GitHub issue reader authorization routes) and its consumers (the Coding Workbench intake and the
+ * issue reader authorization hook), so a rename can never map the refusal to a generic failure on
+ * one side (PR #3452 review).
+ */
+export const UNKNOWN_REPOSITORY_ERROR_CODE = "UNKNOWN_REPOSITORY" satisfies BffErrorCode;
 
 // ─── Run report (BFF GET /api/runs/:runId — projection over evidence + state) ─────
 
@@ -1490,15 +1695,83 @@ export interface TerminalEventEnvelope {
 
 export type FilesEntryKind = "directory" | "file" | "symlink";
 
-export interface FilesTreeEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly kind: FilesEntryKind;
-  readonly sizeBytes: number;
-  readonly modifiedAt: number;
-  readonly extension: string | null;
-  readonly symlink: boolean;
-  readonly readable: boolean;
+// What a symlink entry's target resolved to, carried ONLY on a "symlink" entry (#2906 review,
+// comment 3863185718). "unknown" covers a target the walk could not resolve at all (broken link,
+// permission error) or one that is neither a regular file nor a directory (socket, FIFO, device).
+export type FilesSymlinkTargetKind = "directory" | "file" | "unknown";
+
+// A discriminated union, not one shape with independently-optional fields (KEIKO-0633 follow-up,
+// #2906 review): every impossible sizeBytes/modifiedAt combination used to be permitted by the
+// type even though only one was ever produced at runtime. A real directory is returned from a
+// readdir walk and is deliberately never stat'd per entry (one syscall per directory would
+// dominate the walk cost), so it is metadata-free BY CONSTRUCTION; a file or symlink entry is
+// always lstat'd and always carries real values.
+//
+// Three FULL variants, not two (PR #3289 review, comment 3865167775, finishing what the previous
+// round started): the earlier two-variant shape still let `kind` and `symlink` disagree —
+// `{kind: "directory", symlink: true}`, `{kind: "symlink", symlink: false}` both type-checked —
+// and let a "file" entry carry `symlinkTargetKind`, which belongs only to a symlink. `kind` alone
+// is now the ENTIRE discriminant: there is no separate `symlink: boolean` field to contradict it,
+// and `symlinkTargetKind` exists ONLY on the "symlink" variant. A symlink whose target is a
+// directory is `kind: "symlink"`, never `kind: "directory"` — unlike a real directory it DOES
+// carry real lstat metadata (of the symlink itself), so collapsing it into "directory" silently
+// violated the metadata-free invariant above. Symmetrically, a symlink whose target is a FILE
+// stays `kind: "symlink"` too, never collapsed into "file" — the runtime used to do exactly that
+// for both cases, contradicting this type. `symlinkTargetKind` carries what the walk resolved the
+// target to, for a consumer (e.g. a tree-view icon) that wants to render a symlinked directory
+// differently from a symlinked file.
+export type FilesTreeEntry =
+  | {
+      readonly kind: "directory";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes?: undefined;
+      readonly modifiedAt?: undefined;
+      readonly extension: string | null;
+      readonly readable: boolean;
+    }
+  | {
+      readonly kind: "file";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes: number;
+      readonly modifiedAt: number;
+      readonly extension: string | null;
+      readonly readable: boolean;
+    }
+  | {
+      readonly kind: "symlink";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes: number;
+      readonly modifiedAt: number;
+      readonly extension: string | null;
+      readonly readable: boolean;
+      readonly symlinkTargetKind: FilesSymlinkTargetKind;
+    };
+
+/**
+ * Compile-time exhaustiveness pin for {@link FilesTreeEntry}'s discriminant (PR #3289 review,
+ * comment 3865167775): a `switch (entry.kind)` that calls this in its `default` case fails to
+ * compile the moment a new variant is added to the union without also being handled at that call
+ * site, instead of silently falling through. Never called at runtime.
+ */
+export function assertNeverFilesTreeEntryKind(entry: never): never {
+  throw new TypeError(`Unhandled FilesTreeEntry.kind: ${JSON.stringify(entry)}`);
+}
+
+// Whether a tree entry should be treated as a navigable/expandable directory: a real directory, or
+// a symlink the walk resolved to one (`kind: "symlink"` + `symlinkTargetKind: "directory"`).
+// #2906 review (comment 3865167721): FilesWidget used to gate expansion, navigation, context
+// menus, and drag/drop on `kind === "directory"` alone, so once a symlink-to-directory stopped
+// being reported as `kind: "directory"` (the discriminated-union fix above), it silently stopped
+// being navigable in the UI even though the server can still list through it. Both the server and
+// the UI consumer import this ONE predicate so "expandable" can never drift between what the walk
+// allows and what the tree renders. Narrows on `kind` explicitly rather than reading
+// `symlinkTargetKind` off the raw union: only the "symlink" variant declares that property.
+export function isExpandableDirectory(entry: FilesTreeEntry): boolean {
+  if (entry.kind === "directory") return true;
+  return entry.kind === "symlink" && entry.symlinkTargetKind === "directory";
 }
 
 export interface FilesTreeResponse {
@@ -1581,6 +1854,14 @@ export interface FilesContentResponse extends FilesPreviewBase {
         readonly status: "degraded";
         readonly reason:
           "workspace-unavailable" | "filesystem-identity-unsupported" | "history-unavailable";
+        readonly correlationId: string;
+      }
+    // Issue #2898: a capture whose content looks like a secret is never vaulted at all — this is
+    // not a failure of the protection mechanism, so it gets its own status rather than routing
+    // through the generic "degraded" (unavailable-infrastructure) shape.
+    | {
+        readonly status: "suppressed";
+        readonly reason: "secret-detected";
         readonly correlationId: string;
       };
 }
@@ -1769,6 +2050,13 @@ export interface GatewayReadinessOptions {
   readonly probes?: readonly GatewayReadinessProbeName[] | undefined;
   readonly includeDeepProbes?: boolean | undefined;
   readonly maxContextTokens?: number | undefined;
+  /**
+   * Machine-readable origin of an automatic run: the bounded Coding Workbench verification flow,
+   * or the on-demand chat probe a conversation guard starts for a model without a current
+   * observation (#3591: both run with the probe floors, never with a bare setup timeout). Only the
+   * Workbench origin is accepted from the wire; the on-demand origin is set by the server itself.
+   */
+  readonly purpose?: "coding-workbench-auto" | "on-demand" | undefined;
 }
 
 export interface GatewayReadinessRequest {

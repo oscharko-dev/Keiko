@@ -56,7 +56,7 @@ describe("AppShellBoundary", () => {
   // Most cases below assert the ENGLISH recovery copy and one deliberately asserts the German, so
   // the language is part of what is under test and belongs next to the assertion rather than
   // inherited from jsdom's navigator or from whichever test ran last. The shared teardown clears
-  // the key after every test (AGENTS.md §9: no shared mutable global state); this states the
+  // the key after every test (AGENTS.md §7: no shared mutable global state); this states the
   // precondition where a reader checking the expected string can see it.
   beforeEach(() => {
     window.localStorage.setItem("keiko.locale", "en");

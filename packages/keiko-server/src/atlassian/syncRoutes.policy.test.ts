@@ -19,15 +19,17 @@ import {
   type AtlassianHttpPort,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianConnectorPendingApproval,
+  AtlassianSyncJobState,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  type AtlassianConnectorPendingApproval,
-  type AtlassianSyncJobState,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -238,6 +240,7 @@ function jsonRequest(body: Record<string, unknown>): IncomingMessage {
 
 function ctxFor(params: Record<string, string>, body: Record<string, unknown>): RouteContext {
   return {
+    correlationId: undefined,
     req: jsonRequest(body),
     res: {} as never,
     params,

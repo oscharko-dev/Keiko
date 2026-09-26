@@ -4,14 +4,22 @@
 // hop, only the connector's configured host is contacted, redirects are surfaced (never
 // followed), and every transport failure classifies into the closed, content-free result union.
 
-import { describe, expect, it } from "vitest";
+import { once } from "node:events";
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { describe, expect, it, vi } from "vitest";
 import {
   AtlassianCredentialCustodyError,
   atlassianAuthorizationHeaderValue,
   type AtlassianCredentialExecutionResolver,
   type AtlassianResolvedCredential,
 } from "@oscharko-dev/keiko-connectors";
-import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } from "./httpPort.js";
+import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  createGatewayAtlassianHttpBodyPort,
+  createGatewayAtlassianHttpPort,
+  exceedsBodyByteCeiling,
+} from "./httpPort.js";
 
 const SYNTHETIC_TOKEN = ["ATATT", "port", "test", "0123456789", "abcdefghij"].join("");
 const SYNTHETIC_EMAIL = ["port-tester", "@", "example", ".", "com"].join("");
@@ -338,8 +346,7 @@ describe("createGatewayAtlassianHttpBodyPort", () => {
     const credentials = resolver();
     const controller = new AbortController();
     controller.abort();
-    const fetchImpl = ((input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      void input;
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       return Promise.reject(
         Object.assign(new Error("aborted"), {
           name: init?.signal?.aborted === true ? "AbortError" : "TypeError",
@@ -476,5 +483,298 @@ describe("createGatewayAtlassianHttpBodyPort — write channel (Issue #2244)", (
       }),
     ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
     expect(calls).toHaveLength(0);
+  });
+});
+
+// ─── Connector egress posture (KEIKO-0316, #3156) ────────────────────────────
+// The connector lane must never inherit the model gateway's private-network opt-ins. Those
+// flags exist for an operator's own approved, customer-hosted MODEL provider; an Atlassian
+// connector base URL is client-supplied through the connector-management routes, so inheriting
+// them would turn the `/verify` probe into an internal-reconnaissance oracle. Both port
+// factories therefore derive their own egress config: proxy/CA transport settings are honoured,
+// `denyLoopback` and `pinProxiedConnectTarget` are now pinned on (#3156 — see httpPort.ts's
+// connectorEgressConfig comment for why both, together, close the proxied-DNS-rebinding gap
+// without reintroducing the blanket proxy refusal an earlier, denyLoopback-alone attempt caused),
+// and `allowPrivateNetwork`/`allowLinkLocalAndMetadata` are never carried over — mirroring
+// researchEgressConfig() in coding-runtime/researchEgressPort.ts.
+
+const PERMISSIVE_GATEWAY_EGRESS: OutboundHttpEgressConfig = {
+  allowPrivateNetwork: true,
+  allowLinkLocalAndMetadata: true,
+};
+
+// Loopback is blocked two ways now: the plain hostname-string classification in httpPort.ts
+// (classifyOutboundHost, applied unconditionally to the LITERAL base URL, proxied or not) catches
+// every base URL in this list directly; `denyLoopback` on the egress config (see above) is the
+// second, DNS-resolution-based layer that additionally catches a hostname that only resolves to
+// loopback (a rebinding attack) rather than naming it literally — exercised by the dedicated
+// "proxied DNS-rebinding refusal" tests further down, not by this literal-hostname list.
+const INTERNAL_BASE_URLS = [
+  "https://10.0.0.5",
+  "https://172.16.4.9",
+  "https://192.168.1.20",
+  "https://169.254.169.254",
+  "https://127.0.0.1",
+  "https://localhost",
+] as const;
+
+describe("Atlassian connector egress posture", () => {
+  it.each(INTERNAL_BASE_URLS)(
+    "blocks %s even when the shared gateway egress opts into private networks",
+    async (baseUrl) => {
+      const { fetchImpl, calls } = fetchFake(200);
+      const result = await createGatewayAtlassianHttpPort({
+        baseUrl,
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => PERMISSIVE_GATEWAY_EGRESS,
+        fetchImpl,
+      })({ method: "GET", url: `${baseUrl}/rest/api/3/myself`, timeoutMs: 30_000 });
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it.each(INTERNAL_BASE_URLS)(
+    "blocks %s on the bounded-body channel under the same permissive gateway egress",
+    async (baseUrl) => {
+      const { fetchImpl, calls } = writeFetchFake(200, "{}");
+      const result = await createGatewayAtlassianHttpBodyPort({
+        baseUrl,
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => PERMISSIVE_GATEWAY_EGRESS,
+        fetchImpl,
+      })({
+        method: "POST",
+        url: `${baseUrl}/rest/api/3/issue`,
+        timeoutMs: 30_000,
+        maxBodyBytes: 1_000,
+        bodyJson: "{}",
+      });
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it("still reaches the connector's own public host and keeps the operator's proxy/CA settings", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    const result = await createGatewayAtlassianHttpPort({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      egress: () => ({ ...PERMISSIVE_GATEWAY_EGRESS, noProxy: ["acme.example"] }),
+      fetchImpl,
+    })({ method: "GET", url: "https://acme.example/rest/api/3/myself", timeoutMs: 30_000 });
+    expect(result).toEqual({ kind: "response", status: 200 });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("blocks a loopback base URL under plain default config, on both channels, without touching the network", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    const result = await createGatewayAtlassianHttpPort({
+      baseUrl: "https://127.0.0.1",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+    })({ method: "GET", url: "https://127.0.0.1/rest/api/3/myself", timeoutMs: 30_000 });
+    expect(result).toEqual({ kind: "network-error" });
+    expect(calls).toHaveLength(0);
+
+    const { fetchImpl: bodyFetchImpl, calls: bodyCalls } = writeFetchFake(200, "{}");
+    const bodyResult = await createGatewayAtlassianHttpBodyPort({
+      baseUrl: "https://127.0.0.1",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl: bodyFetchImpl,
+    })({
+      method: "POST",
+      url: "https://127.0.0.1/rest/api/3/issue",
+      timeoutMs: 30_000,
+      maxBodyBytes: 1_000,
+      bodyJson: "{}",
+    });
+    expect(bodyResult).toEqual({ kind: "network-error" });
+    expect(bodyCalls).toHaveLength(0);
+  });
+
+  it("never resolves the credential for a loopback target (rejected before materialisation)", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    const credentials = resolver();
+    await createGatewayAtlassianHttpPort({
+      baseUrl: "https://localhost",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+    })({ method: "GET", url: "https://localhost/rest/api/3/myself", timeoutMs: 30_000 });
+    expect(credentials.resolvedRefs).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// ─── Proxied DNS-rebinding refusal (#3156) ───────────────────────────────────
+// Two independent reviewers flagged the same question from opposite sides: does the proxied path
+// actually vet a connector hostname's RESOLVED address, or does it just pin an unvetted one? These
+// tests use the REAL gatewayFetch transport (no fetchImpl fake) with "node:dns/promises" mocked, so
+// the production dnsLookup call inside enforceOutboundTargetPolicy is fully controlled — matching
+// the AUDIT-SEC-001 pattern in keiko-model-gateway/src/http.test.ts. A fetchImpl fake cannot
+// exercise this: it makes gatewayFetch treat the request as unproxied (`usesRealTransport` false),
+// so neither DNS-pinning path is ever reached and a fake-based test would prove nothing here.
+
+async function listenLocal(server: ReturnType<typeof createHttpServer>): Promise<number> {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return (server.address() as AddressInfo).port;
+}
+
+function closeServer(server: ReturnType<typeof createHttpServer>): Promise<void> {
+  return new Promise((resolve) => {
+    server.closeAllConnections();
+    server.close(() => {
+      resolve();
+    });
+  });
+}
+
+describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (#3156)", () => {
+  it("refuses a connector host that DNS-resolves to loopback through a proxy, before the proxy is ever contacted", async () => {
+    // "mycompany.atlassian.example" is not literally loopback-shaped (classifyOutboundHost would
+    // not flag it), so this only reaches the DNS-resolution-based check — exactly the rebinding
+    // scenario the reviewers described: an operator configured a legitimate-looking host, and it
+    // now resolves somewhere it should not.
+    let proxyContacts = 0;
+    const proxy = createHttpServer();
+    proxy.on("connect", (_req, clientSocket) => {
+      proxyContacts += 1;
+      clientSocket.destroy();
+    });
+    const proxyPort = await listenLocal(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { createGatewayAtlassianHttpPort: freshPort } = await import("./httpPort.js");
+      const result = await freshPort({
+        baseUrl: "https://mycompany.atlassian.example",
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => ({
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
+        }),
+      })({
+        method: "GET",
+        url: "https://mycompany.atlassian.example/rest/api/3/myself",
+        // Short: a proxy that swallows the CONNECT with no clean error can otherwise stall this
+        // request past vitest's own test timeout before the port's internal abort fires.
+        timeoutMs: 5_000,
+      });
+      expect(result).toEqual({ kind: "network-error" });
+      // The load-bearing assertion: without denyLoopback + pinProxiedConnectTarget on the
+      // connector's egress config, gatewayFetch never resolves DNS for a proxied request at all,
+      // so the request reaches the proxy's CONNECT handler (which this test's fake then destroys,
+      // ALSO surfacing as "network-error" — the same outward result for a different reason). Only
+      // this count distinguishes "refused before any proxy contact" from "reached the proxy
+      // unvetted and failed for an unrelated reason."
+      expect(proxyContacts).toBe(0);
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      await closeServer(proxy);
+    }
+  });
+
+  it("does not blanket-refuse ordinary proxied traffic — DNS is actually attempted, not short-circuited", async () => {
+    // Proves the fix does not reintroduce the exact regression connectorEgressConfig's own comment
+    // warns about: denyLoopback alone, WITHOUT pinProxiedConnectTarget, makes
+    // refuseUnpinnableResearchEgress throw synchronously for every proxied request, before DNS is
+    // ever attempted — that is what broke every proxied Atlassian deployment the first time
+    // denyLoopback was tried here. The mocked address is deliberately public (203.0.113.10, RFC
+    // 5737 TEST-NET-3) so a failure downstream of the DNS lookup (this fake proxy returns
+    // an explicit CONNECT failure) cannot be mistaken for the
+    // blanket-refusal this test exists to rule out. The discriminating signal is that `lookup` was
+    // called at all: refuseUnpinnableResearchEgress's throw happens strictly before any DNS work,
+    // so reaching the mock proves the request was NOT short-circuited there.
+    const proxy = createHttpServer();
+    proxy.on("connect", (_req, clientSocket) => {
+      clientSocket.end(
+        ["HTTP/1.1 502 Bad Gateway", "Content-Length: 0", "Connection: close", "", ""].join("\r\n"),
+      );
+    });
+    const proxyPort = await listenLocal(proxy);
+    try {
+      vi.resetModules();
+      const lookup = vi.fn(() => Promise.resolve([{ address: "203.0.113.10", family: 4 }]));
+      vi.doMock("node:dns/promises", () => ({ lookup }));
+      const { createGatewayAtlassianHttpPort: freshPort } = await import("./httpPort.js");
+      const result = await freshPort({
+        baseUrl: "https://mycompany.atlassian.example",
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => ({
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
+        }),
+      })({
+        method: "GET",
+        url: "https://mycompany.atlassian.example/rest/api/3/myself",
+        // Short: a proxy that swallows the CONNECT with no clean error can otherwise stall this
+        // request past vitest's own test timeout before the port's internal abort fires.
+        timeoutMs: 5_000,
+      });
+      expect(result).toEqual({ kind: "network-error" });
+      expect(lookup).toHaveBeenCalledWith(
+        "mycompany.atlassian.example",
+        expect.objectContaining({ all: true }),
+      );
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      await closeServer(proxy);
+    }
+  });
+});
+
+describe("Atlassian write-channel body ceiling — fails closed on a non-finite cap (Issue #3246)", () => {
+  // dev run 32563378802: the oversized-body test above resolved 200 in coverage shard 1/3 and
+  // passed on rerun. The only way `assertValidRequestBody` could let a 1 000 001-byte body
+  // through is the imported `ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES` not being a finite number in
+  // that worker — `bytes > cap` is false for EVERY comparison against NaN, so the old guard
+  // silently passed. These two tests pin both halves of the fix independently: the inverted
+  // comparison (a pure, body-free predicate — byte counts only) and the module-load assertion
+  // that turns a non-finite imported ceiling into a load-time throw instead of a silent bypass.
+  it("rejects when the ceiling is NaN, where the old `bytes > cap` comparison would have silently passed", () => {
+    expect(exceedsBodyByteCeiling(0, Number.NaN)).toBe(true);
+    expect(exceedsBodyByteCeiling(1_000_000, Number.NaN)).toBe(true);
+  });
+
+  it("stays a strict >-cap rejection for finite ceilings: at the cap passes, one byte over rejects", () => {
+    expect(exceedsBodyByteCeiling(1_000_000, 1_000_000)).toBe(false);
+    expect(exceedsBodyByteCeiling(1_000_001, 1_000_000)).toBe(true);
+  });
+
+  it("throws a TypeError naming the ceiling at module load when the imported constant is non-finite", async () => {
+    vi.resetModules();
+    const actualConnectors = await vi.importActual<typeof import("@oscharko-dev/keiko-connectors")>(
+      "@oscharko-dev/keiko-connectors",
+    );
+    vi.doMock("@oscharko-dev/keiko-connectors", () => ({
+      ...actualConnectors,
+      ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES: Number.NaN,
+    }));
+    try {
+      let loadError: unknown;
+      try {
+        await import("./httpPort.js");
+      } catch (error) {
+        loadError = error;
+      }
+      expect(loadError).toBeInstanceOf(TypeError);
+      expect((loadError as Error).message).toContain("ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES");
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-connectors");
+      vi.resetModules();
+    }
   });
 });

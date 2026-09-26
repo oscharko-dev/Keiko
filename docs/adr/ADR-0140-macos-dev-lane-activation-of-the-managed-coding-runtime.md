@@ -1,4 +1,4 @@
-# ADR-0140: macOS dev-lane activation of the managed coding runtime
+# ADR-0140: macOS and Windows dev-lane activation of the managed coding runtime
 
 ## Status
 
@@ -30,14 +30,23 @@ through seams that production never exercises.
 ### D1 — A development lane is a distinct, declared availability source
 
 The coding runtime gains exactly one additional activation source next to the packaged
-windows-x64 discovery: dev-lane discovery on macOS (arm64/x64). It is inactive unless
+windows-x64 discovery: dev-lane discovery on macOS (arm64/x64) and Windows (x64). It is inactive unless
 `KEIKO_CODING_RUNTIME_DEV_LANE` carries an explicit enable token. A runtime activated through it
 carries `evidenceClass: "functional-not-platform-qualified"` and an availability record in which
 only checks the lane actually performs are marked verified (`signatureVerified: false`,
 `qualificationVerified: false`). Nothing on this lane may present itself as platform-qualified.
 
+`functional-not-platform-qualified` is no longer server-internal. It is now a value of the
+`runtimeEvidenceClass` field on the coding-workbench readiness contract, REQUIRED whenever
+`runtimeAvailable` is true, and the packaged evaluation lane (ADR-0163 D9) is its second producer.
+One vocabulary answers "how strong is this available runtime's evidence?" for both lanes, and the
+anti-false-green rule above now binds the UI as well as the server: a runtime in this class is
+never narrated, labelled or coloured as a plain ready runtime. This also repairs a pre-existing
+hole — the dev lane's evidence class previously reached no UI surface, so a dev-lane runtime
+announced "Runtime ready."
+
 `npm run dev:start` is the trusted development launcher and is itself the operator's explicit
-selection of this repository-confined lane. On a supported macOS checkout it supplies the enable
+selection of this repository-confined lane. On a supported macOS or Windows checkout it supplies the enable
 token to the BFF, evaluates production discovery after the package build, stages the
 review-approved payload and secure-read helper only when discovery reports a repairable staged
 artifact failure, and then evaluates production discovery again. The launcher fails instead of
@@ -50,20 +59,53 @@ Dev-lane discovery refuses, before evaluating any payload trust, whenever the re
 root carries a packaged-install manifest (`.portable/update-portable-manifest.json` or
 `.portable/setup-manifest.json`) or lacks repository-checkout markers (`.git` or
 `tsconfig.packages.json`). Packaged installs — Windows and macOS alike — therefore cannot adopt
-the dev lane as a de-facto activation path; their behavior is unchanged and remains fail-closed
-until the Wave-5 packaged qualification supplies the evidence ADR-0137 D5 demands.
+the dev lane as a de-facto activation path; that confinement is unchanged and still absolute.
+
+A packaged artifact now has a second, differently confined availability source: the ADR-0163 D9
+evaluation lane. It is not this lane and does not weaken this confinement. The distinction is the
+confinement rule itself. The dev lane is selected by an environment token on a repository checkout
+and refuses the moment a packaged install marker exists. The evaluation lane is selected by a
+declaration the packaged artifact carries in its own manifest, written only when a release
+explicitly requests it, and it carries the complete integrity evidence set of a production
+artifact. Neither can be reached from the other, and neither can be entered by a fallback after
+some other prerequisite fails.
+
+### D2a — The npm runtime package is a third, separately anchored availability source (2026-09-21, #3577)
+
+An npm installation of Keiko carries neither OpenCode nor the native helpers, and a customer who
+cannot install a desktop package (no administrator rights, no infrastructure approval) had no way
+to start a coding run at all. On macOS an npm installation therefore activates the runtime from
+`@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64`. Both are `optionalDependencies`
+of the main package with `os`/`cpu` fields, so `npm install -g @oscharko-dev/keiko` installs the one
+for the host by itself and skips them everywhere else; Keiko finds the package by ordinary module
+resolution from its own package root. They carry a valid SPDX license expression
+(`Apache-2.0 AND MIT`) because the supply-chain gates evaluate everything the main package can
+install.
+
+This does not loosen D2. The dev lane stays confined to repository checkouts and stays opt-in. The
+npm lane is not reachable from it and applies the same D3 verification with a different trust
+anchor: the approved executable-tree, license and SBOM digests and the digest of the helper binary
+Keiko built are compiled into the server, pinned by test to `portable-runtime-approvals.json` and
+to `native/secure-workspace-read`, so a runtime package can never vouch for itself and a planted
+package of the same name verifies or is refused. No environment token is asked: the runtime is
+part of what the operator installs, and `--omit=optional` remains their way to decline it. An installed package that fails verification decides the outcome
+with its own D4 reason and never falls through to another lane. The lane reports the same honest
+posture as the dev lane (`functional-not-platform-qualified`) and the same forgone guarantees, and
+both dev-lane log operations carry `lane: "npm-runtime-package"`. Windows and Linux stay on their
+packaged lanes: Windows needs the native supervisor and Linux the sandbox isolation, neither of
+which this lane ships.
 
 ### D3 — Verified payload, declared forgone guarantees
 
 The lane's trust anchor is the review-approved redistribution catalog
-(`portable-runtime-approvals.json`): the staged executable's tree digest and the license digest
-are recomputed from disk and compared against the catalog on every discovery. The secure-read
-helper is built locally, digest-pinned in a dev-lane manifest at staging time, re-verified at
-discovery (including source-tree freshness) and at every admitted read. Two guarantees are
-deliberately forgone and must stay documented wherever the lane is described: the
-release-qualified supervisor's containment and orphan-reaping proof (the dev-lane backend
-terminates a POSIX process group best-effort and proves exit only for the direct child), and
-platform signature chains (digest pinning replaces Developer ID/notarization evidence).
+(`portable-runtime-approvals.json`): the staged executable's tree digest, license digest, and the
+freshly generated SBOM digest are compared against the catalog during staging and on every
+discovery. The secure-read helper is built locally, digest-pinned in a dev-lane manifest at
+staging time, re-verified at discovery (including source-tree freshness) and at every admitted
+read. On macOS the dev-lane backend terminates a POSIX process group best-effort and proves exit
+only for the direct child; Windows uses its native Job Object supervisor. Neither platform carries
+a platform signature chain (digest pinning replaces Developer ID/notarization or Authenticode
+evidence).
 
 ### D4 — Honest, content-free unavailability reasons
 
@@ -81,7 +123,40 @@ unrecognized values are ignored fail-closed. Enabling the dev lane never widens 
 readiness projection reports the same ceiling the mint clamp enforces; the previously reported
 autonomous-delivery ceiling was a separate authority knob and could diverge from enforcement.
 
-### D6 — Development stop owns bounded runtime teardown
+### D6 — Long-lived gateway-only network confinement on macOS (Issue #2951)
+
+The macOS dev-lane backend (`devLaneRuntimeProcessBackend.ts`) never spawns the sidecar directly.
+Every launch is wrapped in a `RuntimeGatewayConfinement` (ADR-0043 D11–D13,
+`packages/keiko-sandbox/src/runtime-gateway.ts`): a Seatbelt profile that denies all network egress
+by default and carves out exactly one outbound allowance — the loopback gateway/BFF port the caller
+attests — plus denies mach-lookup, Apple Event, and `LSOpen` escapes. `process-fork` remains
+available for the pinned OpenCode sidecar's Git handshake (#3390), while `process-exec` is
+deny-by-default and admits only the verified runtime executable and the exact Git executable
+attested for that launch. Arbitrary shells, curl, compilers, and other child executables are
+refused. Every admitted descendant inherits the same Seatbelt profile, including the network
+denial above. The backend refuses to spawn at all when no confinement is attached, or when the
+policy's `runId`/`treeBindingId`
+does not match the launch request, before any process exists (fail-closed, consistent with D5's
+kill-switch precedence).
+
+The profile is asymmetric by design: outbound is a single pinned allowance (the caller-attested
+gateway host/port), but inbound is not port-pinned at all — the compiled rule is
+`(allow network-inbound (local <family> "localhost:*"))`
+(`packages/keiko-sandbox/src/backends.ts`'s `buildGatewaySeatbeltCommand`), so the confined process
+may itself accept a connection on any local port, as long as the peer is loopback-sourced (`deny
+network*` still blocks every route to a non-loopback peer in either direction). This is what lets
+the sidecar's own HTTP server bind and answer `/health` and other local callers without a second,
+narrower carve-out; it does not weaken the egress boundary this ADR closes, since an inbound-only
+allowance grants no ability to reach out to a network destination the outbound rule denies.
+
+This closes the network side of the dev lane's confinement for macOS only. Windows production
+composition does attach the same `RuntimeGatewayConfinement` to `nativeRuntimeProcessBackend.ts`,
+but the native launch protocol/helper cannot enforce it yet. The Windows launch therefore refuses
+before spawn with `GATEWAY_UNSUPPORTED_ON_HOST_REASON`; omitting the policy or launching unconfined
+is not an allowed fallback. Exact-port WFP enforcement remains tracked by #3423/#2951 and is not
+claimed here as done.
+
+### D7 — Development stop owns bounded runtime teardown
 
 `npm run dev:stop` signals the trusted development runner first. The runner gives the BFF longer
 than the BFF's complete bounded runtime-disposal window before escalating, so the coding
@@ -89,6 +164,35 @@ orchestrator can revoke authority, terminate the owned OpenCode process group, a
 state before UI and watcher processes disappear. The stop command waits for the runner and every
 tracked child; it does not report success while a tracked process remains alive. `--force` remains
 an explicit last-resort hard stop.
+
+### D8 — Cross-platform gateway policy moves to a shared contract type (Issue #2951 follow-up, 2026-09-05)
+
+D6's Seatbelt confinement now flows through a contract-level `NetworkGatewayPolicy`
+(`keiko-contracts/src/tools.ts`) and keiko-sandbox's generic `planIsolatedRun`/`selectGatewayBackend`
+planning path (ADR-0043 D14) instead of a macOS-only helper called directly: the dev-lane backend
+builds an `IsolatedRunPlan` with that policy and lets the shared planner pick (and, on an
+unsupported host, refuse) the backend, rather than assuming Seatbelt is always present. The observed
+behaviour on a working macOS host is unchanged — same profile, same `/usr/bin/sandbox-exec` path —
+but a macOS host missing `sandbox-exec` itself now fails the launch closed with a reasoned decision
+instead of an OS-level spawn error surfacing after the fact.
+
+D6's Windows/native gap also gets an explicit, shared refusal: `nativeRuntimeProcessBackend.ts` can
+now be given the same gateway policy and, because its launch-packet protocol has no way to enforce
+one, always fails the launch with the identical reason keiko-sandbox's planner would produce for an
+unsupported host. Production composition (`productionOpenCodeBackend.ts`) now always attaches that
+policy to a native/Windows launch too, via the unconditional `runtimeGatewayConfinement` helper at
+both native-backend construction sites (the release/evaluation-lane path and `devLaneSupervisor`'s
+Windows branch) — so a Windows-activated sidecar today fails closed pre-spawn with
+`GATEWAY_UNSUPPORTED_ON_HOST_REASON` (`nativeRuntimeProcessBackend.ts`'s refusal path) rather than
+running unconfined. This matches ADR-0043 D14's own description of the same wiring; the two ADRs
+converge instead of describing the fact differently.
+
+Issue #3422 additionally teaches the shared planner to compile the same contract into a Linux
+bubblewrap/unshare namespace plus an anonymous descriptor-transfer gateway bridge (ADR-0043
+D12/D14). ADR-0140 does not activate that path: the development lane still supports only its
+declared macOS and Windows targets. Issue #3451 supplies `linux-x64` exclusively through the
+packaged production-discovery path, where exact-component, offline Sigstore, fresh-runner, and real
+namespace qualification are mandatory; it does not widen this weaker development lane.
 
 ## Consequences
 
@@ -114,7 +218,7 @@ keep proving a composition production never runs, and first-contact integration 
 URL composition, secure-read wiring, supervisor identity) would surface only after the packaged
 qualification lands.
 
-### Silently qualify macOS through the existing receipt path
+### Silently qualify a dev checkout through the existing receipt path
 
 Rejected. Fabricating supervisor qualification receipts without the qualification suite would
 forge packaged-grade evidence and violate ADR-0137 D5's core prohibition. The dev lane instead

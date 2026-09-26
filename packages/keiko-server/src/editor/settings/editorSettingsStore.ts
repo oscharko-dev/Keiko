@@ -2,15 +2,17 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import type {
+  EditorM11SettingScope,
+  EditorM7ReasonCode,
+  EditorM7SettingId,
+  EditorM7SettingScope,
+  EditorM7SettingValue,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   parseEditorM7SettingPatch,
-  type EditorM11SettingScope,
-  type EditorM7ReasonCode,
-  type EditorM7SettingId,
-  type EditorM7SettingScope,
-  type EditorM7SettingValue,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { containsPath } from "@oscharko-dev/keiko-git";
 
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";

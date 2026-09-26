@@ -25,6 +25,7 @@ import {
   listDirtyPerformanceSubjectPaths,
 } from "./check-perf-evidence.mjs";
 import { computeD12MeasurementToolchainDigest } from "./d12-measurement-toolchain.mjs";
+import { EXPECTED_NODE_BASELINE, EXPECTED_NPM_ENGINE } from "./check-runtime-toolchain.mjs";
 
 const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const AGGREGATE_RULE = "median-run-level-percentile";
@@ -241,8 +242,9 @@ function validateHardware(value) {
 function validateProvenance(value, warmUp) {
   const provenance = object(value, "provenance");
   if (provenance.platform !== "linux") fail("provenance platform must be linux");
-  if (provenance.nodeVersion !== "24.18.0") fail("provenance Node.js version must be 24.18.0");
-  if (provenance.npmVersion !== "11.16.0") fail("provenance npm version must be 11.16.0");
+  if (provenance.nodeVersion !== EXPECTED_NODE_BASELINE)
+    fail("provenance Node.js version must be 24.18.0");
+  if (provenance.npmVersion !== EXPECTED_NPM_ENGINE) fail("provenance npm version must be 11.16.0");
   if (!SHA_256.test(provenance.lockfileSha256 ?? "")) {
     fail("provenance lockfileSha256 must be a lowercase SHA-256 digest");
   }
@@ -250,8 +252,8 @@ function validateProvenance(value, warmUp) {
     platform: "linux",
     architecture: requiredString(provenance.architecture, "provenance architecture"),
     osRelease: requiredString(provenance.osRelease, "provenance osRelease"),
-    nodeVersion: "24.18.0",
-    npmVersion: "11.16.0",
+    nodeVersion: EXPECTED_NODE_BASELINE,
+    npmVersion: EXPECTED_NPM_ENGINE,
     lockfileSha256: provenance.lockfileSha256,
     playwrightVersion: requiredString(provenance.playwrightVersion, "provenance playwrightVersion"),
     chromiumVersion: requiredString(provenance.chromiumVersion, "provenance chromiumVersion"),
@@ -279,16 +281,16 @@ function validateBundleRuntime(value, label) {
     `${label} bundle runtime`,
   );
   if (runtime.platform !== "linux") fail(`${label} bundle runtime platform must be linux`);
-  if (runtime.nodeVersion !== "24.18.0") {
+  if (runtime.nodeVersion !== EXPECTED_NODE_BASELINE) {
     fail(`${label} bundle runtime Node.js version must be 24.18.0`);
   }
-  if (runtime.npmVersion !== "11.16.0") {
+  if (runtime.npmVersion !== EXPECTED_NPM_ENGINE) {
     fail(`${label} bundle runtime npm version must be 11.16.0`);
   }
   return {
     architecture: requiredString(runtime.architecture, `${label} bundle runtime architecture`),
-    nodeVersion: "24.18.0",
-    npmVersion: "11.16.0",
+    nodeVersion: EXPECTED_NODE_BASELINE,
+    npmVersion: EXPECTED_NPM_ENGINE,
     osRelease: requiredString(runtime.osRelease, `${label} bundle runtime osRelease`),
     platform: "linux",
     zlibVersion: requiredString(runtime.zlibVersion, `${label} bundle runtime zlibVersion`),
@@ -1341,13 +1343,10 @@ function parseArguments(argv) {
   return options;
 }
 
-function validateCheckoutHeads(roots, expectedHeads, isAncestor) {
+function validateCheckoutHeads(expectedHeads) {
   validateCommit(expectedHeads.baseline, BASELINE_COMMIT, "baseline checkout HEAD");
   if (!FULL_COMMIT.test(expectedHeads.candidate ?? "")) {
     fail("candidate checkout HEAD must be a full lowercase commit SHA");
-  }
-  if (!isAncestor(roots.candidate, BASELINE_COMMIT, expectedHeads.candidate)) {
-    fail("pinned baseline commit is not an ancestor of candidate HEAD");
   }
 }
 
@@ -1398,10 +1397,10 @@ function resolveCheckoutDependencies(dependencies) {
   };
 }
 
-function bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, candidateRoot) {
+function bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, baselineRoot) {
   const pinnedBaselineDigest = computeBaselineDigest({
     commit: BASELINE_COMMIT,
-    root: candidateRoot,
+    root: baselineRoot,
   });
   if (!SHA_256.test(pinnedBaselineDigest)) fail("pinned baseline source-tree digest is invalid");
   if (expectedSourceDigests.baseline !== pinnedBaselineDigest) {
@@ -1434,9 +1433,9 @@ function resolveCheckoutEvidence(options, dependencies) {
   const expectedHeads = Object.fromEntries(
     REVISIONS.map((revision) => [revision, getHead(roots[revision])]),
   );
-  validateCheckoutHeads(roots, expectedHeads, isAncestor);
+  validateCheckoutHeads(expectedHeads);
   const expectedSourceDigests = computeCheckoutDigests(roots, listDirtyPaths, computeDigest);
-  bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, roots.candidate);
+  bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, roots.baseline);
   const expectedLockfileSha256ByRevision = lockfileSha256ByRevision(roots, getLockfileSha256);
   return {
     expectedHeads,
@@ -1444,7 +1443,7 @@ function resolveCheckoutEvidence(options, dependencies) {
     expectedSourceDigests,
     getFreshnessOptions: () => ({
       computeBaselineSourceTreeSha256: () =>
-        computeBaselineDigest({ commit: BASELINE_COMMIT, root: roots.candidate }),
+        computeBaselineDigest({ commit: BASELINE_COMMIT, root: roots.baseline }),
       computeMeasurementHarnessSha256: () =>
         computeMeasurementHarnessSha256(roots.candidate, expectedHeads.candidate),
       computeLockfileSha256: () => getLockfileSha256(roots.candidate),

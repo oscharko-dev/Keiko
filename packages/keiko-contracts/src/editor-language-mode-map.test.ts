@@ -129,6 +129,24 @@ describe("inferEditorLanguageModeId", () => {
   });
 });
 
+// KEIKO-0436: the extension table was reduced into a `{}` seed, so it inherited Object.prototype
+// and a lookup for an all-lowercase prototype member returned an inherited value. `??` only guards
+// null/undefined, so `notes.constructor` was reported as a known source language whose id was the
+// Object constructor function — the wrong type entirely, and the documented `null` safe-degrade
+// signal (ADR-0067 D5) was skipped. A null-prototype table closes the whole class, not two names.
+describe("inferEditorLanguageModeId prototype safety", () => {
+  it("degrades prototype-member extensions to null instead of returning an inherited value", () => {
+    expect(inferEditorLanguageModeId("notes.constructor")).toBeNull();
+    expect(inferEditorLanguageModeId("notes.__proto__")).toBeNull();
+    expect(inferEditorLanguageModeId("notes.toString")).toBeNull();
+    expect(inferEditorLanguageModeId("notes.valueOf")).toBeNull();
+  });
+
+  it("builds the extension table without a prototype chain", () => {
+    expect(Object.getPrototypeOf(EDITOR_LANGUAGE_MODE_BY_EXTENSION)).toBeNull();
+  });
+});
+
 describe("isEditorLanguageModeId", () => {
   it("accepts every canonical id and rejects everything else", () => {
     for (const id of EDITOR_LANGUAGE_MODE_IDS) {

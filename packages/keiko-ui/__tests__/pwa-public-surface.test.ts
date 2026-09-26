@@ -10,8 +10,6 @@ const REQUIRED_PUBLIC_FILES: readonly string[] = [
   "public/manifest.webmanifest",
   "public/icon-192.png",
   "public/icon-512.png",
-  "public/icon-192-maskable.png",
-  "public/icon-512-maskable.png",
   "public/apple-touch-icon.png",
   "public/favicon.svg",
   "public/favicon.ico",

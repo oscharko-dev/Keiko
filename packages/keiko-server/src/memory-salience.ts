@@ -45,7 +45,11 @@ import {
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSummary,
+} from "./diagnostics-log.js";
 import {
   buildMemoryCaptureDecisionAuditEvent,
   type MemoryCaptureDecisionOutcome,
@@ -170,6 +174,7 @@ function buildSalienceContext(context: ConversationMemoryRuntimeContext): Captur
 function buildCallModel(
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId: string,
 ): NonNullable<SalienceDeps["callModelMessages"]> | null {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
@@ -185,6 +190,7 @@ function buildCallModel(
         stream: false,
         ...(responseFormat !== undefined ? { responseFormat } : {}),
         ...(seed !== undefined ? { seed } : {}),
+        logContext: { correlationId },
       },
       new AbortController().signal,
     );
@@ -218,19 +224,31 @@ function salienceSeedFor(deps: UiHandlerDeps, modelId: string): number | undefin
 // redaction-safe server diagnostic sink (diagnostics-log.ts) instead of console.* directly, mirroring
 // the emitAdvisoryPhaseSummary pattern in memory-conflict-advisory.ts. errorClass doubles as a
 // machine-readable event-kind tag for non-error informational records (e.g. a capture summary).
+// `correlationId` is always the turn-scoped id `captureSalientFromTurn` already resolved (or its
+// own fallback default) — never minted fresh here — so an informational salience diagnostic joins
+// the SAME trail as that turn's eventual failure diagnostic (`emitSalienceFailureDiagnostic`)
+// instead of reporting under a disconnected, unrelated id.
+// Issue #3245: `message` is now the fixed closed-vocabulary condition label. Every call site
+// below used to compose a per-invocation detail string (model id, mode, surface, bounded counts —
+// never user/model text, per each site's own "safe diagnostic" comment) directly into `message`;
+// that detail moves to the optional `code` param as a compact machine-readable string instead, so
+// none of it is lost — only relocated to the field this record already has for exactly this shape.
 function emitSalienceDiagnostic(
   deps: UiHandlerDeps,
+  correlationId: string,
   source: string,
   errorClass: string,
-  message: string,
+  message: ServerDiagnosticSummary,
+  code?: string,
 ): void {
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: randomUUID(),
+    correlationId,
     timestamp: new Date().toISOString(),
     operation: "memory.salience",
     source,
     errorClass,
     message,
+    ...(code === undefined ? {} : { code }),
   });
 }
 
@@ -238,18 +256,26 @@ function logSalienceDiagnostic(
   diagnostic: SalienceDiagnostic,
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId: string,
 ): void {
   const responseFormatEnabled = salienceResponseFormatFor(deps, modelId) !== undefined;
   const detail =
     diagnostic.kind === "dropped-model-items"
-      ? `reason=${diagnostic.reason} count=${String(diagnostic.count)}`
+      ? `reason=${diagnostic.reason}:count=${String(diagnostic.count)}`
       : `rawItemCount=${String(diagnostic.rawItemCount)}`;
-  // Safe diagnostic: model id, response-format bit, and counts only; never user text or model text.
+  // `code` is a colon-joined machine token (no spaces — the same closed shape
+  // `memory-conflict-advisory.ts`'s `emitAdvisoryPhaseSummary` uses), bounded again by the writer
+  // (`diagnostics-log.ts` drops a `code` outside DIAGNOSTIC_CODE_SHAPE). It carries the
+  // response-format bit, the diagnostic kind and counts only — never the model id (this file's
+  // convention: a model id is recorded once by `gateway.config.resolved`, and the correlation id
+  // joins this record to it), never user text, never model text.
   emitSalienceDiagnostic(
     deps,
+    correlationId,
     "memory-salience.logSalienceDiagnostic",
     "SalienceExtractionDiagnostic",
-    `model=${modelId} responseFormat=${String(responseFormatEnabled)} kind=${diagnostic.kind} ${detail}`,
+    "salience-extraction-diagnostic",
+    `responseFormat=${String(responseFormatEnabled)}:kind=${diagnostic.kind}:${detail}`,
   );
 }
 
@@ -470,14 +496,20 @@ function logSalienceCaptureFailure(
   );
 }
 
-function logSalienceCaptureDropped(surface: SalienceCaptureSurface, deps: UiHandlerDeps): void {
+function logSalienceCaptureDropped(
+  surface: SalienceCaptureSurface,
+  deps: UiHandlerDeps,
+  correlationId: string,
+): void {
   emitSalienceDiagnostic(
     deps,
+    correlationId,
     "memory-salience.scheduleMemorySalienceCapture",
     "SalienceCaptureDropped",
-    `${surface} salience capture skipped: background queue full (${String(
-      pendingSalienceCaptures,
-    )}/${String(MAX_PENDING_SALIENCE_CAPTURES)})`,
+    "salience-capture-dropped-queue-full",
+    `surface=${surface} pending=${String(pendingSalienceCaptures)}/${String(
+      MAX_PENDING_SALIENCE_CAPTURES,
+    )}`,
   );
 }
 
@@ -494,7 +526,7 @@ export function scheduleMemorySalienceCapture(
     return;
   }
   if (pendingSalienceCaptures >= MAX_PENDING_SALIENCE_CAPTURES) {
-    logSalienceCaptureDropped(surface, deps);
+    logSalienceCaptureDropped(surface, deps, correlationId);
     return;
   }
   pendingSalienceCaptures += 1;
@@ -522,17 +554,29 @@ type TurnSalienceExtraction =
   | { readonly kind: "refused"; readonly reason: RejectionReason }
   | { readonly kind: "outcomes"; readonly outcomes: readonly CaptureOutcome[] };
 
+// The per-turn scalars `extractTurnSalienceOutcomes` and `runSalienceCapture` both thread through
+// unchanged, bundled into one parameter so neither function's positional-argument count crosses
+// the repository's 7-argument ceiling (Sonar S107) now that g9's correlationId threading added an
+// 8th to each. `SalienceCaptureInputs` extends this with the one field `runSalienceCapture` alone
+// needs (`surface`), rather than widening this shape for a field `extractTurnSalienceOutcomes`
+// never reads.
+interface TurnSalienceInputs {
+  readonly modelId: string;
+  readonly assistantText: string;
+  readonly correlationId: string;
+}
+
 async function extractTurnSalienceOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   captureContext: CaptureContext,
-  modelId: string,
-  assistantText: string,
+  inputs: TurnSalienceInputs,
 ): Promise<TurnSalienceExtraction> {
+  const { modelId, assistantText, correlationId } = inputs;
   const salienceModelId = configuredSalienceModelId(deps, modelId);
-  const callModelMessages = buildCallModel(deps, salienceModelId);
+  const callModelMessages = buildCallModel(deps, salienceModelId, correlationId);
   if (callModelMessages === null) return { kind: "unavailable" };
   const policy = memoryCapturePolicyForDeps(deps);
   const refusalReason = memoryTextSecretEgressRejectionReason(request.content, policy);
@@ -556,7 +600,7 @@ async function extractTurnSalienceOutcomes(
       newMemoryId: captureContext.newMemoryId,
       newProposalId: captureContext.newProposalId,
       onDiagnostic: (diagnostic) => {
-        logSalienceDiagnostic(diagnostic, deps, salienceModelId);
+        logSalienceDiagnostic(diagnostic, deps, salienceModelId, correlationId);
       },
     },
   );
@@ -599,11 +643,14 @@ function logSalienceCaptureSummary(
   mode: CodingWorkbenchMode,
   summary: SalienceCaptureSummary,
   deps: UiHandlerDeps,
+  correlationId: string,
 ): void {
   emitSalienceDiagnostic(
     deps,
+    correlationId,
     "memory-salience.captureSalientFromTurn",
     "SalienceCaptureSummary",
+    "salience-capture-summary",
     `mode=${mode} proposed=${String(summary.proposed)} accepted=${String(summary.accepted)} ` +
       `rejected=${String(summary.rejected)} merged=${String(summary.merged)}`,
   );
@@ -655,6 +702,42 @@ function activeSalienceVault(
   return request.memory?.enabled === true ? deps.memoryVault : undefined;
 }
 
+interface SalienceCaptureInputs extends TurnSalienceInputs {
+  readonly surface: SalienceCaptureSurface;
+}
+
+// The turn-scoped work `captureSalientFromTurn` runs inside its own try/catch. Split out so that
+// function's own body stays a thin boundary (resolve the vault, catch, report) — everything that
+// can throw lives here instead.
+async function runSalienceCapture(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  request: SalienceTurnRequest,
+  context: ConversationMemoryRuntimeContext,
+  inputs: SalienceCaptureInputs,
+): Promise<readonly ConversationMemoryActionWire[]> {
+  const { surface, correlationId } = inputs;
+  const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory?.mode);
+  const captureContext = buildSalienceContext(context);
+  const extraction = await extractTurnSalienceOutcomes(
+    deps,
+    vault,
+    request,
+    context,
+    captureContext,
+    inputs,
+  );
+  if (extraction.kind === "unavailable") return [];
+  if (extraction.kind === "refused") {
+    recordTurnCaptureRefusal(deps, mode, surface, context, captureContext.nowMs, extraction.reason);
+    return [];
+  }
+  const { outcomes } = extraction;
+  const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface);
+  if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps, correlationId);
+  return actions;
+}
+
 // Captures salient memories from a completed chat turn. Never throws — any failure (model error,
 // vault error, malformed output) yields [] so the chat response is unaffected. Direct callers that
 // do not own a committed message id receive one capture-scoped fallback correlation id; post-commit
@@ -671,33 +754,12 @@ export async function captureSalientFromTurn(
   const vault = activeSalienceVault(deps, request);
   if (vault === undefined) return [];
   try {
-    const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory?.mode);
-    const captureContext = buildSalienceContext(context);
-    const extraction = await extractTurnSalienceOutcomes(
-      deps,
-      vault,
-      request,
-      context,
-      captureContext,
+    return await runSalienceCapture(deps, vault, request, context, {
       modelId,
       assistantText,
-    );
-    if (extraction.kind === "unavailable") return [];
-    if (extraction.kind === "refused") {
-      recordTurnCaptureRefusal(
-        deps,
-        mode,
-        surface,
-        context,
-        captureContext.nowMs,
-        extraction.reason,
-      );
-      return [];
-    }
-    const { outcomes } = extraction;
-    const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface);
-    if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps);
-    return actions;
+      surface,
+      correlationId,
+    });
   } catch (error) {
     // Boundary: salience must never break the chat path. Log and continue.
     emitSalienceFailureDiagnostic(

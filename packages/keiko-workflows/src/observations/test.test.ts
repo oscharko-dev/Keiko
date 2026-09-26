@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  validateContextToolObservation,
-  type VerificationResult,
-} from "@oscharko-dev/keiko-contracts";
+import type { VerificationResult } from "@oscharko-dev/keiko-contracts";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
 
 import { shapeTestObservation } from "./test.js";
 

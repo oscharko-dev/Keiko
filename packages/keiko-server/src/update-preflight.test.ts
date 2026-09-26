@@ -1,13 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import type { IncomingMessage } from "node:http";
+import { generateKeyPairSync } from "node:crypto";
 import {
-  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
-  type ReleaseImpactCatalog,
-  type ReleaseImpactEntry,
-  type UpdateInstallMode,
-  type UpdatePortableTarget,
+  createPortableReleaseTrust,
+  portableReleaseTrustKeyId,
+  type PortableReleaseTrustedKey,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
+import type { IncomingMessage } from "node:http";
+import type {
+  ReleaseImpactCatalog,
+  ReleaseImpactEntry,
+  UpdateInstallMode,
+  UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   compareSemver,
@@ -17,6 +24,7 @@ import {
   runUpdatePreflight,
 } from "./update-preflight.js";
 import type { RouteContext } from "./routes.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
 const ARCHIVE_SHA = "a".repeat(64);
@@ -175,7 +183,7 @@ function baseCatalog(): ReleaseImpactCatalog {
   };
 }
 
-function depsWith(fetchImpl: typeof fetch): UiHandlerDeps {
+function depsWith(fetchImpl: typeof fetch, overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -186,6 +194,7 @@ function depsWith(fetchImpl: typeof fetch): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
     gatewayReadinessFetch: fetchImpl,
+    ...overrides,
   };
 }
 
@@ -284,18 +293,18 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+      version: "2.0.10",
+      tag: "v2.0.10",
+      commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
+      adapterVersion: "2",
       transport: "http-sse",
     },
     protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+      path: "packages/protocol/openapi.json",
+      sha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -306,10 +315,10 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       platformTarget: target,
       sha256:
         target === "windows-x64"
-          ? "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85"
+          ? "c8c0e0d05ac3dac544a0edfad8de9eb244bf46c6c7a131c38619d40fcf31bd1f"
           : target === "macos-arm64"
-            ? "cec03cf8b1119053d583e9afa14a987ca4ffa9dcd76cb79a7cd66774de6411f7"
-            : "e621f1ac6c78aae10caf69d7a1cc15d8adf32b9d68ad124506e9f4e4fe04d7ba",
+            ? "a5e43d6887386efc7d68ce49ae28e3bbdfdee3dfd1d7169b612c3ce67e53b1e8"
+            : "7453007e58ff122401438d95ccb24334874b5908dcaee77883f96c23395d5710",
     },
     executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
     executableTreeSha256: "c".repeat(64),
@@ -370,8 +379,20 @@ function portableManifest(
   sidecarRuntimes: readonly Record<string, unknown>[] = [],
 ): Record<string, unknown> {
   const archiveName = UPDATE_PORTABLE_TARGET_ASSET_NAMES[target];
+  const windowsGeneration =
+    target === "windows-x64"
+      ? {
+          schemaVersion: 1,
+          resourceRoot: `.portable/generations/${"a".repeat(64)}`,
+          treeHashSchema: "KHT1",
+          treeSha256: "a".repeat(64),
+          launcherPath: "Keiko.exe",
+          launcherSha256: "b".repeat(64),
+        }
+      : undefined;
   return {
-    schemaVersion: 1,
+    schemaVersion: windowsGeneration === undefined ? 1 : 2,
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
     product: {
       packageName: "@oscharko-dev/keiko",
       packageVersion: "0.2.11",
@@ -388,6 +409,7 @@ function portableManifest(
       assetName: archiveName,
       archiveFormat: "zip",
       sizeBytes: 99_000,
+      uncompressedSizeBytes: 240_000,
       sha256: ARCHIVE_SHA,
     },
     releaseImpact: {
@@ -403,9 +425,11 @@ function portableManifest(
         packageVersion: "0.2.11",
         archiveSha256: ARCHIVE_SHA,
         platformSignatureLocallyVerified: true,
+        ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
         ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
       },
     },
+    provenance: windowsGeneration === undefined ? {} : { windowsGeneration },
     security: signingEvidence(target),
     ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
     updateEligibility: {
@@ -421,7 +445,52 @@ function portableManifest(
   };
 }
 
+function releaseTrustedManifest(target: UpdatePortableTarget): {
+  readonly manifest: Record<string, unknown>;
+  readonly trustedKey: PortableReleaseTrustedKey;
+} {
+  const unsigned = portableManifest(target);
+  const security = unsigned.security as Record<string, unknown>;
+  security.verificationPolicy = "release";
+  security.verificationStatus = "platform-signature-optional";
+  security.verificationReasonCodes = ["platform-signature-optional"];
+  security.signatureVerified = false;
+  security.notarizationVerified = false;
+  security.verificationChecks =
+    target === "windows-x64"
+      ? { publisherChainVerified: false, timestampVerified: false }
+      : {
+          developerIdVerified: false,
+          notarizationVerified: false,
+          stapleVerified: false,
+          assessmentVerified: false,
+        };
+  const binding = (unsigned.releaseImpact as Record<string, Record<string, unknown>>)
+    .reviewedBinding;
+  if (binding === undefined) throw new Error("portable release-impact binding fixture is missing");
+  binding.platformSignatureLocallyVerified = false;
+  const predicates = (unsigned.updateEligibility as Record<string, Record<string, unknown>>)
+    .requiredPredicates;
+  if (predicates === undefined) {
+    throw new Error("portable update-eligibility predicates fixture is missing");
+  }
+  predicates.platformSignatureLocallyVerified = false;
+  predicates.releaseTrustRequired = true;
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
+  return {
+    manifest: createPortableReleaseTrust(unsigned, {
+      expiresAt: "2027-03-09T08:00:00.000Z",
+      metadataVersion: 987_654_321,
+      privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
+      signedAt: "2026-09-10T08:00:00.000Z",
+    }),
+    trustedKey: { keyId: portableReleaseTrustKeyId(publicKeyPem), publicKeyPem },
+  };
+}
+
 const ctx: RouteContext = {
+  correlationId: undefined,
   req: {} as IncomingMessage,
   res: {} as RouteContext["res"],
   params: {},
@@ -653,6 +722,176 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("allows one-click updates with Keiko release trust and no platform signature", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const trusted = releaseTrustedManifest(target);
+    const events: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
+    }[] = [];
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(trusted.manifest)));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl, {
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      updatePortableReleaseNow: () => Date.parse("2026-09-11T08:00:00.000Z"),
+      updatePortableReleaseTrustedKeys: [trusted.trustedKey],
+    });
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.oneClickEligible).toBe(true);
+    expect(report.portableAsset?.status).toBe("eligible");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "update.release-trust.verify",
+        extra: {
+          keyId: trusted.trustedKey.keyId,
+          metadataVersion: 987_654_321,
+          status: "succeeded",
+          target,
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
+    deps.store.close();
+  });
+
+  it("logs a body-free security event when a portable asset redirect is refused", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const events: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
+    }[] = [];
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      return Promise.resolve(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://updates.example.invalid/portable-manifest.json" },
+        }),
+      );
+    });
+    const deps = depsWith(fetchImpl, {
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-manifest-malformed" }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: "unsafe-target",
+        level: "warn",
+        op: "update.portable-asset.redirect-refused",
+        extra: {
+          assetKind: "manifest",
+          reason: "unsafe-target",
+          target,
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
+    deps.store.close();
+  });
+
+  it("logs a body-free deadline reason when portable manifest fetches time out", async () => {
+    vi.useFakeTimers();
+    const target: UpdatePortableTarget = "macos-arm64";
+    const events: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
+    }[] = [];
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      if (requestUrl(input).endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      return Promise.reject(new DOMException("sensitive timeout detail", "TimeoutError"));
+    });
+    const deps = depsWith(fetchImpl, {
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+
+    try {
+      const pending = runUpdatePreflight(
+        deps,
+        {
+          currentVersion: "0.2.10",
+          bundledCatalog: baseCatalog(),
+          installMode: () => portableMode(target),
+        },
+        "request-portable-timeout-0001",
+      );
+      await vi.runAllTimersAsync();
+      const report = await pending;
+
+      expect(report.blockers).toContainEqual(
+        expect.objectContaining({ code: "portable-manifest-malformed" }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          category: "diagnostic",
+          correlationId: "request-portable-timeout-0001",
+          errorKind: "timeout",
+          level: "warn",
+          op: "update.portable-fetch.failed",
+          extra: {
+            assetKind: "manifest",
+            reason: "deadline-exceeded",
+            target,
+            completeness: "complete",
+            loss: "none",
+          },
+        }),
+      );
+      expect(JSON.stringify(events)).not.toContain("sensitive timeout detail");
+    } finally {
+      vi.useRealTimers();
+      deps.store.close();
+    }
+  });
+
   it("reports redacted sidecar summaries for sidecar-bearing portable assets", async () => {
     const target: UpdatePortableTarget = "macos-arm64";
     const sidecar = sidecarRuntime(target);
@@ -681,7 +920,7 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(true);
     expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "1.17.17",
+      upstreamVersion: "2.0.10",
       platformTarget: target,
       payloadSha256: "f".repeat(64),
       payloadSha256Prefix: "f".repeat(12),
@@ -845,7 +1084,10 @@ describe("update preflight service", () => {
       }
       return Promise.resolve(new Response("not found", { status: 404 }));
     });
-    const deps = depsWith(fetchImpl);
+    const events: ServerLogEvent[] = [];
+    const deps = depsWith(fetchImpl, {
+      activityLog: { write: (event): void => void events.push(event) },
+    });
 
     const report = await runUpdatePreflight(deps, {
       currentVersion: "0.2.10",
@@ -858,9 +1100,20 @@ describe("update preflight service", () => {
     expect(report.blockers).toContainEqual(
       expect.objectContaining({
         code: "portable-signing-unverified",
-        message: "The portable update is missing verified signing or notarization evidence.",
+        message:
+          "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
       }),
     );
+    const releaseTrustEvent = events.find(({ op }) => op === "update.release-trust.verify");
+    expect(releaseTrustEvent).toMatchObject({
+      level: "warn",
+      errorKind: "validation-failed",
+    });
+    expect(releaseTrustEvent?.extra).toMatchObject({
+      status: "failed",
+      target,
+      reason: "metadata-malformed",
+    });
     deps.store.close();
   });
 
@@ -981,6 +1234,44 @@ describe("update preflight service", () => {
     expect(report.blockers).toContainEqual(
       expect.objectContaining({ code: "portable-manifest-malformed" }),
     );
+    deps.store.close();
+  });
+
+  it("rejects a Windows manifest whose provenance generation is rebound", async () => {
+    const target: UpdatePortableTarget = "windows-x64";
+    const manifest = portableManifest(target);
+    const provenance = manifest.provenance as Record<string, unknown>;
+    const generation = provenance.windowsGeneration as Record<string, unknown>;
+    provenance.windowsGeneration = { ...generation, launcherSha256: "c".repeat(64) };
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(manifest)));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-manifest-malformed" }),
+    );
+    expect(fetchImpl).toHaveBeenCalled();
     deps.store.close();
   });
 
@@ -1532,10 +1823,109 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("keeps one-click readiness for an owner issue-comment approval the publish gate verifies", async () => {
+    // 0.3.1 is approved by an owner comment on the release epic, not a pull-request review: the
+    // 0.3.0 GitHub release was withdrawn during verification and its tag is immutable, so the
+    // republication carries the artifact form scripts/check-release-impact.mjs verifies live
+    // against the GitHub API. A runtime that accepted only `github-pr-review:` reported a release
+    // the publish gate had approved as missing reviewed metadata and withheld the governed update.
+    const catalog = {
+      ...baseCatalog(),
+      entries: baseCatalog().entries.map((entry) =>
+        entry.packageVersion === "0.2.11"
+          ? {
+              ...entry,
+              review: {
+                ...entry.review,
+                approvalReference: "github-issue-comment:oscharko-dev/Keiko#2802#5230996334",
+              },
+            }
+          : entry,
+      ),
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tag_name: "v0.2.11",
+          name: "Keiko 0.2.11",
+          body: "- Public note",
+        }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: catalog,
+    });
+
+    expect(report.impact).toBeDefined();
+    expect(report.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "release-impact-missing" }),
+    );
+    deps.store.close();
+  });
+
+  it("does not let an internal staging record block the operator's update", async () => {
+    // A repository-machinery record (the portable runtime staging contract is the real one) is
+    // reviewed, internal, and deliberately not one-click eligible — it describes a build lane, not
+    // the product being updated. Aggregating its ineligibility into the operator's blockers made
+    // every such historical record permanently disable the governed update for anyone below its
+    // version. `releaseNoteBullets` already omits these records for the same reason.
+    const base = baseCatalog();
+    const customerEntry = base.entries.find((entry) => entry.packageVersion === "0.2.11");
+    if (customerEntry === undefined) throw new Error("fixture must carry a 0.2.11 entry");
+    const catalog: ReleaseImpactCatalog = {
+      ...base,
+      entries: [
+        ...base.entries,
+        {
+          ...customerEntry,
+          id: "0.2.11-internal-staging",
+          internalOnly: true,
+          observableImpact: false,
+          oneClickEligible: false,
+          releaseNoteBullets: [],
+          // Attributes that would each leak into a different aggregation if the internal record
+          // reached it: the severity ceiling, the operator-facing entry list, and the
+          // supported-from floor (Codex finding on #3054 — one operator entry set, everywhere).
+          releaseNotePriority: "critical",
+          userActionRequired: true,
+          supportedFrom: ["0.2.11"],
+        },
+      ],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ tag_name: "v0.2.11", name: "Keiko 0.2.11", body: "- Public note" }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: catalog,
+    });
+
+    expect(report.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "one-click-ineligible" }),
+    );
+    // The internal record must be absent from the WHOLE operator resolution, not merely from
+    // blocker generation: no duplicated target entry in the report, no severity escalation, no
+    // support floor. Only the one customer-facing 0.2.11 record may speak for the target.
+    expect(
+      report.impact?.entries.filter((entry) => entry.packageVersion === "0.2.11"),
+    ).toHaveLength(1);
+    expect(report.severity).not.toBe("critical");
+    deps.store.close();
+  });
+
   it("compares semver numerically instead of lexically", () => {
     expect(compareSemver("0.2.9", "0.2.10")).toBeLessThan(0);
     expect(compareSemver("0.2.10", "0.2.10")).toBe(0);
-    expect(compareSemver("0.3.0", "0.2.99")).toBeGreaterThan(0);
+    expect(compareSemver("0.3.1", "0.2.99")).toBeGreaterThan(0);
   });
 
   it("rejects malformed semver comparisons instead of lexically sorting them", () => {

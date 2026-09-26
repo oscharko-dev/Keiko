@@ -9,7 +9,7 @@ import type {
   UpdatePreflightReport,
   UpdatePreflightSeverity,
 } from "@oscharko-dev/keiko-contracts";
-import { UPDATE_PREFLIGHT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PREFLIGHT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-preflight";
 import { BULLET_LIMIT, normalizeText, uniqueStrings } from "./update-preflight-registry.js";
 import type { GitHubReleaseOutcome, RegistryOutcome } from "./update-preflight-registry.js";
 import { blocker, maxSeverity, uniqueBlockers } from "./update-preflight-impact.js";

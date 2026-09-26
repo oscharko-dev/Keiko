@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchEvidenceRecord,
+  CodingWorkbenchPermissionRequest,
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchSidecarGatewayUnavailable,
+} from "./index.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
-  CODING_WORKBENCH_CODEX_AUTH_METHODS,
-  CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
-  CODING_WORKBENCH_CODEX_AUTH_STATUSES,
-  CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
-  CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
@@ -13,31 +18,38 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   decideCodingWorkbenchActionForMode,
-  isCodingWorkbenchEvidenceSafeText,
   permissionKindForSupervisedCodingAction,
-  redactCodingWorkbenchEvidenceText,
   resolveEffectiveCodingWorkbenchMode,
-  selectCodingWorkbenchRuntimeProfile,
   supervisedCodingActionRequiresApproval,
-  validateCodingWorkbenchAuthorityEnvelope,
+} from "./coding-workbench.js";
+import {
+  CODING_WORKBENCH_CODEX_AUTH_METHODS,
+  CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
+  CODING_WORKBENCH_CODEX_AUTH_STATUSES,
+  CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
+  CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  codingWorkbenchCodexAuthMethodRowFor,
+  selectCodingWorkbenchRuntimeProfile,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
   validateCodingWorkbenchCodexSubscriptionProfile,
+} from "./coding-workbench-codex-auth.js";
+import {
+  isCodingWorkbenchEvidenceSafeText,
+  redactCodingWorkbenchEvidenceText,
   validateCodingWorkbenchEvidenceRecord,
+} from "./coding-workbench-evidence.js";
+import {
+  validateCodingWorkbenchAuthorityEnvelope,
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchCodexAuthSetupPlan,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchEvidenceRecord,
-  type CodingWorkbenchPermissionRequest,
-  type CodingWorkbenchRuntimeEvent,
-} from "./index.js";
+} from "./coding-workbench-validation.js";
 import {
   CODING_WORKBENCH_APPROVAL_RISKS,
   CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_POLICY_EFFECTS,
   CODING_WORKBENCH_POLICY_RESOURCE_SCOPES,
+  codingWorkbenchCodeTaskDeliveryEffectFor,
   codingWorkbenchPolicyEffectFor,
   strictestCodingWorkbenchPolicyEffect,
 } from "./coding-workbench.js";
@@ -174,10 +186,14 @@ describe("coding-workbench constants", () => {
     ]);
     expect(CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES).toEqual(["managed-sidecar-runtime"]);
     expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("permission-requested");
+    expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("operator-decision");
     expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
       "file-edit",
+      "git-stage",
       "verification-command",
+      "ci-observe",
+      "connector-read",
       "research",
       "commit",
       "push",
@@ -205,7 +221,7 @@ describe("coding workbench autonomy policy", () => {
     expect(CODING_WORKBENCH_MODE_POLICIES["autonomous-delivery"].display).toEqual({
       label: "Full access",
       description:
-        "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+        "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
     });
   });
 
@@ -224,9 +240,9 @@ describe("coding workbench autonomy policy", () => {
     for (const mode of CODING_WORKBENCH_MODES) {
       const policy = CODING_WORKBENCH_MODE_POLICIES[mode];
       expect(policy.allowedActionClasses).toEqual(CODING_WORKBENCH_ACTION_CLASSES);
-      expect(policy.allowsWorkspaceWrites).toBe(true);
-      expect(policy.allowsCommandExecution).toBe(true);
-      expect(policy.allowsDeliverySubstrate).toBe(true);
+      // KEIKO-0831: the previous three coarse booleans on this policy were dead. The `effects`
+      // tri-state matrix below (asserted in the next test) carries the same information at a
+      // finer grain and is the sole consumer surface — no need to assert the removed fields.
     }
   });
 
@@ -284,6 +300,29 @@ describe("coding workbench autonomy policy", () => {
       "denied",
     );
     expect(strictestCodingWorkbenchPolicyEffect("allowed")).toBe("allowed");
+  });
+
+  it("allows only proposal-bound Code-task delivery in Full without widening general delivery", () => {
+    for (const action of ["commit", "push", "pull-request"] as const) {
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("governed-assist", action)).toBe(
+        "approval-required",
+      );
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("supervised-coding", action)).toBe(
+        "approval-required",
+      );
+      expect(codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", action)).toBe(
+        "allowed",
+      );
+    }
+    expect(codingWorkbenchPolicyEffectFor("autonomous-delivery", "delivery", "high")).toBe(
+      "approval-required",
+    );
+    expect(codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", "merge")).toBe(
+      "approval-required",
+    );
+    expect(
+      codingWorkbenchCodeTaskDeliveryEffectFor("autonomous-delivery", "unknown" as never),
+    ).toBe("denied");
   });
 
   // Epic #2384: total monotonicity. Raising the mode must never make ANY (scope, risk) cell
@@ -442,6 +481,99 @@ describe("coding workbench Codex subscription profile", () => {
     });
   });
 
+  // KEIKO-0445: a setup plan's method DETERMINES its command label, whether a secret is typed, and
+  // how that secret travels — but the three fields were each validated in isolation, so a plan could
+  // name chatgpt-browser-login while carrying the access-token command label and requiresSecretInput
+  // true. That is a login flow that does not exist and no operator could act on.
+  it.each([
+    ["a command label from a different method", { commandLabel: "codex-login" }],
+    ["requiresSecretInput disagreeing with the method", { requiresSecretInput: false }],
+    ["a credentialTransport the method does not use", { credentialTransport: undefined }],
+  ])("rejects a setup plan carrying %s", (_label, override) => {
+    expect(validateCodingWorkbenchCodexAuthSetupPlan({ ...codexSetupPlan(), ...override }).ok).toBe(
+      false,
+    );
+  });
+
+  it("accepts the consistent plan for every auth method", () => {
+    const browser = {
+      ...codexSetupPlan(),
+      method: "chatgpt-browser-login" as const,
+      commandLabel: "codex-login" as const,
+      requiresSecretInput: false,
+      credentialTransport: undefined,
+    };
+    expect(validateCodingWorkbenchCodexAuthSetupPlan(browser).ok).toBe(true);
+
+    const device = {
+      ...browser,
+      method: "chatgpt-device-code" as const,
+      commandLabel: "codex-login-device-auth" as const,
+    };
+    expect(validateCodingWorkbenchCodexAuthSetupPlan(device).ok).toBe(true);
+    // …and each method rejects the other's command label.
+    expect(
+      validateCodingWorkbenchCodexAuthSetupPlan({
+        ...browser,
+        commandLabel: "codex-login-device-auth",
+      }).ok,
+    ).toBe(false);
+  });
+
+  // codingWorkbenchCodexAuthMethodRowFor is the ONE formula for this mapping: keiko-server's
+  // coding-codex-subscription.ts calls it directly instead of keeping its own copy (which had
+  // drifted-formula risk — a private commandLabelFor plus a separate accessToken boolean, either
+  // of which could disagree with this table and build a plan validateCodingWorkbenchCodexAuthSetupPlan
+  // then rejects). Pinned here so the exported function itself — not just the validator that
+  // happens to call it — is under direct test.
+  it("derives the canonical command label, secret requirement, and transport for every method", () => {
+    expect(codingWorkbenchCodexAuthMethodRowFor("chatgpt-browser-login")).toEqual({
+      commandLabel: "codex-login",
+      requiresSecretInput: false,
+    });
+    expect(codingWorkbenchCodexAuthMethodRowFor("chatgpt-device-code")).toEqual({
+      commandLabel: "codex-login-device-auth",
+      requiresSecretInput: false,
+    });
+    expect(codingWorkbenchCodexAuthMethodRowFor("codex-access-token")).toEqual({
+      commandLabel: "codex-login-with-access-token",
+      requiresSecretInput: true,
+      credentialTransport: "stdin",
+    });
+    for (const method of CODING_WORKBENCH_CODEX_AUTH_METHODS) {
+      const row = codingWorkbenchCodexAuthMethodRowFor(method);
+      // codexSetupPlan()'s base carries codex-access-token's credentialTransport ("stdin");
+      // set it explicitly from `row` (including back to undefined for the other methods) rather
+      // than leaving it stale under the spread, matching the "accepts the consistent plan for
+      // every auth method" pattern above.
+      const plan = {
+        ...codexSetupPlan(),
+        method,
+        ...row,
+        credentialTransport: row.credentialTransport,
+      };
+      expect(validateCodingWorkbenchCodexAuthSetupPlan(plan).ok).toBe(true);
+    }
+  });
+
+  // Codex finding: Object.freeze is shallow, so codingWorkbenchCodexAuthMethodRowFor handed out a
+  // MUTABLE reference to the table's inner row objects (KEIKO-0139's exact bug class, just in a
+  // table added after that sweep) — a caller could rewrite requiresSecretInput or
+  // credentialTransport process-wide, and this file's own validateSetupPlanMethodConsistency
+  // (which calls the same accessor) would then agree with the corrupted row. Modules run in strict
+  // mode, so a write to a frozen object throws rather than silently no-opping.
+  it("returns a deeply frozen row that cannot be mutated by a caller", () => {
+    const row = codingWorkbenchCodexAuthMethodRowFor("codex-access-token");
+    expect(() => {
+      (row as { requiresSecretInput: boolean }).requiresSecretInput = false;
+    }).toThrow(TypeError);
+    // The corruption must not have taken effect even if the assignment failed silently under some
+    // future non-strict caller: re-fetching the row must still show the true, untampered value.
+    expect(codingWorkbenchCodexAuthMethodRowFor("codex-access-token").requiresSecretInput).toBe(
+      true,
+    );
+  });
+
   it("keeps Codex subscription authority bounded by the same envelope policy", () => {
     const envelope = {
       ...baseAuthorityEnvelope(),
@@ -536,6 +668,8 @@ describe("supervised coding action authority", () => {
   it("requires approval only for delivery, connector, external, and system mutations", () => {
     expect(supervisedCodingActionRequiresApproval("file-edit")).toBe(false);
     expect(supervisedCodingActionRequiresApproval("verification-command")).toBe(false);
+    expect(supervisedCodingActionRequiresApproval("ci-observe")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("connector-read")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("commit")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("push")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("pull-request")).toBe(true);
@@ -546,15 +680,18 @@ describe("supervised coding action authority", () => {
     const autoAdmitted = CODING_WORKBENCH_SUPERVISED_ACTION_KINDS.filter(
       (kind) => !supervisedCodingActionRequiresApproval(kind),
     );
-    expect(autoAdmitted).toEqual(["file-edit", "verification-command"]);
+    expect(autoAdmitted).toEqual(["file-edit", "git-stage", "verification-command"]);
   });
 
   it("maps supervised actions to the existing permission classes", () => {
     expect(permissionKindForSupervisedCodingAction("file-edit")).toBe("workspace-write");
+    expect(permissionKindForSupervisedCodingAction("git-stage")).toBe("workspace-write");
     expect(permissionKindForSupervisedCodingAction("verification-command")).toBe(
       "command-execution",
     );
     expect(permissionKindForSupervisedCodingAction("research")).toBe("network-egress");
+    expect(permissionKindForSupervisedCodingAction("ci-observe")).toBe("command-execution");
+    expect(permissionKindForSupervisedCodingAction("connector-read")).toBe("command-execution");
     expect(permissionKindForSupervisedCodingAction("connector-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("external-write")).toBe("connector-access");
     expect(permissionKindForSupervisedCodingAction("commit")).toBe("delivery-substrate");
@@ -1046,6 +1183,32 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
 });
 
 describe("validateCodingWorkbenchRuntimeEvent", () => {
+  it("accepts only a body-free target digest on verification summaries", () => {
+    const event = {
+      schemaVersion: "1",
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind: "verification-summarized",
+      verificationKind: "verification-command",
+      verificationStatus: "failed",
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      verificationTargetDigest: "d".repeat(64),
+    } as const;
+
+    expect(validateCodingWorkbenchRuntimeEvent(event)).toEqual({ ok: true, value: event });
+    const invalid = validateCodingWorkbenchRuntimeEvent({
+      ...event,
+      verificationTargetDigest: "src/private.test.ts",
+    });
+    expect(invalid).toEqual({
+      ok: false,
+      errors: ["event.verificationTargetDigest must be a 64-character lowercase hex digest"],
+    });
+  });
+
   it("keeps runtimeSource and modelSource vocabularies separate", () => {
     expect(validateCodingWorkbenchRuntimeEvent(baseRuntimeEvent()).ok).toBe(true);
 
@@ -1646,6 +1809,80 @@ describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
   });
 });
 
+describe("validateCodingWorkbenchRuntimeEvent (operator-decision)", () => {
+  function operatorDecisionEvent(): Record<string, unknown> {
+    return {
+      schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind: "operator-decision",
+    };
+  }
+
+  it("accepts an open decision carrying only the required operatorDecision", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...operatorDecisionEvent(),
+        operatorDecision: "workspace-script-trust",
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts a settled decision carrying a legal auxiliaryOutcome", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...operatorDecisionEvent(),
+        operatorDecision: "workspace-script-trust",
+        auxiliaryOutcome: "accepted",
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("requires operatorDecision", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent(operatorDecisionEvent());
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.operatorDecision is required");
+    }
+  });
+
+  it("rejects an operatorDecision outside the closed vocabulary", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...operatorDecisionEvent(),
+      operatorDecision: "workspace-trust-override",
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.operatorDecision is invalid");
+    }
+  });
+
+  it("rejects an auxiliaryOutcome outside the closed vocabulary", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...operatorDecisionEvent(),
+      operatorDecision: "workspace-script-trust",
+      auxiliaryOutcome: "granted",
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.auxiliaryOutcome is invalid");
+    }
+  });
+
+  it("rejects a key outside the operator-decision allowed set", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...operatorDecisionEvent(),
+      operatorDecision: "workspace-script-trust",
+      permissionRequest: validPermissionRequest(),
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.permissionRequest is not allowed");
+    }
+  });
+});
+
 describe("validateCodingWorkbenchEvidenceRecord", () => {
   it("accepts a minimal content-free evidence record", () => {
     expect(validateCodingWorkbenchEvidenceRecord(baseEvidenceRecord())).toEqual({
@@ -1796,5 +2033,24 @@ describe("redactCodingWorkbenchEvidenceText", () => {
     expect(redacted).not.toMatch(/\bsrc\b/i);
     expect(redacted).not.toMatch(/\ba\.ts\b/i);
     expect(redacted).not.toMatch(/\bb\.ts\b/i);
+  });
+});
+
+// #3390 closeout: the readiness vocabulary appended for the sidecar gateway's "otherwise available
+// but the context window cannot survive one request" state. Append-only per AGENTS.md — this test
+// exists so a future edit that narrows the union or drifts the constant fails loudly here first.
+describe("coding workbench sidecar gateway readiness — context window floor", () => {
+  it("defines the minimum coding-context prompt-token floor as a positive integer", () => {
+    expect(Number.isSafeInteger(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS)).toBe(true);
+    expect(CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS).toBe(32_000);
+  });
+
+  it("accepts the appended reason on an unavailable sidecar gateway projection", () => {
+    const unavailable: CodingWorkbenchSidecarGatewayUnavailable = {
+      status: "unavailable",
+      reason: "model-context-window-insufficient",
+    };
+
+    expect(unavailable.reason).toBe("model-context-window-insufficient");
   });
 });

@@ -1,5 +1,5 @@
 // Persistent record of generated launcher shortcut paths, written under the existing
-// `.keiko/` state dir alongside `ui.pid` / `ui.log` (see `lifecycle.ts`). The state file
+// `.keiko/` state dir alongside `ui.pid` (see `lifecycle.ts`). The state file
 // is plaintext JSON and contains ONLY:
 //   - the absolute path of each generated shortcut,
 //   - the SHA-256 hash of the content Keiko generated for that path at install time,
@@ -11,8 +11,8 @@
 // SAFETY CONTRACT (spec §"Filesystem safety contract"):
 //   - State file is opened with `O_NOFOLLOW` on POSIX; symlinks at the state path are
 //     refused. On Windows the equivalent is to refuse if `lstat` reports a symlink.
-//   - All writes are atomic via mkdtemp → write → rename (atomic on POSIX; on Windows we
-//     accept the standard rename semantics; the file lives under the user's `.keiko/`).
+//   - All writes are atomic via mkdtemp → write → atomicPublishRename (POSIX first-try;
+//     Windows retries EPERM/EBUSY). The file lives under the user's `.keiko/`.
 //   - The state dir itself is created with mode 0o700.
 //   - `loadState` returns an empty state when the file is missing OR malformed; we never
 //     throw on a missing/corrupt state file at read-time, but we DO refuse to write into
@@ -33,8 +33,13 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import {
+  atomicPublishRename,
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { LauncherError, launcherFor, type Platform } from "./launcher-platforms.js";
 import { isRealpathContained } from "./launcher-paths.js";
+import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
 
 export const LAUNCHER_STATE_VERSION = 1 as const;
 const STATE_FILE_NAME = "launcher-state.json";
@@ -250,11 +255,26 @@ export function saveState(stateDir: string, state: LauncherState): void {
   const tmpDir = mkdtempSync(join(stateDir, ".launcher-state-"));
   const tmpFile = join(tmpDir, "state.json");
   try {
+    // PR-review follow-up (Codex thread 3770922333): drop the ownership marker file first so
+    // state-paths.ts's isMkdtempOwnedDir classifier can distinguish this Keiko staging
+    // directory from any customer-created directory that happens to match the same prefix +
+    // 6-alphanum shape. Without the marker, `keiko uninstall --state` walks past a look-alike
+    // directory rather than recursively deleting a user-owned tree.
+    //
+    // PR-review follow-ups (KfQ threads 3771862670 + 3771862741): propagate marker write
+    // failures so the shared finally rmSync cleans up the tmpDir immediately — swallowing
+    // left the caller with a marker-less staging dir that a later `uninstall --state` sweep
+    // would skip, leaving stray temp data behind. Create with mode 0o600 so the marker
+    // cannot leak information about staging directory presence to other local users.
+    writeFileSync(join(tmpDir, STAGING_OWNERSHIP_MARKER), "", { encoding: "utf8", mode: 0o600 });
     writeFileSync(tmpFile, JSON.stringify(state, null, 2) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
-    renameSync(tmpFile, file);
+    atomicPublishRename(tmpFile, file, {
+      rename: renameSync,
+      backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+    });
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

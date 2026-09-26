@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   Chat,
   ChatConnectedScope,
+  ChatGitChangeScope,
   ChatLocalKnowledgeScope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -16,6 +17,12 @@ function localKnowledgeScopes(chat: Chat): readonly ChatLocalKnowledgeScope[] {
   );
 }
 
+// Issue #3400 (epic #3384, contract correction 2) — no legacy single-object field exists for this
+// scope kind.
+function gitChangeScopes(chat: Chat): readonly ChatGitChangeScope[] {
+  return chat.gitChangeScopes ?? [];
+}
+
 interface CanonicalConnectedScope {
   readonly kind: ChatConnectedScope["kind"];
   readonly relativePaths: readonly string[];
@@ -25,6 +32,19 @@ interface CanonicalConnectedScope {
 interface CanonicalLocalKnowledgeScope {
   readonly kind: ChatLocalKnowledgeScope["kind"];
   readonly id: string;
+}
+
+// Issue #3400 (epic #3384, contract correction 2) — only the fields that identify WHICH exact
+// snapshot content a turn is grounded against: `relationshipId` (which comparison), `remoteDigest`
+// (which repository) and `snapshotDigest` (which exact content). A snapshot re-check that finds a
+// different snapshotDigest changes this identity, so the existing `admittedGroundingScopeFailure`
+// 409 GROUNDING_SCOPE_CHANGED guard (grounded-qa.ts) rejects a turn after the head moved, with no
+// second mechanism. Display-only fields (comparisonLabel, counts, descriptionStatus,
+// connectedAtMs) are deliberately excluded — they never change what content a turn reads.
+interface CanonicalGitChangeScope {
+  readonly relationshipId: string;
+  readonly remoteDigest: string;
+  readonly snapshotDigest: string;
 }
 
 function compareCanonical(left: string, right: string): number {
@@ -67,10 +87,19 @@ function canonicalLocalKnowledgeScope(
   };
 }
 
+function canonicalGitChangeScope(scope: ChatGitChangeScope): CanonicalGitChangeScope {
+  return {
+    relationshipId: scope.relationshipId,
+    remoteDigest: scope.remoteDigest,
+    snapshotDigest: scope.snapshotDigest,
+  };
+}
+
 function canonicalGroundingScope(chat: Chat): string {
   return JSON.stringify({
     connected: canonicalConnectedScopes(chat),
     local: deduplicateAndSort(localKnowledgeScopes(chat).map(canonicalLocalKnowledgeScope)),
+    gitChange: deduplicateAndSort(gitChangeScopes(chat).map(canonicalGitChangeScope)),
   });
 }
 

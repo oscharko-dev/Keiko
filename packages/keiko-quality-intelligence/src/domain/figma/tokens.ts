@@ -10,7 +10,7 @@
 // many nodes carry it or in what order. Every family is sorted by its canonical key before emit, so
 // output never depends on traversal or map-insertion order.
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   asNode,
   nodeType,

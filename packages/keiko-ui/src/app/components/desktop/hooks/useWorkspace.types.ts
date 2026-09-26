@@ -2,7 +2,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type { SnapZone } from "../windows/connectionUtils";
 import type { WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
-import type { ChatConnectedScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatGitChangeScope } from "@/lib/types";
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
@@ -31,18 +31,69 @@ export interface OpenEditorFileRequest {
 
 export interface ChatBindingTarget {
   readonly conversationId: string | undefined;
+  readonly projectPath: string | undefined;
   readonly isCurrent: () => boolean;
+}
+
+export interface ChatUnbindTarget {
+  readonly conversationId: string;
+  readonly projectPath: string | undefined;
 }
 
 export type OpenEditorFileResult =
   | { readonly ok: true; readonly windowId: string }
   | { readonly ok: false; readonly message: string };
 
+export interface WorkspaceLinkedGitChangeComparison {
+  readonly connectionId: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly pending: boolean;
+  // Repository identity: `connectionId` names the UI edge (`${fromId}~${toId}`), which is not
+  // enough on its own — a chat can hold multiple Git-change scopes across DIFFERENT repositories
+  // that happen to share the same base/head ref names. `remoteDigest` is the documented same-
+  // repository key, so the confirmed/pending comparison filter must include it (review on #3506).
+  // Optional because the projection precedes remote-digest hydration for some legacy edges.
+  readonly remoteDigest?: string | undefined;
+}
+
+// Issue #2150 follow-up — copy/cut/paste report counts so the workspace can
+// announce the outcome (ADR-0123 D5 requires skipped windows to carry a
+// documented reason; a silent no-op is not one). `captured` is the number of
+// windows the clipboard took (for cut: also closed); `skipped` is the number of
+// selected windows that cannot be duplicated (singleton/keyed/minimized/
+// maximized descriptors); `overflow` is the number of duplicable windows that
+// only exceeded the clipboard's per-copy cap — a different reason that must not
+// be announced as "not duplicable".
+export interface WorkspaceClipboardCaptureResult {
+  readonly captured: number;
+  readonly skipped: number;
+  readonly overflow: number;
+}
+
+// Cut removes windows, and a connected window only leaves once its scope and
+// connector unbinds are accepted — a refusal deliberately keeps it open. The
+// synchronous fields describe what went into the clipboard (known at once);
+// `settled` resolves with what actually left the workspace, so the caller
+// announces the real outcome instead of an optimistic one.
+export interface WorkspaceClipboardCutResult extends WorkspaceClipboardCaptureResult {
+  readonly settled: Promise<WorkspaceClipboardCaptureResult>;
+}
+
+export interface WorkspaceClipboardPasteResult {
+  readonly pasted: number;
+  readonly limitReached: boolean;
+}
+
 export interface WorkspaceApi {
   readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly toggleTool: (type: WindowType) => void;
+  /** Atomically raises, focuses, and selects a window for a primary user activation. */
+  readonly activateWindow: (id: string) => void;
+  /** Raises and focuses without changing an intentional workspace selection. */
   readonly focus: (id: string) => void;
+  readonly currentWindowStack?: (() => readonly string[]) | undefined;
   readonly currentSelection: () => WorkspaceUiSelectionState;
   readonly replaceSelection: (windowIds: readonly string[]) => void;
   readonly toggleWindowSelection: (windowId: string) => void;
@@ -51,8 +102,9 @@ export interface WorkspaceApi {
     dx: number,
     dy: number,
   ) => { readonly dx: number; readonly dy: number };
-  readonly copySelectedWindows: () => boolean;
-  readonly pasteCopiedWindows: () => boolean;
+  readonly copySelectedWindows: () => WorkspaceClipboardCaptureResult;
+  readonly cutSelectedWindows: () => WorkspaceClipboardCutResult;
+  readonly pasteCopiedWindows: () => WorkspaceClipboardPasteResult;
   readonly close: (id: string) => void;
   readonly minimize: (id: string) => void;
   readonly restore: (id: string) => void;
@@ -68,6 +120,8 @@ export interface WorkspaceApi {
   readonly cancelConnect: () => void;
   readonly removeConn: (connId: string, options?: { readonly unbind?: boolean }) => void;
   readonly updateConnBoundScope: (connId: string, scope: ChatConnectedScope) => void;
+  readonly updateConnGitChangeScope?:
+    ((connId: string, scope: ChatGitChangeScope) => void) | undefined;
   readonly connect: (a: string, b: string) => void;
   readonly linkedFilesRoot: (id: string) => string | null;
   readonly linkedFilesContext: (id: string) => FilesWindowContext | null;
@@ -82,6 +136,9 @@ export interface WorkspaceApi {
   /** Image-only sources from connected Figma Image windows. */
   readonly linkedImageSources?:
     ((id: string) => readonly QualityIntelligenceImageSource[]) | undefined;
+  /** Git-change comparison projected from a Git↔Chat workspace connector edge. */
+  readonly linkedGitChangeComparisons?:
+    ((id: string) => readonly WorkspaceLinkedGitChangeComparison[]) | undefined;
   readonly currentFilesContext: () => FilesWindowContext | null;
   /**
    * Live snapshot of the pan/zoom view, read through a ref so window children can

@@ -1,25 +1,41 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeUnavailableReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createFetchEditorAgentHttpTransport,
   EditorAgentHttpClient,
 } from "@oscharko-dev/keiko-tools";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { codingSidecarDisabledByPolicy } from "../coding-sidecar-gateway.js";
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/index.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
   discoverDevLaneOpenCode,
+  discoverNpmLaneOpenCode,
+  type DevLaneName,
   type DevLaneOpenCodeDiscovery,
   type DevLaneOpenCodeRefusalReason,
   type DevLanePortableOpenCodeRuntime,
 } from "./devLanePortableCodingRuntime.js";
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
-import type { ResolvedPortableOpenCodeRuntime } from "./productionOpenCodeBackend.js";
+import type {
+  ProductionOpenCodeBackendInput,
+  ResolvedPortableOpenCodeRuntime,
+} from "./productionOpenCodeBackend.js";
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
@@ -30,7 +46,88 @@ type ProductionOpenCodePorts = Pick<
   "backend" | "editorAgentClient" | "secureWorkspaceTextRead"
 >;
 
+const CODING_RUNTIME_DEV_LANE_ACTIVATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.dev-lane.activated",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeActivation.recordDevLaneDiscovery",
+  fields: {
+    lane: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["dev-checkout", "npm-runtime-package"],
+    },
+    target: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: ["windows-x64", "macos-arm64", "macos-x64"],
+    },
+    evidenceClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["functional-not-platform-qualified"],
+    },
+    runtimeSupervisorSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-dev-lane"],
+  proofIds: ["coding-runtime.dev-lane.activated.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.dev-lane.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeActivation.recordDevLaneDiscovery",
+  fields: {
+    lane: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["dev-checkout", "npm-runtime-package"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "platform-unsupported",
+        "packaged-install-present",
+        "not-a-dev-checkout",
+        "payload-missing",
+        "payload-unapproved",
+        "payload-tampered",
+        "native-helper-directory-untrusted",
+        "secure-read-helper-missing",
+        "secure-read-helper-stale",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-dev-lane"],
+  proofIds: ["coding-runtime.dev-lane.refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
 export interface ProductionOpenCodeActivationInput {
+  readonly historyCapture?: ProductionOpenCodeBackendInput["historyCapture"];
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
   readonly platform?: NodeJS.Platform | undefined;
@@ -39,8 +136,10 @@ export interface ProductionOpenCodeActivationInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "clear"
+    "waitForObservedRequest" | "verifyObserved" | "clear"
   >;
+  readonly resolveGatewayRunMetadata?:
+    ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
   /** Explicit test/composition override; packaged production constructs its own verified port. */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** Live active-task-workspace root resolution for the dev-lane secure-read port. */
@@ -50,18 +149,78 @@ export interface ProductionOpenCodeActivationInput {
     ProductionCodingRuntimeResolverInput["editorAgentClient"] | undefined;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** Body-free lifecycle evidence for the chosen dev-lane outcome. */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export type ProductionOpenCodeActivationResult =
-  | { readonly ports: ProductionOpenCodePorts; readonly unavailableReason?: undefined }
+  | {
+      readonly ports: ProductionOpenCodePorts;
+      /** How strong the activated runtime's evidence is; never optional on the success branch. */
+      readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
+      readonly unavailableReason?: undefined;
+    }
   | {
       readonly ports?: undefined;
+      readonly evidenceClass?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
+export interface ProductionOpenCodeLoopbackEndpoints {
+  readonly gatewayUrl: string;
+  readonly toolFacadeUrl: string;
+}
+
+/** Derives both sidecar endpoints from the one attested BFF loopback origin. */
+export function productionOpenCodeLoopbackEndpoints(
+  env: NodeJS.ProcessEnv,
+): ProductionOpenCodeLoopbackEndpoints | undefined {
+  const loopback = loopbackBaseUrl(env);
+  return loopback === undefined
+    ? undefined
+    : {
+        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
+        toolFacadeUrl: `${loopback}/api/coding-sidecar/tool`,
+      };
+}
+
+function activatedPorts(
+  input: ProductionOpenCodeActivationInput,
+  portable: ResolvedPortableOpenCodeRuntime,
+  endpoints: ProductionOpenCodeLoopbackEndpoints,
+  secureWorkspaceTextRead: SecureWorkspaceTextReadPort,
+): ProductionOpenCodePorts {
+  return {
+    backend: createProductionOpenCodeBackend({
+      historyCapture: input.historyCapture,
+      portable,
+      runtimeStateRoot: input.runtimeStateDir,
+      gatewayUrl: endpoints.gatewayUrl,
+      resolveGatewayRunMetadata:
+        input.resolveGatewayRunMetadata ??
+        ((): CodingWorkbenchSidecarGatewayRunMetadata | undefined => undefined),
+      // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as the model
+      // gateway above, never a second listener's own port.
+      toolFacadeUrl: endpoints.toolFacadeUrl,
+      runtimeEvidence: input.runtimeEvidence,
+      gatewayReadiness: input.gatewayReadiness,
+      ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+      ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+      ...(input.fetch ? { fetch: input.fetch } : {}),
+    }),
+    secureWorkspaceTextRead,
+    editorAgentClient:
+      input.editorAgentClient ??
+      new EditorAgentHttpClient({
+        baseUrl: new URL(endpoints.gatewayUrl).origin,
+        transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
+      }),
+  };
+}
+
 /**
  * Assembles the production OpenCode runtime ports from a discovered runtime: the attested
- * packaged portable artifact where one exists, otherwise the explicitly opted-in macOS dev-lane
+ * packaged portable artifact where one exists, otherwise the explicitly opted-in supported dev-lane
  * payload. Every prerequisite is mandatory; the first missing one names the content-free
  * unavailability reason and keeps the runtime host unqualified and the Code surface unavailable.
  */
@@ -75,32 +234,30 @@ export function resolveProductionOpenCodeActivation(
   if (runtime.unavailableReason !== undefined) {
     return { unavailableReason: runtime.unavailableReason };
   }
-  const loopback = loopbackBaseUrl(input.env);
-  if (loopback === undefined) return { unavailableReason: "loopback-unavailable" };
+  const endpoints = productionOpenCodeLoopbackEndpoints(input.env);
+  if (endpoints === undefined) return { unavailableReason: "loopback-unavailable" };
   const secureWorkspaceTextRead = resolveSecureRead(input, runtime.portable);
   if (secureWorkspaceTextRead === undefined) {
     return { unavailableReason: "secure-read-unavailable" };
   }
   return {
-    ports: {
-      backend: createProductionOpenCodeBackend({
-        portable: runtime.portable,
-        runtimeStateRoot: input.runtimeStateDir,
-        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
-        runtimeEvidence: input.runtimeEvidence,
-        gatewayReadiness: input.gatewayReadiness,
-        ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
-        ...(input.fetch ? { fetch: input.fetch } : {}),
-      }),
-      secureWorkspaceTextRead,
-      editorAgentClient:
-        input.editorAgentClient ??
-        new EditorAgentHttpClient({
-          baseUrl: loopback,
-          transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
-        }),
-    },
+    evidenceClass: runtimeEvidenceClass(runtime.portable),
+    ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
+}
+
+/**
+ * The single junction where all three runtime union members converge into ports, and therefore the
+ * one place the readiness evidence class is derived. ONLY the release-signed packaged artifact is
+ * platform-qualified; the packaged evaluation lane, supported dev lane and functional-harness
+ * stand-in all report the honest weaker class (ADR-0140 D1, ADR-0163 D9).
+ */
+function runtimeEvidenceClass(
+  portable: ResolvedPortableOpenCodeRuntime,
+): CodingWorkbenchRuntimeEvidenceClass {
+  return "platformAssurance" in portable && portable.platformAssurance === "release-qualified"
+    ? "platform-qualified"
+    : "functional-not-platform-qualified";
 }
 
 type ResolvedRuntime =
@@ -111,7 +268,10 @@ type ResolvedRuntime =
     };
 
 function resolveRuntime(
-  input: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch" | "diagnostics">,
+  input: Pick<
+    ProductionOpenCodeActivationInput,
+    "env" | "platform" | "arch" | "diagnostics" | "activityLog"
+  >,
 ): ResolvedRuntime {
   const host = {
     env: input.env,
@@ -121,7 +281,64 @@ function resolveRuntime(
   };
   const packaged = discoverQualifiedPortableOpenCode(host);
   if (packaged !== undefined) return { portable: packaged };
-  return devLaneRuntime(discoverDevLaneOpenCode(host));
+  const activityLog = input.activityLog ?? processServerLogSink();
+  // An installed npm runtime package decides the npm installation's outcome, refusal included: a
+  // package that fails verification must surface its reason, not fall through to a dev lane that
+  // an npm installation can never satisfy and that would report `platform-unqualified` instead.
+  const npmLane = discoverNpmLaneOpenCode(host);
+  if (npmLane.outcome !== "inactive") {
+    recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
+    return devLaneRuntime(npmLane);
+  }
+  const discovery = discoverDevLaneOpenCode(host);
+  recordDevLaneDiscovery(activityLog, discovery, "dev-checkout");
+  return devLaneRuntime(discovery);
+}
+
+function recordDevLaneDiscovery(
+  activityLog: ServerLogSink,
+  discovery: DevLaneOpenCodeDiscovery,
+  lane: DevLaneName,
+): void {
+  if (discovery.outcome === "inactive") return;
+  if (discovery.outcome === "activated") {
+    activityLog.write(
+      activityLogEvent(
+        CODING_RUNTIME_DEV_LANE_ACTIVATED_OPERATION,
+        { correlationId: UNKNOWN_CORRELATION_ID },
+        {
+          lane: discovery.runtime.lane,
+          target: discovery.runtime.target,
+          evidenceClass: discovery.runtime.evidenceClass,
+          ...(discovery.runtime.nativeHelperSha256 === undefined
+            ? {}
+            : { runtimeSupervisorSha256: discovery.runtime.nativeHelperSha256 }),
+        },
+      ),
+    );
+    return;
+  }
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION,
+      {
+        level: "warn",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: devLaneRefusalErrorKind(discovery.reason),
+      },
+      { lane, reason: discovery.reason },
+    ),
+  );
+}
+
+function devLaneRefusalErrorKind(
+  reason: DevLaneOpenCodeRefusalReason,
+): "unavailable" | "validation-failed" | "unsafe-target" {
+  if (reason === "payload-tampered") return "validation-failed";
+  if (reason === "native-helper-directory-untrusted" || reason === "payload-unapproved") {
+    return "unsafe-target";
+  }
+  return "unavailable";
 }
 
 function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {
@@ -145,6 +362,8 @@ function devLaneRefusalReason(
     case "payload-unapproved":
     case "payload-tampered":
       return reason;
+    case "native-helper-directory-untrusted":
+      return "payload-tampered";
   }
 }
 

@@ -7,18 +7,22 @@
 
 import { randomUUID } from "node:crypto";
 
-import {
-  isKnowledgePodEvidenceSafeText,
-  isSafeScopePath,
-  standardPodModelUsePolicy,
-  type EmbeddingModelIdentity,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
-  type KnowledgeSourceScope,
-  type SharedPodRefreshTerminal,
+import type {
+  EmbeddingModelIdentity,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
+  KnowledgeSourceScope,
+  SharedPodRefreshTerminal,
 } from "@oscharko-dev/keiko-contracts";
+import { isKnowledgePodEvidenceSafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import { isSafeScopePath } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
@@ -31,7 +35,7 @@ import {
   type DiscoveryOptions,
 } from "./discovery/types.js";
 import { KnowledgeStoreError } from "./errors.js";
-import { diffFingerprintSets } from "./fingerprint-diff.js";
+import { diffFingerprintSets, type FingerprintSetDelta } from "./fingerprint-diff.js";
 import {
   readRepositoryFileFingerprints,
   replaceRepositoryFileFingerprints,
@@ -41,11 +45,38 @@ import {
 } from "./indexing/repository-fingerprints.js";
 import type { ContextualRetrievalOptions } from "./indexing/contextual-retrieval.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeLogCorrelationId,
+  type KnowledgeLogSink,
+} from "./knowledge-log.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
 import type { ParserRegistry } from "./parsers/index.js";
 import type { AuditEventSink } from "./privacy/index.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+
+const REPOSITORY_FINGERPRINT_DIFF_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "repository.fingerprint-diff.completed",
+  category: "indexing",
+  owner: "keiko-local-knowledge",
+  emitter: "repository-pod.logFingerprintDiffCompleted",
+  fields: {
+    added: { type: "integer", dataClass: "count", required: true },
+    changed: { type: "integer", dataClass: "count", required: true },
+    removed: { type: "integer", dataClass: "count", required: true },
+    moved: { type: "integer", dataClass: "count", required: true },
+    unchanged: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["repository-fingerprint-diff"],
+  proofIds: ["repository.fingerprint-diff.completed.counts"],
+  releaseImpact: "patch",
+});
 
 export interface RepositoryPodDeps {
   readonly store: KnowledgeStore;
@@ -54,6 +85,7 @@ export interface RepositoryPodDeps {
   readonly now?: (() => number) | undefined;
   readonly idSource?: (() => string) | undefined;
   readonly auditSink?: AuditEventSink | undefined;
+  readonly logSink?: KnowledgeLogSink | undefined;
 }
 
 export interface RepositoryPodIndexingDeps extends RepositoryPodDeps {
@@ -270,6 +302,7 @@ function runRepositoryIndexing(
       store: deps.store,
       discoveryOptions,
       ...(deps.auditSink === undefined ? {} : { auditSink: deps.auditSink }),
+      ...(deps.logSink === undefined ? {} : { logSink: deps.logSink }),
       ...(deps.signal === undefined ? {} : { signal: deps.signal }),
       ...(deps.now === undefined ? {} : { now: deps.now }),
       ...(deps.idSource === undefined ? {} : { idSource: deps.idSource }),
@@ -324,20 +357,62 @@ function pruneRemovedDocuments(
   }
 }
 
+// Job-scoped: correlated to the refresh run, not the document, since a fingerprint diff is a
+// whole-source-scan fact rather than a per-document one. Category "indexing" matches the op
+// prefix and every other repository-pod-adjacent line this package already writes from
+// `orchestrator.ts`'s `logIndexing`.
+function logFingerprintDiffCompleted(
+  deps: RepositoryPodDeps,
+  runId: string,
+  delta: FingerprintSetDelta,
+): void {
+  emitKnowledgeLogEvent(
+    deps.logSink,
+    activityLogEvent(
+      REPOSITORY_FINGERPRINT_DIFF_COMPLETED_OPERATION,
+      { correlationId: knowledgeLogCorrelationId(runId) },
+      {
+        added: delta.added,
+        changed: delta.changed,
+        removed: delta.removed,
+        moved: delta.moved,
+        unchanged: delta.unchanged,
+      },
+    ),
+  );
+}
+
+// The one delta this run reports — from `prior` to the EFFECTIVE next baseline (the
+// failure-withheld set the caller is about to persist, never the raw scan), with `removed`
+// suppressed to 0 whenever enumeration is incomplete. Computed once and reused for both the
+// logged event and the persisted `RepositoryPodChangeCounts` so the two can never disagree with
+// each other about whether something was removed.
+function effectiveFingerprintDelta(
+  prior: ReadonlyMap<string, RepositoryFileFingerprint>,
+  next: readonly RepositoryFileFingerprint[],
+  enumerationComplete: boolean,
+): FingerprintSetDelta {
+  const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
+    detectMoves: false,
+  });
+  return enumerationComplete ? delta : { ...delta, removed: 0 };
+}
+
 function runCounts(
+  deps: RepositoryPodDeps,
+  runId: string,
   prior: ReadonlyMap<string, RepositoryFileFingerprint>,
   next: readonly RepositoryFileFingerprint[],
   result: IndexingResult,
   rejectedEntries: number,
   enumerationComplete: boolean,
 ): RepositoryPodChangeCounts {
-  const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
-    detectMoves: false,
-  });
+  const delta = effectiveFingerprintDelta(prior, next, enumerationComplete);
+  logFingerprintDiffCompleted(deps, runId, delta);
   return {
     addedFiles: delta.added,
     changedFiles: delta.changed,
-    removedFiles: enumerationComplete ? delta.removed : 0,
+    removedFiles: delta.removed,
     unchangedFiles: delta.unchanged,
     failedDocuments: result.failedDocuments,
     rejectedEntries,
@@ -441,8 +516,10 @@ export async function refreshRepositoryPod(
   }
   const persisted = applied ? next : [...prior.values()];
   const counts = runCounts(
+    deps,
+    runId,
     prior,
-    scan.fingerprints,
+    next,
     drained.result,
     scan.rejectedEntries,
     enumerationComplete,

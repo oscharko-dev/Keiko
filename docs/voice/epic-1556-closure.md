@@ -109,8 +109,8 @@ Performed by the coordinator at closure through PR #1596 on HEAD `c75af49d`:
 
 The closure record correctly noted that `keiko-stt` alone provides composer dictation, not spoken
 dialogue. Its former statement that speech output or Realtime plus `voiceProfiles` was sufficient is
-superseded. ADR-0154 now requires Realtime WebRTC input with an explicit transcription deployment plus a
-separate speech-output provider carrying the persona mapping.
+superseded. ADR-0154 now accepts either Realtime WebRTC input or turn-based STT capture, plus a
+separate speech-output provider carrying the persona mapping. Both paths use canonical chat.
 
 **Recommended, non-blocking follow-ups (deferred):**
 

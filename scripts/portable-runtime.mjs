@@ -2,11 +2,17 @@ import { createHash } from "node:crypto";
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import {
-  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import { sha256 } from "./lib/digest.mjs";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
+export const WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION = 2;
+export const WINDOWS_GENERATION_BINDING_SCHEMA_VERSION = 1;
+export const WINDOWS_GENERATION_TREE_HASH_SCHEMA = "KHT1";
+export const WINDOWS_GENERATION_STAGING_RELATIVE_PATH = ".portable/generation-staging";
+export const WINDOWS_PORTABLE_SETUP_ASSET_NAME = "keiko-windows-x64-setup.exe";
 
 // Shared bounds for the platform-specific bounded payload-tree walkers (Windows PE and macOS
 // Mach-O inventory). Kept in one place so the two walkers cannot drift to different limits.
@@ -19,6 +25,18 @@ export function portablePayloadRelativePath(root, path) {
 
 export const PORTABLE_TARGETS = Object.freeze([
   Object.freeze({
+    assetName: "keiko-linux-x64.zip",
+    nodeArchiveExtension: "tar.gz",
+    nodeArchiveTarget: "linux-x64",
+    nodeArchitecture: "x64",
+    nodePlatform: "linux",
+    platformTarget: "linux-x64",
+    primaryLauncher: "Keiko",
+    runtimeTarget: "linux-x64",
+    sidecarArchiveName: "opencode-linux-x64.tar.gz",
+    signatureKind: "github-oidc-attested",
+  }),
+  Object.freeze({
     assetName: "keiko-windows-x64.zip",
     nodeArchiveExtension: "zip",
     nodeArchiveTarget: "win-x64",
@@ -27,6 +45,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "windows-x64",
     primaryLauncher: "Keiko.exe",
     runtimeTarget: "win32-x64",
+    sidecarArchiveName: "opencode-windows-x64.zip",
     signatureKind: "authenticode",
   }),
   Object.freeze({
@@ -38,6 +57,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "macos-arm64",
     primaryLauncher: "Keiko.app",
     runtimeTarget: "darwin-arm64",
+    sidecarArchiveName: "opencode-darwin-arm64.zip",
     signatureKind: "developer-id-notarized",
   }),
   Object.freeze({
@@ -49,6 +69,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "macos-x64",
     primaryLauncher: "Keiko.app",
     runtimeTarget: "darwin-x64",
+    sidecarArchiveName: "opencode-darwin-x64.zip",
     signatureKind: "developer-id-notarized",
   }),
 ]);
@@ -56,32 +77,90 @@ export const PORTABLE_TARGETS = Object.freeze([
 export const PORTABLE_TARGET_NAMES = Object.freeze(
   PORTABLE_TARGETS.map((target) => target.platformTarget),
 );
+
+// The reviewed staging contract a release-impact entry must carry before a portable target may be
+// staged from it. It lives beside the target list so that one rule serves both callers: the staging
+// producer applies it when a tagged run stages a target, and check:release-impact applies it on the
+// pull request. Before, only the producer knew it, so on the v1.0.0 cut a target list that still
+// omitted linux-x64 surfaced three steps into a tagged release instead of in review.
+export const PORTABLE_RELEASE_IMPACT_CONTRACT = Object.freeze({
+  issue: 1948,
+  parentEpic: 1942,
+  programEpic: 1944,
+  stagingOnly: true,
+});
+export const LEGACY_PORTABLE_TARGETS = Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]);
+
+export function reviewedPortableTargetSet(actual, requestedTarget) {
+  if (!Array.isArray(actual)) return false;
+  const actualSet = new Set(actual);
+  const knownTargets = new Set(PORTABLE_TARGET_NAMES);
+  return (
+    actualSet.size === actual.length &&
+    LEGACY_PORTABLE_TARGETS.every((target) => actualSet.has(target)) &&
+    actualSet.has(requestedTarget) &&
+    actual.every((target) => knownTargets.has(target))
+  );
+}
+
+export function portableRuntimeContractMatches(contract, requestedTarget) {
+  return (
+    contract !== null &&
+    typeof contract === "object" &&
+    contract.issue === PORTABLE_RELEASE_IMPACT_CONTRACT.issue &&
+    contract.parentEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.parentEpic &&
+    contract.programEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.programEpic &&
+    contract.stagingOnly === PORTABLE_RELEASE_IMPACT_CONTRACT.stagingOnly &&
+    reviewedPortableTargetSet(contract.targets, requestedTarget)
+  );
+}
+
+// The release-impact entry a tagged run stages a target from: the current package at the stable tag,
+// reviewed and approved by a human, carrying the reviewed staging contract for that target. The
+// staging producer and the dev rehearsal's readiness check apply this one rule.
+export function reviewedStagingEntryMatches(entry, rootPackage, releaseTag, target) {
+  return (
+    entry?.packageName === rootPackage.name &&
+    entry.packageVersion === rootPackage.version &&
+    entry.releaseTag === releaseTag &&
+    entry.review?.status === "reviewed" &&
+    entry.review?.humanApproved === true &&
+    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract, target)
+  );
+}
 export const PORTABLE_VERIFICATION_POLICIES = Object.freeze([
   "staging",
   "development",
   "pull-request",
+  "evaluation",
   "production",
 ]);
 export const PORTABLE_VERIFICATION_STATUSES = Object.freeze([
   "unverified-staging",
   "unsigned-non-production",
   "verified-non-production",
+  "evaluation-unqualified",
   "verified-production",
   "verification-failed",
 ]);
 export const PORTABLE_MANIFEST_VALIDATION_CONTEXTS = Object.freeze([
   "staging",
   "non-production",
+  "evaluation",
   "candidate",
   "published",
+  "published-release-trust",
   "published-contract",
 ]);
 export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
   "credential-unavailable",
+  "evaluation-artifact",
+  "evaluation-unsigned-allowed",
   "macos-assessment-unverified",
   "macos-developer-id-unverified",
   "macos-notarization-unverified",
   "macos-staple-unverified",
+  "github-provenance-unverified",
   "non-production-artifact",
   "non-production-unsigned-allowed",
   "staging-unverified",
@@ -160,6 +239,7 @@ function matchesAnyPattern(value, patterns) {
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
+const WINDOWS_GENERATION_RESOURCE_ROOT_PATTERN = /^\.portable\/generations\/([a-f0-9]{64})$/u;
 const PLACEHOLDER_DIGEST_PATTERN = /^64-hex-[a-z0-9-]+$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$|^40-hex-[a-z0-9-]+$/u;
 const STRICT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -278,11 +358,16 @@ function isRecord(value) {
 }
 
 function usesZeroReleaseIdentity(options) {
-  return new Set(["staging", "non-production", "candidate"]).has(options.context);
+  return new Set(["staging", "non-production", "evaluation", "candidate"]).has(options.context);
 }
 
+// The evaluation lane (ADR-0163 D9) waives exactly the platform signature, notarization and
+// qualification gates and nothing else. Every digest, size, containment and provenance predicate
+// stays outside this Set and therefore stays mandatory on every lane.
 function requiresProductionVerification(options) {
-  return !new Set(["staging", "non-production"]).has(options.context);
+  return !new Set(["staging", "non-production", "evaluation", "published-release-trust"]).has(
+    options.context,
+  );
 }
 
 function push(failures, path, message) {
@@ -375,6 +460,7 @@ function verificationCheckTemplate(target, verified) {
       timestampVerified: verified,
     };
   }
+  if (target.nodePlatform === "linux") return { provenanceVerified: verified };
   return {
     developerIdVerified: verified,
     notarizationVerified: verified,
@@ -390,15 +476,25 @@ export function createPortableVerificationChecks(platformTarget, verified = fals
 }
 
 function verificationCheckKeys(target) {
-  return target?.nodePlatform === "win32"
-    ? ["publisherChainVerified", "timestampVerified"]
-    : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+  if (target?.nodePlatform === "win32") {
+    return ["publisherChainVerified", "timestampVerified"];
+  }
+  if (target?.nodePlatform === "linux") return ["provenanceVerified"];
+  return ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
 }
 
 function forbiddenVerificationCheckKeys(target) {
-  return target?.nodePlatform === "win32"
-    ? ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"]
-    : ["publisherChainVerified", "timestampVerified"];
+  const all = [
+    "publisherChainVerified",
+    "timestampVerified",
+    "provenanceVerified",
+    "developerIdVerified",
+    "notarizationVerified",
+    "stapleVerified",
+    "assessmentVerified",
+  ];
+  const allowed = new Set(verificationCheckKeys(target));
+  return all.filter((key) => !allowed.has(key));
 }
 
 function validateProduct(manifest, failures) {
@@ -485,6 +581,90 @@ function validateProvenance(manifest, failures, options) {
   }
   relativePathAt(provenance, "provenanceStatementPath", "provenance", failures);
   digestAt(provenance, "provenanceStatementSha256", "provenance", failures, options);
+  validateWindowsGenerationCopies(manifest, provenance, "provenance", failures, options);
+}
+
+function validateWindowsGenerationCopies(manifest, container, path, failures, options) {
+  const isWindows = manifest.artifact?.platformTarget === "windows-x64";
+  const usesGenerationLayout = manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION;
+  if (!isWindows || !usesGenerationLayout) {
+    if (container.windowsGeneration !== undefined) {
+      push(failures, `${path}.windowsGeneration`, "is supported only by Windows schema 2");
+    }
+    return;
+  }
+  const generation = validateWindowsGenerationBinding(
+    container.windowsGeneration,
+    `${path}.windowsGeneration`,
+    failures,
+    options,
+  );
+  if (!bindingValuesMatch(generation, manifest.windowsGeneration)) {
+    push(failures, `${path}.windowsGeneration`, "does not match manifest");
+  }
+}
+
+function validateWindowsGenerationBinding(value, path, failures, options) {
+  if (!isRecord(value)) {
+    push(failures, path, "must be an object");
+    return {};
+  }
+  exactKeysAt(
+    value,
+    [
+      "schemaVersion",
+      "resourceRoot",
+      "treeHashSchema",
+      "treeSha256",
+      "launcherPath",
+      "launcherSha256",
+    ],
+    path,
+    failures,
+  );
+  literalAt(value, "schemaVersion", WINDOWS_GENERATION_BINDING_SCHEMA_VERSION, path, failures);
+  const resourceRoot = stringAt(value, "resourceRoot", path, failures);
+  const resourceMatch = WINDOWS_GENERATION_RESOURCE_ROOT_PATTERN.exec(resourceRoot);
+  if (resourceMatch === null)
+    push(failures, `${path}.resourceRoot`, "must name one KHT1 generation");
+  literalAt(value, "treeHashSchema", WINDOWS_GENERATION_TREE_HASH_SCHEMA, path, failures);
+  const treeSha256 = digestAt(value, "treeSha256", path, failures, options);
+  if (resourceMatch?.[1] !== undefined && resourceMatch[1] !== treeSha256) {
+    push(failures, `${path}.resourceRoot`, "must end with treeSha256");
+  }
+  literalAt(value, "launcherPath", "Keiko.exe", path, failures);
+  digestAt(value, "launcherSha256", path, failures, options);
+  return value;
+}
+
+export function windowsGenerationBindingValidationFailures(
+  value,
+  { expected, path = "windowsGeneration" } = {},
+) {
+  const failures = [];
+  const binding = validateWindowsGenerationBinding(value, path, failures, {
+    allowPlaceholders: false,
+  });
+  if (expected !== undefined && !bindingValuesMatch(binding, expected)) {
+    push(failures, path, "does not match expected binding");
+  }
+  return failures;
+}
+
+function validateWindowsGeneration(manifest, failures, options) {
+  const isWindows = manifest.artifact?.platformTarget === "windows-x64";
+  if (manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION && isWindows) {
+    validateWindowsGenerationBinding(
+      manifest.windowsGeneration,
+      "windowsGeneration",
+      failures,
+      options,
+    );
+    return;
+  }
+  if (manifest.windowsGeneration !== undefined) {
+    push(failures, "windowsGeneration", "is supported only by Windows schema 2");
+  }
 }
 
 function validateRuntime(manifest, failures, options) {
@@ -526,15 +706,38 @@ function validateRuntimeActivation(manifest, failures, options) {
   literalAt(value, "path", ".portable/runtime-activation.json", "runtimeActivation", failures);
   digestAt(value, "sha256", "runtimeActivation", failures, options);
   const trustAnchor = stringAt(value, "trustAnchor", "runtimeActivation", failures);
-  const target = portableTargetByName(manifest.artifact?.platformTarget);
-  const expected =
-    target?.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal";
-  if (options.context === "staging" && trustAnchor !== "unverified-staging") {
-    push(failures, "runtimeActivation.trustAnchor", "must remain unverified during staging");
+  validateRuntimeActivationTrustAnchor(manifest, trustAnchor, failures, options);
+}
+
+/**
+ * The pre-signing contexts each pin their own anchor. No platform seal binds an evaluation
+ * activation document, so its anchor must say so plainly rather than borrow a production anchor or
+ * the staging one (ADR-0163 D9).
+ */
+function validateRuntimeActivationTrustAnchor(manifest, trustAnchor, failures, options) {
+  const preSigningAnchor = {
+    staging: "unverified-staging",
+    evaluation: "evaluation-unqualified",
+    "published-release-trust": "evaluation-unqualified",
+  }[options.context];
+  if (preSigningAnchor !== undefined) {
+    if (trustAnchor !== preSigningAnchor) {
+      push(failures, "runtimeActivation.trustAnchor", `must be ${preSigningAnchor}`);
+    }
+    return;
   }
-  if (requiresProductionVerification(options) && trustAnchor !== expected) {
+  if (!requiresProductionVerification(options)) return;
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const expected = runtimeActivationTrustAnchor(target);
+  if (trustAnchor !== expected) {
     push(failures, "runtimeActivation.trustAnchor", `must be ${expected}`);
   }
+}
+
+function runtimeActivationTrustAnchor(target) {
+  if (target?.nodePlatform === "win32") return "authenticode-attestor";
+  if (target?.nodePlatform === "linux") return "sigstore-qualification-receipt";
+  return "developer-id-app-resource-seal";
 }
 
 function validateRuntimeAttestation(manifest, failures, options) {
@@ -575,13 +778,14 @@ function validateRuntimeQualification(manifest, failures, options) {
   const target = portableTargetByName(manifest.artifact?.platformTarget);
   const qualification = manifest.runtimeQualification;
   if (qualification === undefined) {
-    if (requiresProductionVerification(options) && target?.nodePlatform === "darwin") {
-      push(failures, "runtimeQualification", "is required for macOS production artifacts");
+    if (runtimeQualificationRequired(target, options)) {
+      push(failures, "runtimeQualification", "is required for qualified production artifacts");
     }
     return;
   }
-  if (target?.nodePlatform !== "darwin") {
-    push(failures, "runtimeQualification", "is supported only for macOS");
+  const backend = runtimeQualificationBackend(target);
+  if (backend === undefined) {
+    push(failures, "runtimeQualification", "is supported only for macOS and Linux");
     return;
   }
   const value = recordAt(manifest, "runtimeQualification", "manifest", failures);
@@ -600,7 +804,19 @@ function validateRuntimeQualification(manifest, failures, options) {
     failures,
   );
   digestAt(value, "sha256", "runtimeQualification", failures, options);
-  literalAt(value, "backend", "macos-endpoint-security", "runtimeQualification", failures);
+  literalAt(value, "backend", backend, "runtimeQualification", failures);
+}
+
+function runtimeQualificationBackend(target) {
+  if (target?.nodePlatform === "linux") return "linux-namespace-gateway";
+  if (target?.nodePlatform === "darwin") return "macos-endpoint-security";
+  return undefined;
+}
+
+function runtimeQualificationRequired(target, options) {
+  return (
+    requiresProductionVerification(options) && runtimeQualificationBackend(target) !== undefined
+  );
 }
 
 function validateSidecarRuntimes(manifest, failures, options) {
@@ -708,29 +924,41 @@ function validateNativeAddons(manifest, failures, options) {
     return;
   }
   const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const approval = usearchApprovalForPortableTarget(target);
   exactKeysAt(addon, NATIVE_ADDON_KEYS, path, failures);
+  validateNativeAddonIdentity(addon, target, approval, path, failures);
+  validateNativeAddonSource(addon, approval, path, failures, options);
+  digestAt(addon, "unsignedSha256", path, failures, options);
+  digestAt(addon, "shippedSha256", path, failures, options);
+  positiveNumberAt(addon, "sizeBytes", path, failures);
+  validateNativeHelperSigning(addon, target, path, failures, options);
+}
+
+function usearchApprovalForPortableTarget(target) {
+  if (target === undefined) return undefined;
+  return usearchRuntimeApproval(
+    usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture),
+  );
+}
+
+function validateNativeAddonIdentity(addon, target, approval, path, failures) {
   literalAt(addon, "name", "usearch", path, failures);
   literalAt(addon, "kind", "node-native-addon", path, failures);
-  literalAt(addon, "version", USEARCH_RUNTIME_MANIFEST.version, path, failures);
+  literalAt(addon, "version", approval?.version, path, failures);
   literalAt(addon, "platformTarget", target?.platformTarget, path, failures);
   literalAt(addon, "architecture", target?.nodeArchitecture, path, failures);
   literalAt(addon, "executablePath", "runtime/native/usearch.node", path, failures);
   literalAt(addon, "licensePath", "runtime/licenses/usearch/LICENSE", path, failures);
-  validateNativeAddonSource(addon, target, path, failures, options);
-  digestAt(addon, "unsignedSha256", path, failures, options);
-  digestAt(addon, "shippedSha256", path, failures, options);
-  positiveNumberAt(addon, "sizeBytes", path, failures);
   literalAt(
     addon,
     "sbomBomRef",
-    `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target?.platformTarget ?? ""}`,
+    `pkg:npm/usearch@${approval?.version ?? ""}?platform=${target?.platformTarget ?? ""}`,
     path,
     failures,
   );
-  validateNativeHelperSigning(addon, target, path, failures, options);
 }
 
-function validateNativeAddonSource(addon, target, path, failures, options) {
+function validateNativeAddonSource(addon, approval, path, failures, options) {
   const source = recordAt(addon, "source", path, failures);
   exactKeysAt(
     source,
@@ -738,29 +966,11 @@ function validateNativeAddonSource(addon, target, path, failures, options) {
     `${path}.source`,
     failures,
   );
-  literalAt(source, "commitSha", USEARCH_RUNTIME_MANIFEST.sourceCommit, `${path}.source`, failures);
-  literalAt(source, "tarballUrl", USEARCH_RUNTIME_MANIFEST.tarballUrl, `${path}.source`, failures);
-  literalAt(
-    source,
-    "tarballSha256",
-    USEARCH_RUNTIME_MANIFEST.tarballSha256,
-    `${path}.source`,
-    failures,
-  );
-  literalAt(
-    source,
-    "licenseSha256",
-    USEARCH_RUNTIME_MANIFEST.licenseSha256,
-    `${path}.source`,
-    failures,
-  );
-  const targetKey =
-    target === undefined
-      ? undefined
-      : usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
-  const approved =
-    targetKey === undefined ? undefined : USEARCH_RUNTIME_MANIFEST.targets[targetKey];
-  literalAt(source, "binarySha256", approved?.binarySha256, `${path}.source`, failures);
+  literalAt(source, "commitSha", approval?.sourceCommit, `${path}.source`, failures);
+  literalAt(source, "tarballUrl", approval?.tarballUrl, `${path}.source`, failures);
+  literalAt(source, "tarballSha256", approval?.tarballSha256, `${path}.source`, failures);
+  literalAt(source, "licenseSha256", approval?.licenseSha256, `${path}.source`, failures);
+  literalAt(source, "binarySha256", approval?.binarySha256, `${path}.source`, failures);
   digestAt(source, "binarySha256", `${path}.source`, failures, options);
 }
 
@@ -808,12 +1018,20 @@ function nativeHelperContract(name, target) {
     };
   }
   if (name === "keiko-runtime-supervisor") {
+    const linux = target.nodePlatform === "linux";
+    const sourcePlatform = target.nodePlatform === "win32" ? "windows" : "macos";
     return {
       bomName: name,
-      executablePath: `runtime/native/${name}${suffix}`,
+      executablePath: linux
+        ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
+        : `runtime/native/${name}${suffix}`,
       kind: "runtime-process-supervisor",
-      protocol: { requestMagic: "KRP1", responseMagic: "KRS1" },
-      sourcePath: `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`,
+      protocol: linux
+        ? { requestMagic: "none", responseMagic: "none" }
+        : { requestMagic: "KRP1", responseMagic: "KRS1" },
+      sourcePath: linux
+        ? "packages/keiko-sandbox/src"
+        : `native/runtime-supervisor/${sourcePlatform}`,
     };
   }
   return undefined;
@@ -910,18 +1128,26 @@ function validateNativeHelperSigningLifecycle(target, path, failures, options, s
     push(failures, `${path}.signing.notarizationRequired`, "must match target");
   if (target?.nodePlatform !== "darwin" && state.notarizationVerified)
     push(failures, `${path}.signing.notarizationVerified`, "must be false for non-macOS targets");
-  if (options.context === "staging" && violatesStagingSigning(state)) {
-    push(failures, `${path}.signing`, "must remain explicitly unverified during staging");
+  if (violatesPreSigningHelperSigning(options.context, state)) {
+    push(
+      failures,
+      `${path}.signing`,
+      `must remain explicitly unverified during ${options.context}`,
+    );
   }
   if (requiresProductionVerification(options) && violatesProductionSigning(target, state)) {
     push(failures, `${path}.signing`, "must be verified for production");
   }
 }
 
-function violatesStagingSigning(state) {
-  return (
-    state.status !== "unverified-staging" || state.signatureVerified || state.notarizationVerified
-  );
+/**
+ * Staging and evaluation are both pre-signing lanes: each pins its own status and neither may ever
+ * assert a platform proof. One predicate keeps the two from drifting apart.
+ */
+function violatesPreSigningHelperSigning(context, state) {
+  const expected = { staging: "unverified-staging", evaluation: "evaluation-unqualified" }[context];
+  if (expected === undefined) return false;
+  return state.status !== expected || state.signatureVerified || state.notarizationVerified;
 }
 
 function violatesProductionSigning(target, state) {
@@ -1010,8 +1236,11 @@ function validateSidecarUpstream(runtime, path, failures) {
   stringAt(upstream, "owner", `${path}.upstream`, failures);
   stringAt(upstream, "repository", `${path}.upstream`, failures);
   stringAt(upstream, "name", `${path}.upstream`, failures);
-  stringAt(upstream, "version", `${path}.upstream`, failures);
-  stringAt(upstream, "tag", `${path}.upstream`, failures);
+  const version = stringAt(upstream, "version", `${path}.upstream`, failures);
+  if (!/^2\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(version)) {
+    push(failures, `${path}.upstream.version`, "must be an OpenCode V2 release version");
+  }
+  literalAt(upstream, "tag", `v${version}`, `${path}.upstream`, failures);
   const commit = stringAt(upstream, "commit", `${path}.upstream`, failures);
   if (!STRICT_COMMIT_PATTERN.test(commit)) {
     push(failures, `${path}.upstream.commit`, "must be a 40-hex commit SHA");
@@ -1033,7 +1262,7 @@ function validateSidecarAdapter(runtime, path, failures) {
     `${path}.adapterCompatibility`,
     failures,
   );
-  literalAt(adapter, "adapterVersion", "1", `${path}.adapterCompatibility`, failures);
+  literalAt(adapter, "adapterVersion", "2", `${path}.adapterCompatibility`, failures);
   literalAt(adapter, "transport", "http-sse", `${path}.adapterCompatibility`, failures);
 }
 
@@ -1110,9 +1339,14 @@ function validateSidecarArchive(runtime, path, failures, options) {
   }
   const url = stringAt(archive, "url", archivePath, failures);
   const upstream = runtime.upstream ?? {};
-  const expectedPrefix = `https://github.com/${upstream.owner}/${upstream.repository}/releases/download/${upstream.tag}/`;
-  if (!url.startsWith(expectedPrefix)) {
-    push(failures, `${archivePath}.url`, "must bind the upstream repository and tag");
+  const target = portableTargetByName(runtime.platformTarget);
+  const expectedUrl = `https://opencode.ai/files/bin/${upstream.version}/${target?.sidecarArchiveName}`;
+  if (url !== expectedUrl) {
+    push(
+      failures,
+      `${archivePath}.url`,
+      "must bind the OpenCode release version and platform archive",
+    );
   }
   positiveNumberAt(archive, "sizeBytes", archivePath, failures);
   digestAt(archive, "sha256", archivePath, failures, options);
@@ -1302,18 +1536,61 @@ function validateVerificationCheckConsistency(
 ) {
   if (target === undefined) return;
   if (target.nodePlatform === "win32") {
-    const windowsVerified =
-      verificationChecks.publisherChainVerified === true &&
-      verificationChecks.timestampVerified === true;
-    if (signatureVerified !== windowsVerified) {
-      push(
-        failures,
-        `${path}.signatureVerified`,
-        "must match Windows publisher-chain and timestamp verification",
-      );
-    }
+    validateWindowsVerificationConsistency(signatureVerified, verificationChecks, failures, path);
     return;
   }
+  if (target.nodePlatform === "linux") {
+    validateLinuxVerificationConsistency(
+      signatureVerified,
+      notarizationVerified,
+      verificationChecks,
+      failures,
+      path,
+    );
+    return;
+  }
+  validateMacosVerificationConsistency(
+    signatureVerified,
+    notarizationVerified,
+    verificationChecks,
+    failures,
+    path,
+  );
+}
+
+function validateWindowsVerificationConsistency(signatureVerified, checks, failures, path) {
+  const verified = checks.publisherChainVerified === true && checks.timestampVerified === true;
+  if (signatureVerified !== verified) {
+    push(
+      failures,
+      `${path}.signatureVerified`,
+      "must match Windows publisher-chain and timestamp verification",
+    );
+  }
+}
+
+function validateLinuxVerificationConsistency(
+  signatureVerified,
+  notarizationVerified,
+  checks,
+  failures,
+  path,
+) {
+  if (signatureVerified !== (checks.provenanceVerified === true)) {
+    push(failures, `${path}.signatureVerified`, "must match Linux provenance verification");
+  }
+  if (notarizationVerified) {
+    push(failures, `${path}.notarizationVerified`, "must be false for Linux targets");
+  }
+}
+
+function validateMacosVerificationConsistency(
+  signatureVerified,
+  notarizationVerified,
+  verificationChecks,
+  failures,
+  path,
+) {
   if (signatureVerified !== (verificationChecks.developerIdVerified === true)) {
     push(failures, `${path}.signatureVerified`, "must match macOS Developer ID verification");
   }
@@ -1384,8 +1661,12 @@ function validateSidecarSigningKeys(signing, signingPath, failures) {
   );
 }
 
+// The evaluation lane ships a runnable, downloadable artifact whose shipped-executable digests the
+// runtime verifies against disk at discovery AND at launch, so the schema must demand them here
+// too. Validating them only under production would produce a lane that passes CI and fails at
+// activation (ADR-0163 D9).
 function validateShippedExecutableEvidence(signing, policy, path, failures, options) {
-  if (policy !== "production") return;
+  if (policy !== "production" && policy !== "evaluation") return;
   digestAt(signing, "shippedExecutableSha256", path, failures, options);
   literalAt(signing, "shippedExecutableTreeAlgorithm", EXECUTABLE_TREE_ALGORITHM, path, failures);
   digestAt(signing, "shippedExecutableTreeSha256", path, failures, options);
@@ -1402,10 +1683,7 @@ function validateLifecycleVerificationContext(policy, status, path, options, fai
     }
     return;
   }
-  const expected =
-    options.context === "staging"
-      ? { policy: "staging", status: "unverified-staging" }
-      : { policy: "production", status: "verified-production" };
+  const expected = lifecycleVerificationExpectation(options.context);
   if (policy !== expected.policy || status !== expected.status) {
     push(
       failures,
@@ -1413,6 +1691,14 @@ function validateLifecycleVerificationContext(policy, status, path, options, fai
       `verification must match ${options.context} lifecycle context (${expected.policy}/${expected.status})`,
     );
   }
+}
+
+function lifecycleVerificationExpectation(context) {
+  if (context === "staging") return { policy: "staging", status: "unverified-staging" };
+  if (new Set(["evaluation", "published-release-trust"]).has(context)) {
+    return { policy: "evaluation", status: "evaluation-unqualified" };
+  }
+  return { policy: "production", status: "verified-production" };
 }
 
 function validateSidecarVerificationChecks(signing, target, path, failures) {
@@ -1426,6 +1712,15 @@ function validateSidecarVerificationState(policy, status, reasonCodes, verified,
     requireStatusForPath(status, "unverified-staging", path, failures);
     requireReasonForPath(reasonCodes, "staging-unverified", path, failures);
     if (verified) push(failures, `${path}.verificationStatus`, "must stay unverified for staging");
+    return;
+  }
+  if (policy === "evaluation") {
+    requireStatusForPath(status, "evaluation-unqualified", path, failures);
+    requireReasonForPath(reasonCodes, "evaluation-artifact", path, failures);
+    requireReasonForPath(reasonCodes, "evaluation-unsigned-allowed", path, failures);
+    if (verified) {
+      push(failures, `${path}.verificationStatus`, "must stay unverified for evaluation");
+    }
     return;
   }
   validateSignedSidecarVerificationState(policy, status, reasonCodes, verified, path, failures);
@@ -1505,6 +1800,10 @@ function validateVerificationState(manifest, policy, status, reasonCodes, failur
     if (verified) push(failures, "security.verificationStatus", "must stay unverified for staging");
     return;
   }
+  if (policy === "evaluation") {
+    validateEvaluationVerificationState(status, reasonCodes, verified, failures);
+    return;
+  }
   if (policy === "production") {
     if (verified) {
       requireVerificationStatus(status, "verified-production", failures);
@@ -1530,6 +1829,15 @@ function validateVerificationState(manifest, policy, status, reasonCodes, failur
   }
   requireVerificationStatus(status, "unsigned-non-production", failures);
   requireReasonCode(reasonCodes, "non-production-unsigned-allowed", failures);
+}
+
+function validateEvaluationVerificationState(status, reasonCodes, verified, failures) {
+  requireVerificationStatus(status, "evaluation-unqualified", failures);
+  requireReasonCode(reasonCodes, "evaluation-artifact", failures);
+  requireReasonCode(reasonCodes, "evaluation-unsigned-allowed", failures);
+  if (verified) {
+    push(failures, "security.verificationStatus", "must stay unverified for evaluation");
+  }
 }
 
 function requireVerificationStatus(actual, expected, failures) {
@@ -1565,7 +1873,7 @@ function validateEvidence(manifest, failures) {
   }
 }
 
-function validateReleaseImpact(manifest, failures) {
+function validateReleaseImpact(manifest, failures, options) {
   const releaseImpact = recordAt(manifest, "releaseImpact", "manifest", failures);
   relativePathAt(releaseImpact, "catalogPath", "releaseImpact", failures);
   stringAt(releaseImpact, "entryId", "releaseImpact", failures);
@@ -1585,13 +1893,50 @@ function validateReleaseImpact(manifest, failures) {
     manifest,
     recordAt(releaseImpact, "reviewedBinding", "releaseImpact", failures),
     failures,
+    options,
   );
 }
 
-function validateReviewedBinding(manifest, binding, failures) {
+function validateReviewedBinding(manifest, binding, failures, options) {
   for (const [key, expected] of reviewedBindingChecks(manifest)) {
     if (!bindingValuesMatch(binding[key], expected))
       push(failures, `releaseImpact.reviewedBinding.${key}`, "does not match manifest");
+  }
+  validateWindowsGenerationCopies(
+    manifest,
+    binding,
+    "releaseImpact.reviewedBinding",
+    failures,
+    options,
+  );
+  validatePublishedSetupAssetBinding(manifest, binding, failures, options);
+}
+
+function validatePublishedSetupAssetBinding(manifest, binding, failures, options) {
+  if (!new Set(["published", "published-release-trust"]).has(options.context)) return;
+  const path = "releaseImpact.reviewedBinding.setupAsset";
+  if (manifest.artifact?.platformTarget !== "windows-x64") {
+    if (binding.setupAsset !== undefined) push(failures, path, "is supported only for Windows x64");
+    if (options.apiIdentity?.setupAsset !== undefined) {
+      push(failures, "validation.apiIdentity.setupAsset", "is supported only for Windows x64");
+    }
+    return;
+  }
+  const setupAsset = recordAt(binding, "setupAsset", "releaseImpact.reviewedBinding", failures);
+  exactKeysAt(setupAsset, ["assetId", "assetName", "sha256", "sizeBytes"], path, failures);
+  positiveNumberAt(setupAsset, "assetId", path, failures);
+  literalAt(setupAsset, "assetName", WINDOWS_PORTABLE_SETUP_ASSET_NAME, path, failures);
+  digestAt(setupAsset, "sha256", path, failures, options);
+  positiveNumberAt(setupAsset, "sizeBytes", path, failures);
+  const apiSetupAsset = options.apiIdentity?.setupAsset;
+  if (!isRecord(apiSetupAsset)) {
+    push(
+      failures,
+      "validation.apiIdentity.setupAsset",
+      "must be a verified GitHub setup asset snapshot",
+    );
+  } else if (!bindingValuesMatch(setupAsset, apiSetupAsset)) {
+    push(failures, path, "does not match the verified GitHub setup asset snapshot");
   }
 }
 
@@ -1706,7 +2051,7 @@ function validateUpdateEligibility(manifest, failures, options) {
   if (!booleanAt(update, "eligibleAfterSetupOnly", "updateEligibility", failures))
     push(failures, "updateEligibility.eligibleAfterSetupOnly", "must be true");
   validateUpdatePredicates(manifest, update, failures, options);
-  validateManualOnlyWhen(update, failures);
+  validateManualOnlyWhen(update, failures, options);
 }
 
 function validateUpdatePredicates(manifest, update, failures, options) {
@@ -1738,15 +2083,23 @@ function validateUpdatePredicates(manifest, update, failures, options) {
   }
 }
 
-function validateManualOnlyWhen(update, failures) {
+function validateManualOnlyWhen(update, failures, options) {
   if (!Array.isArray(update.manualOnlyWhen) || update.manualOnlyWhen.length === 0) {
     push(failures, "updateEligibility.manualOnlyWhen", "must list manual-only blockers");
   } else if (
     update.manualOnlyWhen.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
     push(failures, "updateEligibility.manualOnlyWhen", "must contain non-empty strings");
-  } else if (!update.manualOnlyWhen.includes("signature-or-notarization-cannot-be-verified")) {
-    push(failures, "updateEligibility.manualOnlyWhen", "must include signature blocker");
+  } else {
+    const predicates = update.requiredPredicates;
+    const releaseTrustRequired = isRecord(predicates) && predicates.releaseTrustRequired === true;
+    const blocker =
+      options.context === "published-release-trust" || releaseTrustRequired
+        ? "release-trust-cannot-be-verified"
+        : "signature-or-notarization-cannot-be-verified";
+    if (!update.manualOnlyWhen.includes(blocker)) {
+      push(failures, "updateEligibility.manualOnlyWhen", `must include ${blocker}`);
+    }
   }
 }
 
@@ -1774,9 +2127,9 @@ function securityVerifiedForTarget(target, security) {
   const checks = security?.verificationChecks;
   if (!isRecord(checks)) return false;
   if (security?.signatureVerified !== true) return false;
-  return target.nodePlatform === "win32"
-    ? windowsSignatureVerified(checks)
-    : macosSignatureVerified(security, checks);
+  if (target.nodePlatform === "win32") return windowsSignatureVerified(checks);
+  if (target.nodePlatform === "linux") return checks.provenanceVerified === true;
+  return macosSignatureVerified(security, checks);
 }
 
 function verificationTargetMatches(security, target) {
@@ -1886,7 +2239,7 @@ function normalizedValidationOptions(options) {
 }
 
 function validateApiIdentity(options, failures) {
-  if (options.context !== "published") return;
+  if (!new Set(["published", "published-release-trust"]).has(options.context)) return;
   if (
     !isRecord(options.apiIdentity) ||
     !Number.isSafeInteger(options.apiIdentity.releaseId) ||
@@ -1906,8 +2259,13 @@ export function validatePortableManifest(manifest, options = {}) {
     return ["validation.context: is unsupported"];
   }
   validateApiIdentity(normalized, failures);
-  if (manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION)
-    push(failures, "schemaVersion", "must be 1");
+  const windowsSchema = manifest.artifact?.platformTarget === "windows-x64";
+  if (
+    manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION &&
+    !(windowsSchema && manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION)
+  ) {
+    push(failures, "schemaVersion", windowsSchema ? "must be 1 or 2" : "must be 1");
+  }
   validateProduct(manifest, failures);
   validateRelease(manifest, failures, normalized);
   validateArtifact(manifest, failures, normalized);
@@ -1916,6 +2274,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateRuntimeActivation(manifest, failures, normalized);
   validateRuntimeAttestation(manifest, failures, normalized);
   validateRuntimeQualification(manifest, failures, normalized);
+  validateWindowsGeneration(manifest, failures, normalized);
   validateSidecarRuntimes(manifest, failures, normalized);
   validateNativeHelpers(manifest, failures, normalized);
   validateNativeAddons(manifest, failures, normalized);
@@ -1925,7 +2284,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateStateExclusion(manifest, failures);
   validateSecurity(manifest, failures, normalized);
   validateEvidence(manifest, failures);
-  validateReleaseImpact(manifest, failures);
+  validateReleaseImpact(manifest, failures, normalized);
   validateUpdateEligibility(manifest, failures, normalized);
   scanForbidden(manifest, "manifest", failures);
   return failures;
@@ -1939,6 +2298,36 @@ export function validatePortableStagingManifest(manifest, options = {}) {
   });
 }
 
+/**
+ * The unsigned, explicitly declared evaluation lane (ADR-0163 D9). Every integrity predicate the
+ * staging and production contexts apply still applies here; only the platform signature,
+ * notarization and qualification gates are waived, and the lane must ASSERT they are declared
+ * negative rather than skip them.
+ */
+export function validatePortableEvaluationManifest(manifest, options = {}) {
+  return validatePortableManifest(manifest, {
+    ...options,
+    context: "evaluation",
+    requireNativeHelpers: true,
+  });
+}
+
+/** A stable-tag candidate is unsigned only until the protected publisher binds and signs it. */
+export function validatePortableReleaseTrustCandidateManifest(manifest, options = {}) {
+  const failures = validatePortableEvaluationManifest(manifest, options);
+  if (manifest?.updateEligibility?.requiredPredicates?.releaseTrustRequired !== true) {
+    push(
+      failures,
+      "updateEligibility.requiredPredicates.releaseTrustRequired",
+      "must be true for a stable release-trust candidate",
+    );
+  }
+  if (manifest?.releaseTrust !== undefined) {
+    push(failures, "releaseTrust", "must be absent before the protected publisher signs it");
+  }
+  return failures;
+}
+
 export function validatePortableCandidateManifest(manifest, options = {}) {
   return validatePortableManifest(manifest, {
     ...options,
@@ -1948,12 +2337,30 @@ export function validatePortableCandidateManifest(manifest, options = {}) {
 }
 
 export function validatePortablePublishedManifest(manifest, apiIdentity, options = {}) {
+  const context =
+    manifest?.security?.verificationPolicy === "evaluation" && isRecord(manifest?.releaseTrust)
+      ? "published-release-trust"
+      : "published";
   return validatePortableManifest(manifest, {
     ...options,
     apiIdentity,
-    context: "published",
+    context,
     requireNativeHelpers: true,
   });
+}
+
+/**
+ * Selects the lifecycle validator a staged manifest declares for itself. Callers that used to ask
+ * a binary "production or staging?" question now ask the manifest which lane it carries, so a
+ * third lane cannot be silently validated against a fourth one's rules. An undeclared or
+ * unsupported policy fails closed with an explicit failure rather than defaulting to a lane.
+ */
+export function portableManifestValidationFailuresForDeclaredLane(manifest) {
+  const policy = manifest?.security?.verificationPolicy;
+  if (policy === "production") return validatePortableCandidateManifest(manifest);
+  if (policy === "staging") return validatePortableStagingManifest(manifest);
+  if (policy === "evaluation") return validatePortableEvaluationManifest(manifest);
+  return [`security.verificationPolicy: declares no stageable lifecycle lane (${String(policy)})`];
 }
 
 export function findPortableMetadataRedactionFailures(value, path = "metadata") {
@@ -2100,13 +2507,9 @@ export function hashDirectoryTree(root) {
   const hash = createHash("sha256");
   for (const file of listFiles(root)) {
     const rel = relative(root, file).split(sep).join("/");
-    hash.update(`${rel}\0${sha256Buffer(readFileSync(file))}\0`);
+    hash.update(`${rel}\0${sha256(readFileSync(file))}\0`);
   }
   return hash.digest("hex");
-}
-
-function sha256Buffer(buffer) {
-  return createHash("sha256").update(buffer).digest("hex");
 }
 
 function listFiles(root) {

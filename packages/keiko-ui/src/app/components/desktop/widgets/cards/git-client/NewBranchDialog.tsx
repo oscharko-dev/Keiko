@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { GitBranchListEntry } from "@/lib/api";
 import KeikoSelect from "../../../KeikoSelect";
 import { Icons } from "../../../Icons";
+import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
 import type { GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
 import {
@@ -48,48 +50,38 @@ export function NewBranchDialog({
     branches.find((branch) => branch.name === currentBranch)?.name ?? branches[0]?.name ?? "";
   const [branchName, setBranchName] = useState("");
   const [baseBranchName, setBaseBranchName] = useState(initialBase);
-  const formRef = useRef<HTMLFormElement | null>(null);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: inputRef });
 
   const trimmed = branchName.trim();
   const canSubmit = trimmed.length > 0 && baseBranchName.length > 0 && !busy;
 
   const dialog = (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal dialog needs Escape/Tab key handling.
-    <div
-      role="dialog"
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the native dialog owns Escape handling while the shared hook owns Tab containment.
+    <dialog
+      open
+      ref={dialogRef}
       aria-modal="true"
       aria-label="New branch"
       tabIndex={-1}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           onClose();
-          return;
-        }
-        if (event.key !== "Tab") return;
-        const focusables = Array.from(
-          formRef.current?.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), input:not([disabled]), [role="combobox"]:not([aria-disabled="true"])',
-          ) ?? [],
-        );
-        if (focusables.length === 0) return;
-        const first = focusables[0]!;
-        const last = focusables.at(-1)!;
-        if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
         }
       }}
       style={{
         position: "fixed",
         inset: 0,
+        width: "auto",
+        maxWidth: "none",
+        height: "auto",
+        maxHeight: "none",
+        margin: 0,
+        padding: 0,
+        border: 0,
         zIndex: 100,
         display: "grid",
         placeItems: "center",
@@ -97,7 +89,6 @@ export function NewBranchDialog({
       }}
     >
       <form
-        ref={formRef}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -105,9 +96,9 @@ export function NewBranchDialog({
           width: "min(420px, calc(100vw - 48px))",
           padding: "var(--space-5)",
           border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-card)",
+          borderRadius: "var(--radius-lg)",
           background: "var(--surface-primary)",
-          boxShadow: "var(--shadow-popover)",
+          boxShadow: "var(--shadow-pop)",
         }}
         onSubmit={(event) => {
           event.preventDefault();
@@ -185,7 +176,7 @@ export function NewBranchDialog({
           </button>
         </div>
       </form>
-    </div>
+    </dialog>
   );
 
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);

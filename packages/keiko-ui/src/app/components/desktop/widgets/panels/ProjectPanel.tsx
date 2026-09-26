@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
@@ -9,6 +9,32 @@ import { useChatSessionActions, useChatSessionCatalog } from "../../context/Chat
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const ChevronRIcon = Icons.chevronR;
 const FolderIcon = Icons.folder;
+
+// KEIKO-0262 layout: styled inline to avoid touching globals.css (SHA-pinned visual-proof gate,
+// #1300). Preserves the previous single-row project-header appearance now that the caret is a
+// physically separate button.
+const PROJ_HEAD_ROW_STYLE: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  width: "100%",
+  gap: "2px",
+};
+// WCAG 2.5.8 Target Size (Minimum): the caret's pointer target is 24×24 CSS pixels; the
+// visible chevron stays at 13px and is centered by placeItems (Codex on PR #3089: 3766009390).
+const PROJ_CARET_BTN_STYLE: CSSProperties = {
+  display: "grid",
+  placeItems: "center",
+  flexShrink: 0,
+  width: "24px",
+  height: "24px",
+  padding: 0,
+  margin: 0,
+  border: 0,
+  background: "transparent",
+  color: "inherit",
+  cursor: "pointer",
+};
+const PROJECT_CHAT_GROUP_STYLE: CSSProperties = { border: 0, margin: 0, minWidth: 0 };
 
 interface ProjectRowProps {
   readonly project: ProjectWithAvailability;
@@ -63,11 +89,19 @@ function focusParentTreeItem({ items, index }: TreeKeyContext): void {
   }
 }
 
+// KEIKO-0262: expansion is a distinct capability from activation. ArrowRight/ArrowLeft dispatch
+// to the sibling caret button (mirroring FilesWidget's `.tr-caret-btn` pattern), so the head
+// button's own onClick — which triggers openProject and discards the composer draft — never fires
+// on a pure keyboard expand/collapse.
+function caretButtonFor(btn: HTMLButtonElement): HTMLButtonElement | null {
+  return btn.closest(".proj")?.querySelector<HTMLButtonElement>("button.proj-caret-btn") ?? null;
+}
+
 function expandOrFocusNextTreeItem(context: TreeKeyContext): void {
   // Expand if collapsed, else move to first child.
   const { btn } = context;
   if (btn.getAttribute("aria-expanded") === "false") {
-    btn.click();
+    caretButtonFor(btn)?.click();
   } else if (btn.getAttribute("aria-expanded") === "true") {
     focusNextTreeItem(context);
   }
@@ -76,7 +110,7 @@ function expandOrFocusNextTreeItem(context: TreeKeyContext): void {
 function collapseOrFocusParentTreeItem(context: TreeKeyContext): void {
   // Collapse if expanded; otherwise move to parent (lower aria-level).
   if (context.btn.getAttribute("aria-expanded") === "true") {
-    context.btn.click();
+    caretButtonFor(context.btn)?.click();
   } else {
     focusParentTreeItem(context);
   }
@@ -110,50 +144,95 @@ interface ProjectHeadButtonProps {
   readonly expanded: boolean;
   readonly availabilityLabel: string;
   readonly treeRef: React.RefObject<HTMLDivElement | null>;
-  readonly onToggle: () => void;
+  readonly onActivate: () => void;
+  readonly onToggleExpanded: () => void;
 }
 
-// Extracted from ProjectRow (#2723 / CodeRabbit): keeps the owning row under the 50-line limit.
+function ProjectCaretButton({
+  project,
+  expanded,
+  onToggleExpanded,
+}: {
+  readonly project: ProjectWithAvailability;
+  readonly expanded: boolean;
+  readonly onToggleExpanded: () => void;
+}): ReactNode {
+  return (
+    <button
+      className="proj-caret-btn"
+      type="button"
+      tabIndex={-1}
+      aria-hidden="true"
+      aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name}`}
+      style={PROJ_CARET_BTN_STYLE}
+      // Codex on PR #3089: Chromium focuses <button> on click even at tabIndex={-1}, and the
+      // caret is aria-hidden and not a role="treeitem", so `handleTreeKey` cannot find a
+      // treeitem from the event target and Arrow/Home/End stops working until focus moves. Prevent
+      // the caret from taking focus on click.
+      onMouseDown={(event) => event.preventDefault()}
+      // Codex 3765267604: when focus is on a chat child (aria-level 2) of THIS expanded project
+      // and the user collapses via caret click, `onToggleExpanded` unmounts the child and focus
+      // falls out of the tree entirely, breaking subsequent Arrow/Home/End navigation. Move focus
+      // to the sibling head treeitem before collapsing so a focused element always survives.
+      onClick={(event) => {
+        const row = event.currentTarget.closest<HTMLDivElement>(".proj-head-row");
+        row?.querySelector<HTMLButtonElement>("button.proj-head")?.focus();
+        onToggleExpanded();
+      }}
+    >
+      <span className="proj-caret" data-open={expanded} aria-hidden="true">
+        <ChevronRIcon size={13} />
+      </span>
+    </button>
+  );
+}
+
+// KEIKO-0262: the head-button click activates (opens the project), the sibling caret button
+// toggles expansion only. ArrowRight/ArrowLeft on the treeitem dispatches to the caret, so
+// keyboard-only expansion never fires openProject (which discards the composer draft).
 function ProjectHeadButton({
   project,
   isActiveProject,
   expanded,
   availabilityLabel,
   treeRef,
-  onToggle,
+  onActivate,
+  onToggleExpanded,
 }: ProjectHeadButtonProps): ReactNode {
+  const clearRovingTabindex = (): void => {
+    if (treeRef.current === null) return;
+    getTreeItems(treeRef.current).forEach((item) => {
+      item.tabIndex = -1;
+    });
+  };
   return (
-    <button
-      className="proj-head"
-      type="button"
-      role="treeitem"
-      aria-level={1}
-      aria-expanded={expanded}
-      aria-selected={isActiveProject}
-      data-active={isActiveProject ? "true" : "false"}
-      aria-current={isActiveProject ? "true" : undefined}
-      aria-label={`${project.name} (${availabilityLabel})`}
-      // Roving tabindex: the first item (or active item) is reachable via Tab;
-      // all others are skipped and reached via arrow keys only.
-      tabIndex={isActiveProject ? 0 : -1}
-      onClick={() => {
-        onToggle();
-        // After activation re-focus so arrow nav keeps the right item at tabIndex 0.
-        if (treeRef.current !== null) {
-          const items = getTreeItems(treeRef.current);
-          items.forEach((item) => {
-            item.tabIndex = -1;
-          });
-        }
-      }}
-    >
-      <span className="proj-caret" data-open={expanded} aria-hidden="true">
-        <ChevronRIcon size={13} />
-      </span>
-      <FolderIcon size={15} aria-hidden="true" />
-      <span className="proj-name">{project.name}</span>
-      <span className="chat-time">{availabilityLabel}</span>
-    </button>
+    <div className="proj-head-row" style={PROJ_HEAD_ROW_STYLE}>
+      <ProjectCaretButton
+        project={project}
+        expanded={expanded}
+        onToggleExpanded={onToggleExpanded}
+      />
+      <button
+        className="proj-head"
+        type="button"
+        role="treeitem"
+        aria-level={1}
+        aria-expanded={expanded}
+        aria-selected={isActiveProject}
+        data-active={isActiveProject ? "true" : "false"}
+        aria-current={isActiveProject ? "true" : undefined}
+        aria-label={`${project.name} (${availabilityLabel})`}
+        tabIndex={isActiveProject ? 0 : -1}
+        onClick={() => {
+          onActivate();
+          clearRovingTabindex();
+        }}
+      >
+        <FolderIcon size={15} aria-hidden="true" />
+        <span className="proj-name">{project.name}</span>
+        <span className="chat-time">{availabilityLabel}</span>
+      </button>
+    </div>
   );
 }
 
@@ -174,8 +253,7 @@ function ProjectChatList({
   onChat,
 }: ProjectChatListProps): ReactNode {
   return (
-    // role="group" groups child treeitems under their parent (APG tree pattern).
-    <div className="proj-chats" role="group" aria-label={project.name}>
+    <fieldset className="proj-chats" aria-label={project.name} style={PROJECT_CHAT_GROUP_STYLE}>
       {isActiveProject && chats.length === 0 && <div className="proj-empty">{"No chats"}</div>}
       {isActiveProject &&
         chats.length > 0 &&
@@ -200,7 +278,7 @@ function ProjectChatList({
           </button>
         ))}
       {!isActiveProject && <div className="proj-empty">{"Select project to load chats"}</div>}
-    </div>
+    </fieldset>
   );
 }
 
@@ -229,10 +307,11 @@ function ProjectRow({
         expanded={expanded}
         availabilityLabel={availabilityLabel}
         treeRef={treeRef}
-        onToggle={() => {
-          setExpanded((current) => !current);
+        onActivate={() => {
+          setExpanded(true);
           onProject(project);
         }}
+        onToggleExpanded={() => setExpanded((current) => !current)}
       />
       {expanded && (
         <ProjectChatList
@@ -247,10 +326,31 @@ function ProjectRow({
   );
 }
 
-export function ProjectPanel(): ReactNode {
+function useProjectPanelChatSelection(
+  activeChatId: string | undefined,
+  openChatWindow: (chat: Chat) => void,
+): readonly [string | undefined, (chat: Chat) => void] {
+  const [selectedChatId, setSelectedChatId] = useState(activeChatId);
+  useEffect(() => setSelectedChatId(activeChatId), [activeChatId]);
+  const selectChat = (chat: Chat): void => {
+    setSelectedChatId(chat.id);
+    openChatWindow(chat);
+  };
+  return [selectedChatId, selectChat];
+}
+
+export function ProjectPanel({
+  openChatWindow,
+}: {
+  readonly openChatWindow: (chat: Chat) => void;
+}): ReactNode {
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
   const treeRef = useRef<HTMLDivElement | null>(null);
+  const [selectedChatId, selectChat] = useProjectPanelChatSelection(
+    session.activeChat?.id,
+    openChatWindow,
+  );
 
   return (
     <div className="tw-scroll">
@@ -279,14 +379,12 @@ export function ProjectPanel(): ReactNode {
               project={project}
               activeProjectPath={session.activeProject?.path}
               chats={session.activeProject?.path === project.path ? session.chats : []}
-              activeChatId={session.activeChat?.id}
+              activeChatId={selectedChatId}
               treeRef={treeRef}
               onProject={(nextProject) => {
                 void actions.openProject(nextProject);
               }}
-              onChat={(chat) => {
-                void actions.openChat(chat);
-              }}
+              onChat={selectChat}
             />
           ))}
         </div>

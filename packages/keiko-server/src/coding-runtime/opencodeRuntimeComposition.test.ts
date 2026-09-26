@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 import { createHash } from "node:crypto";
 import {
   accessSync,
@@ -10,15 +11,36 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { request as httpRequest, type ClientRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
+
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createRuntimeProcessSupervisor,
@@ -27,195 +49,55 @@ import {
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
+import type { OpenCodeGovernedSinkReceipt } from "./opencodeRuntimeAdapter.js";
+import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  projectOpenCodeProtocolSurface,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
+import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
+import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
+import { openCodeToolClientTimeoutMs } from "./opencodeRuntimeAdapter.js";
 
 const dirs: string[] = [];
 const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
+// ADR-0043 D11-D14 (#3390): the fixed test double of the ONE attested loopback origin the tool
+// facade rides -- the same origin `productionOpenCodeActivation.ts` derives `gatewayUrl` and
+// `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
+const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "1.17.17";
+const OPENCODE_VERSION = "2.0.10";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
-const OPENAPI = {
-  openapi: "3.1.0",
-  paths: {
-    "/global/health": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: {
-          "200": { $ref: "#/components/responses/Health" },
-          "401": { $ref: "#/components/responses/Unauthorized" },
-        },
-      },
-    },
-    "/global/event": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/EventStream" } },
-      },
-    },
-    "/doc": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/sync/history": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/History" } },
-      },
-    },
-    "/session": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Sessions" } },
-      },
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Session" } },
-      },
-    },
-    "/session/status": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/SessionStatus" } },
-      },
-    },
-    "/session/{sessionID}/prompt_async": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/session/{sessionID}/abort": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reject": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-  },
-  components: {
-    securitySchemes: { basicAuth: { type: "http", scheme: "basic" } },
-    responses: {
-      Health: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Health" } } },
-      },
-      Unauthorized: { description: "unauthorized" },
-      EventStream: { content: { "text/event-stream": { schema: { type: "string" } } } },
-      History: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/History" } } },
-      },
-      Sessions: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/SessionList" } } },
-      },
-      Session: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Session" } } },
-      },
-      SessionStatus: {
-        content: {
-          "application/json": { schema: { $ref: "#/components/schemas/SessionStatusMap" } },
-        },
-      },
-    },
-    schemas: {
-      Health: {
-        type: "object",
-        required: ["healthy", "version"],
-        properties: { healthy: { type: "boolean" }, version: { type: "string" } },
-      },
-      History: { type: "array", items: { $ref: "#/components/schemas/Event" } },
-      Event: {
-        type: "object",
-        required: ["id", "aggregate_id", "seq", "type", "data"],
-        properties: {
-          id: { type: "string" },
-          aggregate_id: { type: "string" },
-          seq: { type: "integer" },
-          type: { type: "string" },
-          data: { type: "object" },
-        },
-      },
-      Session: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      SessionList: {
-        type: "array",
-        items: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      },
-      SessionStatusMap: {
-        type: "object",
-        additionalProperties: { $ref: "#/components/schemas/SessionStatus" },
-      },
-      SessionStatus: {
-        oneOf: [
-          { type: "object", required: ["type"], properties: { type: { const: "idle" } } },
-          { type: "object", required: ["type"], properties: { type: { const: "busy" } } },
-          {
-            type: "object",
-            required: ["type", "attempt", "message", "next"],
-            properties: {
-              type: { const: "retry" },
-              attempt: { type: "integer" },
-              message: { type: "string" },
-              next: { type: "number" },
-            },
-          },
-        ],
-      },
-    },
-  },
-} as const;
-const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeProtocolSurface(OPENAPI).digest;
+const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
+// Captured structural projection from OpenCode 2.0.10's actual OpenAPI document.
+const OPENAPI: unknown = JSON.parse(
+  readFileSync(
+    new URL("./opencodeProtocolSurface.opencode-2.0.10.fixture.json", import.meta.url),
+    "utf8",
+  ),
+);
+const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(OPENAPI).digest;
 
 interface OpenCodeRuntimeComposition {
-  readonly manager: {
-    start(request: Record<string, unknown>): unknown;
-    stop(runId: string): Promise<unknown>;
-    health(): unknown;
-  };
+  readonly manager: CodingRuntimeManager;
   readonly toolBridge: {
     readonly url: string;
+    readonly requestDeadlineMs: number;
     handle(input: {
       readonly method: "POST";
       readonly headers: Headers;
       readonly body: string;
+      readonly signal?: AbortSignal;
     }): Promise<{ readonly status: number; readonly body: string }>;
   };
   readonly runPort: {
-    readonly submitTask: (runId: string, text: string) => Promise<boolean>;
+    readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
     readonly abortTask: (runId: string) => Promise<boolean>;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
@@ -244,17 +126,27 @@ interface TestQuestionRequest {
 }
 
 interface OpenCodeRuntimeCompositionModule {
+  readonly toolBridgeRequestDeadlineMs: (
+    configuredDeadlineMs: number,
+    body: string | undefined,
+  ) => number;
   createOpenCodeRuntimeComposition(input: {
+    readonly activityLog?: ServerLogSink;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
         readonly protocolHandshakeDigest: string;
-        readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1";
+        readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2";
       };
       readonly resourceRoot: string;
       readonly target: "macos-arm64";
     };
     readonly stateBaseRoot: string;
+    readonly contextGeometry: {
+      readonly contextWindowTokens: number;
+      readonly maxInputTokens: number;
+      readonly maxOutputTokens: number;
+    };
     readonly capabilities: {
       readonly modelGatewayCapability: string;
       readonly toolFacadeCapability: string;
@@ -264,17 +156,21 @@ interface OpenCodeRuntimeCompositionModule {
       readonly requestDeadlineMs: number;
       readonly maxInFlight: number;
     };
+    // ADR-0043 D11-D14 (#3390): mirrors `OpenCodeRuntimeCompositionInput.toolFacadeOrigin` --
+    // the SAME single attested loopback origin the model gateway rides, never a second listener.
+    readonly toolFacadeOrigin: string;
     readonly toolFacade: CodingToolFacade;
     readonly governedEventSink: {
       readonly execute: (
         identityKey: string,
-        event: Readonly<Record<string, unknown>>,
-      ) => Promise<"applied" | "duplicate">;
+        event: OpenCodeReconciliationEvent,
+      ) => Promise<OpenCodeGovernedSinkReceipt>;
     };
     readonly safeActivity?: {
       readonly arm: () => void;
       readonly clear: () => void;
-      readonly ingest: (signal: unknown) => boolean;
+      readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
+      readonly captureMessages?: (messages: readonly CodingHistoryMessage[]) => boolean;
       readonly recordDrops: (count: number) => void;
       readonly settleTool: (input: {
         readonly actionId: string;
@@ -282,10 +178,12 @@ interface OpenCodeRuntimeCompositionModule {
         readonly occurredAt: string;
       }) => void;
     };
-    readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
+    readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
+    readonly onQuestionObserved?: (identity: string) => void;
     readonly gatewayReadiness: {
-      readonly waitForObservedRequest: () => Promise<boolean>;
-      readonly clear: () => void;
+      readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+      readonly verifyObserved: (runId: string) => void;
+      readonly clear: (runId: string, preserveVerification?: boolean) => void;
     };
     readonly fetch: typeof globalThis.fetch;
     readonly supervisor: ReturnType<typeof createRuntimeProcessSupervisor>;
@@ -301,9 +199,50 @@ interface OpenCodeRuntimeCompositionModule {
   }): OpenCodeRuntimeComposition;
 }
 
-async function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
+let loadedCompositionModule: OpenCodeRuntimeCompositionModule | undefined;
+
+async function loadCompositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
   const moduleName = "./opencodeRuntimeComposition.js";
   return (await import(moduleName)) as OpenCodeRuntimeCompositionModule;
+}
+
+function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
+  if (loadedCompositionModule === undefined) throw new Error("Composition module was not loaded");
+  return Promise.resolve(loadedCompositionModule);
+}
+
+async function withDeterministicReadinessTimers<T>(operation: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const pending = operation();
+    await vi.advanceTimersByTimeAsync(50);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+function persistedDiagnostics(): { sink: ServerDiagnosticSink; read: () => string } {
+  const stateDir = tempDir("keiko-opencode-diagnostics-");
+  vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+  return { sink: defaultServerDiagnosticSink, read: () => readPersistedActivityLog(stateDir) };
+}
+
+function expectPersistedDiagnostic(raw: string, source: string): Record<string, unknown> {
+  const lines = persistedActivityLogLines(raw, "server.diagnostic.failure").filter(
+    (line) => (JSON.parse(line) as { source?: string }).source === source,
+  );
+  expect(lines).toHaveLength(1);
+  const line = lines[0];
+  if (line === undefined) throw new Error("Expected the persisted diagnostic");
+  const record = expectActivityLogProof("server.diagnostic.failure.activity-log-line", line);
+  expect(record).toMatchObject({
+    correlationId: FIXTURE_RUN_ID,
+    source,
+    completeness: "complete",
+    loss: "none",
+  });
+  return record;
 }
 
 function tempDir(prefix: string): string {
@@ -318,12 +257,22 @@ function requestPath(url: URL | RequestInfo): string {
   return new URL(url.url).pathname;
 }
 
+function v2Json(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function v2Envelope(value: unknown): Response {
+  return v2Json({ data: value });
+}
+
 function portableFixture(resourceRoot: string): {
   readonly executablePath: string;
   readonly verification: PortableSidecarRuntimeVerification & {
     readonly protocolSchemaRawSha256: string;
     readonly protocolHandshakeDigest: string;
-    readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1";
+    readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2";
   };
 } {
   const payloadRootPath = "runtime/sidecars/opencode-compatible";
@@ -385,49 +334,9 @@ function portableFixture(resourceRoot: string): {
       },
       protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
       protocolHandshakeDigest: PROTOCOL_HANDSHAKE_DIGEST,
-      protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1",
+      protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2",
     },
   };
-}
-
-interface HttpResult {
-  readonly status: number;
-  readonly body: Buffer;
-}
-
-function openHttpRequest(
-  url: string,
-  options: { readonly method?: string; readonly headers?: Readonly<Record<string, string>> } = {},
-): { readonly client: ClientRequest; readonly response: Promise<HttpResult> } {
-  let settle = (_result: HttpResult): void => undefined;
-  const response = new Promise<HttpResult>((resolve) => {
-    settle = resolve;
-  });
-  const client = httpRequest(
-    url,
-    { method: options.method ?? "POST", headers: options.headers, agent: false },
-    (result) => {
-      const chunks: Buffer[] = [];
-      result.on("data", (chunk: Buffer) => chunks.push(chunk));
-      result.on("end", () => {
-        settle({ status: result.statusCode ?? 0, body: Buffer.concat(chunks) });
-      });
-    },
-  );
-  // Disconnects are expected in cancellation tests; the assertion is on the facade signal.
-  client.on("error", () => {
-    settle({ status: 0, body: Buffer.alloc(0) });
-  });
-  return { client, response };
-}
-
-async function responseBeforeEof(response: Promise<HttpResult>): Promise<HttpResult | undefined> {
-  return await Promise.race([
-    response,
-    new Promise<undefined>((resolve) => {
-      setTimeout(resolve, 250);
-    }),
-  ]);
 }
 
 type FixtureSafeActivity = NonNullable<
@@ -436,7 +345,10 @@ type FixtureSafeActivity = NonNullable<
   >[0]["safeActivity"]
 >;
 
+type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
+
 interface StartBridgeControl {
+  readonly activityLog?: ServerLogSink;
   readonly startTimeoutMs?: number;
   readonly historyResponse?: Promise<Response>;
   readonly historyResponseFactory?: () => Promise<Response>;
@@ -445,17 +357,21 @@ interface StartBridgeControl {
   readonly onSseStart?: (controller: ReadableStreamDefaultController<Uint8Array>) => void;
   readonly sseFrame?: string;
   readonly historyCalls?: Readonly<Record<string, number>>[];
-  readonly governedEvents?: Readonly<Record<string, unknown>>[];
+  readonly governedEvents?: OpenCodeReconciliationEvent[];
   readonly questionObservations?: string[];
   readonly safeActivity?: FixtureSafeActivity;
   readonly diagnostics?: ServerDiagnosticSink;
-  readonly runtimeEvents?: Readonly<Record<string, unknown>>[];
+  readonly runtimeEvents?: CodingWorkbenchRuntimeEvent[];
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
+  /** The gateway route refused the readiness challenge's model request (#3603). */
+  readonly gatewayRefused?: boolean;
   readonly runControl?: {
     readonly promptBodies: string[];
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
+    readonly statusResponseForReadinessPhase?: (phase: ReadinessChallengePhase) => unknown;
     readonly questionResponses?: unknown[];
+    readonly onQuestionListFetch?: () => Promise<void> | void;
     readonly permissionResponses?: unknown[];
     readonly questionRequests?: {
       readonly method: string;
@@ -500,7 +416,7 @@ function optionalDiagnostics(control: StartBridgeControl | undefined): {
 }
 
 function optionalRuntimeEvents(control: StartBridgeControl | undefined): {
-  readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
+  readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
 } {
   const sink = control?.runtimeEvents;
   return sink === undefined
@@ -516,6 +432,12 @@ function runtimeMode(
   control: StartBridgeControl | undefined,
 ): NonNullable<StartBridgeControl["mode"]> {
   return control?.mode ?? "supervised-coding";
+}
+
+function optionalActivityLog(control: StartBridgeControl | undefined): {
+  readonly activityLog?: ServerLogSink;
+} {
+  return control?.activityLog === undefined ? {} : { activityLog: control.activityLog };
 }
 
 async function startBridgeFixture(
@@ -536,7 +458,7 @@ async function startBridgeFixture(
     backend: {
       identity: { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" },
       spawnOwnedTree: (): RuntimeProcessTree => {
-        stdout.end("opencode server listening on http://127.0.0.1:43123\n");
+        stdout.end("server listening on http://127.0.0.1:43123\n");
         return {
           treeId: "tool-bridge-tree",
           stdout,
@@ -567,135 +489,108 @@ async function startBridgeFixture(
       ),
   });
   const sseFrame = new TextEncoder().encode(
-    control?.sseFrame ??
-      'data: {"payload":{"id":"evt_server","type":"server.connected","properties":{}}}\n\n',
+    control?.sseFrame ?? 'data: {"id":"evt_server","type":"server.connected","data":{}}\n\n',
   );
-  let readinessAbortPending = false;
+  let readinessChallengePhase: ReadinessChallengePhase = "before-prompt";
   // eslint-disable-next-line complexity -- finite mock endpoint table is intentionally explicit.
   const fetch = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
     const path = requestPath(url);
-    if (path === "/global/health" && new Headers(init?.headers).get("authorization") === null)
+    if (path === "/api/info" && new Headers(init?.headers).get("authorization") === null)
       return Promise.resolve(new Response("", { status: 401 }));
-    if (path === "/global/health")
-      return Promise.resolve(
-        new Response(JSON.stringify({ healthy: true, version: OPENCODE_VERSION }), {
-          headers: { "content-type": "application/json" },
-        }),
+    if (path === "/api/info") return Promise.resolve(v2Json({ version: OPENCODE_VERSION }));
+    if (path === "/openapi.json") return Promise.resolve(v2Json(OPENAPI));
+    if (path === "/api/event") {
+      let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let cancelled = false;
+      const onCancel = (): void => {
+        if (cancelled) return;
+        cancelled = true;
+        control?.onSseCancel?.();
+      };
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          onCancel();
+          try {
+            controllerRef?.close();
+          } catch {
+            // The V2 stream may already have ended before the test aborts its fetch.
+          }
+        },
+        { once: true },
       );
-    if (path === "/doc")
-      return Promise.resolve(
-        new Response(JSON.stringify(OPENAPI), { headers: { "content-type": "application/json" } }),
-      );
-    if (path === "/global/event")
       return Promise.resolve(
         new Response(
           new ReadableStream<Uint8Array>({
             start(controller): void {
+              controllerRef = controller;
               control?.onSseStart?.(controller);
               controller.enqueue(sseFrame);
             },
             cancel(): void {
-              control?.onSseCancel?.();
+              onCancel();
             },
           }),
           { headers: { "content-type": "text/event-stream" } },
         ),
       );
-    if (path === "/sync/history") {
-      if (control?.historyCalls !== undefined && typeof init?.body === "string") {
-        control.historyCalls.push(JSON.parse(init.body) as Readonly<Record<string, number>>);
-      }
-      if (control?.historyResponseFactory !== undefined) {
-        return control.historyResponseFactory();
-      }
-      return (
-        control?.historyResponse ??
-        Promise.resolve(
-          new Response(
-            JSON.stringify([
-              {
-                id: "evt_created",
-                aggregate_id: "ses_tool",
-                seq: 0,
-                type: "session.created.1",
-                data: { sessionID: "ses_tool", info: { id: "ses_tool", title: "private" } },
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
-          ),
-        )
-      );
     }
-    if (path.endsWith("/prompt_async")) {
+    if (path === "/api/session/ses_tool/message") {
+      control?.historyCalls?.push({});
+      if (control?.historyResponseFactory !== undefined) return control.historyResponseFactory();
+      return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
+    }
+    if (path.endsWith("/prompt")) {
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
-        readinessAbortPending = true;
+        readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string") {
         control?.runControl?.promptBodies.push(init.body);
       }
-      return Promise.resolve(new Response(null, { status: 204 }));
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path.endsWith("/abort")) {
-      if (readinessAbortPending) readinessAbortPending = false;
-      else control?.runControl?.abortSessions.push(path.split("/")[2] ?? "");
-      return Promise.resolve(
-        new Response("true", { headers: { "content-type": "application/json" } }),
-      );
+    if (path.endsWith("/interrupt")) {
+      if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
+      else control?.runControl?.abortSessions.push(path.split("/")[3] ?? "");
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/session/status") {
+    if (path === "/api/session/active") {
       const statuses = control?.runControl?.statusResponses;
-      const value = statuses?.length === 1 ? statuses[0] : statuses?.shift();
-      return Promise.resolve(
-        new Response(JSON.stringify(value ?? {}), {
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      const value =
+        control?.runControl?.statusResponseForReadinessPhase?.(readinessChallengePhase) ??
+        (statuses?.length === 1 ? statuses[0] : statuses?.shift());
+      return Promise.resolve(v2Envelope(value ?? {}));
     }
-    if (path === "/question") {
+    if (path === "/api/form") {
       const responses = control?.runControl?.questionResponses;
       const value = responses?.length === 1 ? responses[0] : responses?.shift();
-      return Promise.resolve(
-        new Response(JSON.stringify(value ?? []), {
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      const respond = (): Response => v2Envelope(value ?? []);
+      const raced = control?.runControl?.onQuestionListFetch?.();
+      return raced instanceof Promise ? raced.then(respond) : Promise.resolve(respond());
     }
-    if (path.startsWith("/question/")) {
+    if (path.includes("/form/")) {
       control?.runControl?.questionRequests?.push({
         method: init?.method ?? "GET",
         path,
         ...(typeof init?.body === "string" ? { body: init.body } : {}),
       });
-      return Promise.resolve(
-        new Response("true", { headers: { "content-type": "application/json" } }),
-      );
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/permission") {
+    if (path === "/api/permission/request") {
       const responses = control?.runControl?.permissionResponses;
       const value = responses?.length === 1 ? responses[0] : responses?.shift();
-      return Promise.resolve(
-        new Response(JSON.stringify(value ?? []), {
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      return Promise.resolve(v2Envelope(value ?? []));
     }
-    if (path.startsWith("/permission/")) {
+    if (path.includes("/permission/")) {
       control?.runControl?.permissionRequests?.push({
         method: init?.method ?? "GET",
         path,
         ...(typeof init?.body === "string" ? { body: init.body } : {}),
       });
-      return Promise.resolve(
-        new Response("true", { headers: { "content-type": "application/json" } }),
-      );
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/session" && init?.method === "POST")
-      return Promise.resolve(
-        new Response('{"id":"ses_tool"}', { headers: { "content-type": "application/json" } }),
-      );
-    if (path === "/session")
-      return Promise.resolve(
-        new Response('[{"id":"ses_tool"}]', { headers: { "content-type": "application/json" } }),
-      );
+    if (path === "/api/session" && init?.method === "POST")
+      return Promise.resolve(v2Envelope({ id: "ses_tool" }));
+    if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_tool" }]));
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
   const readinessAwareFacade: CodingToolFacade = {
@@ -703,15 +598,22 @@ async function startBridgeFixture(
       input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
         ? Promise.resolve({ status: "observed", evidence: [] })
         : facade.execute(input),
+    editBaseDigest: facade.editBaseDigest,
   };
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
+    contextGeometry: {
+      contextWindowTokens: 65_536,
+      maxInputTokens: 61_440,
+      maxOutputTokens: 4_096,
+    },
     capabilities: {
       modelGatewayCapability: MODEL_CAPABILITY,
       toolFacadeCapability: TOOL_CAPABILITY,
     },
     toolBridge,
+    toolFacadeOrigin: TOOL_FACADE_ORIGIN,
     toolFacade: readinessAwareFacade,
     governedEventSink: {
       execute: (_identityKey, event): Promise<"applied"> => {
@@ -722,9 +624,12 @@ async function startBridgeFixture(
     ...optionalSafeActivity(control),
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
+    ...optionalActivityLog(control),
     ...optionalRuntimeEvents(control),
     gatewayReadiness: {
-      waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
+      waitForObservedRequest: (): Promise<boolean> =>
+        Promise.resolve(control?.gatewayRefused !== true),
+      verifyObserved: (): void => undefined,
       clear: (): void => undefined,
     },
     fetch,
@@ -778,74 +683,112 @@ async function startBridgeFixture(
 }
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
-  const tokens = {
-    total: 0,
-    input: 0,
-    output: 0,
-    reasoning: 0,
-    cache: { read: 0, write: 0 },
+  return turnHistory("succeeded");
+}
+
+function changesetArguments(patch: string): Readonly<Record<string, unknown>> {
+  return {
+    changeset: {
+      patch,
+      files: [{ file: "src/App.tsx", expectedContentHash: "a".repeat(64) }],
+    },
   };
+}
+
+function editPartRow(
+  sequence: number,
+  state: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return {
+    id: `msg_edit_${String(sequence)}`,
+    type: "assistant",
+    time: { created: sequence },
+    content: [
+      {
+        type: "tool",
+        id: `call_edit_${String(sequence)}`,
+        name: "keiko_changeset_edit",
+        time: { created: sequence },
+        state,
+      },
+    ],
+  };
+}
+
+function failedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
+  return turnHistory("failed", {
+    name: "APIError",
+    data: { message: "SENTINEL_PROVIDER_DETAIL", isRetryable: false },
+  });
+}
+
+function turnHistory(
+  outcome: "succeeded" | "failed",
+  error?: Readonly<Record<string, unknown>>,
+): readonly Readonly<Record<string, unknown>>[] {
   return [
+    { id: "msg_user", type: "user", time: { created: 1 }, text: "bounded task" },
     {
-      id: "evt_created",
-      aggregate_id: "ses_tool",
-      seq: 0,
-      type: "session.created.1",
-      data: { sessionID: "ses_tool", info: { id: "ses_tool", title: "private" } },
+      id: "msg_assistant",
+      type: "assistant",
+      time: { created: 2 },
+      content: [{ type: "text", text: "done" }],
+      ...(error === undefined ? {} : { error }),
     },
-    {
-      id: "evt_user",
-      aggregate_id: "ses_tool",
-      seq: 1,
-      type: "message.updated.1",
-      data: {
-        sessionID: "ses_tool",
-        info: {
-          id: "msg_user",
-          sessionID: "ses_tool",
-          role: "user",
-          time: { created: 1 },
-          agent: "build",
-          model: { providerID: "keiko-runtime", modelID: "coding" },
-        },
-      },
-    },
-    {
-      id: "evt_assistant",
-      aggregate_id: "ses_tool",
-      seq: 2,
-      type: "message.updated.1",
-      data: {
-        sessionID: "ses_tool",
-        info: {
-          id: "msg_assistant",
-          sessionID: "ses_tool",
-          role: "assistant",
-          time: { created: 1, completed: 2 },
-          parentID: "msg_user",
-          modelID: "coding",
-          providerID: "keiko-runtime",
-          mode: "build",
-          agent: "build",
-          path: { cwd: "/private/workspace", root: "/" },
-          cost: 0,
-          tokens,
-          finish: "stop",
-        },
-      },
-    },
+    { id: "msg_idle", type: "idle", time: { created: 3 }, outcome },
   ];
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+beforeAll(async () => {
+  loadedCompositionModule = await loadCompositionModule();
+});
+
+afterAll(() => {
+  loadedCompositionModule = undefined;
+});
+
 describe("unmounted OpenCode runtime composition", () => {
+  it("shows the human task without replaying attached issue context as a user message", () => {
+    const context = "PRIVATE_ISSUE_CONTEXT";
+    const intent = "Summarize the issue";
+    const projection = createOpenCodeV2HistoryProjection();
+    const events = projection.project(
+      "ses_safe",
+      [
+        {
+          id: "msg_context",
+          type: "user",
+          time: { created: 1 },
+          text: `${context}\n\n${intent}`,
+          metadata: {
+            keikoContextPresentationV1: {
+              displayText: intent,
+              hiddenContextSha256: createHash("sha256").update(context).digest("hex"),
+            },
+          },
+        },
+      ],
+      undefined,
+    );
+    const signals = events.flatMap((event) => {
+      const signal = projection.takeSignal(event);
+      return signal === undefined ? [] : [signal];
+    });
+    expect(signals.filter((signal) => signal.kind === "text")).toEqual([
+      expect.objectContaining({ kind: "text", text: intent }),
+    ]);
+    expect(JSON.stringify(signals)).not.toContain(context);
+  });
+
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
-    expect(OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6",
+    expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
+      "726109518aba483675a0be0a0b162221c7a50a24ef2de4539cb7fd0ea929ff9b",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -874,7 +817,7 @@ describe("unmounted OpenCode runtime composition", () => {
       spawnOwnedTree: (request): RuntimeProcessTree => {
         order.push("spawn");
         launch = request;
-        stdout.end("opencode server listening on http://127.0.0.1:43123\n");
+        stdout.end("server listening on http://127.0.0.1:43123\n");
         return {
           treeId: "tree-1",
           stdout,
@@ -917,7 +860,7 @@ describe("unmounted OpenCode runtime composition", () => {
     const sseControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
     const sseCancellations: number[] = [];
     const sseFrame = new TextEncoder().encode(
-      'event: message\ndata: {"payload":{"id":"evt_server","type":"server.connected","properties":{}}}\n\n',
+      'data: {"id":"evt_server","type":"server.connected","data":{}}\n\n',
     );
     const stream = (): ReadableStream<Uint8Array> =>
       new ReadableStream({
@@ -935,68 +878,35 @@ describe("unmounted OpenCode runtime composition", () => {
     const fetchMock = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
       const path = requestPath(url);
       const authorization = new Headers(init?.headers).get("authorization");
-      if (path === "/global/health" && authorization === null)
+      if (path === "/api/info" && authorization === null)
         return Promise.resolve(new Response("", { status: 401 }));
       expect(authorization).toMatch(/^Basic /u);
-      if (path === "/global/health")
-        return Promise.resolve(
-          new Response(JSON.stringify({ healthy: true, version: OPENCODE_VERSION }), {
-            headers: { "content-type": "application/json" },
-          }),
+      if (path === "/api/info") return Promise.resolve(v2Json({ version: OPENCODE_VERSION }));
+      if (path === "/openapi.json") return Promise.resolve(v2Json(OPENAPI));
+      if (path === "/api/event") {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            order.push("sse-abort");
+            sseCancellations.push(sseControllers.length - 1);
+            sseControllers.at(-1)?.close();
+          },
+          { once: true },
         );
-      if (path === "/doc") {
-        return Promise.resolve(
-          new Response(JSON.stringify(OPENAPI), {
-            headers: { "content-type": "application/json" },
-          }),
-        );
-      }
-      if (path === "/global/event") {
-        init?.signal?.addEventListener("abort", () => order.push("sse-abort"), { once: true });
         return Promise.resolve(
           new Response(stream(), { headers: { "content-type": "text/event-stream" } }),
         );
       }
-      if (path === "/sync/history")
+      if (path === "/api/session/ses_1/message") return Promise.resolve(v2Envelope([]));
+      if (path.endsWith("/prompt")) return Promise.resolve(v2Envelope({}));
+      if (path.endsWith("/interrupt")) return Promise.resolve(v2Envelope({}));
+      if (path === "/api/session/active")
         return Promise.resolve(
-          new Response(
-            JSON.stringify([
-              {
-                id: "evt_created",
-                aggregate_id: "ses_1",
-                seq: 0,
-                type: "session.created.1",
-                data: { sessionID: "ses_1", info: { id: "ses_1", title: "private" } },
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
-          ),
+          v2Envelope(readinessStatusReads++ < 4 ? { ses_1: { type: "busy" } } : {}),
         );
-      if (path.endsWith("/prompt_async"))
-        return Promise.resolve(new Response(null, { status: 204 }));
-      if (path.endsWith("/abort"))
-        return Promise.resolve(
-          new Response("false", { headers: { "content-type": "application/json" } }),
-        );
-      if (path === "/session/status")
-        return Promise.resolve(
-          new Response(
-            JSON.stringify(readinessStatusReads++ < 4 ? { ses_1: { type: "busy" } } : {}),
-            { headers: { "content-type": "application/json" } },
-          ),
-        );
-      if (path === "/session" && init?.method === "POST")
-        return Promise.resolve(
-          new Response(JSON.stringify({ id: "ses_1" }), {
-            headers: { "content-type": "application/json" },
-          }),
-        );
-      if (path === "/session")
-        return Promise.resolve(
-          new Response(JSON.stringify([{ id: "ses_1" }]), {
-            headers: { "content-type": "application/json" },
-          }),
-        );
+      if (path === "/api/session" && init?.method === "POST")
+        return Promise.resolve(v2Envelope({ id: "ses_1" }));
+      if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_1" }]));
       return Promise.resolve(new Response("", { status: 404 }));
     });
     const fetch = fetchMock as unknown as typeof globalThis.fetch;
@@ -1014,7 +924,7 @@ describe("unmounted OpenCode runtime composition", () => {
       ) as CodingToolFacade["execute"],
     };
     const authorityOrder: string[] = [];
-    const governedEvents: Readonly<Record<string, unknown>>[] = [];
+    const governedEvents: OpenCodeReconciliationEvent[] = [];
     const authorityLifecycle = {
       revokeRuntime: (runId: string): true => {
         authorityOrder.push(`revoke:${runId}`);
@@ -1036,10 +946,16 @@ describe("unmounted OpenCode runtime composition", () => {
     const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
       portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
       stateBaseRoot,
+      contextGeometry: {
+        contextWindowTokens: 65_536,
+        maxInputTokens: 61_440,
+        maxOutputTokens: 4_096,
+      },
       capabilities: {
         modelGatewayCapability: MODEL_CAPABILITY,
         toolFacadeCapability: TOOL_CAPABILITY,
       },
+      toolFacadeOrigin: TOOL_FACADE_ORIGIN,
       toolFacade: facade,
       governedEventSink: {
         execute: (_identityKey, event): Promise<"applied"> => {
@@ -1049,6 +965,7 @@ describe("unmounted OpenCode runtime composition", () => {
       },
       gatewayReadiness: {
         waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
+        verifyObserved: (): void => undefined,
         clear: (): void => undefined,
       },
       fetch,
@@ -1056,7 +973,7 @@ describe("unmounted OpenCode runtime composition", () => {
       authorityLifecycle,
     });
 
-    await expect(
+    const startResult = await withDeterministicReadinessTimers(() =>
       Promise.resolve(
         runtime.manager.start({
           runId: "run-1",
@@ -1071,7 +988,9 @@ describe("unmounted OpenCode runtime composition", () => {
           effectiveMode: "supervised-coding",
           executablePath: executable,
           managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
-          gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+          // Same loopback origin as `TOOL_FACADE_ORIGIN` (below) -- ADR-0043 D11-D14 (#3390):
+          // production derives both from ONE loopback origin (productionOpenCodeActivation.ts).
+          gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
           modelProfileId: "coding-safe-openai-compatible",
           args: ["--caller"],
           inheritedEnvAllowlist: [],
@@ -1085,31 +1004,37 @@ describe("unmounted OpenCode runtime composition", () => {
           },
         }),
       ),
-    ).resolves.toMatchObject({ ok: true });
+    );
+    expect(startResult).toMatchObject({ ok: true });
     expect(readinessStatusReads).toBe(5);
     const sessionCreate = fetchMock.mock.calls.find(
-      ([url, init]) => requestPath(url) === "/session" && init?.method === "POST",
+      ([url, init]) => requestPath(url) === "/api/session" && init?.method === "POST",
     );
-    expect(sessionCreate?.[1]?.body).toBe(JSON.stringify({ title: FIXED_SESSION_TITLE }));
+    expect(sessionCreate?.[1]?.body).toBe(
+      JSON.stringify({ title: FIXED_SESSION_TITLE, location: { directory: workspaceRoot } }),
+    );
     expect(new Headers(sessionCreate?.[1]?.headers).get("content-type")).toBe("application/json");
+    let readinessPromptObserved = false;
     for (const [url, init] of fetchMock.mock.calls) {
-      if (requestPath(url).endsWith("/prompt_async")) {
+      if (requestPath(url).endsWith("/prompt")) {
         expect(typeof init?.body).toBe("string");
         if (typeof init?.body === "string") {
           expect(init.body).not.toContain(FIXED_SESSION_TITLE);
+          readinessPromptObserved ||= init.body.includes("runtime readiness handshake");
         }
       }
     }
-    // #2254: readiness consumes the hint, but must retain the authenticated stream for the
-    // post-ready supervisor. The SSE payload is deliberately the exact nested message shape.
+    expect(readinessPromptObserved).toBe(true);
+    // #2254: startup retains the authenticated stream for the post-ready supervisor. The SSE
+    // payload is deliberately the exact nested message shape.
     expect(order).toEqual(["spawn"]);
     expect(sseCancellations).toEqual([]);
-    expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0", "--no-mdns"]);
+    expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0"]);
     const runRoot = join(stateBaseRoot, "run-1");
     expect(launch?.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     expect(launch?.env.OPENCODE_CONFIG_DIR).toBe(join(runRoot, "config", "opencode"));
     expect(
-      fetchMock.mock.calls.some(([url]) => url instanceof URL && url.pathname === "/doc"),
+      fetchMock.mock.calls.some(([url]) => url instanceof URL && url.pathname === "/openapi.json"),
     ).toBe(true);
     expect(
       new Set([
@@ -1118,6 +1043,13 @@ describe("unmounted OpenCode runtime composition", () => {
         launch?.env.OPENCODE_SERVER_PASSWORD,
       ]),
     ).toHaveLength(3);
+    // ADR-0043 D11-D14 (#3390): the spawned sidecar receives exactly one loopback origin for
+    // model and tool traffic.
+    expect(launch?.env.KEIKO_TOOL_FACADE_URL).toBeDefined();
+    expect(launch?.env.KEIKO_MODEL_GATEWAY_URL).toBeDefined();
+    expect(new URL(launch?.env.KEIKO_TOOL_FACADE_URL ?? "").origin).toBe(
+      new URL(launch?.env.KEIKO_MODEL_GATEWAY_URL ?? "").origin,
+    );
     // Windows does not implement POSIX permission bits; chmodSync cannot make these mode
     // assertions meaningful there. The state layout and secret-free contents remain covered on
     // every platform, while Unix hosts verify the intended 0700/0600 permissions.
@@ -1126,21 +1058,21 @@ describe("unmounted OpenCode runtime composition", () => {
         runRoot,
         join(runRoot, "config"),
         join(runRoot, "config", "opencode"),
-        join(runRoot, "config", "opencode", "tools"),
+        join(runRoot, "config", "opencode", "plugins"),
         join(runRoot, "state"),
       ])
         expect(statSync(path).mode & 0o777).toBe(0o700);
       for (const path of [
         join(runRoot, "config", "opencode", "opencode.json"),
-        join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"),
-        join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"),
+        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
+        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
       ])
         expect(statSync(path).mode & 0o777).toBe(0o600);
     }
     const files = [
       join(runRoot, "config", "opencode", "opencode.json"),
-      join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"),
-      join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"),
+      join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
+      join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
     ]
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
@@ -1150,10 +1082,35 @@ describe("unmounted OpenCode runtime composition", () => {
     expect(files).not.toContain(FIXED_SESSION_TITLE);
     expect(JSON.stringify(governedEvents)).not.toContain(FIXED_SESSION_TITLE);
     expect(files).toContain("Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}");
+    const materializedConfig = JSON.parse(
+      readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
+    ) as {
+      readonly providers: Readonly<Record<string, unknown>>;
+      readonly compaction: Readonly<Record<string, unknown>>;
+    };
+    const materializedProvider = materializedConfig.providers["keiko-runtime"] as {
+      readonly models: Readonly<
+        Record<string, { readonly limit: Readonly<Record<string, number>> }>
+      >;
+    };
+    expect(materializedProvider.models.coding?.limit).toEqual({
+      context: 65_536,
+      input: 61_440,
+      output: 4_096,
+    });
+    expect(materializedConfig.compaction).toMatchObject({ auto: true });
+    expect(typeof (materializedConfig.compaction.keep as { readonly tokens: unknown }).tokens).toBe(
+      "number",
+    );
     const paths = fetchMock.mock.calls.map(([url]) => requestPath(url));
-    expect(paths.indexOf("/session")).toBeLessThan(paths.lastIndexOf("/session"));
-    expect(paths.indexOf("/sync/history")).toBeGreaterThan(paths.indexOf("/session"));
-    expect(new URL(runtime.toolBridge.url).hostname).toBe("127.0.0.1");
+    expect(paths.indexOf("/api/session")).toBeLessThan(paths.lastIndexOf("/api/session"));
+    expect(paths.indexOf("/api/session/ses_1/message")).toBeGreaterThan(
+      paths.indexOf("/api/session"),
+    );
+    // ADR-0043 D11-D14 (#3390): the bridge's public `url` is the SAME attested loopback origin
+    // supplied at composition -- relocated from asserting a self-issued ephemeral listener port
+    // (retired) to asserting the bridge never fabricates a second one of its own.
+    expect(runtime.toolBridge.url).toBe(TOOL_FACADE_ORIGIN);
     await expect(
       runtime.toolBridge.handle({
         method: "POST",
@@ -1227,28 +1184,36 @@ describe("private OpenCode run control", () => {
     ) as CodingToolFacade["execute"],
   };
 
-  it("accepts a schema-compatible explicit idle readiness status", async () => {
+  it("accepts an empty V2 active-session map after readiness interruption", async () => {
     const fixture = await startBridgeFixture(facade, undefined, {
       runControl: {
         promptBodies: [],
         abortSessions: [],
-        statusResponses: [{ ses_tool: { type: "idle" } }],
+        statusResponses: [{}],
       },
     });
     await fixture.stop();
   });
 
-  it("stops terminal polling when the handshake deadline aborts", async () => {
-    const fixture = await startBridgeFixture(facade, undefined, {
-      startTimeoutMs: 35,
-      expectedStart: { ok: false, failureCode: "start-timeout", retryable: true },
-      runControl: {
-        promptBodies: [],
-        abortSessions: [],
-        statusResponses: [{ ses_tool: { type: "busy" } }],
+  it("isolates the live startup challenge from user task submissions", async () => {
+    const statusPhases: ReadinessChallengePhase[] = [];
+    const runControl = {
+      promptBodies: [],
+      abortSessions: [],
+      statusResponses: [],
+      statusResponseForReadinessPhase: (phase: ReadinessChallengePhase): unknown => {
+        statusPhases.push(phase);
+        return phase === "aborted" ? {} : { ses_tool: { type: "busy" } };
       },
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    expect(runControl.promptBodies).toEqual([]);
+    expect(runControl.abortSessions).toEqual([]);
+    expect(statusPhases.at(-1)).toBe("aborted");
+    expect(fixture.runtime.manager.health()).toMatchObject({
+      status: "ready",
+      activeRunId: FIXTURE_RUN_ID,
     });
-    expect(fixture.runtime.manager.health()).toEqual({ status: "stopped" });
     await fixture.stop();
   });
 
@@ -1256,11 +1221,11 @@ describe("private OpenCode run control", () => {
     const historyCalls: Readonly<Record<string, number>>[] = [];
     const fixture = await startBridgeFixture(facade, undefined, {
       sseFrame:
-        'data: {"payload":{"id":"evt_live_only","type":"session.status","properties":{"sessionID":"ses_other","status":{"type":"busy"}}}}\n\n',
+        'data: {"id":"evt_live_only","type":"session.execution.started","data":{"sessionID":"ses_other"}}\n\n',
       historyCalls,
     });
     try {
-      expect(historyCalls).toEqual([{}, { ses_tool: 0 }]);
+      expect(historyCalls).toEqual([{}, {}]);
     } finally {
       await fixture.stop();
     }
@@ -1270,10 +1235,10 @@ describe("private OpenCode run control", () => {
     const questionObservations: string[] = [];
     const fixture = await startBridgeFixture(facade, undefined, {
       sseFrame: [
-        'data: {"payload":{"id":"evt_q1","type":"question.asked","properties":{"sessionID":"ses_tool","id":"que_1"}}}\n\n',
-        'data: {"payload":{"id":"evt_q2","type":"question.replied","properties":{"sessionID":"ses_tool","requestID":"que_1"}}}\n\n',
-        'data: {"payload":{"id":"evt_q3","type":"question.asked","properties":{"sessionID":"ses_other","id":"que_2"}}}\n\n',
-        'data: {"payload":{"id":"evt_q4","type":"question.rejected","properties":{}}}\n\n',
+        'data: {"id":"evt_q1","type":"form.created","data":{"form":{"id":"frm_1","sessionID":"ses_tool"}}}\n\n',
+        'data: {"id":"evt_q2","type":"form.created","data":{"form":{"id":"frm_2","sessionID":"ses_tool"}}}\n\n',
+        'data: {"id":"evt_q3","type":"form.created","data":{"form":{"id":"frm_3","sessionID":"ses_other"}}}\n\n',
+        'data: {"id":"evt_q4","type":"form.created","data":{}}\n\n',
       ].join(""),
       questionObservations,
     });
@@ -1282,52 +1247,76 @@ describe("private OpenCode run control", () => {
         expect(questionObservations.length).toBeGreaterThanOrEqual(2);
       });
       // Foreign-session and session-unbound frames observe nothing; dedupe is the consumer's job.
-      expect(questionObservations).toEqual([
-        "question.asked\u0000evt_q1",
-        "question.replied\u0000evt_q2",
-      ]);
+      expect(questionObservations).toEqual(["evt_q1", "evt_q2"]);
     } finally {
       await fixture.stop();
     }
   });
 
+  // The ask as the generated V2 plugin sends it for one keiko_changeset_edit call (#3612).
+  const editAsk = (callId: string): Promise<Record<string, unknown>> =>
+    capturedGeneratedV2Ask({
+      runId: FIXTURE_RUN_ID,
+      sessionId: "ses_tool",
+      callId,
+      tool: "keiko_changeset_edit",
+      args: {
+        changeset: {
+          patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n",
+          files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+        },
+      },
+    });
+  const settlementRecorder = (): {
+    readonly safeActivity: NonNullable<StartBridgeControl["safeActivity"]>;
+    readonly settlements: Parameters<
+      NonNullable<StartBridgeControl["safeActivity"]>["settleTool"]
+    >[0][];
+  } => {
+    const settlements: Parameters<
+      NonNullable<StartBridgeControl["safeActivity"]>["settleTool"]
+    >[0][] = [];
+    return {
+      settlements,
+      safeActivity: {
+        arm: vi.fn(),
+        clear: vi.fn(),
+        ingest: () => true,
+        recordDrops: vi.fn(),
+        settleTool: (settlement): void => {
+          settlements.push(settlement);
+        },
+      },
+    };
+  };
+  const permissionRequested = async (
+    runtimeEvents: readonly CodingWorkbenchRuntimeEvent[],
+  ): Promise<string> => {
+    await vi.waitFor(() => {
+      expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
+    });
+    const event = runtimeEvents.find((candidate) => candidate.kind === "permission-requested");
+    const permission = event?.permissionRequest;
+    if (permission === undefined || Array.isArray(permission)) {
+      throw new Error("expected public permission request");
+    }
+    return permission.requestId;
+  };
+
   it("aliases live permission ids and resolves only the run-owned upstream request", async () => {
-    const runtimeEvents: Readonly<Record<string, unknown>>[] = [];
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
     const permissionRequests: {
       readonly method: string;
       readonly path: string;
       readonly body?: string;
     }[] = [];
-    let sseController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const upstreamPermission = {
-      id: "per_upstream_1",
-      sessionID: "ses_tool",
-      permission: "keiko_governed_action",
-      patterns: ["src/example.ts"],
-      always: [],
-      tool: { messageID: "msg_1", callID: "call_1" },
-      metadata: {
-        kind: "workspace-write",
-        actionClass: "workspace-write",
-        reasonCode: "approval-required",
-        expiresAt: "2099-07-23T14:05:00.000Z",
-        actionKind: "file-edit",
-        scopeLabel: "workspace-scope",
-        risk: "medium",
-        policyReason: "approval-required",
-        targetPath: "src/example.ts",
-        allowedRelativePaths: ["src/example.ts"],
-        fileCount: 1,
-        addedLines: 1,
-        deletedLines: 1,
-      },
-    };
+    const ask = await editAsk("call_1");
+    const upstreamPermission = ask.properties as { readonly id: string };
+    const recorder = settlementRecorder();
     const fixture = await startBridgeFixture(facade, undefined, {
       mode: "governed-assist",
       runtimeEvents,
-      onSseStart: (controller): void => {
-        sseController = controller;
-      },
+      safeActivity: recorder.safeActivity,
       runControl: {
         promptBodies: [],
         abortSessions: [],
@@ -1337,43 +1326,148 @@ describe("private OpenCode run control", () => {
       },
     });
     try {
-      if (sseController === undefined) throw new Error("expected live event controller");
-      sseController.enqueue(
-        new TextEncoder().encode(
-          `data: ${JSON.stringify({
-            payload: {
-              id: "evt_permission",
-              type: "permission.asked",
-              properties: upstreamPermission,
-            },
-          })}\n\n`,
-        ),
-      );
-      await vi.waitFor(() => {
-        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
+      const decision = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(ask),
       });
-      const event = runtimeEvents.find((candidate) => candidate.kind === "permission-requested");
-      const permission = event?.permissionRequest;
-      if (typeof permission !== "object" || permission === null || Array.isArray(permission)) {
-        throw new Error("expected public permission request");
-      }
-      const requestId = (permission as Record<string, unknown>).requestId;
+      const requestId = await permissionRequested(runtimeEvents);
       expect(requestId).toMatch(/^permission-[0-9]+$/u);
       expect(requestId).not.toBe(upstreamPermission.id);
-      expect(permission).toMatchObject({ scopeLabel: "workspace-scope" });
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, upstreamPermission.id, "reject"),
       ).resolves.toBe(false);
       expect(permissionRequests).toEqual([]);
-      if (typeof requestId !== "string") throw new Error("expected permission alias");
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, requestId, "reject"),
       ).resolves.toBe(true);
-      expect(permissionRequests).toEqual([
+      // #3610: the refusal names the human decision, so the route never logs it as an origin refusal.
+      await expect(decision).resolves.toMatchObject({ status: 403, rejection: "approval-denied" });
+      expect(permissionRequests).toEqual([]);
+      // #3612: the refused call is settled with the human's verdict, never left to OpenCode's
+      // generic failure that read "Failed" for a denial.
+      expect(recorder.settlements).toEqual([
+        { actionId: "ses_tool:call_1", state: "denied", occurredAt: expect.any(String) as string },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("settles an ask whose caller went away as cancelled (#3612)", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const recorder = settlementRecorder();
+    const fixture = await startBridgeFixture(facade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      safeActivity: recorder.safeActivity,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+    });
+    try {
+      const caller = new AbortController();
+      const decision = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await editAsk("call_gone")),
+        signal: caller.signal,
+      });
+      await permissionRequested(runtimeEvents);
+      caller.abort();
+      await expect(decision).resolves.toMatchObject({
+        status: 403,
+        rejection: "approval-cancelled",
+      });
+      expect(recorder.settlements).toEqual([
         {
-          method: "POST",
-          path: "/permission/per_upstream_1/reply",
-          body: '{"reply":"reject"}',
+          actionId: "ses_tool:call_gone",
+          state: "cancelled",
+          occurredAt: expect.any(String) as string,
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a stale changeset base before any human is asked (#3612)", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const recorder = settlementRecorder();
+    const checked: string[] = [];
+    const staleFacade: CodingToolFacade = {
+      execute: facade.execute,
+      // The check runs under the run's own tool capability, the one its tool calls carry.
+      editBaseDigest: (capability, relativePath) => {
+        checked.push(`${String(capability === TOOL_CAPABILITY)}:${relativePath}`);
+        return Promise.resolve({ kind: "digest", digest: "b".repeat(64) });
+      },
+    };
+    const fixture = await startBridgeFixture(staleFacade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      safeActivity: recorder.safeActivity,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await editAsk("call_stale")),
+      });
+      expect(response).toMatchObject({ status: 409, rejection: "approval-stale" });
+      // The model reads the edit's own re-read guidance, exactly as after an approval.
+      expect(JSON.parse(response.body)).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
+        detail: "The file changed after its read: src/example.ts",
+        guidance: expect.stringContaining("Re-read the file with keiko_workspace_read") as string,
+      });
+      expect(checked).toEqual(["true:src/example.ts"]);
+      expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
+      expect(recorder.settlements).toEqual([
+        {
+          actionId: "ses_tool:call_stale",
+          state: "failed",
+          occurredAt: expect.any(String) as string,
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // PR #3617 review: an edit the run's authority no longer admits is refused before any human is
+  // asked, and its tool call reads Denied instead of OpenCode's generic failure.
+  it("settles an edit the run's authority no longer admits as denied, asking no one", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const recorder = settlementRecorder();
+    const deniedFacade: CodingToolFacade = {
+      execute: facade.execute,
+      editBaseDigest: () => Promise.resolve({ kind: "authority-denied" }),
+    };
+    const fixture = await startBridgeFixture(deniedFacade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      safeActivity: recorder.safeActivity,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await editAsk("call_revoked")),
+      });
+      expect(response).toMatchObject({
+        status: 403,
+        rejection: "approval-authority-denied",
+        // PR #3617 review: the route's line joins the run's own approval lines through these.
+        approval: { runId: FIXTURE_RUN_ID, requestId: expect.any(String) as unknown },
+      });
+      expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
+      expect(recorder.settlements).toEqual([
+        {
+          actionId: "ses_tool:call_revoked",
+          state: "denied",
+          occurredAt: expect.any(String) as string,
         },
       ]);
     } finally {
@@ -1383,7 +1477,9 @@ describe("private OpenCode run control", () => {
 
   it("accepts status omission only when causal terminal history exists", async () => {
     const prompt = "SENTINEL_PRIVATE_RUN_PROMPT";
-    const governedEvents: Readonly<Record<string, unknown>>[] = [];
+    const initialContext = "SENTINEL_UNTRUSTED_ISSUE_CONTEXT";
+    const activityLog = createBufferedServerLogSink();
+    const governedEvents: OpenCodeReconciliationEvent[] = [];
     let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
     const runControl = {
       promptBodies: [] as string[],
@@ -1394,19 +1490,17 @@ describe("private OpenCode run control", () => {
     const fixture = await startBridgeFixture(facade, undefined, {
       governedEvents,
       runControl,
-      historyResponseFactory: () =>
-        Promise.resolve(
-          new Response(JSON.stringify(history), {
-            headers: { "content-type": "application/json" },
-          }),
-        ),
+      activityLog,
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
       afterStart: (_runtime, root): void => {
         runRoot = root;
       },
     });
 
     await expect(fixture.runtime.runPort.submitTask("unknown-run", prompt)).resolves.toBe(false);
-    await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, prompt)).resolves.toBe(true);
+    await expect(
+      fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, prompt, initialContext),
+    ).resolves.toBe(true);
     history = completedTurnHistory();
     const terminalWait = new AbortController();
     const terminalDeadline = setTimeout(() => {
@@ -1420,7 +1514,15 @@ describe("private OpenCode run control", () => {
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
     expect(runControl.abortSessions).toEqual(["ses_tool"]);
     expect(runControl.promptBodies).toEqual([
-      JSON.stringify({ parts: [{ type: "text", text: prompt }] }),
+      JSON.stringify({
+        text: `${initialContext}\n\n${prompt}`,
+        metadata: {
+          keikoContextPresentationV1: {
+            displayText: prompt,
+            hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
+          },
+        },
+      }),
     ]);
 
     const aborted = new AbortController();
@@ -1431,16 +1533,80 @@ describe("private OpenCode run control", () => {
     const retained = [
       JSON.stringify(governedEvents),
       readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
-      readFileSync(join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"), "utf8"),
-      readFileSync(join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"), "utf8"),
+      readFileSync(
+        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
+        "utf8",
+      ),
+      readFileSync(
+        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
+        "utf8",
+      ),
     ].join("\n");
     expect(retained).not.toContain(prompt);
+    expect(retained).not.toContain(initialContext);
+    const presentation = activityLog.events.find(
+      (event) => event.extra?.event === "context-presented",
+    );
+    if (presentation === undefined) throw new Error("Missing context presentation");
+    const line = formatActivityLogProofLine(presentation);
+    expect(JSON.parse(line)).toMatchObject({
+      op: "coding-runtime.history",
+      correlationId: FIXTURE_RUN_ID,
+      event: "context-presented",
+      runId: FIXTURE_RUN_ID,
+      messageCount: 1,
+    });
+    expect(line).not.toContain(initialContext);
+    expect(line).not.toContain(prompt);
 
     await fixture.stop();
     await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "after stop")).resolves.toBe(
       false,
     );
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(false);
+  });
+
+  it("records a body-free diagnostic when a submitted turn terminates as failed", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
+    });
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded failing task"),
+      ).resolves.toBe(true);
+      history = failedTurnHistory();
+      await expect(
+        fixture.runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(2_000)),
+      ).resolves.toBe(false);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode.turn",
+          errorClass: "OpenCodeTurnFailure",
+          message: "runtime-turn-failed",
+          code: "stage=terminal:db=missing",
+        }),
+      ]);
+      const serialized = JSON.stringify(records);
+      expect(serialized).not.toContain("bounded failing task");
+      expect(serialized).not.toContain("SENTINEL_PROVIDER_DETAIL");
+    } finally {
+      await fixture.stop();
+    }
   });
 
   it("synchronizes durable history before arming and submitting each productive turn", async () => {
@@ -1472,12 +1638,7 @@ describe("private OpenCode run control", () => {
     };
     const fixture = await startBridgeFixture(facade, undefined, {
       runControl,
-      historyResponseFactory: () =>
-        Promise.resolve(
-          new Response(JSON.stringify(history), {
-            headers: { "content-type": "application/json" },
-          }),
-        ),
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
     });
     try {
       await expect(
@@ -1496,7 +1657,7 @@ describe("private OpenCode run control", () => {
       expect(runControl.abortSessions).toEqual(["ses_tool"]);
       expect(abortSettled).toBe(false);
       history = completedTurnHistory();
-      runControl.statusResponses.push({ ses_tool: { type: "idle" } });
+      runControl.statusResponses.push({});
       await expect(aborting).resolves.toBe(true);
       await expect(terminal).resolves.toBe(true);
     } finally {
@@ -1512,20 +1673,24 @@ describe("private OpenCode run control", () => {
     }[] = [];
     const pending = [
       {
-        id: "que_fixed",
+        id: "frm_fixed",
         sessionID: "ses_tool",
-        questions: [
+        title: "Approval",
+        fields: [
           {
-            question: "Approve the bounded edit?",
-            header: "Approval",
-            options: [{ label: "Approve", description: "Continue" }],
+            key: "decision",
+            title: "Approval",
+            description: "Approve the bounded edit?",
+            type: "string",
+            options: [{ label: "Approve", value: "approved", description: "Continue" }],
           },
         ],
       },
       {
-        id: "que_other",
+        id: "frm_other",
         sessionID: "ses_other",
-        questions: [{ question: "Private other session", header: "Other", options: [] }],
+        title: "Other",
+        fields: [{ key: "decision", title: "Other", type: "string" }],
       },
     ];
     const fixture = await startBridgeFixture(facade, undefined, {
@@ -1540,11 +1705,27 @@ describe("private OpenCode run control", () => {
     try {
       await expect(fixture.runtime.runPort.listQuestions("unknown-run")).resolves.toEqual([]);
       await expect(fixture.runtime.runPort.listQuestions(FIXTURE_RUN_ID)).resolves.toEqual([
-        pending[0],
+        {
+          id: "que_fixed",
+          sessionID: "ses_tool",
+          questions: [
+            {
+              question: "Approve the bounded edit?",
+              header: "Approval",
+              options: [{ label: "Approve", description: "Continue" }],
+              multiple: false,
+              custom: false,
+            },
+          ],
+        },
       ]);
       await expect(
         fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_other", [["Approve"]]),
       ).resolves.toBe(false);
+      await expect(
+        fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_fixed", []),
+      ).rejects.toThrow("question-answer-rejected");
+      expect(questionRequests).toEqual([]);
       await expect(
         fixture.runtime.runPort.rejectQuestion("unknown-run", "que_fixed"),
       ).resolves.toBe(false);
@@ -1555,10 +1736,108 @@ describe("private OpenCode run control", () => {
         fixture.runtime.runPort.rejectQuestion(FIXTURE_RUN_ID, "que_fixed"),
       ).resolves.toBe(true);
       expect(questionRequests).toEqual([
-        { method: "POST", path: "/question/que_fixed/reply", body: '{"answers":[["Approve"]]}' },
-        { method: "POST", path: "/question/que_fixed/reject" },
+        {
+          method: "POST",
+          path: "/api/session/ses_tool/form/frm_fixed/reply",
+          body: '{"answer":{"decision":"approved"}}',
+        },
+        { method: "DELETE", path: "/api/session/ses_tool/form/frm_fixed" },
       ]);
       expect(JSON.stringify(questionRequests)).not.toContain("Approve the bounded edit?");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it.each(["list", "answer", "reject"] as const)(
+    "propagates V2 %s transport failures with redacted run evidence",
+    async (operation) => {
+      const diagnostics = persistedDiagnostics();
+      const fixture = await startBridgeFixture(facade, undefined, {
+        diagnostics: diagnostics.sink,
+        runControl: {
+          promptBodies: [],
+          abortSessions: [],
+          statusResponses: [{}],
+          questionResponses: [{ privateContent: "PRIVATE_FORM_CONTENT" }],
+        },
+      });
+      try {
+        const port = fixture.runtime.runPort;
+        const request =
+          operation === "list"
+            ? port.listQuestions(FIXTURE_RUN_ID)
+            : operation === "answer"
+              ? port.answerQuestion(FIXTURE_RUN_ID, "que_fixed", [["Approve"]])
+              : port.rejectQuestion(FIXTURE_RUN_ID, "que_fixed");
+        await expect(request).rejects.toThrow();
+        const persisted = diagnostics.read();
+        const record = expectPersistedDiagnostic(persisted, "opencode.turn");
+        expect(record).toMatchObject({
+          diagnosticOperation: "coding-runtime.opencode-composition",
+          diagnosticSummary: "runtime-turn-failed",
+        });
+        expect(record.code).toMatch(/^stage=question:/u);
+        expect(persisted).not.toContain("PRIVATE_FORM_CONTENT");
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // Pins the post-await readiness re-check in answerQuestion (opencodeRuntimeComposition.ts):
+  // `readyRun` hands back a live reference into the SAME mutable run record kept in the
+  // composition's internal map, so a concurrent dispose that completes while the run's own
+  // listQuestions() round trip is still in flight is visible on that reference the instant it
+  // resolves, even though nothing re-fetches the run from the map. Before #3384 batch-6 fixed
+  // `ReadyRun.ready`'s type from the literal `true` to `boolean`, TypeScript treated that
+  // re-check as provably always false, which made `@typescript-eslint/no-unnecessary-condition`
+  // flag it as dead code -- a lint-driven "cleanup" that deleted it would have let an
+  // already-disposed run answer a question it no longer owns.
+  it("fails closed when the run is disposed while its question list is still in flight", async () => {
+    const questionRequests: {
+      readonly method: string;
+      readonly path: string;
+      readonly body?: string;
+    }[] = [];
+    const pending = [
+      {
+        id: "frm_fixed",
+        sessionID: "ses_tool",
+        title: "Approval",
+        fields: [
+          {
+            key: "decision",
+            title: "Approval",
+            description: "Approve the bounded edit?",
+            type: "string",
+            options: [{ label: "Approve", value: "approved", description: "Continue" }],
+          },
+        ],
+      },
+    ];
+    const runtimeRef: { current?: OpenCodeRuntimeComposition } = {};
+    let disposedOnce = false;
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl: {
+        promptBodies: [],
+        abortSessions: [],
+        statusResponses: [{}],
+        questionResponses: [pending],
+        questionRequests,
+        onQuestionListFetch: async (): Promise<void> => {
+          if (disposedOnce) return;
+          disposedOnce = true;
+          await runtimeRef.current?.manager.stop(FIXTURE_RUN_ID);
+        },
+      },
+    });
+    runtimeRef.current = fixture.runtime;
+    try {
+      await expect(
+        fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_fixed", [["Approve"]]),
+      ).resolves.toBe(false);
+      expect(questionRequests).toEqual([]);
     } finally {
       await fixture.stop();
     }
@@ -1579,6 +1858,64 @@ describe("private OpenCode tool bridge", () => {
       idempotencyKey: `idempotency-${callId}`,
       relativePath: "src/index.ts",
     });
+  // Valid requests for the tools the catalog settles beyond the sandbox default, exactly as the
+  // facade's own parser accepts them (a body it refuses is admitted under the default instead),
+  // each with the budget the catalog declares for it.
+  const longBudgetBody = (fields: Readonly<Record<string, unknown>>): string =>
+    JSON.stringify({ actionId: "tool:call_long", idempotencyKey: "idempotency-long", ...fields });
+  const LONG_BUDGET_REQUESTS = [
+    [
+      "verification",
+      longBudgetBody({ action: "verification", verifierId: "test", targetPath: "" }),
+      VERIFICATION_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "git stage proposal",
+      longBudgetBody({
+        action: "git",
+        operation: "stage",
+        phase: "propose",
+        paths: ["src/index.ts"],
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "commit proposal",
+      longBudgetBody({
+        action: "delivery",
+        intent: "commit",
+        phase: "propose",
+        message: "Add the landing page",
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "push proposal",
+      longBudgetBody({ action: "delivery", intent: "push", phase: "propose" }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "pull-request proposal",
+      longBudgetBody({
+        action: "delivery",
+        intent: "pull-request",
+        phase: "propose",
+        title: "Add the landing page",
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "changeset edit",
+      longBudgetBody({
+        action: "edit",
+        changeset: {
+          patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+          files: [{ file: "a.ts", expectedContentHash: "c".repeat(64) }],
+        },
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+  ] as const;
   const activityRecorder = (): {
     readonly safeActivity: FixtureSafeActivity;
     readonly settlements: Parameters<FixtureSafeActivity["settleTool"]>[0][];
@@ -1598,24 +1935,36 @@ describe("private OpenCode tool bridge", () => {
     };
   };
 
+  // #3390 (ADR-0043 D11-D14): a negative proof that no production path re-opens a second loopback
+  // listener for this bridge. The public port's OWN shape is the guard: it exposes exactly `url`
+  // (a fixed string, never a self-issued port), `requestDeadlineMs` (a plain number the route
+  // reads to bound body-ingestion by the SAME deadline the admission gate uses for execution) and
+  // `handle` -- no `listen`/`close`/socket accessor a caller could use to stand up an HTTP server,
+  // which is exactly what made the retired listener reachable from a Seatbelt-denied second port
+  // in the first place.
+  it("exposes exactly {url, requestDeadlineMs, handle} on the public bridge port -- no listener surface to reopen", async () => {
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade);
+    try {
+      expect(Object.keys(fixture.runtime.toolBridge).sort()).toEqual([
+        "handle",
+        "requestDeadlineMs",
+        "url",
+      ]);
+      // Pins to the SAME configured value `startBridgeFixture`'s default `toolBridge` input uses
+      // (`requestDeadlineMs: 50`) -- not just "some positive number" -- so a future change that
+      // decouples the exposed value from the admission gate's own limit is caught here.
+      expect(fixture.runtime.toolBridge.requestDeadlineMs).toBe(50);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("closes an adapter whose handshake succeeds after manager timeout disposal", async () => {
     let releaseHistory: (() => void) | undefined;
     const historyResponse = new Promise<Response>((resolve) => {
       releaseHistory = (): void => {
-        resolve(
-          new Response(
-            JSON.stringify([
-              {
-                id: "evt_tool",
-                aggregate_id: "ses_tool",
-                seq: 0,
-                type: "session.status",
-                data: { sessionID: "ses_tool", status: "idle" },
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
-          ),
-        );
+        resolve(v2Envelope([]));
       };
     });
     let sseCancellations = 0;
@@ -1665,23 +2014,26 @@ describe("private OpenCode tool bridge", () => {
   it("reports a malformed history page as one bulk drop update", async () => {
     const recordDrops = vi.fn();
     const rows = Array.from({ length: 512 }, (_, sequence) => ({
-      id: `evt_malformed_${String(sequence)}`,
-      aggregate_id: "ses_tool",
-      seq: sequence,
+      id: `msg_malformed_${String(sequence)}`,
+      time: { created: sequence },
       type: "message.part.updated.1",
-      data: {
-        sessionID: "ses_tool",
-        part: { type: "text", text: "malformed" },
-        time: 1_721_323_200_000 + sequence,
-      },
     }));
+    const descending = rows.slice().reverse();
+    let offset = 0;
     const fixture = await startBridgeFixture(
       { execute: vi.fn(() => Promise.resolve(completed)) },
       undefined,
       {
-        historyResponse: Promise.resolve(
-          new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } }),
-        ),
+        historyResponseFactory: (): Promise<Response> => {
+          const batch = descending.slice(offset, offset + 100);
+          offset += batch.length;
+          return Promise.resolve(
+            v2Json({
+              data: batch,
+              ...(offset < descending.length ? { cursor: { next: String(offset) } } : {}),
+            }),
+          );
+        },
         expectedStart: {
           ok: false,
           failureCode: "protocol-schema-mismatch",
@@ -1702,102 +2054,426 @@ describe("private OpenCode tool bridge", () => {
     await fixture.stop();
   });
 
-  it("rejects an unauthorized chunked request before EOF or any facade call", async () => {
-    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
-    const fixture = await startBridgeFixture(facade);
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: { "transfer-encoding": "chunked" },
-    });
-    try {
-      request.client.write('{"action":"read"');
-      await expect(responseBeforeEof(request.response)).resolves.toMatchObject({ status: 401 });
-      expect(facade.execute).not.toHaveBeenCalled();
-    } finally {
-      request.client.end();
-      await fixture.stop();
-    }
-  });
-
-  it("rejects Origin, non-POST paths, and oversized declared bodies before reading them", async () => {
-    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
-    const fixture = await startBridgeFixture(facade);
-    const origin = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: {
-        ...authorized,
-        origin: "http://untrusted.invalid",
-        "transfer-encoding": "chunked",
-      },
-    });
-    const wrongMethod = openHttpRequest(fixture.runtime.toolBridge.url, {
-      method: "GET",
-      headers: { ...authorized, "transfer-encoding": "chunked" },
-    });
-    const wrongPath = openHttpRequest(
-      fixture.runtime.toolBridge.url.replace(/\/tool$/u, "/other"),
+  it("forwards validated canonical history to durable capture even when display signals are rejected", async () => {
+    const captureMessages = vi.fn().mockReturnValue(true);
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
       {
-        headers: { ...authorized, "transfer-encoding": "chunked" },
+        historyResponseFactory: () =>
+          Promise.resolve(
+            v2Envelope([
+              {
+                id: "msg_durable_assistant",
+                type: "assistant",
+                time: { created: 2 },
+                content: [{ type: "text", text: "Retained native answer" }],
+              },
+              {
+                id: "msg_durable_user",
+                type: "user",
+                time: { created: 1 },
+                text: "Visible intent",
+              },
+            ]),
+          ),
+        safeActivity: {
+          arm: vi.fn(),
+          clear: vi.fn(),
+          ingest: () => false,
+          recordDrops: vi.fn(),
+          settleTool: vi.fn(),
+          captureMessages,
+        },
       },
     );
-    const oversized = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: {
-        ...authorized,
-        "content-length": String(CODING_TOOL_MAX_BODY_BYTES + 1),
-      },
-    });
     try {
-      origin.client.write("{");
-      wrongMethod.client.write("{");
-      wrongPath.client.write("{");
-      oversized.client.flushHeaders();
-      await expect(responseBeforeEof(origin.response)).resolves.toMatchObject({ status: 403 });
-      await expect(responseBeforeEof(wrongMethod.response)).resolves.toMatchObject({ status: 404 });
-      await expect(responseBeforeEof(wrongPath.response)).resolves.toMatchObject({ status: 404 });
-      await expect(responseBeforeEof(oversized.response)).resolves.toMatchObject({ status: 413 });
-      expect(facade.execute).not.toHaveBeenCalled();
+      expect(captureMessages).toHaveBeenCalledWith([
+        { messageId: "msg_durable_user", role: "user", content: "Visible intent" },
+        {
+          messageId: "msg_durable_assistant",
+          role: "assistant",
+          content: "Retained native answer",
+        },
+      ]);
     } finally {
-      origin.client.end();
-      wrongMethod.client.end();
-      wrongPath.client.end();
-      oversized.client.end(Buffer.alloc(CODING_TOOL_MAX_BODY_BYTES + 1));
       await fixture.stop();
     }
   });
 
-  it("uses a fatal UTF-8 decoder and preserves the exact ingress byte boundary", async () => {
-    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
-    const fixture = await startBridgeFixture(facade);
-    const exact = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
-    const invalidUtf8 = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+  it("records a correlated reconciliation failure when live text is rewritten", async () => {
+    const diagnostics = persistedDiagnostics();
+    let text = "PRIVATE_Hello";
+    const facade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      diagnostics: diagnostics.sink,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+      historyResponseFactory: () =>
+        Promise.resolve(v2Envelope([{ id: "msg_user", type: "user", time: { created: 1 }, text }])),
+    });
     try {
-      exact.client.end(
-        Buffer.concat([
-          Buffer.from("{}", "utf8"),
-          Buffer.alloc(CODING_TOOL_MAX_BODY_BYTES - 2, 0x20),
+      text = "PRIVATE_He";
+      await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "next")).resolves.toBe(false);
+      const record = expectPersistedDiagnostic(diagnostics.read(), "opencode.history");
+      expect(record).toMatchObject({
+        diagnosticOperation: "coding-runtime.history",
+        diagnosticSummary: "runtime-history-failed",
+        code: "stage=history:reason=text-prefix-invalid",
+      });
+      expect(record.frames).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^packages\/keiko-server\/(?:src|dist)\/coding-runtime\/opencodeV2History\.(?:ts|js):[0-9]+:[0-9]+$/u,
+          ),
         ]),
       );
-      await expect(exact.response).resolves.toMatchObject({ status: 200 });
-      invalidUtf8.client.end(Buffer.from([0x7b, 0xc3, 0x28, 0x7d]));
-      await expect(invalidUtf8.response).resolves.toMatchObject({ status: 400 });
-      expect(facade.execute).toHaveBeenCalledOnce();
+      expect(diagnostics.read()).not.toContain("PRIVATE_");
     } finally {
-      exact.client.destroy();
-      invalidUtf8.client.destroy();
       await fixture.stop();
     }
   });
 
-  it("applies one absolute deadline while reading an authorized body", async () => {
-    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
-    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: { ...authorized, "transfer-encoding": "chunked" },
-    });
+  it("preserves safe frames and causes from a history transport failure", async () => {
+    const diagnostics = persistedDiagnostics();
+    const failure = new Error("PRIVATE_TRANSPORT", { cause: new TypeError("PRIVATE_CAUSE") });
+    failure.stack =
+      "Error: PRIVATE_TRANSPORT\n    at read (/private/packages/keiko-server/dist/coding-runtime/opencodeV2HttpClient.js:88:9)";
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        historyResponseFactory: () => Promise.reject(failure),
+        expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+      },
+    );
     try {
-      request.client.write('{"action":"read"');
-      await expect(responseBeforeEof(request.response)).resolves.toMatchObject({ status: 408 });
+      expect(expectPersistedDiagnostic(diagnostics.read(), "opencode.history")).toMatchObject({
+        diagnosticOperation: "coding-runtime.history",
+        diagnosticSummary: "runtime-history-failed",
+        code: "stage=history:reason=transport-invalid",
+        frames: ["packages/keiko-server/dist/coding-runtime/opencodeV2HttpClient.js:88:9"],
+        causeChain: ["TypeError"],
+      });
+      expect(diagnostics.read()).not.toContain("PRIVATE_");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #3603: the gateway route refused the readiness challenge's model request (a deterministic
+  // 400). The handshake ends at once under its own cause instead of waiting out the start timeout
+  // as a request that never arrived, and the start is no protocol schema mismatch.
+  it("ends a start whose gateway challenge the route refused under gateway-refused", async () => {
+    const diagnostics = persistedDiagnostics();
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        gatewayRefused: true,
+        startTimeoutMs: 60_000,
+        expectedStart: { ok: false, failureCode: "gateway-challenge-failed", retryable: false },
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode.gateway-challenge"),
+      ).toMatchObject({
+        diagnosticOperation: "coding-runtime.handshake",
+        code: "stage=gateway-challenge:reason=gateway-refused",
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("records a body-free structural diagnostic for an unknown history message shape", async () => {
+    const diagnostics = persistedDiagnostics();
+    const sentinel = "SENTINEL_PRIVATE_HISTORY_BODY";
+    const sentinelKey = "ÄpfelPrivateHistoryKey";
+    const history = completedTurnHistory();
+    const assistant = history.at(-2);
+    if (assistant === undefined) throw new Error("assistant history fixture missing");
+    const malformed = [
+      ...history.slice(0, -2),
+      { ...assistant, [sentinelKey]: sentinel, zebra: sentinel },
+      history.at(-1),
+    ];
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        historyResponse: Promise.resolve(v2Envelope(malformed.slice().reverse())),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    const persisted = diagnostics.read();
+    const record = expectPersistedDiagnostic(persisted, "opencode.history");
+    expect(record).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      diagnosticOperation: "coding-runtime.history",
+      source: "opencode.history",
+      diagnosticErrorClass: "OpenCodeHistoryFailure",
+      diagnosticSummary: "runtime-history-failed",
+    });
+    expect(record.code).toMatch(
+      /^stage=history:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=2:extraKeySha256=[a-f0-9]{16}$/u,
+    );
+    expect(persisted).not.toContain(sentinel);
+    expect(persisted).not.toContain(sentinelKey);
+    const keysDigest = createHash("sha256")
+      .update(JSON.stringify(["zebra", sentinelKey]))
+      .digest("hex")
+      .slice(0, 16);
+    expect(record.code).toContain(`extraKeySha256=${keysDigest}`);
+    await fixture.stop();
+  });
+
+  // Run 2026-09-10: the model's first `keiko_changeset_edit` call (a 19 KiB unified diff, inside the
+  // 64 KiB patch contract) left durable rows whose arguments exceeded the 4096-character metadata
+  // bound; the pull threw and the run ended `runtime-failed` on its first edit. The rows a governed
+  // edit legitimately leaves -- pending with the raw argument text, running, settled -- now
+  // reconcile, and nothing of the patch reaches the diagnostics. The start phase pulls history more
+  // than once, so the fixture answers every pull with a fresh response.
+  it("reconciles a governed edit whose argument rows fill the patch contract", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const patch = "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES);
+    const input = changesetArguments(patch);
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponseFactory: (): Promise<Response> =>
+          Promise.resolve(
+            v2Envelope(
+              [
+                ...completedTurnHistory().slice(0, -1),
+                editPartRow(3, { status: "streaming", input: JSON.stringify(input) }),
+                editPartRow(4, {
+                  status: "running",
+                  input,
+                  metadata: {},
+                }),
+                editPartRow(5, {
+                  status: "error",
+                  input,
+                  error: { name: "INVALID_EDITS", data: { message: "bounded" } },
+                }),
+                completedTurnHistory().at(-1),
+              ]
+                .slice()
+                .reverse(),
+            ),
+          ),
+      },
+    );
+
+    expect(records.filter((record) => record.errorClass === "OpenCodeHistoryFailure")).toEqual([]);
+    expect(JSON.stringify(records)).not.toContain("xxxxx");
+    await fixture.stop();
+  });
+
+  it.each(["streaming", "SENTINEL_PRIVATE_STATUS"])(
+    "records a body-free diagnostic for a refused history part with status %s",
+    async (status) => {
+      const diagnostics = persistedDiagnostics();
+      const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve(completed)) },
+        undefined,
+        {
+          diagnostics: diagnostics.sink,
+          historyResponse: Promise.resolve(
+            v2Envelope(
+              [
+                ...completedTurnHistory().slice(0, -1),
+                {
+                  ...editPartRow(3, {}),
+                  content: [
+                    {
+                      type: "tool",
+                      id: "call_private",
+                      name: "keiko_PRIVATE_EMPLOYEE_A123",
+                      time: { created: 3 },
+                      state: {
+                        status,
+                        input: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
+                      },
+                    },
+                  ],
+                },
+                completedTurnHistory().at(-1),
+              ]
+                .slice()
+                .reverse(),
+            ),
+          ),
+          expectedStart: {
+            ok: false,
+            failureCode: "protocol-schema-mismatch",
+            retryable: false,
+          },
+        },
+      );
+
+      const persisted = diagnostics.read();
+      const record = expectPersistedDiagnostic(persisted, "opencode.history");
+      expect(record).toMatchObject({
+        correlationId: FIXTURE_RUN_ID,
+        diagnosticOperation: "coding-runtime.history",
+        source: "opencode.history",
+        diagnosticErrorClass: "OpenCodeHistoryFailure",
+        diagnosticSummary: "runtime-history-failed",
+      });
+      expect(record.code).toMatch(
+        /^stage=history:reason=argument-bound:eventSha256=[a-f0-9]{16}:toolSha256=[a-f0-9]{16}:statusSha256=[a-f0-9]{16}:partBytes=[1-9][0-9]*$/u,
+      );
+      expect(persisted).not.toContain(sentinel);
+      expect(persisted).not.toContain("PRIVATE_EMPLOYEE_A123");
+      expect(persisted).not.toContain("SENTINEL_PRIVATE_STATUS");
+      await fixture.stop();
+    },
+  );
+
+  // Before 2026-09-10 a pull that failed before any row was parsed -- refused, oversized, not a JSON
+  // array -- reached the lifecycle failure with no line of its own. The closed reason and, for an
+  // oversized pull, the budget it exceeded now travel in `code`; the response never does.
+  it("records the closed transport reason when the history pull itself fails", async () => {
+    const diagnostics = persistedDiagnostics();
+    let cancellations = 0;
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        historyResponse: Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>(
+              {
+                cancel(): void {
+                  cancellations += 1;
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+            {
+              headers: {
+                "content-length": String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES + 1),
+                "content-type": "application/json",
+              },
+            },
+          ),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    expect(cancellations).toBe(1);
+    const record = expectPersistedDiagnostic(diagnostics.read(), "opencode.history");
+    expect(record).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      diagnosticOperation: "coding-runtime.history",
+      source: "opencode.history",
+      diagnosticErrorClass: "OpenCodeHistoryFailure",
+      diagnosticSummary: "runtime-history-failed",
+      errorKind: "internal",
+      code: `stage=history:reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`,
+    });
+    await fixture.stop();
+  });
+
+  // #3390 (ADR-0043 D11-D14): the raw-listener framing pins below (chunked-before-EOF, declared
+  // Content-Length, non-POST/wrong-path routing, and the fatal UTF-8 decode) tested the RETIRED
+  // `createServer` listener's own request parsing. That framing is gone -- `handle()` is now the
+  // ONE dispatch surface, reached by the BFF's real route dispatcher (coding-sidecar-tool-facade.ts)
+  // which reads the body itself before calling `handle()`. Each invariant that still applies to
+  // `handle()` is relocated below, called directly instead of over a socket; the two that moved to
+  // a different owning layer are relocated there instead (never silently dropped):
+  //  - non-POST / wrong-path routing is now the router's job, not this bridge's -- covered by
+  //    routes.test.ts's generic `matchRoute` method-not-allowed coverage, strengthened with an
+  //    explicit pin for this route's pattern.
+  //  - "reject bytes that fail to decode as UTF-8" is now the BFF body reader's job
+  //    (coding-sidecar-tool-facade.ts's `readJsonObject`, over the real `IncomingMessage`) -- see
+  //    coding-sidecar-tool-facade.test.ts's own malformed-encoding pin.
+  it("rejects an unauthorized request before any facade call", async () => {
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade);
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(),
+          body: '{"action":"read"}',
+        }),
+      ).resolves.toMatchObject({ status: 401 });
       expect(facade.execute).not.toHaveBeenCalled();
     } finally {
-      request.client.end();
+      await fixture.stop();
+    }
+  });
+
+  it("rejects an Origin header before invoking the facade", async () => {
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade);
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers({ ...authorized, origin: "http://untrusted.invalid" }),
+          body: '{"action":"read"}',
+        }),
+      ).resolves.toMatchObject({ status: 403 });
+      expect(facade.execute).not.toHaveBeenCalled();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("admits a body at exactly the byte budget and rejects one over it, before invoking the facade for the oversized one", async () => {
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade);
+    // Padding with ASCII spaces keeps `Buffer.byteLength(body, "utf8")` equal to `body.length`,
+    // so the body constructed for N bytes is EXACTLY N bytes -- the same off-by-one-sensitive
+    // boundary `preflightToolRequest`'s `Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES`
+    // check guards.
+    const paddedObjectOfSize = (bytes: number): string => `{${" ".repeat(bytes - 2)}}`;
+    try {
+      const exact = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES);
+      expect(Buffer.byteLength(exact, "utf8")).toBe(CODING_TOOL_MAX_BODY_BYTES);
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: exact,
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(facade.execute).toHaveBeenCalledOnce();
+      const oversized = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES + 1);
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: oversized,
+        }),
+      ).resolves.toMatchObject({ status: 413 });
+      expect(facade.execute).toHaveBeenCalledOnce();
+    } finally {
       await fixture.stop();
     }
   });
@@ -1815,20 +2491,23 @@ describe("private OpenCode tool bridge", () => {
       ),
     };
     const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 1_000, maxInFlight: 1 });
-    const first = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
-    const second = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    const request = (): Promise<{ readonly status: number; readonly body: string }> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: '{"action":"read"}',
+      });
     try {
-      first.client.end('{"action":"read"}');
+      const first = request();
       await vi.waitFor(() => {
         expect(facade.execute).toHaveBeenCalledOnce();
       });
-      second.client.end('{"action":"read"}');
-      await expect(responseBeforeEof(second.response)).resolves.toMatchObject({ status: 429 });
+      await expect(request()).resolves.toMatchObject({ status: 429 });
       expect(facade.execute).toHaveBeenCalledOnce();
+      for (const release of releases) release();
+      await expect(first).resolves.toMatchObject({ status: 200 });
     } finally {
       for (const release of releases) release();
-      first.client.destroy();
-      second.client.destroy();
       await fixture.stop();
     }
   });
@@ -1895,9 +2574,12 @@ describe("private OpenCode tool bridge", () => {
       expect(activity.settlements).toEqual([
         expect.objectContaining({ actionId: "tool:call_sync_throw", state: "failed" }),
       ]);
+      // The evidence's `tool:<callId>` action id is not a canonical correlation id (no `:`), so the
+      // bridge maps it onto `tool-<callId>` — the documented prefix swap — rather than letting the
+      // default sink replace it with its content-free marker and lose the correlation.
       expect(records).toEqual([
         expect.objectContaining({
-          correlationId: "tool:call_sync_throw",
+          correlationId: "tool-call_sync_throw",
           operation: "coding-runtime.tool-bridge",
           source: "opencode-runtime-composition.facade-execute",
           errorClass: "Error",
@@ -2006,12 +2688,22 @@ describe("private OpenCode tool bridge", () => {
       { requestDeadlineMs: 1_000, maxInFlight: 1 },
       { safeActivity: activity.safeActivity },
     );
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    // #3390 (ADR-0043 D11-D14): a raw TCP disconnect no longer reaches this bridge directly --
+    // the ROUTE (coding-sidecar-tool-facade.ts's `bindRouteDisconnect`) observes its own
+    // request/response and turns that into exactly this `signal`, merged with the admission
+    // gate's own deadline abort by `bindExternalAbort`. Driving that same `signal` here proves
+    // the merge point directly instead of simulating a socket close this bridge never sees again.
+    const disconnect = new AbortController();
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers(authorized),
+      body: toolBody("call_disconnect"),
+      signal: disconnect.signal,
+    });
     try {
-      request.client.end(toolBody("call_disconnect"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
-      request.client.destroy();
+      disconnect.abort();
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
       });
@@ -2020,8 +2712,9 @@ describe("private OpenCode tool bridge", () => {
           expect.objectContaining({ actionId: "tool:call_disconnect", state: "cancelled" }),
         ]);
       });
+      await expect(handled).resolves.toMatchObject({ status: 502 });
     } finally {
-      request.client.destroy();
+      disconnect.abort();
       await fixture.stop();
     }
   });
@@ -2049,26 +2742,170 @@ describe("private OpenCode tool bridge", () => {
       }) as CodingToolFacade["execute"],
     };
     const activity = activityRecorder();
+    const records: ServerDiagnosticRecord[] = [];
     const fixture = await startBridgeFixture(
       facade,
       { requestDeadlineMs: 30, maxInFlight: 1 },
-      { safeActivity: activity.safeActivity },
+      {
+        safeActivity: activity.safeActivity,
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      },
     );
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers(authorized),
+      body: toolBody("call_timeout"),
+    });
     try {
-      request.client.end(toolBody("call_timeout"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
       });
-      await expect(request.response).resolves.toMatchObject({ status: 408 });
+      await expect(handled).resolves.toMatchObject({ status: 408 });
       expect(activity.settlements).toEqual([
         expect.objectContaining({ actionId: "tool:call_timeout", state: "cancelled" }),
       ]);
+      // The bridge's own deadline names itself, the configured default for an ordinary tool.
+      expect(records).toEqual([
+        expect.objectContaining({ message: "tool-bridge-deadline", deadlineMs: 30 }),
+      ]);
     } finally {
-      request.client.destroy();
       await fixture.stop();
     }
+  });
+
+  // #3452 (F44): the deadline a request is admitted under is read from the catalog budget of the
+  // tool it dispatches to (toolBridgeRequestDeadlineMs), pinned here through the public handle()
+  // surface for every tool the catalog settles beyond the sandbox default. The verification budget
+  // is on the order of eleven minutes and an approval's near six, so fake timers step through them
+  // without ever really waiting; the deadline's expiry leaves a diagnostic that names it.
+  it.each(LONG_BUDGET_REQUESTS)(
+    "keeps a %s admitted past the configured default deadline and stops it at its own",
+    async (_label, body, budgetMs) => {
+      const facade: CodingToolFacade = {
+        execute: vi.fn((input: Parameters<CodingToolFacade["execute"]>[0]) => {
+          const { signal } = input;
+          return new Promise((resolve) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                resolve(completed);
+              },
+              { once: true },
+            );
+          });
+        }) as CodingToolFacade["execute"],
+      };
+      const records: ServerDiagnosticRecord[] = [];
+      // A small configured default: were the request bound to it (a regression), it would already
+      // be settled long before the first `advanceTimersByTimeAsync` ends.
+      const fixture = await startBridgeFixture(
+        facade,
+        { requestDeadlineMs: 30, maxInFlight: 1 },
+        {
+          diagnostics: {
+            record: (record): void => {
+              records.push(record);
+            },
+          },
+        },
+      );
+      try {
+        vi.useFakeTimers();
+        const { toolBridgeRequestDeadlineMs } = await compositionModule();
+        const deadlineMs = toolBridgeRequestDeadlineMs(30, body);
+        // The bridge outlives the catalog's own settlement of the tool, so the facade answers first.
+        expect(deadlineMs).toBeGreaterThan(budgetMs);
+        let settled = false;
+        const handled = fixture.runtime.toolBridge
+          .handle({ method: "POST", headers: new Headers(authorized), body })
+          .then((response) => {
+            settled = true;
+            return response;
+          });
+
+        await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(handled).resolves.toMatchObject({ status: 408 });
+        expect(records).toEqual([
+          expect.objectContaining({
+            operation: "coding-runtime.tool-bridge",
+            source: "opencode-runtime-composition.request-deadline",
+            message: "tool-bridge-deadline",
+            httpStatus: 408,
+            deadlineMs,
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+        await fixture.stop();
+      }
+    },
+  );
+
+  it("aborts a body without a recognized verification action at the configured default deadline", async () => {
+    const facade: CodingToolFacade = {
+      execute: vi.fn((input: Parameters<CodingToolFacade["execute"]>[0]) => {
+        const { signal } = input;
+        return new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              resolve(completed);
+            },
+            { once: true },
+          );
+        });
+      }) as CodingToolFacade["execute"],
+    };
+    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
+    try {
+      vi.useFakeTimers();
+      // Valid JSON so it is admitted past preflight and reaches the facade, but declaredAction()
+      // finds no "action" key at all -- requestDeadlineFor() must fall through to the configured
+      // default rather than the verification budget.
+      const handled = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: '{"unrelated":true}',
+      });
+      await vi.advanceTimersByTimeAsync(30);
+      await expect(handled).resolves.toMatchObject({ status: 408 });
+    } finally {
+      vi.useRealTimers();
+      await fixture.stop();
+    }
+  });
+
+  // The budgets the tool bridge chain relies on staying strictly ordered for every tool the catalog
+  // settles beyond the sandbox default, so the sidecar always receives the server's own answer (the
+  // result or the catalog's timeout) instead of racing a client- or bridge-side abort of its own.
+  // Each bound is read from the layer that owns it: the catalog budget from the contract, the
+  // bridge deadline from the bridge, the client timeout from the plugin generator.
+  it.each(LONG_BUDGET_REQUESTS)(
+    "orders the plugin client timeout above the bridge deadline above the catalog budget for a %s",
+    async (_label, body, budgetMs) => {
+      const { toolBridgeRequestDeadlineMs } = await compositionModule();
+      const bridgeDeadlineMs = toolBridgeRequestDeadlineMs(
+        DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
+        body,
+      );
+      expect(openCodeToolClientTimeoutMs(budgetMs)).toBeGreaterThan(bridgeDeadlineMs);
+      expect(bridgeDeadlineMs).toBeGreaterThan(budgetMs);
+      expect(budgetMs).toBeGreaterThan(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
+    },
+  );
+
+  it("orders the verification budget above the default wall time", () => {
+    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
+      DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    );
   });
 });

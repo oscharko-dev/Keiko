@@ -276,43 +276,46 @@ function historyIndexFieldsAreValid(value: UnknownRecord): boolean {
   ].every(Boolean);
 }
 
+// KEIKO-0940: the previous shape re-ran `entries.every(isHistoryEntry)` up to four times per
+// validation call — once inside historyIndexEntriesAreValid's array literal and again inside its
+// two dependent clauses, plus once inside historyIndexTotalsAreValid. For an index at the
+// documented per-workspace cap (512 entries) the per-entry deep guard therefore ran ~2048 times.
+// Compute the base result once and cache the narrowed entries array so downstream calls run at
+// most once per entry per validation invocation.
 function historyIndexEntriesAreValid(value: UnknownRecord): boolean {
   if (!Array.isArray(value.entries)) return false;
   const entries = value.entries;
-  return [
-    entries.length <= EDITOR_LOCAL_HISTORY_MAX_ENTRIES,
-    entries.every(isHistoryEntry),
-    entries.every(
-      (entry): boolean => isWorkspaceRecord(entry) && entry.workspaceId === value.workspaceId,
-    ),
-    entries.every(isHistoryEntry) && entriesHaveUniqueIdentity(entries),
-    entries.every(isHistoryEntry) && versionsPerFileAreBounded(entries),
-  ].every(Boolean);
-}
-
-function historyIndexTotalsAreValid(value: UnknownRecord): boolean {
+  if (entries.length > EDITOR_LOCAL_HISTORY_MAX_ENTRIES) return false;
+  if (!entries.every(isHistoryEntry)) return false;
   if (
-    !Array.isArray(value.entries) ||
-    !value.entries.every(isHistoryEntry) ||
-    !isNonNegativeInteger(value.totalPlaintextBytes)
+    !entries.every(
+      (entry): boolean => isWorkspaceRecord(entry) && entry.workspaceId === value.workspaceId,
+    )
   ) {
     return false;
   }
-  const entries = value.entries;
-  return [
-    value.totalPlaintextBytes === sumEntryBytes(entries),
-    value.totalPlaintextBytes <= EDITOR_LOCAL_HISTORY_MAX_TOTAL_BYTES,
-    sumPinnedBytes(entries) <= EDITOR_LOCAL_HISTORY_MAX_PINNED_BYTES,
-  ].every(Boolean);
+  if (!entriesHaveUniqueIdentity(entries)) return false;
+  if (!versionsPerFileAreBounded(entries)) return false;
+  return true;
+}
+
+function historyIndexTotalsAreValid(
+  value: UnknownRecord,
+  entries: readonly EditorLocalHistoryEntry[],
+): boolean {
+  if (!isNonNegativeInteger(value.totalPlaintextBytes)) return false;
+  if (value.totalPlaintextBytes !== sumEntryBytes(entries)) return false;
+  if (value.totalPlaintextBytes > EDITOR_LOCAL_HISTORY_MAX_TOTAL_BYTES) return false;
+  if (sumPinnedBytes(entries) > EDITOR_LOCAL_HISTORY_MAX_PINNED_BYTES) return false;
+  return true;
 }
 
 function isHistoryIndex(value: unknown): value is EditorLocalHistoryIndex {
   if (!isWorkspaceRecord(value) || !hasOnlyWorkspaceKeys(value, INDEX_KEYS)) return false;
-  return (
-    historyIndexFieldsAreValid(value) &&
-    historyIndexEntriesAreValid(value) &&
-    historyIndexTotalsAreValid(value)
-  );
+  if (!historyIndexFieldsAreValid(value)) return false;
+  if (!historyIndexEntriesAreValid(value)) return false;
+  const entries = value.entries as readonly EditorLocalHistoryEntry[];
+  return historyIndexTotalsAreValid(value, entries);
 }
 
 export function validateEditorLocalHistoryIndex(value: unknown): WorkspaceContractValidation {

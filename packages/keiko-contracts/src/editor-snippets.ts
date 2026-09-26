@@ -95,7 +95,12 @@ type UnknownRecord = Readonly<Record<string, unknown>>;
 
 const MAX_SNIPPETS = 128;
 const MAX_BODY_LINES = 64;
-const MAX_BODY_BYTES = 8 * 1024;
+// Exported (#2906 round 3) so a caller that owns raw, not-yet-split draft text (e.g. a textarea
+// bound to a single string) can cheaply preflight-reject an oversized body BEFORE paying for
+// split()/full snippet validation/UTF-8 accounting -- see WorkspaceSnippetsPanel.tsx's
+// compileDraftBody. Never restate this value; import it.
+export const EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES = 8 * 1024;
+const MAX_BODY_BYTES = EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES;
 const MAX_PREFIXES = 8;
 const MAX_PREFIX_BYTES = 64;
 const MAX_LANGUAGE_SCOPES = 16;

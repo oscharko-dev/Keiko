@@ -1,8 +1,11 @@
+import { withImmediateTransaction } from "./transaction.js";
+import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
 // `node:sqlite` DatabaseSync drives both factories; the node adapter adds directory creation,
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
+import { createCodingHistoryStore } from "./codingHistory.js";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -10,6 +13,20 @@ import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   canonicalDesktopChatTurnReferenceSeed,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatGitChangeScope } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+// Reused directly rather than re-declared: `store/db.ts` lives inside `keiko-server` itself, the
+// same package that owns `ServerLogSink`/`ServerLogEvent`, so — unlike `KnowledgeLogSink`
+// (`keiko-local-knowledge`) or `SecurityLogSink` (`keiko-security`), which each declare their own
+// structural mirror because importing this package from BELOW it would invert ADR-0019's
+// dependency direction — there is no boundary here to protect, and a third near-duplicate
+// interface in the same package would be pure duplication (AGENTS.md §5).
+import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
   chmodIfPresent,
@@ -28,7 +45,7 @@ import type {
   ChatTurnAdmission,
   ChatTurnCompletion,
   ChatTurnInspection,
-  CreateChatOptions,
+  StoreCreateChatOptions,
   NewChatMessage,
   Project,
   StoredPdfCitationPreviewCitation,
@@ -43,7 +60,8 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./types.js";
-import { runMigrations } from "./schema.js";
+import { newReferenceId } from "../reference-id.js";
+import { runMigrations, SCHEMA_VERSION } from "./schema.js";
 import {
   deleteProject as sqlDeleteProject,
   getProject as sqlGetProject,
@@ -58,6 +76,7 @@ import {
   listChats as sqlListChats,
   listChatsLimited as sqlListChatsLimited,
   touchChat as sqlTouchChat,
+  mutateGitChangeScopes as sqlMutateGitChangeScopes,
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
@@ -68,6 +87,7 @@ import {
   findMessageById as sqlFindMessageById,
   attachGroundedAnswer as sqlAttachGroundedAnswer,
   findGroundedPreviewCitations as sqlFindGroundedPreviewCitations,
+  discardLegacyTurnUserMessage as sqlDiscardLegacyTurnUserMessage,
   insertMessage as sqlInsertMessage,
   isLatestChatMessage as sqlIsLatestChatMessage,
   listMessages as sqlListMessages,
@@ -93,6 +113,7 @@ import {
   findWorkspaceManifestRecordByRoot as sqlFindWorkspaceManifestRecordByRoot,
   listWorkspaceManifestRecords as sqlListWorkspaceManifestRecords,
   readWorkspaceManifestRecord as sqlReadWorkspaceManifestRecord,
+  reconnectProjectWorkspaceManifest,
   replaceWorkspaceManifest as sqlReplaceWorkspaceManifest,
   workspaceManifestRootCountForProject,
 } from "./workspaceManifests.js";
@@ -101,7 +122,43 @@ import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy.js";
+import {
+  readGitHubIssueReaderAuthorization as sqlReadGitHubIssueReaderAuthorization,
+  updateGitHubIssueReaderAuthorization as sqlUpdateGitHubIssueReaderAuthorization,
+} from "./github-issue-reader-authorization.js";
 import { invalidRequest } from "./errors.js";
+
+const STORE_OPENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "store.opened",
+  category: "setup",
+  owner: "keiko-server",
+  emitter: "store.db.buildUiStoreOpenedEvent",
+  fields: {
+    encryptionMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["plaintext"],
+    },
+    migrationsAppliedCount: { type: "integer", dataClass: "count", required: true },
+    quickCheckOk: { type: "boolean", dataClass: "closed-enum", required: true },
+    store: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ui"],
+    },
+    storeSchemaVersion: { type: "integer", dataClass: "safe-version", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["ui-store-open"],
+  proofIds: ["store.opened.identity"],
+  releaseImpact: "patch",
+});
 
 const DEFAULT_REDACT = (s: string): string => s;
 
@@ -118,13 +175,24 @@ export function isProjectAvailable(project: { readonly path: string }): boolean 
 interface ResolvedFactoryOptions {
   readonly now: () => number;
   readonly newId: () => string;
+  // A chat id is persisted by the browser as a window reference (#3557 review).
+  readonly newChatId: (correlationId: string | undefined) => string;
   readonly redactString: (s: string) => string;
+}
+
+// An injected id source (tests) keeps its ids; otherwise a chat id is a reference id.
+function chatIdFactory(
+  injected: (() => string) | undefined,
+): (correlationId: string | undefined) => string {
+  if (injected !== undefined) return (): string => injected();
+  return (correlationId): string => newReferenceId({ kind: "chat", correlationId });
 }
 
 function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
   return {
     now: opts?.now ?? ((): number => Date.now()),
     newId: opts?.newId ?? randomUUID,
+    newChatId: chatIdFactory(opts?.newId),
     redactString: opts?.redactString ?? DEFAULT_REDACT,
   };
 }
@@ -141,14 +209,14 @@ function createChatRecord(
   projectPath: string,
   title: string,
   selectedModel: string,
-  opts: CreateChatOptions | undefined,
+  opts: StoreCreateChatOptions | undefined,
 ): Chat {
   const project = sqlGetProject(db, projectPath);
   if (project !== undefined && !isProjectAvailable(project)) {
     throw invalidRequest("Project path is unavailable.");
   }
   return sqlInsertChat(db, {
-    id: options.newId(),
+    id: options.newChatId(opts?.correlationId),
     projectPath,
     title,
     selectedModel,
@@ -239,16 +307,11 @@ function createProjectRecord(
   const normalized = validateProjectPath(path, { mustExist: true });
   const resolvedName = deriveProjectName(name, normalized);
   const now = options.now();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return withImmediateTransaction(db, () => {
     const project = sqlUpsertProject(db, normalized, resolvedName, name !== undefined, now);
     ensureProjectWorkspaceManifest(db, project.path, project.name, now);
-    db.exec("COMMIT");
     return project;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 function reconnectProjectRecord(
@@ -262,7 +325,7 @@ function reconnectProjectRecord(
   try {
     const project = sqlUpdateProject(db, normalized, {}, now);
     validateProjectPath(project.path, { mustExist: true });
-    ensureProjectWorkspaceManifest(db, project.path, project.name, now);
+    reconnectProjectWorkspaceManifest(db, project.path, project.name, now);
     db.exec("COMMIT");
     return project;
   } catch (error) {
@@ -333,18 +396,6 @@ function clientTurnContentMatches(
   return turn.contentDigest === undefined
     ? turn.userMessage?.content === legacyContent
     : turn.contentDigest === expectedDigest;
-}
-
-function withImmediateTransaction<T>(db: DatabaseSync, operation: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = operation();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 function existingTurnAdmission(
@@ -607,7 +658,7 @@ function createMessageBatch(
 // eslint-disable-next-line max-lines-per-function
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
-  return {
+  const store: UiStore = {
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string): Project =>
       createProjectRecord(db, options, path, name),
@@ -626,10 +677,14 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       projectPath: string,
       title: string,
       selectedModel: string,
-      opts?: CreateChatOptions,
+      opts?: StoreCreateChatOptions,
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),
+    mutateGitChangeScopes: (
+      id: string,
+      mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
+    ): Chat => sqlMutateGitChangeScopes(db, id, mutate, options.now()),
     deleteChat: (id: string): void => {
       sqlDeleteChat(db, id);
     },
@@ -686,6 +741,20 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         if (pending.clientTurnId === storedTurnId) stagedTurnAssistants.delete(id);
       }
     },
+    discardLegacyTurnUserMessage: (
+      chatId: string,
+      id: string,
+      restoreUpdatedAtMs: number,
+      expectedTouchedUpdatedAtMs: number | undefined,
+    ): void => {
+      sqlDiscardLegacyTurnUserMessage(
+        db,
+        chatId,
+        id,
+        restoreUpdatedAtMs,
+        expectedTouchedUpdatedAtMs,
+      );
+    },
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),
     attachGroundedAnswer: (id: string, answer, previewCitations): ChatMessage =>
@@ -703,6 +772,16 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     readMemoryAutonomyPolicy: () => sqlReadMemoryAutonomyPolicy(db),
     updateMemoryAutonomyPolicy: (mode, expectedRevision) =>
       sqlUpdateMemoryAutonomyPolicy(db, mode, expectedRevision),
+    readGitHubIssueReaderAuthorization: (repositoryId) =>
+      sqlReadGitHubIssueReaderAuthorization(db, repositoryId),
+    updateGitHubIssueReaderAuthorization: (repositoryId, authorized, expectedRevision) =>
+      sqlUpdateGitHubIssueReaderAuthorization(
+        db,
+        repositoryId,
+        authorized,
+        expectedRevision,
+        new Date(options.now()).toISOString(),
+      ),
     readWorkspaceTrustRecord: (rootRef: string): WorkspaceTrustRecordRow | undefined =>
       sqlReadWorkspaceTrustRecord(db, rootRef),
     writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput): void => {
@@ -727,6 +806,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       db.close();
     },
   };
+  return isolateCodingHistory(store, createCodingHistoryStore(db, store, options.now));
 }
 
 function assertQuickCheckOk(db: DatabaseSync): void {
@@ -741,12 +821,12 @@ function assertQuickCheckOk(db: DatabaseSync): void {
 function quarantineCorruptDb(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinedPath = `${target}.corrupt.${ts}`;
-  renameSync(target, quarantinedPath);
+  atomicPublishRename(target, quarantinedPath, { rename: renameSync });
   const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
       const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
-      renameSync(sidecar, sidecarQuarantinePath);
+      atomicPublishRename(sidecar, sidecarQuarantinePath, { rename: renameSync });
       sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }
@@ -767,6 +847,179 @@ function quarantineCorruptDb(target: string, cause?: unknown): void {
     )}\n`,
     { mode: FILE_MODE },
   );
+}
+
+// ─── StoreFingerprint (Wave 4a, epic #3233 §6.2) ───────────────────────────────────────────────
+//
+// `keiko bundle export`'s manifest assembly calls this to embed a redacted, point-in-time
+// snapshot of this store's schema/integrity state. Every field is a count, a closed-vocabulary
+// label, or a bounded identifier — never a row, a path, a key, a secret, or free text.
+//
+// FIXED, closed table-name list this package already owns — enumerated explicitly from
+// `schema.ts`'s own `CREATE TABLE` statements, never a dynamic `sqlite_master` walk. No migration
+// through v19 has ever dropped or renamed one of these tables. The v28 migration (Issue #3400)
+// internally renames and rebuilds `relationships` and `relationship_lifecycle_history` to widen
+// the `relationships` CHECK constraint, but both tables exist under their ORIGINAL names once the
+// migration completes — this list needs no change for that rebuild.
+export const UI_STORE_FINGERPRINT_TABLES = [
+  "projects",
+  "chats",
+  "chat_messages",
+  "relationships",
+  "relationship_lifecycle_history",
+  "relationship_audit_entries",
+  "task_workspace_instances",
+  "task_workspace_active_pointer",
+  "coding_history_tasks",
+  "coding_history_runs",
+  "coding_history_message_bindings",
+  "coding_runtime_snapshots",
+  "coding_runtime_ci_repair_budgets",
+  "git_journey_outcomes",
+  "coding_runtime_description_jobs",
+  "memory_autonomy_policy",
+  "github_issue_reader_authorization",
+  "workspace_trust_records",
+  "workspace_manifests",
+  "workspace_manifest_roots",
+] as const;
+
+// `computeStoreFingerprint` is READ-ONLY and must never throw, even against a corrupted or
+// half-written file — it is called from `keiko bundle export`, which must still produce a
+// (degraded) manifest for the very store an operator is trying to diagnose. Every read below is
+// therefore individually guarded and degrades in place rather than propagating.
+function safeReadSchemaVersion(db: DatabaseSync): number {
+  try {
+    const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+    return typeof row?.user_version === "number" && Number.isInteger(row.user_version)
+      ? row.user_version
+      : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function boundedSchemaVersion(rawSchemaVersion: number): number {
+  if (rawSchemaVersion < 0) return 0;
+  // Clamped to the binary's own known ceiling: a value above it is unreadable noise from a
+  // corrupted header, not a real future schema this binary could ever have produced migrations for.
+  return Math.min(rawSchemaVersion, SCHEMA_VERSION);
+}
+
+// This store's migrations are tracked only by `schema.ts`'s numeric `PRAGMA user_version`, not by
+// named migration files, so a bounded identifier per applied version number ("v1".."vN") is this
+// store's own honest rendering of "migration-group names, already tracked by the migration
+// runner" — never a fabricated or borrowed name.
+function migrationsAppliedFor(schemaVersion: number): readonly string[] {
+  return Array.from({ length: schemaVersion }, (_unused, index) => `v${String(index + 1)}`);
+}
+
+function readQuickCheckOk(db: DatabaseSync): boolean {
+  try {
+    assertQuickCheckOk(db);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readOneTableRowCount(db: DatabaseSync, table: string): number | undefined {
+  try {
+    // Table names cannot be bind parameters; `table` is always drawn from the fixed, package-owned
+    // `UI_STORE_FINGERPRINT_TABLES` constant above, never from caller input.
+    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as
+      { count?: number } | undefined;
+    return typeof row?.count === "number" ? row.count : undefined;
+  } catch {
+    // Absent (older schema, not yet migrated to this table) or unreadable — omit rather than fail
+    // the whole fingerprint over one table.
+    return undefined;
+  }
+}
+
+function readTableRowCounts(db: DatabaseSync): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const table of UI_STORE_FINGERPRINT_TABLES) {
+    const count = readOneTableRowCount(db, table);
+    if (count !== undefined) counts[table] = count;
+  }
+  return counts;
+}
+
+/**
+ * Redacted, point-in-time snapshot of this store's schema/integrity state (Wave 4a). Read-only
+ * and never throws, including against a corrupted or half-migrated file — a degraded fingerprint
+ * (e.g. `quickCheckOk: false`, an empty `tableRowCounts`) is always returned instead.
+ *
+ * This store is never encrypted at rest (content encryption in this codebase applies to Local
+ * Knowledge and the memory vault, not the UI store), so `encryptionMode` is always `"plaintext"`
+ * and `keySource` is always omitted.
+ */
+export function computeStoreFingerprint(db: DatabaseSync): StoreFingerprint {
+  const schemaVersion = boundedSchemaVersion(safeReadSchemaVersion(db));
+  return {
+    store: "ui",
+    schemaVersion,
+    migrationsApplied: migrationsAppliedFor(schemaVersion),
+    tableRowCounts: readTableRowCounts(db),
+    quickCheckOk: readQuickCheckOk(db),
+    encryptionMode: "plaintext",
+  };
+}
+
+// ─── `store.opened` activity-log event (Wave 4a, epic #3233 §8) ───────────────────────────────
+//
+// `openNodeUiDatabase` is where every real production caller and every test all necessarily pass
+// through, so this is the one place that can honestly say the store just finished opening. A sink
+// failure must never surface as a store-open failure — the real `processServerLogSink()` already
+// cannot throw here (it degrades and self-reports through the process logger), so the guard below
+// protects only a non-conforming sink a future caller or test might supply.
+function startUiStoreOpenTimer(): () => number {
+  const startedAt = performance.now();
+  return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
+}
+
+// Deliberately NOT `computeStoreFingerprint(db)`: that helper also runs `readTableRowCounts` (a
+// `COUNT(*)` scan over all `UI_STORE_FINGERPRINT_TABLES.length` tables — O(rows), no cached count
+// in SQLite) and its own `PRAGMA quick_check` via `readQuickCheckOk`, neither of which this event
+// carries (see the `extra` fields below — there is no `tableRowCounts`). `openNodeUiDatabase`, this
+// function's only caller, already ran `assertQuickCheckOk(db)` earlier in the very same call
+// without it throwing (a throw either propagates past this call entirely or is repaired by the
+// quarantine-and-reopen branch, which re-asserts before falling through here), so `quickCheckOk` is
+// already a known fact and is stated directly instead of re-scanning the whole database a second
+// time on every production server start.
+function buildUiStoreOpenedEvent(db: DatabaseSync, durationMs: number): ServerLogEvent {
+  const schemaVersion = boundedSchemaVersion(safeReadSchemaVersion(db));
+  return activityLogEvent(
+    STORE_OPENED_OPERATION,
+    { durationMs },
+    {
+      store: "ui",
+      // Named `storeSchemaVersion`, not `schemaVersion`: the latter is a RESERVED envelope field
+      // name on the log line itself (the log schema's own version) and would be silently dropped.
+      storeSchemaVersion: schemaVersion,
+      migrationsAppliedCount: migrationsAppliedFor(schemaVersion).length,
+      quickCheckOk: true,
+      encryptionMode: "plaintext",
+      // `keySource` is omitted: this store is never encrypted, so no key is ever resolved.
+    },
+  );
+}
+
+function emitUiStoreOpenedEvent(sink: ServerLogSink | undefined, event: ServerLogEvent): void {
+  if (sink === undefined) return;
+  try {
+    sink.write(event);
+  } catch {
+    try {
+      process.emitWarning("Keiko UI store activity log write failed.", {
+        type: "KeikoActivityLog",
+        code: "KEIKO_LOG_SINK_FAILED",
+      });
+    } catch {
+      // The process warning channel is the last one there is; a report beyond it does not exist.
+    }
+  }
 }
 
 // Issue #639 — bound the SQLITE_BUSY window so concurrent UI/BFF writers (chat writes,
@@ -801,13 +1054,20 @@ export function createInMemoryUiStore(opts?: UiStoreFactoryOptions): UiStore {
 // the same UI database file. The relationship V5 schema lives in this DB (schema.ts §V5);
 // keeping a single connection avoids WAL-coordination overhead. `createNodeUiStore` stays a
 // one-shot convenience for callers that do not need the underlying handle.
-export function openNodeUiDatabase(dbPath: string): DatabaseSync {
+//
+// `sink` is optional and `KnowledgeLogSink`-shaped (Wave 4a, epic #3233 §8): when supplied, a
+// single `store.opened` event is emitted once the open fully succeeds (recovery included), never
+// on a path that still throws. Production wires `processServerLogSink()` in at the composition
+// root (`deps.ts`); every other caller, and every existing test, keeps working unchanged with no
+// sink at all.
+export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): DatabaseSync {
+  const elapsed = startUiStoreOpenTimer();
   ensureDirHardened(dirname(dbPath));
   let db = preparedDatabase(dbPath);
   try {
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
-    runMigrations(db);
+    runMigrations(db, sink);
     sqlRecoverInterruptedClientTurns(db);
   } catch (error) {
     db.close();
@@ -818,12 +1078,34 @@ export function openNodeUiDatabase(dbPath: string): DatabaseSync {
     db = preparedDatabase(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
-    runMigrations(db);
+    runMigrations(db, sink);
     sqlRecoverInterruptedClientTurns(db);
   }
   chmodIfPresent(dbPath, FILE_MODE);
   chmodIfPresent(`${dbPath}-wal`, FILE_MODE);
   chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
+  emitUiStoreOpenedEvent(sink, buildUiStoreOpenedEvent(db, elapsed()));
+  return db;
+}
+
+// Genuinely read-only open for a diagnostic snapshot (Wave 4a, epic #3233 §6.2/§8): `node:sqlite`'s
+// `readOnly` mode opens the file without ever running `PRAGMA journal_mode = WAL`, `runMigrations`,
+// `sqlRecoverInterruptedClientTurns`, or the corruption-quarantine reopen loop `openNodeUiDatabase`
+// runs above — every one of those is a write. A WAL-mode reader/writer elsewhere on the same file is
+// unaffected: SQLite serves a read-only connection through the existing wal-index. Callers computing
+// only `computeStoreFingerprint` must use this, never `openNodeUiDatabase`, so a diagnostic export
+// can never flip a `client_turn_state`, apply a migration, or quarantine the very file an operator
+// is trying to inspect.
+export function openNodeUiDatabaseReadOnly(dbPath: string): DatabaseSync {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // Issue #639's busy_timeout applies here too (Finding 2): without it, a reader opened with no
+  // wait bound can receive an immediate SQLITE_BUSY from a concurrent WAL checkpoint or
+  // schema-changing transaction on a live production server — exactly the moment `keiko support
+  // export` needs the fingerprint to work — and spuriously report the store `open-failed` for a
+  // purely transient reason. This is a connection-local PRAGMA; it performs no write and does not
+  // throw on a `readOnly: true` handle, so it does not affect the genuinely-read-only guarantee
+  // documented above.
+  db.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
   return db;
 }
 

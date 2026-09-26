@@ -9,18 +9,19 @@
 
 import type { QualityIntelligenceReviewRecordId, QualityIntelligenceRunId } from "./ids.js";
 
-export type QualityIntelligenceReviewerKind = "human-author" | "human-reviewer" | "judge";
-
-export const QUALITY_INTELLIGENCE_REVIEWER_KINDS: readonly QualityIntelligenceReviewerKind[] = [
+// KEIKO-0522: const-first + `(typeof X)[number]` (matches retentionPolicy.ts / testQualityRubric.ts).
+// The union type IS the array's element type rather than a hand-maintained mirror of it, so a
+// member added, removed, or mistyped in the array is automatically reflected in the type — there is
+// nothing left for the two to drift apart from.
+export const QUALITY_INTELLIGENCE_REVIEWER_KINDS = [
   "human-author",
   "human-reviewer",
   "judge",
 ] as const;
 
-export type QualityIntelligenceReviewState =
-  "open" | "approved" | "changes-requested" | "rejected" | "withdrawn";
+export type QualityIntelligenceReviewerKind = (typeof QUALITY_INTELLIGENCE_REVIEWER_KINDS)[number];
 
-export const QUALITY_INTELLIGENCE_REVIEW_STATES: readonly QualityIntelligenceReviewState[] = [
+export const QUALITY_INTELLIGENCE_REVIEW_STATES = [
   "open",
   "approved",
   "changes-requested",
@@ -28,16 +29,17 @@ export const QUALITY_INTELLIGENCE_REVIEW_STATES: readonly QualityIntelligenceRev
   "withdrawn",
 ] as const;
 
-export type QualityIntelligenceReviewAction =
-  "approve" | "reject" | "request-changes" | "reopen" | "withdraw";
+export type QualityIntelligenceReviewState = (typeof QUALITY_INTELLIGENCE_REVIEW_STATES)[number];
 
-export const QUALITY_INTELLIGENCE_REVIEW_ACTIONS: readonly QualityIntelligenceReviewAction[] = [
+export const QUALITY_INTELLIGENCE_REVIEW_ACTIONS = [
   "approve",
   "reject",
   "request-changes",
   "reopen",
   "withdraw",
 ] as const;
+
+export type QualityIntelligenceReviewAction = (typeof QUALITY_INTELLIGENCE_REVIEW_ACTIONS)[number];
 
 export function isQualityIntelligenceReviewAction(
   value: unknown,
@@ -60,8 +62,36 @@ export const QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES = [
   "withdrawn",
 ] as const;
 
-export function isTerminalReviewState(state: string): boolean {
-  return (QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES as readonly string[]).includes(state);
+// KEIKO-0522: QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES is a DELIBERATE subset of
+// QualityIntelligenceReviewState, not the whole union, so it cannot bind via `satisfies readonly
+// QualityIntelligenceReviewState[]` the way a full-coverage array can (bffWire.ts's
+// QUALITY_INTELLIGENCE_RUN_STATUSES) — `satisfies` on an array only rejects an invalid element, it
+// never requires a member to be present, so a state added to the union without a terminality
+// decision would pass silently. This Record is a completeness witness instead: its type requires
+// an explicit boolean for EVERY current QualityIntelligenceReviewState, so a state added to the
+// union without an entry here fails to compile (missing property) rather than leaving a silent
+// runtime gap. `isTerminalReviewState` is implemented directly against this witness — not against
+// `.includes()` on the array above — so the predicate is always the exhaustive, compiler-checked
+// classification; the array above stays the enumerable, order-pinned public constant existing
+// consumers iterate (reviewStore.terminalMatrix.test.ts, reviewRecord.test.ts).
+const QUALITY_INTELLIGENCE_REVIEW_STATE_IS_TERMINAL: Readonly<
+  Record<QualityIntelligenceReviewState, boolean>
+> = {
+  open: false,
+  approved: true,
+  "changes-requested": false,
+  rejected: true,
+  withdrawn: true,
+};
+
+export function isTerminalReviewState(state: QualityIntelligenceReviewState): boolean {
+  // Indexing with the exact key union `QualityIntelligenceReviewState` against
+  // `Record<QualityIntelligenceReviewState, boolean>` is total — TypeScript proves every key is
+  // present, so this can never observe `undefined` for a well-typed caller (a caller that bypasses
+  // the parameter type, e.g. via `@ts-expect-error`, gets the plain-object `undefined` a
+  // non-existent key always produces in JS; that boundary is expected to validate before it ever
+  // reaches this predicate — see reviewRecord.test.ts's compile-time pin).
+  return QUALITY_INTELLIGENCE_REVIEW_STATE_IS_TERMINAL[state];
 }
 
 export const QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET: Readonly<

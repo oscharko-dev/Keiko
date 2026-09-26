@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { DE_MESSAGES } from "@/lib/i18n-messages.de";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
+import { DE_CODING_WORKBENCH_MESSAGES } from "./coding-workbench-i18n.de";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 
 describe("Coding Workbench translations", () => {
   it("localizes English and German feature labels", () => {
@@ -12,6 +14,61 @@ describe("Coding Workbench translations", () => {
     expect(translateCodingWorkbench("de", "codingWorkbench.header.summary")).toBe(
       "Starte und beaufsichtige einen gesteuerten Coding-Lauf. Autorität und Ergebnisse bleiben serverseitig.",
     );
+  });
+
+  it("describes scoped Full delivery without advertising approval-free merge", () => {
+    const en = translateCodingWorkbench(
+      "en",
+      "codingWorkbench.mode.autonomous-delivery.description",
+    );
+    const de = translateCodingWorkbench(
+      "de",
+      "codingWorkbench.mode.autonomous-delivery.description",
+    );
+    for (const text of [en, de]) {
+      expect(text).toMatch(/commit/iu);
+      expect(text).toMatch(/push/iu);
+      expect(text).toMatch(/merge/iu);
+    }
+    expect(en).toContain("draft pull request");
+    expect(en).toContain("Merge remains separately approval-gated");
+    expect(de).toContain("Draft-Pull-Request");
+    expect(de).toContain("Merge bleibt separat genehmigungspflichtig");
+    expect(translateCodingWorkbench("en", "codingWorkbench.controls.help")).toContain(
+      "server-confirmed mode",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.controls.help")).toContain(
+      "serverbestätigten Modus",
+    );
+  });
+
+  // ADR-0163 D9: every new key resolves non-empty in BOTH catalogs and the two strings differ, so
+  // a German entry copied from the English one cannot pass as a translation. The wording must never
+  // present the evaluation runtime with an unqualified "ready", "verified" or "confirmed".
+  it.each([
+    "codingWorkbench.readiness.runtime.label",
+    "codingWorkbench.readiness.runtime.verified",
+    "codingWorkbench.readiness.runtime.evaluation",
+    "codingWorkbench.header.readyEvaluation",
+    "codingWorkbench.announcement.runtime.evaluation",
+    "codingWorkbench.setup.runtimeEvaluation",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  it.each([
+    "codingWorkbench.readiness.runtime.evaluation",
+    "codingWorkbench.header.readyEvaluation",
+    "codingWorkbench.announcement.runtime.evaluation",
+    "codingWorkbench.setup.runtimeEvaluation",
+  ] as const)("names %s as unverified rather than ready or verified", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    expect(en.toLowerCase()).toContain("unverified");
+    expect(en).not.toMatch(/\bverified\b(?!\s*evaluation)/u);
   });
 
   it("interpolates runtime state and revision in both catalogs", () => {
@@ -27,6 +84,30 @@ describe("Coding Workbench translations", () => {
         state: "Wird ausgeführt",
       }),
     ).toBe("Wird ausgeführt. Revision 7.");
+  });
+
+  it("falls back instead of crashing when a feature catalog is momentarily stale", () => {
+    const key = "codingWorkbench.activity.toolCount";
+    const messages = DE_CODING_WORKBENCH_MESSAGES as Partial<
+      Record<CodingWorkbenchMessageKey, string>
+    >;
+    const previous = messages[key];
+    expect(previous).toBeDefined();
+    if (previous === undefined) {
+      throw new TypeError(`${key} must exist before the stale-catalog regression runs`);
+    }
+    delete messages[key];
+
+    try {
+      expect(translateCodingWorkbench("de", key, { count: 3 })).toBe("3 calls");
+    } finally {
+      messages[key] = previous;
+    }
+  });
+
+  it("returns the key instead of throwing when no catalog contains a runtime key", () => {
+    const key = "codingWorkbench.runtime.missing" as CodingWorkbenchMessageKey;
+    expect(translateCodingWorkbench("en", key)).toBe(key);
   });
 
   it("localizes the authenticated run-changes surface", () => {
@@ -50,6 +131,25 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  // The retired identity bound only the inode, so a same-path replacement reproduces it exactly:
+  // the operator's approval — not a proof Keiko holds — is what re-registers the tree. The card is
+  // the only place that judgement is made, so both catalogs must state the caveat the
+  // task-workspace-identity-rule-retired troubleshooting entry already carries (#3381 review).
+  it.each(["en", "de"] as const)(
+    "states in %s that repairing re-registers whatever is on disk at that path",
+    (locale) => {
+      const text = translateCodingWorkbench(locale, "codingWorkbench.setup.repairRequired", {
+        finding: "F",
+        effect: "E",
+      });
+      expect(text).toContain(locale === "en" ? "at the same path" : "am selben Pfad");
+      expect(text).toContain(
+        locale === "en" ? "whatever is on disk" : "was dort auf der Festplatte",
+      );
+      expect(text).toContain(locale === "en" ? "Task workspaces" : "Task Workspaces");
+    },
+  );
+
   it("localizes the #2387 research grant, revoke, and auxiliary-outcome vocabulary", () => {
     const keys = [
       "codingWorkbench.research.chipLabel",
@@ -70,6 +170,51 @@ describe("Coding Workbench translations", () => {
     expect(translateCodingWorkbench("en", "codingWorkbench.research.chipLabel")).toBe(
       "Internet · Research only",
     );
+  });
+
+  // #3381 review: both new governance strings — the one that explains why a run's chips no longer
+  // follow the active workspace, and the one that explains a disabled Approve — must exist in both
+  // catalogs, since either shown blank leaves an operator with an unexplained blocked control.
+  it.each([
+    "codingWorkbench.composer.workspaceMismatch",
+    "codingWorkbench.approval.evidenceRequired",
+    "codingWorkbench.questions.answerRejected",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  // #3390 wave: the trust affordance's strings — restated in both catalogs, not copied verbatim
+  // from one to the other. The drift notice (ADR-0147 D3, 2026-09-10) and the run-waiting notice
+  // (the pauseReason "workspace-script-trust" branch, 2026-09-10) join them.
+  it.each([
+    "codingWorkbench.trust.restrictedNotice",
+    "codingWorkbench.trust.driftNotice",
+    "codingWorkbench.trust.runWaitingNotice",
+    "codingWorkbench.trust.allow",
+    "codingWorkbench.trust.allowing",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  // #3390 wave: the workbench's own event-label catalog (`codingWorkbench.event.${eventKind}`,
+  // read by codingWorkbenchLabels.ts) restates a distinct string for the operator-decision runtime
+  // event kind — separate from the desktop-shell activity-bus label
+  // ("activity.event.operatorDecision" in i18n-messages.en.ts / .de.ts, covered where that catalog
+  // is tested).
+  it("localizes codingWorkbench.event.operator-decision in both catalogs", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.event.operator-decision");
+    const de = translateCodingWorkbench("de", "codingWorkbench.event.operator-decision");
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
   });
 
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {

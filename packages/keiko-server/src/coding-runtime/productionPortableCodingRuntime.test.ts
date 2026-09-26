@@ -1,21 +1,41 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-sandbox";
+import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
-import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
+import {
+  discoverQualifiedPortableOpenCode,
+  portableInstallCarriesReleaseSignature,
+} from "./productionPortableCodingRuntime.js";
 
 const TARGET = "windows-x64";
 const COMMIT = "c".repeat(40);
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
 const SUPERVISOR = "qualified native supervisor";
 const SECURE_READ = "qualified secure read";
+const LINUX_TARGET = "linux-x64";
+const LINUX_LAUNCHER = "qualified Linux launcher";
+const LINUX_NODE = "qualified Linux Node.js";
+const LINUX_USEARCH = "qualified Linux USearch";
 
 describe("production portable OpenCode discovery", () => {
   it("discovers only a disk-verified sidecar with a signed exact-byte attestation", () => {
@@ -38,6 +58,111 @@ describe("production portable OpenCode discovery", () => {
       qualification: { backend: "windows-job-object" },
     });
   });
+
+  it("discovers a Windows generation with root setup and launcher authorities", () => {
+    const fixture = windowsGenerationInstall();
+    const result = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: fixture.installRoot,
+      platform: "win32",
+      arch: "x64",
+      attestation: attestation(fixture.resourceRoot),
+    });
+
+    expect(result).toMatchObject({
+      installRoot: realpathSync(fixture.resourceRoot),
+      target: TARGET,
+      nativeHelperPath: join(
+        realpathSync(fixture.resourceRoot),
+        "runtime",
+        "native",
+        "keiko-runtime-supervisor.exe",
+      ),
+    });
+  });
+
+  it.each([
+    ["missing runtime", undefined],
+    ["null runtime", null],
+    ["array runtime", []],
+    ["wrong platform", { nodePlatform: "darwin", nodeArchitecture: "x64" }],
+    ["wrong architecture", { nodePlatform: "win32", nodeArchitecture: "arm64" }],
+  ] as const)("refuses a Windows generation with %s", (_label, runtime) => {
+    const fixture = windowsGenerationInstall();
+    const setup = JSON.parse(readFileSync(fixture.setupPath, "utf8")) as Record<string, unknown>;
+    setup.runtime = runtime;
+    writeFileSync(fixture.setupPath, JSON.stringify(setup));
+
+    expect(discoverWindowsGeneration(fixture)).toBeUndefined();
+  });
+
+  it.each(["setup", "launcher"] as const)(
+    "refuses an oversized sparse Windows %s identity file before reading its contents",
+    (identity) => {
+      const fixture = windowsGenerationInstall();
+      truncateSync(
+        identity === "setup" ? fixture.setupPath : join(fixture.installRoot, "Keiko.exe"),
+        identity === "setup" ? 64 * 1024 + 1 : 64 * 1024 * 1024 + 1,
+      );
+
+      expect(discoverWindowsGeneration(fixture)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["setup", "symbolic"],
+    ["setup", "hard"],
+    ["launcher", "symbolic"],
+    ["launcher", "hard"],
+  ] as const)("refuses a Windows generation with a %s %s link", (identity, linkKind) => {
+    const fixture = windowsGenerationInstall();
+    const path = identity === "setup" ? fixture.setupPath : join(fixture.installRoot, "Keiko.exe");
+    const replacement = `${path}.linked`;
+    renameSync(path, replacement);
+    if (linkKind === "symbolic") {
+      symlinkSync(replacement, path);
+    } else {
+      linkSync(replacement, path);
+    }
+
+    expect(discoverWindowsGeneration(fixture)).toBeUndefined();
+    unlinkSync(path);
+  });
+
+  it.each(["setup-generation", "launcher", "package-version"] as const)(
+    "refuses a Windows generation with drifted %s binding",
+    (scenario) => {
+      const fixture = windowsGenerationInstall();
+      if (scenario === "setup-generation") {
+        const setup = JSON.parse(readFileSync(fixture.setupPath, "utf8")) as Record<
+          string,
+          unknown
+        >;
+        const generation = setup.windowsGeneration;
+        if (typeof generation !== "object" || generation === null || Array.isArray(generation)) {
+          throw new Error("generation fixture is malformed");
+        }
+        setup.windowsGeneration = { ...generation, launcherSha256: "f".repeat(64) };
+        writeFileSync(fixture.setupPath, JSON.stringify(setup));
+      } else if (scenario === "launcher") {
+        writeFileSync(join(fixture.installRoot, "Keiko.exe"), "replaced launcher");
+      } else {
+        writeFileSync(
+          join(fixture.resourceRoot, "app", "package.json"),
+          JSON.stringify({ name: "@oscharko-dev/keiko", version: "9.9.9" }),
+        );
+      }
+      expect(
+        discoverQualifiedPortableOpenCode({
+          env: {},
+          installRoot: fixture.installRoot,
+          platform: "win32",
+          arch: "x64",
+          attestation: attestation(fixture.resourceRoot),
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it.each(["stale-attestation", "sidecar-drift", "helper-drift", "unsupported-host"] as const)(
     "fails closed for %s",
@@ -66,6 +191,44 @@ describe("production portable OpenCode discovery", () => {
       expect(result).toBeUndefined();
     },
   );
+
+  it.each(["Keiko", "runtime/node/bin/node", "runtime/native/usearch.node"])(
+    "refuses Linux production activation after %s changes",
+    (relativePath) => {
+      const fixture = linuxPortableInstall();
+      expect(discoverLinux(fixture)).toMatchObject({
+        target: LINUX_TARGET,
+        qualification: { backend: "linux-namespace-gateway" },
+      });
+
+      writeFileSync(join(fixture.root, ...relativePath.split("/")), "drifted runtime bytes");
+
+      expect(discoverLinux(fixture)).toBeUndefined();
+    },
+  );
+
+  it("emits body-free diagnostics for a rejected Linux component binding", () => {
+    const fixture = linuxPortableInstall();
+    const records: unknown[] = [];
+    writeFileSync(join(fixture.root, "runtime", "node", "bin", "node"), "customer bytes");
+
+    expect(
+      discoverQualifiedPortableOpenCode({
+        env: {},
+        installRoot: fixture.root,
+        platform: "linux",
+        arch: "x64",
+        attestation: { readReceipt: () => fixture.receipt },
+        diagnostics: { record: (record): void => void records.push(record) },
+      }),
+    ).toBeUndefined();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "coding.runtime.discover",
+      source: "coding.runtime.discovery",
+    });
+    expect(JSON.stringify(records)).not.toContain("customer bytes");
+  });
 
   it("does not treat ambient PATH or an arbitrary executable as an installed runtime", () => {
     expect(
@@ -175,6 +338,393 @@ describe("production portable OpenCode discovery", () => {
   });
 });
 
+/**
+ * ADR-0163 D9. The declared evaluation lane activates WITHOUT any platform attestation, and the
+ * attestation port is never consulted — `refusingAttestation` throws if it is reached, so this is
+ * a structural-skip proof, not a tolerate-the-failure one. Every other integrity predicate stays
+ * exactly as strict, which the adversarial suite below asserts one mutation at a time.
+ */
+describe("packaged evaluation lane", () => {
+  it("refuses the evaluation lane on an install that carries a release signature", () => {
+    // The lane downgrade this guards: the declaration lives in .portable/runtime-activation.json,
+    // inside the resource root, and honouring it is what turns the platform seal off. Without this
+    // refusal, anyone able to rewrite that one file on a SIGNED install could switch off the very
+    // codesign/Authenticode check that would have detected the rewrite, and every surviving
+    // predicate would still pass because they are all recomputed against that same manifest.
+    const root = portableInstall("evaluation");
+    // A real install always ships the launcher; the fixture does not, and without signable code
+    // there is nothing to downgrade FROM.
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+
+    const runtime = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: root,
+      platform: "win32",
+      arch: "x64",
+      // Stands for a release-signed launcher: the Authenticode probe yields a signer thumbprint.
+      // An unsigned one yields none, which is why an evaluation build is unaffected. (The macOS
+      // half of the same guard reads `codesign -d`, where a signed bundle reports a real
+      // TeamIdentifier and the shipped unsigned artifact reports "not set" — measured.)
+      commandRunner: () => ({ status: 0, stdout: `${"A".repeat(40)}\n`, stderr: "" }),
+      attestation: {
+        readReceipt: (): never => {
+          throw new Error("discovery must refuse before reaching platform attestation");
+        },
+      },
+    });
+
+    expect(runtime).toBeUndefined();
+  });
+
+  it("answers the public release-signature probe with the launch surface's fail-closed contract", () => {
+    // The portable launcher waives macOS containment activation only on this probe's "false" —
+    // an install the platform reports as unsigned. Its fail-closed direction must match the lane
+    // guard exactly: a probe that cannot answer counts as signed.
+    const root = portableInstall("evaluation");
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => ({
+        status: 0,
+        stdout: `${"A".repeat(40)}\n`,
+        stderr: "",
+      })),
+    ).toBe(false); // no launcher on disk: nothing to downgrade from
+
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => ({
+        status: 0,
+        stdout: `${"A".repeat(40)}\n`,
+        stderr: "",
+      })),
+    ).toBe(true); // signer thumbprint present: release-signed
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => ({
+        status: 0,
+        stdout: "",
+        stderr: "",
+      })),
+    ).toBe(false); // platform reports no signer: unsigned
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => {
+        throw new Error("probe unavailable");
+      }),
+    ).toBe(true); // probe failure on present code: fail closed toward "signed"
+  });
+
+  it("still activates the evaluation lane when the install carries no release signature", () => {
+    const root = portableInstall("evaluation");
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+
+    const runtime = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: root,
+      platform: "win32",
+      arch: "x64",
+      commandRunner: () => ({ status: 0, stdout: "", stderr: "" }),
+      attestation: {
+        readReceipt: (): never => {
+          throw new Error("platform attestation must not run on the evaluation lane");
+        },
+      },
+    });
+
+    expect(runtime).toMatchObject({ platformAssurance: "evaluation-unqualified" });
+  });
+
+  it("activates a declared evaluation artifact without any platform attestation", () => {
+    const root = portableInstall("evaluation");
+
+    const runtime = discoverEvaluation(root);
+
+    expect(runtime).toMatchObject({
+      installRoot: realpathSync(root),
+      target: TARGET,
+      platformAssurance: "evaluation-unqualified",
+      sidecar: { summary: { name: "opencode-compatible" } },
+      qualification: { platform: "win32", arch: "x64", backend: "windows-job-object" },
+    });
+    expect(runtime?.qualification.releaseReceipt).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    // The honest availability record travels with the verification to every downstream consumer.
+    expect(runtime?.sidecar.availability).toMatchObject({
+      signatureVerified: false,
+      qualificationVerified: false,
+      archiveDigestVerified: true,
+      executableTreeDigestVerified: true,
+    });
+  });
+
+  it("still reports release-qualified for a production artifact", () => {
+    expect(discover(portableInstall())).toMatchObject({
+      platformAssurance: "release-qualified",
+    });
+  });
+
+  // A plain staging artifact is the default output of `stage-portable-runtime.mjs`. It must stay
+  // refused, before and after the lane exists — nothing is promoted by accident.
+  it.each(["staging"] as const)("refuses a plain %s artifact", (lane) => {
+    const root = portableInstall(lane);
+    expect(discoverEvaluation(root)).toBeUndefined();
+    expect(discover(root)).toBeUndefined();
+  });
+
+  // The lane is ONE coherent artifact-wide declaration, never a per-block waiver.
+  it.each([
+    [
+      "security declares evaluation while the sidecar declares production",
+      (activation: FixtureActivation): void => {
+        activation.security = laneSecurity("evaluation");
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          ...laneSecurity("production"),
+        };
+      },
+    ],
+    [
+      "security declares production while the sidecar declares evaluation",
+      (activation: FixtureActivation): void => {
+        activation.security = laneSecurity("production");
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          ...laneSecurity("evaluation"),
+        };
+      },
+    ],
+    [
+      "a native helper declares the other lane",
+      (activation: FixtureActivation): void => {
+        activation.nativeHelpers[0].signing = laneHelperSigning("production");
+      },
+    ],
+    [
+      "a native helper carries no signing block at all",
+      (activation: FixtureActivation): void => {
+        delete activation.nativeHelpers[1].signing;
+      },
+    ],
+    [
+      "the security block is absent",
+      (activation: FixtureActivation): void => {
+        delete activation.security;
+      },
+    ],
+  ])("refuses a mixed declaration: %s", (_name, mutate) => {
+    const root = portableInstall("evaluation");
+    mutateActivation(root, mutate);
+    expect(discoverEvaluation(root)).toBeUndefined();
+  });
+
+  // EVERY integrity check the owner listed as NOT waived, one mutation at a time.
+  it.each([
+    [
+      "one byte flipped in the sidecar executable",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "opencode.cmd"), "@echo off\r\r");
+      },
+    ],
+    [
+      "an extra file added under the sidecar payload root",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "smuggled.txt"), "extra");
+      },
+    ],
+    [
+      "the license evidence mutated",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "LICENSE.txt"), "tampered license");
+      },
+    ],
+    [
+      "the SBOM evidence mutated",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "evidence", "sbom.cdx.json"), "{}");
+      },
+    ],
+    [
+      "the supervisor helper bytes drifted",
+      (root: string): void => {
+        writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), "drifted");
+      },
+    ],
+    [
+      "the secure-read helper bytes drifted",
+      (root: string): void => {
+        writeFileSync(
+          join(root, "runtime", "native", "keiko-secure-workspace-read.exe"),
+          "drifted!!",
+        );
+      },
+    ],
+  ])("refuses an evaluation artifact with %s", (_name, tamper) => {
+    const root = portableInstall("evaluation");
+    tamper(root);
+    expect(discoverEvaluation(root)).toBeUndefined();
+  });
+
+  it.each([
+    // Discovery rejects a malformed sizeBytes; it does NOT recompute the declared byte count from
+    // disk, because the payload tree digest already binds the bytes exactly (an off-by-one payload
+    // is caught by the "one byte flipped" and "extra file" cases above). The declared value's own
+    // correctness is a producer-schema obligation (validateSidecarPayload), pinned in
+    // scripts/__tests__/portable-runtime.test.mjs.
+    [
+      "a zero sizeBytes",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].sizeBytes = 0;
+      },
+    ],
+    [
+      "a negative sizeBytes",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].sizeBytes = -1;
+      },
+    ],
+    [
+      "a non-integer sizeBytes",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].sizeBytes = 12.5;
+      },
+    ],
+    [
+      "a payloadRootPath that is not the sidecar's own root",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].payloadRootPath = "runtime/sidecars/other";
+      },
+    ],
+    [
+      "an executablePath resolved outside the payload root",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].executablePath = "runtime/native/opencode.cmd";
+      },
+    ],
+    [
+      "a foreign shipped executable tree algorithm",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          shippedExecutableTreeAlgorithm: "sha256",
+        };
+      },
+    ],
+    [
+      "an absent shipped executable digest",
+      (activation: FixtureActivation): void => {
+        const signing = { ...activation.sidecarRuntimes[0].signing };
+        delete signing.shippedExecutableSha256;
+        activation.sidecarRuntimes[0].signing = signing;
+      },
+    ],
+    [
+      "a non-hex shipped executable digest",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          shippedExecutableSha256: "not-a-digest",
+        };
+      },
+    ],
+    [
+      "a drifted payloadSha256",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].payloadSha256 = "1".repeat(64);
+      },
+    ],
+    [
+      "a native-helper sizeBytes that disagrees with disk",
+      (activation: FixtureActivation): void => {
+        activation.nativeHelpers[0].sizeBytes = Number(activation.nativeHelpers[0].sizeBytes) + 1;
+      },
+    ],
+    [
+      "a native-helper shippedSha256 that disagrees with disk",
+      (activation: FixtureActivation): void => {
+        activation.nativeHelpers[1].shippedSha256 = "2".repeat(64);
+      },
+    ],
+    [
+      "a sourceCommitSha that is not 40 hex characters",
+      (activation: FixtureActivation): void => {
+        activation.sourceCommitSha = "not-a-commit";
+      },
+    ],
+    [
+      "a broken redistribution approval",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].releaseApproval = {
+          redistribution: { status: "withdrawn" },
+        };
+      },
+    ],
+  ])("refuses an evaluation artifact declaring %s", (_name, mutate) => {
+    const root = portableInstall("evaluation");
+    mutateActivation(root, mutate);
+    expect(discoverEvaluation(root)).toBeUndefined();
+  });
+
+  /**
+   * The synthesized receipt is computed over the COMPLETE qualification binding, so the activation
+   * digest and both native-helper digests remain load-bearing for the runtime identity: a swapped
+   * supervisor binary still changes the receipt.
+   */
+  it("binds the synthesized receipt to the artifact rather than to a constant", () => {
+    const first = discoverEvaluation(portableInstall("evaluation"))?.qualification.releaseReceipt;
+    const second = discoverEvaluation(portableInstall("evaluation"))?.qualification.releaseReceipt;
+    expect(first).toBeDefined();
+    // Two byte-identical artifacts agree: the receipt is deterministic, not random.
+    expect(second).toBe(first);
+
+    const drifted = portableInstall("evaluation");
+    mutateActivation(drifted, (activation) => {
+      // The drift injects the CURRENT product identity over the fixture's archived 0.2.15 one.
+      // Derived from the exported constant so a version bump cannot silently turn this into a
+      // no-op mutation (review findings on #3054).
+      activation.product = {
+        packageName: "@oscharko-dev/keiko",
+        packageVersion: KEIKO_PRODUCT_VERSION,
+      };
+    });
+    expect(discoverEvaluation(drifted)?.qualification.releaseReceipt).not.toBe(first);
+  });
+});
+
+type FixtureRecord = Record<string, unknown>;
+
+interface FixtureSidecar extends FixtureRecord {
+  signing: FixtureRecord;
+}
+
+interface FixtureHelper extends FixtureRecord {
+  signing?: FixtureRecord;
+}
+
+// Tuple shapes, not arrays: the fixture always carries exactly one sidecar and exactly two native
+// helpers, so the mutators below index them without an undefined narrowing at every call.
+interface FixtureActivation extends FixtureRecord {
+  sidecarRuntimes: [FixtureSidecar, ...FixtureSidecar[]];
+  nativeHelpers: [FixtureHelper, FixtureHelper, ...FixtureHelper[]];
+}
+
+function mutateActivation(root: string, mutate: (activation: FixtureActivation) => void): void {
+  const path = join(root, ".portable", "runtime-activation.json");
+  const activation = JSON.parse(readFileSync(path, "utf8")) as FixtureActivation;
+  mutate(activation);
+  writeFileSync(path, JSON.stringify(activation));
+}
+
+/** Discovery with an attestation port that FAILS if the platform chain is ever reached. */
+function discoverEvaluation(root: string): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+  return discoverQualifiedPortableOpenCode({
+    env: {},
+    installRoot: root,
+    platform: "win32",
+    arch: "x64",
+    attestation: {
+      readReceipt: (): never => {
+        throw new Error("platform attestation must not run on the evaluation lane");
+      },
+    },
+  });
+}
+
 function discover(
   root: string,
   stale = false,
@@ -217,16 +767,99 @@ function attestation(
   };
 }
 
-function portableInstall(): string {
+interface LinuxFixture {
+  readonly root: string;
+  readonly receipt: RuntimeQualificationReceipt;
+}
+
+function discoverLinux(
+  fixture: LinuxFixture,
+): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+  return discoverQualifiedPortableOpenCode({
+    env: {},
+    installRoot: fixture.root,
+    platform: "linux",
+    arch: "x64",
+    attestation: { readReceipt: () => fixture.receipt },
+  });
+}
+
+function linuxPortableInstall(): LinuxFixture {
+  const root = mkdtempSync(join(tmpdir(), "keiko-linux-portable-runtime-"));
+  const sidecar = linuxSidecarFixture();
+  writeLinuxRuntimeFiles(root, sidecar.files);
+  const activation = linuxActivation(sidecar.runtime);
+  const activationPath = join(root, ".portable", "runtime-activation.json");
+  writeFileSync(activationPath, JSON.stringify(activation));
+  return { root, receipt: linuxReceipt(root, activationPath, sidecar.payloadSha256) };
+}
+
+function writeLinuxRuntimeFiles(
+  root: string,
+  sidecarFiles: Readonly<Record<string, string>>,
+): void {
+  const files = {
+    ".portable/setup-manifest.json": JSON.stringify({
+      schemaVersion: 1,
+      platformTarget: LINUX_TARGET,
+      stable: true,
+    }),
+    Keiko: LINUX_LAUNCHER,
+    "runtime/node/bin/node": LINUX_NODE,
+    "runtime/native/keiko-secure-workspace-read": SECURE_READ,
+    "runtime/native/usearch.node": LINUX_USEARCH,
+    "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js": SUPERVISOR,
+    ...Object.fromEntries(
+      Object.entries(sidecarFiles).map(([path, bytes]) => [`${SIDECAR_ROOT}/${path}`, bytes]),
+    ),
+  };
+  for (const [path, bytes] of Object.entries(files)) {
+    const destination = join(root, ...path.split("/"));
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, bytes);
+  }
+}
+
+function linuxReceipt(
+  root: string,
+  activationPath: string,
+  payloadSha256: string,
+): RuntimeQualificationReceipt {
+  return {
+    schemaVersion: 2,
+    suiteVersion: "runtime-tree-qualification-v1",
+    platformTarget: LINUX_TARGET,
+    sourceCommitSha: COMMIT,
+    activationManifestSha256: sha256(readFileSync(activationPath)),
+    supervisorSha256: sha256(SUPERVISOR),
+    secureReadSha256: sha256(SECURE_READ),
+    sidecars: [{ name: "opencode-compatible", sha256: payloadSha256 }],
+    runtimeComponents: [
+      { name: "primary-launcher", sha256: sha256(readFileSync(join(root, "Keiko"))) },
+      {
+        name: "node-runtime",
+        sha256: sha256(readFileSync(join(root, "runtime", "node", "bin", "node"))),
+      },
+      {
+        name: "usearch",
+        sha256: sha256(readFileSync(join(root, "runtime", "native", "usearch.node"))),
+      },
+    ],
+    backend: "linux-namespace-gateway",
+    result: "passed",
+  };
+}
+
+function portableInstall(lane: FixtureLane = "production"): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-"));
-  const sidecar = sidecarFixture();
+  const sidecar = sidecarFixture(lane);
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "runtime", "native"), { recursive: true });
   writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), SUPERVISOR);
   writeFileSync(join(root, "runtime", "native", "keiko-secure-workspace-read.exe"), SECURE_READ);
   writeFileSync(
     join(root, ".portable", "setup-manifest.json"),
-    JSON.stringify({ platformTarget: TARGET, stable: true }),
+    JSON.stringify({ schemaVersion: 1, platformTarget: TARGET, stable: true }),
   );
   for (const [path, bytes] of Object.entries(sidecar.files)) {
     const destination = join(root, SIDECAR_ROOT, path);
@@ -235,12 +868,75 @@ function portableInstall(): string {
   }
   writeFileSync(
     join(root, ".portable", "runtime-activation.json"),
-    JSON.stringify(runtimeActivation(sidecar.runtime)),
+    JSON.stringify(runtimeActivation(sidecar.runtime, lane)),
   );
   return root;
 }
 
-function sidecarFixture(): {
+function windowsGenerationInstall(): {
+  readonly installRoot: string;
+  readonly resourceRoot: string;
+  readonly setupPath: string;
+} {
+  const installRoot = portableInstall();
+  const treeSha256 = "a".repeat(64);
+  const resourceRoot = join(installRoot, ".portable", "generations", treeSha256);
+  mkdirSync(resourceRoot, { recursive: true });
+  renameSync(join(installRoot, "runtime"), join(resourceRoot, "runtime"));
+  renameSync(
+    join(installRoot, ".portable", "runtime-activation.json"),
+    join(resourceRoot, ".portable-runtime-activation.json"),
+  );
+  mkdirSync(join(resourceRoot, ".portable"), { recursive: true });
+  renameSync(
+    join(resourceRoot, ".portable-runtime-activation.json"),
+    join(resourceRoot, ".portable", "runtime-activation.json"),
+  );
+  mkdirSync(join(resourceRoot, "app"), { recursive: true });
+  writeFileSync(
+    join(resourceRoot, "app", "package.json"),
+    JSON.stringify({ name: "@oscharko-dev/keiko", version: KEIKO_PRODUCT_VERSION }),
+  );
+  const launcher = "bounded signed launcher fixture";
+  writeFileSync(join(installRoot, "Keiko.exe"), launcher);
+  const setupPath = join(installRoot, ".portable", "setup-manifest.json");
+  writeFileSync(
+    setupPath,
+    JSON.stringify({
+      schemaVersion: 2,
+      platformTarget: TARGET,
+      packageName: "@oscharko-dev/keiko",
+      packageVersion: KEIKO_PRODUCT_VERSION,
+      stable: true,
+      primaryLauncher: "Keiko.exe",
+      bootstrapUpdateEligible: false,
+      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+      windowsGeneration: {
+        schemaVersion: 1,
+        resourceRoot: `.portable/generations/${treeSha256}`,
+        treeHashSchema: "KHT1",
+        treeSha256,
+        launcherPath: "Keiko.exe",
+        launcherSha256: sha256(launcher),
+      },
+    }),
+  );
+  return { installRoot, resourceRoot, setupPath };
+}
+
+function discoverWindowsGeneration(
+  fixture: ReturnType<typeof windowsGenerationInstall>,
+): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+  return discoverQualifiedPortableOpenCode({
+    env: {},
+    installRoot: fixture.installRoot,
+    platform: "win32",
+    arch: "x64",
+    attestation: attestation(fixture.resourceRoot),
+  });
+}
+
+function sidecarFixture(lane: FixtureLane = "production"): {
   readonly runtime: Record<string, unknown>;
   readonly files: Readonly<Record<string, string>>;
   readonly payloadSha256: string;
@@ -269,18 +965,18 @@ function sidecarFixture(): {
         owner: "anomalyco",
         repository: "opencode",
         name: "opencode",
-        version: "1.17.17",
-        tag: "v1.17.17",
-        commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+        version: "2.0.10",
+        tag: "v2.0.10",
+        commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
       },
       adapterCompatibility: {
         adapterName: "keiko-coding-sidecar",
-        adapterVersion: "1",
+        adapterVersion: "2",
         transport: "http-sse",
       },
       protocolSchema: {
-        path: "packages/sdk/openapi.json",
-        sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+        path: "packages/protocol/openapi.json",
+        sha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
         hashAlgorithm: "sha256",
         hashEncoding: "lowercase-hex",
         digestInput: "upstream-raw-bytes",
@@ -304,14 +1000,7 @@ function sidecarFixture(): {
         sha256: sha256(files["evidence/sbom.cdx.json"]),
       },
       signing: {
-        verificationPolicy: "production",
-        verificationStatus: "verified-production",
-        verificationReasonCodes: [],
-        signatureKind: "authenticode",
-        signatureVerified: true,
-        notarizationRequired: false,
-        notarizationVerified: false,
-        verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+        ...laneSecurity(lane),
         shippedExecutableSha256: executableSha256,
         shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
         shippedExecutableTreeSha256: sha256(`opencode.cmd\0${executableSha256}\0`),
@@ -320,7 +1009,159 @@ function sidecarFixture(): {
   };
 }
 
-function runtimeActivation(runtime: Record<string, unknown>): Record<string, unknown> {
+function linuxSidecarFixture(): {
+  readonly runtime: Record<string, unknown>;
+  readonly files: Readonly<Record<string, string>>;
+  readonly payloadSha256: string;
+} {
+  const base = sidecarFixture().runtime;
+  const baseSigning = base.signing as Record<string, unknown>;
+  const files = {
+    "LICENSE.txt": "sidecar license",
+    "evidence/sbom.cdx.json": '{"bomFormat":"CycloneDX"}',
+    "bin/opencode": "qualified Linux OpenCode",
+  } as const;
+  const payloadSha256 = treeSha256(files);
+  const executableSha256 = sha256(files["bin/opencode"]);
+  return {
+    files,
+    payloadSha256,
+    runtime: {
+      ...base,
+      archive: { platformTarget: LINUX_TARGET, sha256: "d".repeat(64) },
+      platformTarget: LINUX_TARGET,
+      executablePath: `${SIDECAR_ROOT}/bin/opencode`,
+      payloadSha256,
+      sizeBytes: Object.values(files).reduce((sum, bytes) => sum + Buffer.byteLength(bytes), 0),
+      signing: {
+        ...baseSigning,
+        signatureKind: "github-oidc-attested",
+        verificationChecks: { provenanceVerified: true },
+        shippedExecutableSha256: executableSha256,
+        shippedExecutableTreeSha256: sha256(`bin/opencode\0${executableSha256}\0`),
+      },
+    },
+  };
+}
+
+function treeSha256(files: Readonly<Record<string, string>>): string {
+  const hash = createHash("sha256");
+  for (const [path, bytes] of Object.entries(files).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    hash.update(`${path}\0${sha256(bytes)}\0`);
+  }
+  return hash.digest("hex");
+}
+
+function linuxActivation(sidecar: Record<string, unknown>): Record<string, unknown> {
+  const security = {
+    ...laneSecurity("production"),
+    signatureKind: "github-oidc-attested",
+    verificationChecks: { provenanceVerified: true },
+  };
+  return {
+    schemaVersion: 1,
+    suiteVersion: "runtime-tree-qualification-v1",
+    sourceCommitSha: COMMIT,
+    platformTarget: LINUX_TARGET,
+    runtime: { nodePlatform: "linux", nodeArchitecture: "x64" },
+    security,
+    nativeHelpers: [
+      linuxNativeHelper("keiko-secure-workspace-read", SECURE_READ),
+      linuxNativeHelper("keiko-runtime-supervisor", SUPERVISOR),
+    ],
+    nativeAddons: [
+      {
+        name: "usearch",
+        platformTarget: LINUX_TARGET,
+        executablePath: "runtime/native/usearch.node",
+        shippedSha256: sha256(LINUX_USEARCH),
+        sizeBytes: Buffer.byteLength(LINUX_USEARCH),
+      },
+    ],
+    sidecarRuntimes: [sidecar],
+  };
+}
+
+function linuxNativeHelper(name: string, bytes: string): Record<string, unknown> {
+  return {
+    name,
+    platformTarget: LINUX_TARGET,
+    executablePath:
+      name === "keiko-runtime-supervisor"
+        ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
+        : `runtime/native/${name}`,
+    shippedSha256: sha256(bytes),
+    sizeBytes: Buffer.byteLength(bytes),
+    signing: {
+      signatureKind: "github-oidc-attested",
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    },
+  };
+}
+
+type FixtureLane = "production" | "evaluation" | "staging";
+
+/**
+ * The declared verification lane a real activation document carries at the top level, in each
+ * sidecar signing block, and (in its 5-key shape) in each native-helper signing block.
+ */
+function laneSecurity(lane: FixtureLane): Record<string, unknown> {
+  if (lane === "production") {
+    return {
+      verificationPolicy: "production",
+      verificationStatus: "verified-production",
+      verificationReasonCodes: [],
+      signatureKind: "authenticode",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+      verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+    };
+  }
+  if (lane === "evaluation") {
+    return {
+      verificationPolicy: "evaluation",
+      verificationStatus: "evaluation-unqualified",
+      verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+      signatureKind: "authenticode",
+      signatureVerified: false,
+      notarizationRequired: false,
+      notarizationVerified: false,
+      verificationChecks: { publisherChainVerified: false, timestampVerified: false },
+    };
+  }
+  return {
+    verificationPolicy: "staging",
+    verificationStatus: "unverified-staging",
+    verificationReasonCodes: ["staging-unverified"],
+    signatureKind: "authenticode",
+    signatureVerified: false,
+    notarizationRequired: false,
+    notarizationVerified: false,
+    verificationChecks: { publisherChainVerified: false, timestampVerified: false },
+  };
+}
+
+function laneHelperSigning(lane: FixtureLane): Record<string, unknown> {
+  const security = laneSecurity(lane);
+  return {
+    signatureKind: "authenticode",
+    verificationStatus: security.verificationStatus,
+    signatureVerified: security.signatureVerified,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+}
+
+function runtimeActivation(
+  runtime: Record<string, unknown>,
+  lane: FixtureLane = "production",
+): Record<string, unknown> {
   return {
     schemaVersion: 1,
     suiteVersion: "runtime-tree-qualification-v1",
@@ -328,21 +1169,30 @@ function runtimeActivation(runtime: Record<string, unknown>): Record<string, unk
     sourceCommitSha: COMMIT,
     platformTarget: TARGET,
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    // The activation document a production build actually ships: `runtimeActivationManifest`
+    // clones `security` and `nativeHelpers` verbatim, and the release-assembly gate deep-equality
+    // pins the on-disk bytes against that projection, so the declared lane is present artifact-wide.
+    security: laneSecurity(lane),
     nativeHelpers: [
-      nativeHelper("keiko-secure-workspace-read", SECURE_READ),
-      nativeHelper("keiko-runtime-supervisor", SUPERVISOR),
+      nativeHelper("keiko-secure-workspace-read", SECURE_READ, lane),
+      nativeHelper("keiko-runtime-supervisor", SUPERVISOR, lane),
     ],
     sidecarRuntimes: [runtime],
   };
 }
 
-function nativeHelper(name: string, bytes: string): Record<string, unknown> {
+function nativeHelper(
+  name: string,
+  bytes: string,
+  lane: FixtureLane = "production",
+): Record<string, unknown> {
   return {
     name,
     platformTarget: TARGET,
     executablePath: `runtime/native/${name}.exe`,
     shippedSha256: sha256(bytes),
     sizeBytes: Buffer.byteLength(bytes),
+    signing: laneHelperSigning(lane),
   };
 }
 

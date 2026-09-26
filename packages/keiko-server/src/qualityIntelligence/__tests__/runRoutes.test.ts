@@ -85,6 +85,7 @@ class MockResponse extends EventEmitter {
 
 function ctx(req: IncomingMessage, res: MockResponse): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: res as unknown as ServerResponse,
     params: {},
@@ -1014,14 +1015,26 @@ describe("doneFrameForSummary — degraded vs failed reasonSummary surfacing (QI
   const summaryWith = (
     status: "succeeded" | "failed",
     reasonSummary: string | undefined,
+    stageFailures?: readonly {
+      readonly stage: "generate" | "judge";
+      readonly reasonSummary: string;
+    }[],
   ): Parameters<typeof doneFrameForSummary>[2] =>
-    ({ status, reasonSummary }) as unknown as Parameters<typeof doneFrameForSummary>[2];
+    ({
+      status,
+      reasonSummary,
+      ...(stageFailures !== undefined
+        ? { evidence: { manifest: { modelRouting: { stageFailures } } } }
+        : {}),
+    }) as unknown as Parameters<typeof doneFrameForSummary>[2];
 
-  it("flags a succeeded run that carries a reason as degraded and surfaces the reason", () => {
+  it("flags persisted generation-stage failure evidence and surfaces its safe reason", () => {
     const frame = doneFrameForSummary(
       deps,
       "run-1",
-      summaryWith("succeeded", "qi-run-error"),
+      summaryWith("succeeded", "qi-run-error", [
+        { stage: "generate", reasonSummary: "qi-run-error" },
+      ]),
       totals,
     ) as {
       status: string;
@@ -1031,6 +1044,32 @@ describe("doneFrameForSummary — degraded vs failed reasonSummary surfacing (QI
     expect(frame.status).toBe("succeeded");
     expect(frame.reasonSummary).toBe("qi-run-error");
     expect(frame.degraded).toBe(true);
+  });
+
+  it("flags a judge-only persisted stage failure even when the summary has no generation reason", () => {
+    const frame = doneFrameForSummary(
+      deps,
+      "run-judge-degraded",
+      summaryWith("succeeded", undefined, [
+        { stage: "judge", reasonSummary: "qi-judge-unavailable" },
+      ]),
+      totals,
+    ) as { degraded?: boolean; reasonSummary?: string };
+
+    expect(frame.degraded).toBe(true);
+    expect(frame.reasonSummary).toBe("qi-judge-unavailable");
+  });
+
+  it("does not infer degradation from a succeeded summary reason without persisted stage evidence", () => {
+    const frame = doneFrameForSummary(
+      deps,
+      "run-unqualified-reason",
+      summaryWith("succeeded", "qi-run-error"),
+      totals,
+    ) as { degraded?: boolean; reasonSummary?: string };
+
+    expect(frame.degraded).toBeUndefined();
+    expect(frame.reasonSummary).toBeUndefined();
   });
 
   it("surfaces a failed run's reason but does NOT mark it degraded", () => {
@@ -1062,6 +1101,128 @@ describe("doneFrameForSummary — degraded vs failed reasonSummary surfacing (QI
     expect(frame.reasonSummary).toBeUndefined();
     expect(frame.degraded).toBeUndefined();
   });
+});
+
+// ─── ADF requirements source is passed through validateSource (KEIKO-0891 follow-on) ──────────
+//
+// Before this fix, `validateSource` in runRoutes.ts stripped the `adf` field when building the
+// `QualityIntelligenceRequirementsSource`, so `ingestRequirements`'s ADF-normalisation branch was
+// unreachable in production. The two tests below drive the real HTTP path (handleStartQiRun) and
+// prove `raw.adf` reaches the ingestion layer:
+//
+//   1. A malformed ADF tree (root type != "doc") causes parseAdfDocument to throw and the ingestion
+//      path to emit a QI_BAD_SOURCE error frame — impossible if `adf` were still being dropped.
+//   2. A well-formed ADF tree containing only whitespace (rendered text is empty) causes
+//      splitRequirementsIntoAtomsWithStats to produce zero atoms and the ingestion path to emit a
+//      QI_SOURCE_EMPTY error frame — again only reachable if the ADF branch actually runs.
+
+describe("handleStartQiRun — ADF requirements source (KEIKO-0891 follow-on)", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function depsWithEvidence(): UiHandlerDeps {
+    const evidenceDir = mkdtempSync(join(tmpdir(), "qi-adf-route-"));
+    tmpDirs.push(evidenceDir);
+    return { ...deps(), evidenceDir };
+  }
+
+  it("routes a malformed ADF tree through parseAdfDocument (emits QI_BAD_SOURCE via SSE)", async () => {
+    const res = new MockResponse();
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({
+          sources: [
+            {
+              kind: "requirements",
+              label: "Malformed ADF",
+              text: "plaintext fallback",
+              // Missing "type":"doc" at the root — parseAdfDocument throws AdfParserError.
+              adf: { type: "notADoc", content: [] },
+            },
+          ],
+        }),
+        res,
+      ),
+      depsWithEvidence(),
+    );
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    const stream = res.chunks.join("");
+    expect(stream).toContain("QI_BAD_SOURCE");
+    expect(stream).toContain("invalid Atlassian Document Format");
+  });
+
+  it("routes an empty ADF tree to QI_SOURCE_EMPTY (proves the ADF text supplants raw.text)", async () => {
+    const res = new MockResponse();
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({
+          sources: [
+            {
+              kind: "requirements",
+              label: "Empty ADF",
+              // raw.text is a valid requirement — but the ADF branch REPLACES it. If ingestion
+              // silently dropped `adf`, this would ingest the requirement text and stream an
+              // accepted frame instead of QI_SOURCE_EMPTY.
+              text: "The system shall generate cases.",
+              adf: { type: "doc", version: 1, content: [] },
+            },
+          ],
+        }),
+        res,
+      ),
+      depsWithEvidence(),
+    );
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    const stream = res.chunks.join("");
+    expect(stream).toContain("QI_SOURCE_EMPTY");
+  });
+
+  // KEIKO-0891 follow-up (reviewer P2): a present-but-malformed `adf` (explicit null or a
+  // primitive) must fail closed at the validator, not silently fall back to raw.text. Prove the
+  // three shapes that used to slip through:
+  //   - adf: null              → QI_BAD_SOURCE  (typeof null === "object", needs its own guard)
+  //   - adf: "not-a-tree"      → QI_BAD_SOURCE  (a string that would parse as JSON but is not ADF)
+  //   - adf: 42                → QI_BAD_SOURCE  (a primitive)
+  //
+  // A well-formed absent `adf` (field simply not present) still succeeds and falls back to text —
+  // the "empty ADF" test above already covers the well-formed path.
+  it.each([
+    ["explicit null", null],
+    ["primitive string", "not-a-tree"],
+    ["primitive number", 42],
+  ])(
+    "rejects a present-but-malformed adf (%s) with QI_BAD_SOURCE before streaming",
+    async (_label, adfValue) => {
+      const res = new MockResponse();
+      const outcome = await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "malformed adf",
+                text: "plaintext fallback",
+                adf: adfValue,
+              },
+            ],
+          }),
+          res,
+        ),
+        depsWithEvidence(),
+      );
+      // Not streaming — the validation error is returned as a pre-stream RouteResult, no
+      // ADF-normalisation branch runs.
+      expect(outcome).not.toBe(STREAMING);
+      const result = outcome as { status: number; body: { error: { code: string } } };
+      expect(result.status).toBe(400);
+      expect(result.body.error.code).toBe("QI_BAD_SOURCE");
+    },
+  );
 });
 
 // ─── SSE backpressure (write returns false → destroy) ────────────────────────────────────────────

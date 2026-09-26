@@ -131,6 +131,28 @@ describe("runVerification — outcomes", () => {
     expect(report.results[0]?.status).toBe("skipped");
     expect(report.results[0]?.detail).toContain("no lint script");
     expect(rec.calls()).toHaveLength(0);
+    // #3390 (KEIKO-0848 class): a plan whose only step was skipped executed nothing, so it is
+    // "skipped", never "passed" -- the verified-commit proof requires an executed, passing step,
+    // and the model must read the same verdict the proof applies.
+    expect(report.overallStatus).toBe("skipped");
+  });
+
+  it("a skipped step beside a passed step still reports passed", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });
+    const skip = step({
+      kind: "lint",
+      scriptName: undefined,
+      command: "npm",
+      args: ["run", "lint"],
+      skipReason: "no lint script",
+    });
+    const report = await runVerification(
+      planOf([skip, step({ kind: "test" })], ws.info.root),
+      depsWith(ws, rec.fn),
+    );
+    expect(report.results.map((result) => result.status)).toEqual(["skipped", "passed"]);
     expect(report.overallStatus).toBe("passed");
   });
 
@@ -189,6 +211,45 @@ describe("runVerification — outcomes", () => {
       scriptName: undefined,
       command: "npx",
       args: ["jest", "--config=jest.config.js", "src/add.test.ts"],
+    });
+    const report = await runVerification(planOf([invalid], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("runs an exact Node native targeted-test step through the governed spawn boundary", async () => {
+    const ws = makeWorkspace({ testFramework: "node-test" });
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const targeted = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "node",
+      args: ["--test", "src/a.test.js"],
+    });
+
+    const report = await runVerification(planOf([targeted], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("passed");
+    expect(rec.calls()).toHaveLength(1);
+    expect(rec.calls()[0]?.command).toMatch(/(?:^|\/)node$/u);
+    expect(rec.calls()[0]?.args).toEqual(["--test", "src/a.test.js"]);
+  });
+
+  it.each([
+    ["escape", ["--test", "../escape.test.js"]],
+    ["absolute", ["--test", "/tmp/absolute.test.js"]],
+    ["eval-short", ["--test", "-e", "process.exit(0)"]],
+    ["eval-long", ["--test", "--eval=process.exit(0)"]],
+    ["extra-flag", ["--test", "src/a.test.js", "--watch"]],
+  ])("rejects malformed Node native targeted-test arguments: %s", async (_label, args) => {
+    const ws = makeWorkspace({ testFramework: "node-test" });
+    const rec = recordingSpawn();
+    const invalid = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "node",
+      args,
     });
     const report = await runVerification(planOf([invalid], ws.info.root), depsWith(ws, rec.fn));
     expect(report.results[0]?.status).toBe("denied");
@@ -292,6 +353,26 @@ describe("runVerification — cancellation (D5)", () => {
 });
 
 describe("runVerification — memory breach (D3) and no monitor-interval leak", () => {
+  it("refuses a requested ceiling when the monitor cannot enforce a complete process tree", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const monitor = { ...fakeMonitor(), canEnforceProcessTreeMemory: (): boolean => false };
+    const limits = { ...DEFAULT_VERIFICATION_LIMITS, maxMemoryBytes: 64 * 1024 * 1024 };
+    const report = await runVerification(planOf([step({ limits })], ws.info.root), {
+      workspace: ws.info,
+      spawn: rec.fn,
+      monitor,
+      now: () => 1,
+      networkEnforcement: "inherit",
+    });
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("process-tree");
+    expect(
+      report.results[0]?.appliedLimits.find((limit) => limit.dimension === "memory")?.enforced,
+    ).toBe(false);
+    expect(rec.calls()).toHaveLength(0);
+  });
+
   it("a fired monitor breach → resource-exceeded with memory breached:true", async () => {
     const ws = makeWorkspace();
     const child = makeFakeChild();
@@ -396,11 +477,16 @@ describe("runVerification — counts and report shape", () => {
     }).not.toThrow();
   });
 
-  it("empty plan → overallStatus passed, results empty, all counts zero", async () => {
+  // KEIKO-0848: this pin previously asserted overallStatus "passed" for a zero-step plan, relying
+  // on Array.prototype.every's vacuous truth on an empty array — a fail-open defect (verification
+  // "succeeded" while nothing ran). The invariant is deliberately inverted here, per AGENTS.md
+  // section 7 (a pin is strengthened or relocated, never silently relaxed): a plan that runs no
+  // steps must never report the best possible answer.
+  it("empty plan → overallStatus failed (fail-closed), results empty, all counts zero", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();
     const report = await runVerification(planOf([], ws.info.root), depsWith(ws, rec.fn));
-    expect(report.overallStatus).toBe("passed");
+    expect(report.overallStatus).toBe("failed");
     expect(report.results).toEqual([]);
     const total = Object.values(report.counts).reduce((a, b) => a + b, 0);
     expect(total).toBe(0);

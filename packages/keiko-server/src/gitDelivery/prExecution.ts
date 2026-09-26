@@ -1,4 +1,4 @@
-// Governed GitHub pull request execution core for the #477 PR routes (Epic #470, ADR-0064).
+// Governed GitHub pull request execution core for the #477 PR routes (Epic #470, ADR-0086).
 //
 // The PR preview + execute routes share ONE path: resolve and authorize the project workspace, build a
 // TRUSTWORTHY snapshot from the live worktree, drive the #477 PR gateway `runGitPullRequest` (the
@@ -9,24 +9,28 @@
 // The Node `gh api` effect is injected via seams so route tests run deterministically against a fake.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryRiskClass,
+  GitPrChangeType,
+  GitPullRequestChangeNarrative,
+  GitPullRequestMetadataDraft,
+  GitPullRequestReadinessSummary,
+  GitPullRequestRiskDigest,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   evaluateGitPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_RISK_CLASS_SEVERITY } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import {
   gitPullRequestLabelSuggestionsFor,
   gitPullRequestLinkageSuggestionsFor,
   gitPullRequestReadinessFor,
   gitPullRequestRecommendationFor,
   synthesizePullRequestMetadata,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryRiskClass,
-  type GitPrChangeType,
-  type GitPullRequestChangeNarrative,
-  type GitPullRequestMetadataDraft,
-  type GitPullRequestReadinessSummary,
-  type GitPullRequestRiskDigest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import {
   evaluateGitPullRequestEffectivePolicy,
   runGitPullRequest,
@@ -37,15 +41,22 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
-  persistGitDeliveryEvidence,
+  gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
+  logGitDeliveryPreconditionFailure,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // Default trusted PR policy: PERMIT `pr-create` / `pr-update` whose BASE is a legitimate integration
 // branch (dev, main, release/*, feat/*) and only within the protected-or-merge ceiling. A base outside
@@ -67,12 +78,31 @@ const PR_BASE_CONSTRAINTS = [
   },
 ] as const;
 
+// #3399 (epic #3384 correction 4): `pr-description-apply` names the same "any approver" shape
+// ADR-0080 D5 defines (`requiredApprovers: []`) for documentation and pack-mintability parity with
+// `pr-create`/`pr-update` above. Its LIVE enforcement is not this rule: `evaluateGitPullRequestEffectivePolicy`
+// (keiko-tools/git-pr-gateway.ts) is closed over `actionKind: "pr-create" | "pr-update"` only, so
+// prDescriptionService.ts's own policy check reuses a `pr-update` base-branch constraint as a
+// proxy and never looks this rule up. That proxy is pinned to the pull request's own base
+// (basePinnedPrPolicy.ts), not to PR_BASE_CONSTRAINTS' Keiko-convention list, unless a deployment
+// configures explicit packs. The description apply's real, unconditional
+// approval requirement is prDescriptionService.ts's own `PrDescriptionApprovals` continuation
+// (mint via issueApproval, redeem via consumeApproval/executeApproved) — matching how commit/push/
+// pr enforce ADR-0138 D2 at their own route/service layer rather than through this pack's decision.
+// #3389 (epic #3384 correction 7): `pr-mark-ready` names the same "any approver" shape ADR-0080 D5
+// defines for `pr-description-apply` above, for documentation and pack-mintability parity. Its LIVE
+// enforcement is not this rule either: the mark-ready execute path (prMarkReadyExecution.ts)
+// unconditionally requires a consumed `pr-mark-ready` claim — independent of any repo/org pack's own
+// decision — mirroring how commit/push/pr/pr-description-apply enforce ADR-0138 D2 at their own
+// route/service layer rather than through this pack's decision.
 export const KEIKO_DEFAULT_PR_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   repoId: "keiko-pr-default",
   rules: [
     { actionKind: "pr-create", decision: "constrained", constraints: [...PR_BASE_CONSTRAINTS] },
     { actionKind: "pr-update", decision: "constrained", constraints: [...PR_BASE_CONSTRAINTS] },
+    { actionKind: "pr-description-apply", decision: "approval-gated", requiredApprovers: [] },
+    { actionKind: "pr-mark-ready", decision: "approval-gated", requiredApprovers: [] },
   ],
   defaultRule: { decision: "blocked" },
 };
@@ -83,17 +113,53 @@ export interface GitDeliveryPullRequestSeams {
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  // The request's own activity-log sink, so the default PR adapter's runCommand
+  // termination-evidence callback (see prAdapterFor) writes through the SAME sink the caller logs
+  // everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied record.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
+}
+
+function authorityGuardedPrAdapter(
+  adapter: GitPullRequestAdapter,
+  beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): GitPullRequestAdapter {
+  if (beforeRemoteDispatch === undefined) return adapter;
+  const aborted = { schemaVersion: "1", outcome: "aborted", durationMs: 0 } as const;
+  // F4: no process is spawned for this attempt — mark it explicitly before returning the synthetic
+  // result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+  const noSpawn = (actionKind: "pr-create" | "pr-update"): Promise<typeof aborted> => {
+    logGitDeliveryNoSpawnRefusal(activityLog, actionKind, correlationId);
+    return Promise.resolve(aborted);
+  };
+  return {
+    createPullRequest: (request) =>
+      beforeRemoteDispatch() ? adapter.createPullRequest(request) : noSpawn("pr-create"),
+    updatePullRequest: (request) =>
+      beforeRemoteDispatch() ? adapter.updatePullRequest(request) : noSpawn("pr-update"),
+  };
 }
 
 function prAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryPullRequestSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitPullRequestAdapter {
   if (seams.prAdapterFactory !== undefined) return seams.prAdapterFactory(workspace);
-  return createNodeGitPullRequestAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitPullRequestAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 /**
@@ -107,11 +173,24 @@ export async function executeGovernedPullRequest(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPullRequestSeams,
+  correlationId?: string,
 ): Promise<GitPullRequestLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = prAdapterFor(workspace, seams, now);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PR_POLICY_PACK };
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
+    throw error;
+  }
+  const adapter = authorityGuardedPrAdapter(
+    prAdapterFor(workspace, seams, now, correlationId),
+    seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
+  );
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitPullRequest(
@@ -125,7 +204,20 @@ export async function executeGovernedPullRequest(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+    ...(result.failure === undefined ? {} : { failureDetail: result.failure }),
+  });
   return result;
 }
 
@@ -185,6 +277,15 @@ export interface GitDeliveryPrPreviewBody {
   readonly actionKind: "pr-create" | "pr-update";
   readonly headBranchName: string;
   readonly baseBranchName: string;
+  // #3394 review: the reviewed head commit the caller should capture and resubmit as
+  // `verifiedCommitSha` at approve/execute time (mirrors push's own preview addition). Sourced from
+  // the local snapshot already read for this preview — `buildGitDeliveryPrPreview` is a pure,
+  // local-snapshot-only projection (no remote read), which is safe here because a PR is normally
+  // only proposed for a branch that has already been pushed (governed by the now-hardened push
+  // route), so local and remote head coincide in the non-adversarial case this preview is for. The
+  // LIVE drift check (git-pr-node.ts) is what protects the adversarial/race case at execute time,
+  // using the true GitHub-reported head. Absent only for an unborn HEAD.
+  readonly headCommitSha?: string | undefined;
   readonly riskClass: GitDeliveryRiskClass;
   readonly riskSeverity: number;
   readonly isDraft: boolean;
@@ -266,12 +367,7 @@ function derivePrPreviewParts(
   );
   const narrative = narrativeFromSnapshot(command.headBranchName, snapshot);
   const riskDigest = riskDigestFor(command, effective.outcome);
-  const draft = synthesizePullRequestMetadata(
-    narrative,
-    riskDigest,
-    command.headBranchName,
-    command.baseBranchName,
-  );
+  const draft = synthesizePullRequestMetadata(narrative, riskDigest, command.headBranchName);
   const readiness = previewReadiness(command, snapshot);
   return {
     effectiveOutcome: effective.outcome,
@@ -296,6 +392,7 @@ export function buildGitDeliveryPrPreview(
     actionKind: command.kind,
     headBranchName: command.headBranchName,
     baseBranchName: command.baseBranchName,
+    ...(snapshot.headSha === undefined ? {} : { headCommitSha: snapshot.headSha }),
     riskClass: parts.riskDigest.riskClass,
     riskSeverity: parts.riskDigest.riskSeverity,
     isDraft: parts.riskDigest.isDraft,

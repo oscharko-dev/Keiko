@@ -27,11 +27,19 @@ export abstract class CodedHttpError extends Error {
 }
 
 /**
- * Derive the HTTP status for `code` from a per-domain STATUS_MAP. Tiny by design: it exists
- * so the lookup site is a single named, tested call rather than an inline `map[code]` that
- * silently returns `undefined` if a code was forgotten (the exhaustive `Record<C, number>`
- * key type makes the omission a compile error at the map's definition).
+ * Derive the HTTP status for `code` from a per-domain STATUS_MAP.
+ *
+ * Two layers of protection, deliberately paired:
+ * - **Compile time**: the exhaustive `Record<C, number>` key type on every STATUS_MAP
+ *   definition makes a forgotten code a compile error at the map site.
+ * - **Runtime (KEIKO-0859)**: a code reaching this function from a widened / deserialized
+ *   string (an `as C` upcast, a prototype-chain read like `constructor`, a hand-maintained map
+ *   the compiler cannot see) falls back to `500` instead of leaking `undefined` into the
+ *   thrown error's `status`. This is defence-in-depth for the compile-time exhaustiveness,
+ *   NOT a replacement — the callers all pass the result straight into a `CodedHttpError`
+ *   constructor's `status` field expecting a number.
  */
 export function httpStatusFor<C extends string>(map: Readonly<Record<C, number>>, code: C): number {
-  return map[code];
+  const status = map[code];
+  return typeof status === "number" ? status : 500;
 }

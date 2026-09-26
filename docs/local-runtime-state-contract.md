@@ -1,8 +1,9 @@
 # Local Runtime State Contract
 
 This document enumerates the local paths, environment variables, and durable stores that Keiko
-intentionally reads or writes at `0.2.15`. It is a current-state contract, not a historical rollout
-or compatibility playbook.
+intentionally reads or writes. It is a current-state contract, not a historical rollout or
+compatibility playbook. The updater section includes #3405's versioned durable session and
+native-handoff boundary; it does not assert that release qualification has completed.
 
 ## Principles
 
@@ -29,7 +30,8 @@ or compatibility playbook.
 | UI database               | `--ui-db` or `KEIKO_UI_DATA_DIR/keiko-ui.db` or `~/.keiko/keiko-ui.db`                                                                                                                        | `@oscharko-dev/keiko-server`                                   | Local SQLite store for projects, chats, canonical messages, and other UI state.                                                                                                                                                                                                                                                                                                     |
 | Evidence directory        | `--evidence-dir` or `KEIKO_EVIDENCE_DIR` or `./.keiko/evidence/`                                                                                                                              | `@oscharko-dev/keiko-evidence`                                 | Redacted JSON manifests and related local evidence files.                                                                                                                                                                                                                                                                                                                           |
 | Consumer package scripts  | `keiko:start`, `keiko:stop` in the consumer `package.json`                                                                                                                                    | `@oscharko-dev/keiko-cli`                                      | Written by `keiko init`.                                                                                                                                                                                                                                                                                                                                                            |
-| Lifecycle files           | `KEIKO_STATE_DIR/ui.pid` and `KEIKO_STATE_DIR/ui.log` or default `.keiko/`                                                                                                                    | `@oscharko-dev/keiko-cli`                                      | Runtime-only process state.                                                                                                                                                                                                                                                                                                                                                         |
+| Lifecycle files           | `KEIKO_STATE_DIR/ui.pid` or default `.keiko/` (a legacy `ui.log` is no longer written)                                                                                                        | `@oscharko-dev/keiko-cli`                                      | Runtime-only process state.                                                                                                                                                                                                                                                                                                                                                         |
+| CLI control state         | Linux `~/.local/state/keiko/control/`; macOS `~/Library/Application Support/Keiko/control/`; Windows `%USERPROFILE%\AppData\Local\Keiko\control\`                                             | `@oscharko-dev/keiko-cli`, `@oscharko-dev/keiko-server`        | Fixed, non-overridable location for the existing activity-log sink when a CLI command must audit or remove its selected runtime-state tree, or safely record a refused support export. Contains only body-free Activity Log segments in `logs/`; never customer content or a second log format.                                                                                     |
 | Update recovery state     | `KEIKO_STATE_DIR/updates/` or default `.keiko/updates/`                                                                                                                                       | `@oscharko-dev/keiko-server`                                   | Content-free update runtime state, remediation action status, audit events, and previous-version recovery manifests for failed or partial governed updates.                                                                                                                                                                                                                         |
 | Portable install state    | `KEIKO_STATE_DIR/portable-install-state.json` or default `.keiko/portable-install-state.json`                                                                                                 | `@oscharko-dev/keiko-cli`                                      | Content-free portable managed-install and registration attestation, bounded local managed-root locator metadata for reversible repair/uninstall, and failed-setup status with hashed install/launcher identities and bounded failure codes only. It never stores portable payloads, archives, customer content, secrets, logs, prompts, model output, or customer repository files. |
 | Local `.env` discovery    | Current working directory `.env` for the closed allowlist `FIGMA_ACCESS_TOKEN` only                                                                                                           | `@oscharko-dev/keiko-cli`                                      | Read-only connector convenience surface; `KEIKO_*` runtime configuration must come from explicit flags or the process environment.                                                                                                                                                                                                                                                  |
@@ -65,10 +67,10 @@ remove.
 `schemaVersion: 1`, `platformTarget`, `status`, `updateEligible`, `packageVersion`, `stable`, and
 `updatedAt`.
 
-| Persisted record         | Required shape                                       | Status-specific fields                                                                                                                                                                                                                                                                            |
-| ------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Managed portable install | `status: "managed"` and `updateEligible: true`       | Optional `managedRootLocator` with `kind: "default"`, `kind: "home-relative"` plus a bounded relative `path`, or `kind: "absolute-local"` plus a bounded absolute local `path`; managed-only attestation hashes `setupManifestSha256`, `installRootIdentitySha256`, and `launcherIdentitySha256`. |
-| Failed setup             | `status: "setup-failed"` and `updateEligible: false` | Optional bounded `failureReason` code only. Managed-root locator and attestation hashes are absent.                                                                                                                                                                                               |
+| Persisted record         | Required shape                                       | Status-specific fields                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Managed portable install | `status: "managed"` and `updateEligible: true`       | Optional `managedRootLocator` with `kind: "default"`, `kind: "home-relative"` plus a bounded relative `path`, or `kind: "absolute-local"` plus a bounded absolute local `path`; managed-only attestation hashes `setupManifestSha256`, `installRootIdentitySha256`, and `launcherIdentitySha256`.                                                                             |
+| Failed setup             | `status: "setup-failed"` and `updateEligible: false` | Optional bounded `failureReason`; when a previously attested managed install exists, its package-version floor, platform target, and opaque setup-manifest, install-root-identity, and launcher SHA-256 attestations are retained solely to authorize fresh-payload recovery. The root-identity hash is not a root locator; failed records never retain `managedRootLocator`. |
 
 The persisted union does not store portable payload bytes, ZIP archives, customer repositories,
 customer document content, prompts, model output, logs, secrets, or credential material. Reader-side
@@ -104,24 +106,27 @@ of the local-at-rest posture; the deterministic auditor in
 [Local-state verification audit](#local-state-verification-audit) checks these expectations against a
 real `.keiko` tree.
 
-| Surface (file)                                                                                                     | File permissions | Redaction          | Encryption at rest                        | Retention      | Tamper evidence                                                                   | Governing decision                                                                                      |
-| ------------------------------------------------------------------------------------------------------------------ | ---------------- | ------------------ | ----------------------------------------- | -------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Gateway config (`keiko.config.json`)                                                                               | yes              | n/a                | n/a (secret refs only)                    | n/a            | n/a                                                                               | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
-| Provider credential vault (`*.vault` + `*.key`)                                                                    | yes              | n/a                | yes (AES-256-GCM)                         | n/a            | yes (GCM auth)                                                                    | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
-| Figma PAT vault (`figma-token.vault` + key)                                                                        | yes              | n/a                | yes (AES-256-GCM)                         | n/a            | yes (GCM auth)                                                                    | [ADR-0037](adr/ADR-0037-figma-snapshot-boundary.md), [ADR-0046](adr/ADR-0046-local-credential-vault.md) |
-| Memory vault (`keiko-memory.db`)                                                                                   | yes              | yes (audit events) | yes (content columns)                     | n/a            | yes (GCM auth)                                                                    | [ADR-0035](adr/ADR-0035-memory-vault-encryption-at-rest.md)                                             |
-| Local Knowledge (`capsules.db`)                                                                                    | yes              | n/a                | yes (content columns)                     | n/a            | yes (GCM auth + sealed probe)                                                     | [ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)                                          |
-| Workspace search index (`workspace-index-*.json`)                                                                  | yes              | n/a                | yes (complete snapshot)                   | yes (cap 128)  | yes (GCM auth)                                                                    | [ADR-0022](adr/ADR-0022-connected-context-privacy.md)                                                   |
-| UI database (`keiko-ui.db`)                                                                                        | yes              | n/a                | deferred (project/chat/message content)   | n/a            | n/a                                                                               | [ADR-0013](adr/ADR-0013-ui-local-persistence-for-projects-and-chats.md)                                 |
-| Evidence run manifests (`<runId>.json`)                                                                            | yes              | yes                | deferred                                  | n/a            | n/a                                                                               | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| QI manifests (`<runId>.qi.json`)                                                                                   | yes              | yes                | deferred                                  | yes            | yes (SHA-256)                                                                     | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| QI candidates (`<runId>.candidates.json`)                                                                          | yes              | yes                | deferred                                  | yes            | n/a                                                                               | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| Figma snapshots (JSON / PNG side-files)                                                                            | yes              | yes                | deferred                                  | yes (cap 500)  | PNG side-file SHA-256                                                             | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| Lifecycle / launcher / portable install (`ui.pid`, `ui.log`, `launcher-state.json`, `portable-install-state.json`) | yes              | n/a                | n/a (content-free local runtime metadata) | n/a            | yes (launcher and install identity hashes; symlink-refusing portable attestation) | this contract                                                                                           |
-| Update recovery manifests (`updates/*`)                                                                            | yes              | n/a                | n/a (content-free)                        | yes (one prev) | manifest validation                                                               | [ADR-0099](adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)                         |
+| Surface (file)                                                                                           | File permissions | Redaction                   | Encryption at rest                        | Retention                                                                                                               | Tamper evidence                                                                   | Governing decision                                                                                      |
+| -------------------------------------------------------------------------------------------------------- | ---------------- | --------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Gateway config (`keiko.config.json`)                                                                     | yes              | n/a                         | n/a (secret refs only)                    | n/a                                                                                                                     | n/a                                                                               | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
+| Provider credential vault (`*.vault` + `*.key`)                                                          | yes              | n/a                         | yes (AES-256-GCM)                         | n/a                                                                                                                     | yes (GCM auth)                                                                    | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
+| Figma PAT vault (`figma-token.vault` + key)                                                              | yes              | n/a                         | yes (AES-256-GCM)                         | n/a                                                                                                                     | yes (GCM auth)                                                                    | [ADR-0037](adr/ADR-0037-figma-snapshot-boundary.md), [ADR-0046](adr/ADR-0046-local-credential-vault.md) |
+| Memory vault (`keiko-memory.db`)                                                                         | yes              | yes (audit events)          | yes (content columns)                     | n/a                                                                                                                     | yes (GCM auth)                                                                    | [ADR-0035](adr/ADR-0035-memory-vault-encryption-at-rest.md)                                             |
+| Local Knowledge (`capsules.db`)                                                                          | yes              | n/a                         | yes (content columns)                     | n/a                                                                                                                     | yes (GCM auth + sealed probe)                                                     | [ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)                                          |
+| Workspace search index (`workspace-index-*.json`)                                                        | yes              | n/a                         | yes (complete snapshot)                   | yes (cap 128)                                                                                                           | yes (GCM auth)                                                                    | [ADR-0022](adr/ADR-0022-connected-context-privacy.md)                                                   |
+| UI database (`keiko-ui.db`)                                                                              | yes              | n/a                         | deferred (project/chat/message content)   | n/a                                                                                                                     | n/a                                                                               | [ADR-0013](adr/ADR-0013-ui-local-persistence-for-projects-and-chats.md)                                 |
+| Evidence run manifests (`<runId>.json`)                                                                  | yes              | yes                         | deferred                                  | n/a                                                                                                                     | n/a                                                                               | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| QI manifests (`<runId>.qi.json`)                                                                         | yes              | yes                         | deferred                                  | yes                                                                                                                     | yes (SHA-256)                                                                     | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| QI candidates (`<runId>.candidates.json`)                                                                | yes              | yes                         | deferred                                  | yes                                                                                                                     | n/a                                                                               | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| Figma snapshots (JSON / PNG side-files)                                                                  | yes              | yes                         | deferred                                  | yes (cap 500)                                                                                                           | PNG side-file SHA-256                                                             | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| Activity logs (`logs/` segments, the CLI control root, and the store's one governing policy record)      | yes              | yes                         | deferred                                  | yes (256 MiB and 14 days by default, plus a 64 MiB pin quota, one governing budget shared across cooperating processes) | n/a                                                                               | [ADR-0173](adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md)                      |
+| Support incidents (`support-incidents/`)                                                                 | yes              | yes (body-free descriptors) | n/a                                       | yes (14 days; at most 32 open)                                                                                          | n/a                                                                               | [ADR-0173](adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md)                      |
+| Activity Log manifests (`activity-log-manifests/`, derived and rebuildable)                              | yes              | yes (body-free metadata)    | n/a                                       | yes (one per retained sealed segment, 256 KiB each)                                                                     | yes (SHA-256 digest; rebuilt on mismatch)                                         | [ADR-0173](adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md)                      |
+| Lifecycle / launcher / portable install (`ui.pid`, `launcher-state.json`, `portable-install-state.json`) | yes              | n/a                         | n/a (content-free local runtime metadata) | n/a                                                                                                                     | yes (launcher and install identity hashes; symlink-refusing portable attestation) | this contract                                                                                           |
+| Update recovery manifests (`updates/*`)                                                                  | yes              | n/a                         | n/a (content-free)                        | yes (one prev)                                                                                                          | manifest validation                                                               | [ADR-0099](adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)                         |
 
 `deferred` is a documented, bounded decision — not an oversight. Customer-reconstructive evidence
-artifacts are not encrypted at rest in `0.2.15`; the compensating controls are owner-only permissions,
+artifacts are not encrypted at rest in `0.3.0`; the compensating controls are owner-only permissions,
 redaction-before-persist, and deterministic bounded retention. See
 [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md) and
 [Evidence artifact confidentiality](#evidence-artifact-confidentiality).
@@ -147,7 +152,15 @@ Quality-Intelligence records, update recovery manifests/audit logs, the gateway 
   symlink out of `.keiko` and never recursively deletes an arbitrary directory. Filesystem
   unlinking does not guarantee secure erasure of SSD-backed data. Portable managed uninstall
   likewise proves the managed-install tree and user-local registration artifacts are safe
-  first, refusing symlinks and unknown managed-install entries before any removal.
+  first, refusing symlinks and unknown managed-install entries before any removal. Start,
+  forced-stop, completion, and failure events use the fixed per-user CLI control-state log, not
+  the tree being deleted, so the command cannot erase or asynchronously recreate its own evidence.
+  Dry runs and scripts-only operations follow the same lifecycle contract. One correlation joins
+  install-layout normalization to the operation, selected targets are represented only by SHA-256,
+  and completion records removal/retention disposition plus body-free counts. The command never
+  opens a second durable log: a control-root overlap or pre-validation failure is reported at the
+  terminal and exits non-zero before any sink is opened, while a failure after successful isolation
+  is retried only through the established control-state log.
 
 ## Evidence artifact confidentiality
 
@@ -185,7 +198,7 @@ enforced once per snapshot-store instance. Startup-purge receipts are not yet wr
 persistent audit ledger (keiko-server has none today); the purge is deterministic but, like the
 user-initiated delete route, not yet attested in an audit trail.
 
-**Encryption scope.** In `0.2.15`, customer-reconstructive evidence artifacts are **not** encrypted
+**Encryption scope.** In `0.3.0`, customer-reconstructive evidence artifacts are **not** encrypted
 at rest. The compensating controls are owner-only `0o600` permissions, deterministic bounded
 retention, and redaction-before-persist. This deferral is explicit and documented in
 [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md); the atomic write boundary in every
@@ -205,8 +218,22 @@ It imports only `node:fs` and `node:sqlite`, never decrypts content (every encry
 on-disk sealed markers the product itself writes, so no vault key is required), and never mutates the
 tree.
 
-- `npm run audit:local-state -- --state-dir <path>` — audit an existing `.keiko` tree (default
-  `<cwd>/.keiko`). Maintainer-facing; exit `0` when the posture is healthy, `1` on any finding.
+- `keiko audit local-state [--state-dir <path>]` — **the operator-facing command.** Without
+  `--state-dir` the target is `$KEIKO_STATE_DIR` when set, otherwise `<cwd>/.keiko`, matching where
+  the runtime actually keeps its state. Audits an existing
+  `.keiko` tree (default `<cwd>/.keiko`); exit `0` when the posture is healthy, `1` on any finding,
+  `2` on a usage error. It ships in the packaged product, so the person who actually has a `.keiko`
+  directory can verify it without a repository checkout — which is the whole point of a compensating
+  control (KEIKO-0230). It runs the same `scripts/lib/local-state-audit.mjs` module described above,
+  not a second implementation. Install-layout normalization plus audit start/completion/failure
+  events go to the fixed per-user CLI control-state log through the existing activity-log sink.
+  One correlation joins those events and a SHA-256 identity distinguishes the selected target
+  without persisting its path. The command refuses containment in either direction before opening
+  the activity sink, preserving the target's physical read-only contract. This overlap refusal is
+  terminal-only because no durable location can both remain outside the protected target and avoid
+  creating a second activity log.
+- `npm run audit:local-state -- --state-dir <path>` — the same audit from a repository checkout.
+  Maintainer-facing; identical output and exit codes.
 - `npm run check:local-state` — maintainer self-test. It generates a genuinely-encrypted healthy
   fixture and a deliberately drifted one, then asserts the auditor passes the former and detects the
   drift in the latter. The required GitHub `ci` check runs the regression coverage through
@@ -214,28 +241,63 @@ tree.
   covers the same proof plus crafted negative cases and a `keiko repair --dry-run`
   healthy/drifted comparison.
 
-The audit covers seven classes: no plaintext credentials in the gateway config; sealed editor
+The audit covers eight classes: no plaintext credentials in the gateway config; sealed editor
 hot-exit recovery snapshots (`kv1.` envelopes with owner-only key material and symlink refusal on the
 recovery store); owner-only file and directory modes for Keiko-owned artifacts; sealed Memory Vault
 content (`kv1.` text envelopes, binary embedding envelopes); sealed Local Knowledge content (the
 `content_encryption=aes-256-gcm/v1` marker plus a sealed key-verification probe, and any populated
 content columns); protected Evidence/QI artifacts (owner-only modes, redaction checks on text-bearing
 artifacts, recomputed QI/Prompt Enhancement manifest hashes, Figma snapshot side-file hash checks, and
-symlink refusal before artifact reads); and runtime store integrity (no unresolved memory-vault or
+symlink refusal before artifact reads); runtime store integrity (no unresolved memory-vault or
 Evidence/QI quarantine residue left behind by a failed operation, and no retired plaintext
-`code-intelligence/` index artifact left behind by a pre-#2670 release).
+`code-intelligence/` index artifact left behind by a pre-#2670 release); and the closed file-name
+grammar and stated byte bound of the two Activity Log control/derived-metadata stores,
+`support-incidents/` (an `incident-<32 hex>.json` record at most `MAX_SUPPORT_INCIDENT_RECORD_BYTES`,
+plus its `fingerprint-<64 hex>.claim` and `slot-<NN>.claim` cross-process dedup/quota claims) and
+`activity-log-manifests/` (a `manifest-<segmentId>.json` at most 256 KiB) — content-free checks,
+since both stores are already body-free control artifacts the audit never needs to decrypt.
 
 Update recovery snapshots are not package archives or general downgrade backups. They retain one
 previous-version, local-only, content-free manifest with version pointers, affected store health,
 remediation status, and aggregate artifact counts. They do not copy customer repository files,
 credential vaults, raw logs, prompts, model outputs, package-manager output, or private paths.
 
-Update remediation status is persisted in `updates/runtime-state.json` as content-free action state
-only: target version, affected store, remediation kind, status, bounded warning code, and timestamps.
+`updates/runtime-state.json` is the updater's single versioned semantic aggregate. Schema 2 adds a
+monotonic revision, active/last session, candidate snapshot without an execution token, bounded
+lifecycle/progress, recovery ownership, and the activation WAL to the existing stage/activation and
+remediation summaries. Updates use revision-checked durable replacement; stale writers cannot reset
+the aggregate or overwrite later activation checkpoints. Valid schema-1 summaries migrate through
+the owning reader; malformed or unsupported state does not become an empty successful update.
+Missing state is distinguishable from an initialized store, and missing state required by an active
+handoff must block recovery rather than authorize a fresh mutation.
+
+Remediation still records only target version, affected store, remediation kind, status, bounded
+warning code, and timestamps.
 Scope reporting uses counts (stores, artifacts, Local Knowledge capsules/documents/chunks/vectors),
 never raw document text, vector bytes, model output, package-manager output, credential material, or
 customer repository paths. Local Knowledge reindex remains a domain-specific action; generic repair
 does not hide or mutate Local Knowledge content.
+
+The activation-specific `updates/handoff/<activation-id>/` capsule is private local control data,
+not a customer evidence store. It may contain bounded verified copies of the current native launcher
+and supervisor, the fixed authenticated handoff plan, registration recovery data, and ordered
+mechanical receipts. Fixed local paths in that plan are a narrowly scoped execution requirement;
+they must not appear in API projections, support exports, activity logs, or release artifacts. The
+capsule is outside the active, staged, and previous install trees and is not a copy of the product
+payload. Reads and writes must enforce the reviewed file, link, size, identity, and retention limits.
+The server owns semantic state; native receipts cannot independently declare application success.
+A fixed post-listen acknowledgement may transport a successfully persisted semantic decision to the
+native coordinator, but is not another lifecycle journal. Missing acknowledgement is not proof that
+verification did not commit. Restoration uses the same ordered, plan-bound receipt authority and a
+distinct restored-process identity; only verified post-listen recovery may settle the failed attempt
+and clear its active authority. Every intermediate crash must remain recoverable from retained
+semantic and mechanical evidence, including a terminal result whose cleanup has not finished.
+
+New updater activity uses the existing canonical Activity Log ports (`logs/`), with structured diagnostic
+failures and explicit attempt/parent-correlation links. A legacy audit journal is not an authority
+for new attempts. Never retain raw execution tokens, URLs, certificate material, command output,
+or private paths in canonical evidence. Uncertain post-handoff state retains recovery ownership;
+cleanup must never restore the previous installation after the new target has been verified.
 
 ## Limitations (honest threat model)
 

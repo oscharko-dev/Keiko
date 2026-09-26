@@ -20,7 +20,11 @@ function userMessage(input: InvestigateBugInput): string {
     input.filePaths === undefined || input.filePaths.length === 0
       ? ""
       : `\n\nSuspected files: ${input.filePaths.join(", ")}`;
-  const context = input.context === undefined ? "" : `\n\nContext: ${input.context}`;
+  // An empty string is treated the same as an absent field (KEIKO-0550).
+  const context =
+    input.context === undefined || input.context.length === 0
+      ? ""
+      : `\n\nContext: ${input.context}`;
   return `Investigate this bug: ${input.description}${files}${context}`;
 }
 

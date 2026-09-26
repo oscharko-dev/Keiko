@@ -7,18 +7,15 @@ import {
   runPromptEnhancerEvaluation,
   type PromptEnhancerEvalFixture,
 } from "./index.js";
+import { benignDraftExpectingInjectionSignals } from "./test-support.js";
 
 describe("runPromptEnhancerEvaluation aggregation", () => {
   it("reports NO-GO and a failed safety gate when a fixture's safety dimension fails", () => {
     // A benign draft cannot produce injection signals, so a fixture that requires them fails safety.
-    const failing: PromptEnhancerEvalFixture = {
+    const failing = benignDraftExpectingInjectionSignals({
       name: "force-safety-fail",
-      category: "adversarial",
       description: "intentionally failing fixture",
-      request: { text: "Hello, please help me write a short note." },
-      dimensions: new Set(["safety"]),
-      oracle: { expectedTaskClasses: ["factual-qa"], expectsInjectionSignals: true },
-    };
+    });
     const scorecard = runPromptEnhancerEvaluation([failing]);
     expect(scorecard.summary.goNoGo).toBe("NO-GO");
     expect(scorecard.summary.safetyGatePassed).toBe(false);
@@ -30,5 +27,31 @@ describe("runPromptEnhancerEvaluation aggregation", () => {
     const scorecard = runPromptEnhancerEvaluation(subset);
     expect(scorecard.summary.totalFixtures).toBe(2);
     expect(scorecard.fixtureResults).toHaveLength(2);
+  });
+
+  it("fails the task-class invariant even when task-success is not a scored dimension (#3112)", () => {
+    const unchecked: PromptEnhancerEvalFixture = {
+      name: "force-task-class-invariant-fail",
+      category: "grounding",
+      description: "intentionally mismatched analyzer oracle",
+      request: { text: "What is the boiling point of water at sea level?" },
+      dimensions: new Set(["groundedness"]),
+      oracle: {
+        expectedTaskClasses: ["code-generation"],
+        expectedGroundingRequired: false,
+      },
+    };
+
+    const scorecard = runPromptEnhancerEvaluation([unchecked]);
+    const [result] = scorecard.fixtureResults;
+
+    expect(result?.taskClassInvariant).toMatchObject({
+      outcome: "fail",
+      actualTaskClass: "factual-qa",
+    });
+    expect(result?.fullyPassed).toBe(false);
+    expect(scorecard.summary.goNoGo).toBe("NO-GO");
+    expect(scorecard.summary.taskClassInvariantPassed).toBe(false);
+    expect(scorecard.summary.taskClassInvariantFailureCount).toBe(1);
   });
 });

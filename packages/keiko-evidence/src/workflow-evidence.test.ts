@@ -89,6 +89,30 @@ describe("buildWorkflowManifest", () => {
     expect(manifest.verification?.overallStatus).toBe("passed");
   });
 
+  it("drops a malformed verificationSummary instead of embedding it unvalidated (KEIKO-0706)", () => {
+    const manifest = buildWorkflowManifest(identity(), [], {
+      workflowId: "unit-test-generation",
+      status: "completed",
+      proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
+      addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
+      // overallStatus has the wrong type -- verificationOf must reject the whole object rather
+      // than casting it straight into the typed EvidenceManifest["verification"] shape.
+      verificationSummary: { overallStatus: 42 },
+    });
+    expect(manifest.verification).toBeUndefined();
+  });
+
+  it("drops a verificationSummary missing overallStatus entirely (KEIKO-0706)", () => {
+    const manifest = buildWorkflowManifest(identity(), [], {
+      workflowId: "unit-test-generation",
+      status: "completed",
+      proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
+      addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
+      verificationSummary: {},
+    });
+    expect(manifest.verification).toBeUndefined();
+  });
+
   it("folds bug-investigation model usage and workspace metadata", () => {
     const manifest = buildWorkflowManifest(
       identity({ kind: "bug-investigation", workspaceRoot: "/repo" }),
@@ -198,6 +222,10 @@ describe("persistWorkflowEvidence", () => {
     if (loaded === undefined) throw new Error("Expected persisted evidence.");
     expect(JSON.stringify(loaded)).not.toContain(literalSecret);
     expect(loaded.patch?.redactedDiff).toBeUndefined();
+    // KEIKO-0768: workflow evidence must be human-diffable multi-line JSON like every other
+    // evidence kind (agent-run, connected-context, compaction), not a single-line dump.
+    const raw = store.get("run-1");
+    expect(raw?.split("\n").length ?? 0).toBeGreaterThan(1);
   });
 
   it("persists an opt-in redacted workflow diff", () => {

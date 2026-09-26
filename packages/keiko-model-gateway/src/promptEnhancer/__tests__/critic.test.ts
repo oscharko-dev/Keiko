@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import {
-  asEnhancedPromptId,
-  estimateTokens,
-  PROMPT_CRITIC_DIMENSIONS,
-  validatePromptCandidateScorecard,
-  type PromptCriticDimension,
-  type PromptEnhancementProfileId,
-  type RawPromptInput,
+import type {
+  PromptCriticDimension,
+  PromptEnhancementProfileId,
+  RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
+import { asEnhancedPromptId } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { PROMPT_CRITIC_DIMENSIONS } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-critic";
+import { validatePromptCandidateScorecard } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
 import { planPromptEnhancement } from "../planner.js";
 import { generateEnhancedPrompt } from "../generator.js";
 import { renderEnhancedPromptText } from "../rendering.js";

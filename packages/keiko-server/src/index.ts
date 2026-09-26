@@ -47,6 +47,12 @@ export {
   type ProductionRuntimeBackendResolver,
   type QualifiedProductionRuntimeRun,
 } from "./coding-runtime/productionCodingRuntimeResolver.js";
+// The command-runner seam types stay module-internal on purpose: they are server-owned shapes,
+// and the launch surface consuming this probe needs only the function (reviewer finding on
+// #3026 — cross-package types belong in contracts, and this seam is not a cross-package
+// contract).
+export { portableInstallCarriesReleaseSignature } from "./coding-runtime/productionPortableCodingRuntime.js";
+export { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 export {
   createUpdateLocalStateManager,
   type CreateUpdateSnapshotInput,
@@ -73,7 +79,19 @@ export {
   type UpdateSessionManager,
   type UpdateSessionManagerOptions,
   type UpdateSessionStartOutcome,
+  type PortableHandoffShutdownRequest,
 } from "./update-session.js";
+export {
+  type UpdateStartupRecoveryCurrent,
+  type UpdateStartupRecoveryPort,
+} from "./update-portable-handoff-recovery.js";
+export { reconcilePortableNormalStartup } from "./update-portable-normal-startup.js";
+export {
+  importLegacyUpdateAuditSnapshot,
+  type ImportLegacyUpdateAuditSnapshotOptions,
+  type LegacyUpdateAuditImportDeferredReason,
+  type LegacyUpdateAuditImportOutcome,
+} from "./update-legacy-audit-import.js";
 export {
   createUpdateRemediationManager,
   UpdateRemediationError,
@@ -98,6 +116,15 @@ export {
 export { QueueEventSink, type StreamEvent, type SseWriter } from "./sink.js";
 export { parseRunRequest, type RunRequest, type RunKind } from "./run-request.js";
 export { startRun, applyRun, type StartRunResult } from "./run-engine.js";
+// 2895 audit KEIKO-0903 (Finding D, #3323 follow-up): a public export so the CLI tier, which
+// already depends on this package (keiko-cli/package.json), can reuse the same harness
+// compaction port the reachable server call sites use rather than reimplementing it.
+export {
+  createServerHarnessContextCompactor,
+  logHarnessContextCompactionEvents,
+  serverHarnessContextCompactor,
+  type HarnessCompactionLogContext,
+} from "./harness-context-compactor.js";
 export {
   handleCreateRun,
   handleRunEvents,
@@ -113,14 +140,18 @@ export {
 } from "./evidence.js";
 // ADR-0013 — UI-local SQLite persistence: ports, factories, and route handlers.
 export {
+  computeStoreFingerprint,
   createInMemoryUiStore,
   createNodeUiStore,
   isProjectAvailable,
+  openNodeUiDatabase,
+  openNodeUiDatabaseReadOnly,
   resolveUiDbPath,
   runMigrations,
   SCHEMA_VERSION,
   UI_DB_DIRNAME,
   UI_DB_FILENAME,
+  UI_STORE_FINGERPRINT_TABLES,
   UiStoreError,
   validateProjectPath,
   type Chat,
@@ -138,6 +169,16 @@ export {
   type WorkspaceTrustRecordRow,
   type WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
+// Wave 4a, epic #3233 §6.2/§8 — `keiko support export`'s per-store schema/integrity snapshot.
+// Lives here (not in keiko-cli) because this is the one package already depending on all three
+// store packages; see store-fingerprints.ts's header for the full ADR-0019 rationale.
+export {
+  collectStoreFingerprints,
+  type CollectStoreFingerprintsInput,
+  type CollectStoreFingerprintsResult,
+  type StoreFingerprintUnavailableEntry,
+  type StoreFingerprintUnavailableReasonKind,
+} from "./store-fingerprints.js";
 export {
   handleListProjects,
   handleCreateProject,
@@ -315,6 +356,17 @@ export {
   type GroundedRetrievalBudget,
 } from "./grounded-retrieval-eval.js";
 
+// Audit KEIKO-0053 — the LATENCY counterpart of the eval above. The quality gate drives the real
+// grounded path but records no timing, and check:retrieval-latency times only lexical searchText,
+// so nothing gated embedding/ANN/rerank/entailment wall-clock. Exposed so
+// scripts/check-grounded-retrieval-latency.mjs can measure it with a deterministic judge.
+export {
+  runGroundedRetrievalLatencyEval,
+  FIXTURE_ANSWER_CLAIMS,
+  type GroundedLatencySample,
+  type GroundedLatencyEvalOptions,
+} from "./grounded-latency-eval.js";
+
 // Knowledge M2.3 (#2567) — the single governed model-rerank facade shared by every grounded
 // orchestrator. Documents remain caller-shaped, while policy/config gating, provider mapping,
 // diagnostics, and deterministic fallback behavior stay centralized.
@@ -357,3 +409,104 @@ export {
   computeLauncherPairingClaim,
   mintLauncherPairingAttestation,
 } from "./coding-app-session/launcherSessionPairingPort.js";
+
+// ADR-0173 (server activity log v2): file-backed activity log sink for the BFF. The CLI wires it
+// into createUiServer so every HTTP request produces one JSON line in `<stateDir>/logs/server.log`,
+// giving operators diagnosable evidence without an env-var opt-in. The additional names below
+// (envelope identity/schema helpers, the log-level threshold resolver and its env constants, and
+// the category/level/threshold types) are exported for `keiko-cli`'s process-lifecycle logging
+// (`ui.ts`) and its support-bundle exporter (`support-export.ts`), which previously had to mirror
+// this package's log-level resolution and shutdown-close logic locally instead of reusing it.
+// `createBufferedServerLogSink` is deliberately absent: it is a test-only helper, every consumer
+// is an in-package test importing it from `./observability/index.js`, and a packaged export is a
+// promise this package would then have to keep. `redactLogFields` is exported for the same
+// support-bundle exporter's Wave 6 `config-snapshot` section (epic #3233 §6.2/§8): the ONE
+// redaction choke point this package's own log line formatter uses, reused rather than re-derived
+// so `keiko-cli` never grows a second copy of field redaction (AGENTS.md §7).
+export {
+  createFileServerLogSink,
+  nullServerLogSink,
+  closeFileServerLogSinks,
+  serverLogInstanceId,
+  SERVER_LOG_SCHEMA_VERSION,
+  resolveServerLogThreshold,
+  SERVER_LOG_LEVEL_ENV,
+  DEFAULT_SERVER_LOG_LEVEL,
+  redactLogFields,
+  type ServerLogSink,
+  type ServerLogEvent,
+  type ServerLogCategory,
+  type ServerLogLevel,
+  type ServerLogThreshold,
+} from "./observability/server-log.js";
+
+// ADR-0173 D3/D11 — error evidence for the activity log: dist/src-anchored stack frames, a
+// content-free `.cause` chain, and the content-free error-CLASS classifier they both build on.
+// Exposed so `keiko-cli`'s process-guards fatal path (an uncaught exception/unhandled rejection
+// with a state directory present) can compute the SAME evidence this package's own diagnostics
+// sink already writes, via a dynamic `import("@oscharko-dev/keiko-server")` reached only inside the
+// crash handler — never at module scope, where it would cost real startup time against
+// GEN-PERF-CLI-001's budget.
+export { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+
+// #3533 — local SupportIncident candidates. `keiko support incident` lists, resolves, previews,
+// records (Report a problem), and dismisses them through these. The automatic trigger runs inside
+// the Activity Log file sink; `recordRegisteredFailureIncident` is its entry for a caller that
+// holds one registered failure event's body-free facts.
+export {
+  dismissSupportIncident,
+  listSupportIncidents,
+  readSupportIncident,
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+  supportIncidentSegmentFiles,
+  type SupportIncidentCreation,
+  type SupportIncidentDismissal,
+  type SupportIncidentSegmentFile,
+} from "./observability/support-incident.js";
+export { contentFreeErrorClass, describeError } from "./diagnostics-log.js";
+
+// #3532 — product-wide Activity Log wiring. `createActivityLogSink` is the level-gated production
+// sink every CLI composition site uses for lifecycle and loss evidence (mandatory evidence is never
+// filtered by KEIKO_LOG_LEVEL); the readiness functions run the startup self-check and its heartbeat
+// refresh; the loss summary persists the process-wide loss ledger; and the client-diagnostics flush
+// writes the BFF's trailing suppressed counts before the process exits.
+export {
+  createActivityLogSink,
+  isMandatoryActivityLogEvent,
+  type ActivityLogSinkOptions,
+} from "./observability/server-logger.js";
+export {
+  checkActivityLogReadiness,
+  currentActivityLogReadiness,
+  refreshActivityLogReadiness,
+  type ActivityLogReadinessOptions,
+  type ActivityLogReadinessScope,
+  type ActivityLogStorageHealthProvider,
+} from "./observability/activity-log-readiness.js";
+export {
+  persistActivityLogLossSummary,
+  type ActivityLogLossSummaryOutcome,
+  type ActivityLogLossSummaryTrigger,
+} from "./observability/activity-log-loss-summary.js";
+export { flushClientDiagnosticsIngestCounts } from "./client-diagnostics-routes.js";
+export { resolveRuntimeStateDir } from "./observability/runtime-state-dir.js";
+// The one process-wide Activity Log port every domain package is handed (#3532). CLI commands that
+// compose domain packages in-process (`keiko memory`, `keiko run`, the workflow commands, `keiko
+// evaluate --live`) pass it to the vault and the Model Gateway exactly like the BFF does, so their
+// evidence reaches the runtime state directory's Activity Log instead of an unwired no-op.
+export { processServerLogSink, type ProcessServerLogSink } from "./process-log-sink.js";
+
+// Install-mode detection for `keiko-cli`'s process-lifecycle (`process.started`) and
+// support-bundle manifest fields. `detectUpdateInstallMode`/`productionUpdateFacts` are exported
+// rather than `detectPortableUpdateInstallMode` (the narrower portable-only branch in
+// `./update-portable-install-mode.js`): the portable detector returns `undefined` for every
+// non-portable install, which is the common case, so it cannot answer "which install mode is this
+// process running in" on its own. `detectUpdateInstallMode` calls the portable detector internally
+// and falls through to package-manager detection, so it is the one call that always answers the
+// question. Both functions run synchronously, take no lock, and are the exact pair
+// `UpdateSessionManagerImpl.getStatus()` already calls under the hood (`defaultDetectorFor` in
+// `./update-session-support.js`) — exporting them lets a caller that only wants the install mode
+// (not the full update-session machinery: locks, run history, command execution) skip
+// constructing an `UpdateSessionManager` entirely.
+export { detectUpdateInstallMode, productionUpdateFacts } from "./update-install-mode.js";

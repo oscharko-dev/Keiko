@@ -13,7 +13,7 @@ import {
   subscribeEditorProblems,
   verificationResultToProblems,
 } from "./editorProblemsStore";
-import { EDITOR_PROBLEM_MESSAGE_MAX_CHARS } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_PROBLEM_MESSAGE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/editor-problems";
 
 function diagnostic(
   severity: EditorDiagnostic["severity"],

@@ -9,4 +9,10 @@ describe("ResourcesPanel", () => {
     expect(screen.getByText("resources")).toBeInTheDocument();
     expect(screen.getByText(/Shared assets & references/i)).toBeInTheDocument();
   });
+
+  it("exposes a named region landmark for assistive tech (KEIKO-0669)", () => {
+    render(<ResourcesPanel />);
+
+    expect(screen.getByRole("region", { name: /resources/i })).toBeInTheDocument();
+  });
 });

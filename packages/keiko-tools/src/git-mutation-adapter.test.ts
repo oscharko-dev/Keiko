@@ -53,13 +53,13 @@ describe("argv builders — fixed, governed argument vectors", () => {
 
   it("commit passes the message as a single `--message` token", () => {
     expect(buildCommitArgv({ message: "fix: thing", allowEmpty: false })).toEqual([
-      ["commit", "--message", "fix: thing"],
+      ["commit", "--gpg-sign", "--message", "fix: thing"],
     ]);
   });
 
   it("commit adds --allow-empty only when requested", () => {
     expect(buildCommitArgv({ message: "empty", allowEmpty: true })).toEqual([
-      ["commit", "--allow-empty", "--message", "empty"],
+      ["commit", "--gpg-sign", "--allow-empty", "--message", "empty"],
     ]);
   });
 
@@ -138,7 +138,7 @@ describe("operand validation — flag injection and malformed operands", () => {
 
   it("allows a commit message that begins with `-` (it is a flag value, not a flag)", () => {
     expect(buildCommitArgv({ message: "-not-a-flag", allowEmpty: false })).toEqual([
-      ["commit", "--message", "-not-a-flag"],
+      ["commit", "--gpg-sign", "--message", "-not-a-flag"],
     ]);
   });
 });
@@ -176,9 +176,9 @@ describe("no-generic-fallback property (AC3)", () => {
     }
   });
 
-  it("the dedicated command rules deny global config / cwd-shifting flags", () => {
+  it("the dedicated command rules deny ambient config and cwd-shifting flags", (): void => {
     expect(
-      isCommandAllowed(GIT_MUTATION_COMMAND_RULES, "git", ["-c", "core.x=1", "commit"]).allowed,
+      isCommandAllowed(GIT_MUTATION_COMMAND_RULES, "git", ["--config-env=x=y", "commit"]).allowed,
     ).toBe(false);
     expect(
       isCommandAllowed(GIT_MUTATION_COMMAND_RULES, "git", ["--exec-path=/x", "add"]).allowed,

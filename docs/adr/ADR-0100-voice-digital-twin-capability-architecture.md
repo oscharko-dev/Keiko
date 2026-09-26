@@ -101,8 +101,9 @@ existing fail-closed posture: a capability that names no configured provider can
 ### D2 — Four provider profiles; STT-only dictation is distinct from full realtime conversation (AC2)
 
 > **Current amendment:** the profile ladder remains, but `full-realtime` no longer grants a provider
-> assistant-response path. ADR-0154 requires Realtime WebRTC input plus an independent explicit TTS
-> provider; the settled transcript enters canonical chat and only that canonical answer may be spoken.
+> assistant-response path. ADR-0154 accepts either Realtime WebRTC input or turn-based STT capture,
+> plus an independent explicit TTS provider; the settled transcript enters canonical chat and only
+> that canonical answer may be spoken.
 > The original speech-to-speech description below is historical rationale.
 
 The architecture defines four mutually ordered provider profiles, gated by advertised capability:
@@ -212,7 +213,7 @@ provider is required for Keiko to reason about voice availability.
 option for a regulated product because a transcription/realtime endpoint is then never conversation-eligible,
 never workflow-eligible, and never elected for chat completion. The voice modality is refined by additive
 optional flags `supportsSpeechInput?`, `supportsSpeechOutput?`, `supportsRealtimeVoice?`, plus
-`voiceProviderLocality?` (`azure-foundry` | `customer-hosted` | `local-only`, D7), all on the closed
+`voiceProviderLocality?` (`azure-foundry` | `customer-hosted` | `local-only` | `gateway-managed`, D7), all on the closed
 `MODEL_CAPABILITY_KNOWN_KEYS` allowlist and enforced by two voice invariants (voice fields require
 `kind: "voice"`; a voice capability must advertise ≥1 sub-capability and a locality). A content-free
 `resolveVoiceCapability` resolver and a UI-readable `GET /api/voice/capability` BFF endpoint expose the
@@ -309,3 +310,7 @@ can reference a stable baseline. Sequencing notes are in
   [ADR-0048](ADR-0048-evidence-artifact-confidentiality.md),
   [ADR-0052](ADR-0052-deterministic-context-engineering-layer.md).
 - [`docs/local-runtime-state-contract.md`](../local-runtime-state-contract.md).
+
+## Date
+
+2026-06-24

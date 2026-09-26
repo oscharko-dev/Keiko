@@ -1,8 +1,14 @@
+import type { DraftDeliveryDependencies } from "../../../packages/keiko-server/src/gitDelivery/draftDeliveryTypes.js";
 // Shared TEST-ONLY server composition for the Code-task browser journeys (#2483). The two
 // scripted entries and the real-binary production-discovery entry differ only in fixture identity,
 // question behavior, app-session pairing, and runtime source; the workspace, BFF, static UI, CSP,
 // shutdown, and deterministic provider-boundary wiring live here once.
 
+import {
+  createDeferredVerifiedCommitDependencies,
+  createCodingIssueCommitFixture,
+  type CodingIssueCommitFixture,
+} from "./coding-issue-commit-fixture.mjs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -18,15 +24,18 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type {
-  GatewayRequest,
-  GatewayStreamChunk,
-  NormalizedResponse,
+import {
+  resolveCodingSafeSidecarGatewayProfile,
+  type GatewayConfig,
+  type GatewayRequest,
+  type GatewayStreamChunk,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../../packages/keiko-server/src/coding-app-session/launcherSessionPairingPort.js";
 import { createCodingRuntimeEvidenceAggregator } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeEvidenceAggregator.js";
+import { createCodingRuntimeEditorMutationLeaseBroker } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   createScriptedOpenCodeHarness,
   scriptedFunctionalPortable,
@@ -57,7 +66,11 @@ import {
   type VerificationRunnerManager,
 } from "../../../packages/keiko-server/src/editor/verificationRunner.js";
 import { createUiServer, UI_HOST } from "../../../packages/keiko-server/src/server.js";
+import { processServerLogSink } from "../../../packages/keiko-server/src/process-log-sink.js";
 import { createInMemoryUiStore } from "../../../packages/keiko-server/src/store/index.js";
+import { createCodingRuntimeSnapshotStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.js";
+import { createCodingRuntimeDescriptionJobStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeDescriptionJobStore.js";
+import type { ProductionWorkbenchDescriptionDispatcher } from "../../../packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.js";
 import { runMigrations } from "../../../packages/keiko-server/src/store/schema.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/active-store.js";
 import { createWorkspaceLifecycleService } from "../../../packages/keiko-server/src/task-workspace/lifecycle.js";
@@ -65,7 +78,12 @@ import { createWorkspaceMutexRegistry } from "../../../packages/keiko-server/src
 import { createWorkspaceProvisioningService } from "../../../packages/keiko-server/src/task-workspace/provisioning.js";
 import { createWorkspaceReconciliationService } from "../../../packages/keiko-server/src/task-workspace/reconciliation.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/store.js";
+import type { GitHubCodeContextApiPort } from "../../../packages/keiko-server/src/coding-context/githubCodeContextConnector.js";
 import { createWorkspaceScriptTrustService } from "../../../packages/keiko-server/src/workspace-script-trust.js";
+import {
+  createRelationshipStorePort,
+  type RelationshipHandlerDeps,
+} from "../../../packages/keiko-server/src/relationship-handlers.js";
 
 type WorkspaceAdapterFactory = (
   workspace: Parameters<typeof createNodeGitWorktreeAdapter>[0]["workspace"],
@@ -77,6 +95,16 @@ interface JourneyWorkspaceServices {
   readonly reconciliation: ReturnType<typeof createWorkspaceReconciliationService>;
   readonly uiStore: ReturnType<typeof createInMemoryUiStore>;
   readonly workspaceScriptTrust: ReturnType<typeof createWorkspaceScriptTrustService>;
+  // Injecting `uiStore` into the BFF assembly suppresses its own persistence composition, so the
+  // journey must bring the snapshot-store companion or the coding-runtime control plane is never
+  // assembled and production discovery refuses as unqualified (the daily lane outage after #2835).
+  readonly codingRuntimeSnapshots: ReturnType<typeof createCodingRuntimeSnapshotStore>;
+  // #3401: companion to `codingRuntimeSnapshots` above, over the SAME handle — without it the
+  // automatic-description job store is unavailable and no journey can prove the dispatch.
+  readonly codingRuntimeDescriptionJobStore: ReturnType<
+    typeof createCodingRuntimeDescriptionJobStore
+  >;
+  readonly relationship: RelationshipHandlerDeps;
 }
 
 /**
@@ -111,11 +139,24 @@ export interface CodingRuntimeResearchJourneyConfig {
   readonly toolCallLogPath: (stateDir: string) => string;
 }
 
+export interface CodingRuntimeIssueJourneyConfig {
+  readonly remoteUrl: string;
+  readonly port: GitHubCodeContextApiPort;
+  readonly initialize: (stateDir: string) => void;
+  readonly observeGatewayRequest: (request: GatewayRequest, stateDir: string) => void;
+}
+
 export interface CodingRuntimeJourneyServerConfig {
   readonly fixtureId: string;
   readonly fixtureLabel: string;
   readonly runtime: "scripted" | "production-discovery";
   readonly includeQuestion: boolean;
+  /** Hold after the real verification tool completes so the journey can prove cancellation. */
+  readonly holdAfterVerification?: boolean;
+  /** Actual runtime search result must determine the model boundary's subsequent read. */
+  readonly proveRepositorySearch?: boolean;
+  /** #3417: the runtime's own skill discovery must determine the skill the model invokes. */
+  readonly proveSkillDiscovery?: boolean;
   readonly defaultPort: number;
   readonly originalContent: string;
   readonly editedContent: string;
@@ -126,6 +167,22 @@ export interface CodingRuntimeJourneyServerConfig {
   readonly launcherSessionSecret?: string | undefined;
   /** #2642: opt-in research runtime seams. Only meaningful when `runtime === "scripted"`. */
   readonly research?: CodingRuntimeResearchJourneyConfig | undefined;
+  readonly issue?: CodingRuntimeIssueJourneyConfig | undefined;
+  /** #3386: actual commit factory/facade with a controlled model response boundary. */
+  readonly commit?: boolean;
+  /** Controlled provider boundary for the actual issue-bound delivery adapters. */
+  readonly delivery?: boolean;
+  readonly ciReader?: DraftDeliveryDependencies["ciReader"];
+  /**
+   * #3401: a fake `WorkbenchDescriptionDispatcher` standing in for the real Model Gateway
+   * generation core, so a journey can prove the terminal-run automatic-description dispatch
+   * end-to-end (job store persistence, snapshot overlay onto the runtime status) without a real
+   * provider response. Only meaningful when `runtime === "scripted"`.
+   */
+  readonly descriptionDispatcher?: ProductionWorkbenchDescriptionDispatcher | undefined;
+  /** Test-only lower provider response; all BFF admission, authority, and persistence stay real. */
+  readonly chatResponse?: ((request: GatewayRequest) => NormalizedResponse) | undefined;
+  readonly gatewayConfig?: GatewayConfig | undefined;
 }
 
 interface JourneyComposition {
@@ -133,8 +190,31 @@ interface JourneyComposition {
   readonly scripted?: ScriptedOpenCodeHarness | undefined;
 }
 
+// KEIKO-1010: bound git invocations defensively even though today's only caller
+// (createRepositoryFixture: init/config/add/commit -q -m) is local-only and non-interactive.
+// A stray interactive prompt or a fs-level hang must not keep the e2e server startup pinned
+// indefinitely — a 30-second ceiling is generous relative to the sub-second local-only cost.
+const GIT_HELPER_TIMEOUT_MS = 30_000;
 function git(cwd: string, args: readonly string[]): void {
-  execFileSync("git", [...args], { cwd, encoding: "utf8" });
+  execFileSync("git", [...args], { cwd, encoding: "utf8", timeout: GIT_HELPER_TIMEOUT_MS });
+}
+
+function configureFixtureCommitSigning(repository: string, stateDir: string, email: string): void {
+  const signingRoot = join(stateDir, "commit-signing");
+  mkdirSync(signingRoot, { recursive: true, mode: 0o700 });
+  const key = join(signingRoot, "fixture-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", key], {
+    cwd: signingRoot,
+    timeout: GIT_HELPER_TIMEOUT_MS,
+  });
+  const allowedSigners = join(signingRoot, "allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${readFileSync(`${key}.pub`, "utf8").trim()}\n`, {
+    mode: 0o600,
+  });
+  git(repository, ["config", "gpg.format", "ssh"]);
+  git(repository, ["config", "gpg.ssh.allowedSignersFile", allowedSigners]);
+  git(repository, ["config", "user.signingkey", `${key}.pub`]);
+  git(repository, ["config", "commit.gpgsign", "true"]);
 }
 
 function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, stateDir: string): void {
@@ -147,10 +227,24 @@ function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, state
   writeFileSync(join(repository, config.targetRelativePath), config.originalContent);
   writeFileSync(
     join(repository, "package.json"),
-    JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(0)"' } }),
+    JSON.stringify({
+      scripts: {
+        typecheck:
+          config.commit === true ? "node --check src/example.ts" : 'node -e "process.exit(0)"',
+      },
+    }),
   );
   git(repository, ["add", "."]);
   git(repository, ["commit", "-q", "-m", `${config.fixtureId} fixture`]);
+  if (config.commit === true) {
+    configureFixtureCommitSigning(repository, stateDir, `${config.fixtureId}@keiko.example`);
+  }
+  if (config.issue !== undefined) {
+    git(repository, ["remote", "add", "origin", config.issue.remoteUrl]);
+    git(repository, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(repository, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    config.issue.initialize(stateDir);
+  }
 }
 
 function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices {
@@ -173,13 +267,8 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
   const mutex = createWorkspaceMutexRegistry();
   const provisioning = createWorkspaceProvisioningService({
     ...shared,
-    ensureManagedWorkspaceIdentity: (instance, initializeTrust): void => {
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust,
-      });
+    ensureManagedWorkspaceIdentity: (instance): void => {
+      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
     },
     mutex,
   });
@@ -189,8 +278,24 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
     provisioning,
     mutex,
   });
-  const reconciliation = createWorkspaceReconciliationService({ ...shared, activePointerStore });
-  return { provisioning, lifecycle, reconciliation, uiStore, workspaceScriptTrust };
+  const reconciliation = createWorkspaceReconciliationService({
+    ...shared,
+    activePointerStore,
+    mutex,
+  });
+  return {
+    provisioning,
+    lifecycle,
+    reconciliation,
+    uiStore,
+    workspaceScriptTrust,
+    codingRuntimeSnapshots: createCodingRuntimeSnapshotStore(db),
+    codingRuntimeDescriptionJobStore: createCodingRuntimeDescriptionJobStore(db),
+    relationship: {
+      scopeResolver: () => ({ workspaceId: "git-change-chat-e2e" }),
+      store: createRelationshipStorePort({ db, redactString: (value) => value }),
+    },
+  };
 }
 
 function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManager, "runToReport"> {
@@ -212,13 +317,36 @@ function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManage
   };
 }
 
-function nextScriptedTurn(
+// KEIKO-0902: a script-mode regression that emits back-to-back `question` tool calls used to
+// spin this loop indefinitely — the harness cannot make progress, no error is surfaced, and
+// the e2e run times out at the Playwright outer deadline with no diagnostic naming which
+// script exhausted the retry. Bound the retry with a small ceiling that is orders of magnitude
+// above the observed 1-2 skips a healthy script would produce, and fail with a message that
+// names the invariant.
+const SCRIPTED_QUESTION_SKIP_CEILING = 8;
+export function nextScriptedTurn(
   script: ScriptState,
   includeQuestion: boolean,
   transcript: string,
 ): NormalizedResponse {
   let response = scriptedResponse(script, transcript);
+  if (
+    script.holdAfterVerification === true &&
+    script.verificationIssued === true &&
+    response.toolCalls.some((call) => call.name === "question")
+  ) {
+    return response;
+  }
+  let skips = 0;
   while (!includeQuestion && response.toolCalls.some((call) => call.name === "question")) {
+    skips += 1;
+    if (skips > SCRIPTED_QUESTION_SKIP_CEILING) {
+      throw new Error(
+        "nextScriptedTurn: scripted transcript exceeded question-skip bound " +
+          `(${String(SCRIPTED_QUESTION_SKIP_CEILING)}) — check the ScriptState for a run that ` +
+          "emits consecutive `question` tool calls when includeQuestion is false.",
+      );
+    }
     response = scriptedResponse(script, transcript);
   }
   return response;
@@ -228,15 +356,28 @@ function scriptedModelDeps(
   deps: UiHandlerDeps,
   script: ScriptState,
   includeQuestion: boolean,
+  chatResponse?: (request: GatewayRequest) => NormalizedResponse,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
+  commit?: CodingIssueCommitFixture,
 ): UiHandlerDeps {
   // #2642: research mode reads the fenced-untrusted transcript to prove the granted page's directive
   // reaches the model without being complied with; productive/discovery/out-of-scope modes ignore
   // the transcript, so passing it always is behaviour-preserving.
-  const chat = (request?: GatewayRequest): Promise<NormalizedResponse> =>
-    Promise.resolve(nextScriptedTurn(script, includeQuestion, scriptedTranscript(request)));
-  return {
-    ...deps,
-    config: functionalGatewayConfig(),
+  const chat = async (request?: GatewayRequest): Promise<NormalizedResponse> => {
+    if (request !== undefined) observeGatewayRequest?.(request);
+    const response =
+      request === undefined || chatResponse === undefined
+        ? nextScriptedTurn(script, includeQuestion, scriptedTranscript(request))
+        : chatResponse(request);
+    await commit?.beforeResponse(response);
+    return response;
+  };
+  // Keep the exact graph identity captured by the production automatic-description dispatcher.
+  // The PR-description application cache is scoped to that graph, so returning a spread clone
+  // would retain the generated artifact in one cache and make the mounted HTTP review route read
+  // an empty cache even though both resolve the same authority binding.
+  return Object.assign(deps, {
+    config: scriptedGatewayConfig(),
     configPresent: true,
     gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
@@ -244,6 +385,17 @@ function scriptedModelDeps(
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
         yield { type: "done" as const, response: await chat(request) };
       },
+  });
+}
+
+function scriptedGatewayConfig(): GatewayConfig {
+  const config = functionalGatewayConfig();
+  return {
+    ...config,
+    // The final model response is deliberately held while Playwright reviews and approves the
+    // commit, push, and PR through mounted routes. Match the fixture's bounded control wait so a
+    // slow CI host cannot time out that already-open request before returning its terminal turn.
+    providers: config.providers.map((provider) => ({ ...provider, timeoutMs: 180_000 })),
   };
 }
 
@@ -273,12 +425,28 @@ function researchResolverSeams(research: CodingRuntimeResearchJourneyConfig): {
   };
 }
 
+function scriptedManagedModelProfile(
+  modelId: string | undefined,
+  reasoningEffort: string | undefined,
+): { readonly profileId: string } {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available" || reasoningEffort !== undefined)
+    throw new Error("fixture-managed-model-unqualified");
+  return { profileId: resolved.modelAlias };
+}
+
 function scriptedResolver(
   config: CodingRuntimeJourneyServerConfig,
   stateDir: string,
   port: number,
   services: JourneyWorkspaceServices,
   scripted: ScriptedOpenCodeHarness,
+  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+  verifiedCommit: CodingIssueCommitFixture["verifiedCommit"],
+  commit?: CodingIssueCommitFixture,
+  resetScript?: () => void,
 ): ReturnType<typeof createFunctionalRuntimeResolver> {
   const input = {
     portable: scriptedFunctionalPortable(stateDir),
@@ -289,7 +457,21 @@ function scriptedResolver(
     readWorkspaceHead: readProductionWorkspaceHead,
     verificationRunner: verificationRunner(config.fixtureLabel),
     runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
+    runtimeMutationLeaseBroker,
+    verifiedCommit,
     createSupervisor: scripted.createSupervisor,
+    resolveManagedModelProfile: scriptedManagedModelProfile,
+    ...(commit === undefined
+      ? {}
+      : {
+          ...(commit.draftDelivery === undefined ? {} : { draftDelivery: commit.draftDelivery }),
+          observeBackendRun: (
+            run: Parameters<CodingIssueCommitFixture["observeBackendRun"]>[0],
+          ): void => {
+            resetScript?.();
+            commit.observeBackendRun(run);
+          },
+        }),
   };
   return config.research === undefined
     ? createFunctionalRuntimeResolver(input)
@@ -297,6 +479,108 @@ function scriptedResolver(
         ...input,
         ...researchResolverSeams(config.research),
       });
+}
+
+function scriptedUiHandlerDepsOptions(
+  config: CodingRuntimeJourneyServerConfig,
+  services: JourneyWorkspaceServices,
+  bffStateRoot: string,
+  env: ReturnType<typeof scriptedEnvironment>,
+  resolver: ReturnType<typeof scriptedResolver>,
+): Parameters<typeof buildUiHandlerDeps>[0] {
+  const chatResponse = config.chatResponse;
+  return {
+    configPath: undefined,
+    evidenceDir: join(bffStateRoot, "evidence"),
+    env,
+    uiDbPath: join(bffStateRoot, "ui-db", "keiko-ui.db"),
+    store: services.uiStore,
+    codingRuntimeSnapshotStore: services.codingRuntimeSnapshots,
+    codingRuntimeDescriptionJobStore: services.codingRuntimeDescriptionJobStore,
+    workspaceScriptTrust: services.workspaceScriptTrust,
+    workspaceProvisioning: services.provisioning,
+    workspaceLifecycle: services.lifecycle,
+    workspaceReconciliation: services.reconciliation,
+    codingRuntimeResolver: resolver,
+    ...(config.issue === undefined ? {} : { codingContextGitHubPort: config.issue.port }),
+    ...(config.descriptionDispatcher === undefined
+      ? {}
+      : { codingRuntimeDescriptionDispatcher: config.descriptionDispatcher }),
+    codingRuntimeDeploymentCeiling: "autonomous-delivery",
+    codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
+    autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+    ...(chatResponse === undefined
+      ? {}
+      : {
+          modelPortFactory: () => ({
+            call: (request: GatewayRequest): Promise<NormalizedResponse> =>
+              Promise.resolve(chatResponse(request)),
+          }),
+        }),
+  };
+}
+
+function scriptedRuntimeDeps(
+  options: Parameters<typeof buildUiHandlerDeps>[0],
+  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+  relationship: RelationshipHandlerDeps,
+): UiHandlerDeps {
+  const assembled = buildUiHandlerDeps(options);
+  const dispose = assembled.dispose;
+  // The production description dispatcher is attached during `buildUiHandlerDeps` and retains its
+  // application service in a WeakMap keyed by this exact deps object. Cloning the graph here made
+  // HTTP review resolve against a second empty cache even though runtime status still saw the held
+  // proposal. Attach the fixture's shared lease broker without changing the graph's identity.
+  return Object.assign(assembled, {
+    runtimeMutationLease: runtimeMutationLeaseBroker,
+    relationship,
+    dispose: async (): Promise<void> => {
+      await dispose?.();
+      runtimeMutationLeaseBroker.dispose();
+    },
+  });
+}
+
+function scriptedJourneyModelDeps(
+  config: CodingRuntimeJourneyServerConfig,
+  deps: UiHandlerDeps,
+  script: ScriptState,
+  observe: ((request: GatewayRequest) => void) | undefined,
+  commit: CodingIssueCommitFixture | undefined,
+): UiHandlerDeps {
+  return scriptedModelDeps(
+    deps,
+    script,
+    config.includeQuestion,
+    config.chatResponse,
+    observe,
+    commit,
+  );
+}
+
+function writeChatGatewayConfig(
+  config: CodingRuntimeJourneyServerConfig,
+  bffStateRoot: string,
+): void {
+  if (config.chatResponse === undefined) return;
+  writeFileSync(
+    join(bffStateRoot, "ui-db", "keiko.config.json"),
+    `${JSON.stringify(config.gatewayConfig ?? functionalGatewayConfig(), null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+}
+
+function deferredJourneyCommit(
+  services: JourneyWorkspaceServices,
+  holder: { readonly deps?: UiHandlerDeps },
+): CodingIssueCommitFixture["verifiedCommit"] {
+  return createDeferredVerifiedCommitDependencies({
+    deps: (): UiHandlerDeps => {
+      if (holder.deps === undefined) throw new Error("journey-dependencies-unavailable");
+      return holder.deps;
+    },
+    snapshots: services.codingRuntimeSnapshots,
+  });
 }
 
 function scriptedComposition(
@@ -309,41 +593,113 @@ function scriptedComposition(
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(bffStateRoot, dir), { recursive: true, mode: 0o700 });
   }
-  const scripted = createScriptedOpenCodeHarness();
+  writeChatGatewayConfig(config, bffStateRoot);
   const script = journeyScript(config, stateDir);
-  const resolver = scriptedResolver(config, stateDir, port, services, scripted);
-  const env: NodeJS.ProcessEnv = {
+  const holder: { deps?: UiHandlerDeps } = {};
+  const commit = commitFixtureFor(config, stateDir, services, holder);
+  const scripted = createScriptedOpenCodeHarness({
+    generatedTools: config.commit === true,
+    pluginVersion: "v2",
+    ...(commit === undefined ? {} : { observePhase: commit.observeToolPhase.bind(commit) }),
+  });
+  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
+  // Every prompt proves its live pre-PR lineage through the production snapshot owner, including
+  // read/edit-only journeys. Omitting delivery controls must not omit that budget dependency.
+  const resolver = scriptedResolver(
+    config,
+    stateDir,
+    port,
+    services,
+    scripted,
+    runtimeMutationLeaseBroker,
+    commit?.verifiedCommit ?? deferredJourneyCommit(services, holder),
+    commit,
+    () => {
+      script.calls = 0;
+    },
+  );
+  const env = scriptedEnvironment(config, bffStateRoot);
+  const deps = scriptedRuntimeDeps(
+    scriptedUiHandlerDepsOptions(config, services, bffStateRoot, env, resolver),
+    runtimeMutationLeaseBroker,
+    services.relationship,
+  );
+  const observe =
+    config.issue === undefined
+      ? undefined
+      : (request: GatewayRequest): void => config.issue?.observeGatewayRequest(request, stateDir);
+  holder.deps = deps;
+  return {
+    deps: scriptedJourneyModelDeps(config, deps, script, observe, commit),
+    scripted,
+  };
+}
+
+function commitFixtureFor(
+  config: CodingRuntimeJourneyServerConfig,
+  stateDir: string,
+  services: JourneyWorkspaceServices,
+  holder: { readonly deps?: UiHandlerDeps },
+): CodingIssueCommitFixture | undefined {
+  if (config.commit !== true) return undefined;
+  return createCodingIssueCommitFixture({
+    deps: () => {
+      if (holder.deps === undefined) throw new Error("commit-fixture-assembly-incomplete");
+      return holder.deps;
+    },
+    snapshots: services.codingRuntimeSnapshots,
+    stateDir,
+    target: config.targetRelativePath,
+    delivery: config.delivery === true,
+    ...(config.ciReader === undefined ? {} : { ciReader: config.ciReader }),
+  });
+}
+
+function scriptedEnvironment(
+  config: CodingRuntimeJourneyServerConfig,
+  bffStateRoot: string,
+): NodeJS.ProcessEnv {
+  return {
     PATH: process.env.PATH ?? "",
+    ...(config.delivery === true ? { HOME: join(dirname(bffStateRoot), "provider-home") } : {}),
     KEIKO_STATE_DIR: join(bffStateRoot, "state"),
     ...(config.launcherSessionSecret === undefined
       ? {}
       : { [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: config.launcherSessionSecret }),
   };
-  const deps = buildUiHandlerDeps({
-    configPath: undefined,
-    evidenceDir: join(bffStateRoot, "evidence"),
-    env,
-    uiDbPath: join(bffStateRoot, "ui-db", "keiko-ui.db"),
-    store: services.uiStore,
-    workspaceScriptTrust: services.workspaceScriptTrust,
-    workspaceProvisioning: services.provisioning,
-    workspaceLifecycle: services.lifecycle,
-    workspaceReconciliation: services.reconciliation,
-    codingRuntimeResolver: resolver,
-    codingRuntimeDeploymentCeiling: "autonomous-delivery",
-    codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
-    autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
-  });
-  return { deps: scriptedModelDeps(deps, script, config.includeQuestion), scripted };
 }
 
 function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: string): ScriptState {
   if (config.research === undefined) {
     return {
-      mode: "productive",
+      mode: config.proveRepositorySearch === true ? "productive-search" : "productive",
       calls: 0,
       old: config.originalContent,
       next: config.editedContent,
+      ...(config.holdAfterVerification === true ? { holdAfterVerification: true } : {}),
+      ...(config.proveRepositorySearch === true
+        ? {
+            observeRepositorySearch: (proof): void => {
+              writeFileSync(
+                join(stateDir, "h1-result-consumption.json"),
+                `${JSON.stringify(proof)}\n`,
+                { mode: 0o600 },
+              );
+            },
+          }
+        : {}),
+      ...(config.proveSkillDiscovery === true
+        ? {
+            proveSkillDiscovery: true,
+            observeSkillDiscovery: (proof): void => {
+              writeFileSync(
+                join(stateDir, "skill-discovery-consumption.json"),
+                `${JSON.stringify(proof)}\n`,
+                { mode: 0o600 },
+              );
+            },
+          }
+        : {}),
     };
   }
   const logPath = config.research.toolCallLogPath(stateDir);
@@ -364,14 +720,60 @@ function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: strin
   };
 }
 
-function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
+interface ObservedGatewayCatalogBinding {
+  readonly catalogRevision: string;
+  readonly profile: { readonly id: string; readonly version: number };
+  readonly projectionDigest: string;
+  readonly handlerSetDigest: string;
+}
+
+function observedGatewayCatalogBinding(
+  request: GatewayRequest,
+): ObservedGatewayCatalogBinding | undefined {
+  const binding = request.toolCatalog?.offered.binding;
+  if (binding === undefined) return undefined;
+  return {
+    catalogRevision: binding.catalogRevision,
+    profile: { id: binding.profile.id, version: binding.profile.version },
+    projectionDigest: binding.projectionDigest,
+    handlerSetDigest: binding.handlerSetDigest,
+  };
+}
+
+function sameGatewayCatalogBinding(
+  left: ObservedGatewayCatalogBinding,
+  right: ObservedGatewayCatalogBinding,
+): boolean {
+  return (
+    left.catalogRevision === right.catalogRevision &&
+    left.profile.id === right.profile.id &&
+    left.profile.version === right.profile.version &&
+    left.projectionDigest === right.projectionDigest &&
+    left.handlerSetDigest === right.handlerSetDigest
+  );
+}
+
+export function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
   const outputPath = process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH;
   if (outputPath === undefined || outputPath.length === 0) return undefined;
   let requestCount = 0;
+  let catalogBindingRequestCount = 0;
+  let catalogBinding: ObservedGatewayCatalogBinding | undefined;
   const outputLimits = new Set<number>();
   return (request): void => {
     requestCount += 1;
     if (request.maxOutputTokens !== undefined) outputLimits.add(request.maxOutputTokens);
+    const observedBinding = observedGatewayCatalogBinding(request);
+    if (observedBinding !== undefined) {
+      if (
+        catalogBinding !== undefined &&
+        !sameGatewayCatalogBinding(catalogBinding, observedBinding)
+      ) {
+        throw new TypeError("Real-binary gateway catalog binding changed during one journey");
+      }
+      catalogBinding = observedBinding;
+      catalogBindingRequestCount += 1;
+    }
     mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
     writeFileSync(
       outputPath,
@@ -379,6 +781,8 @@ function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
         schemaVersion: 1,
         requestCount,
         outputTokenLimits: [...outputLimits].sort((left, right) => left - right),
+        catalogBinding: catalogBinding ?? null,
+        catalogBindingRequestCount,
         contentFieldsRecorded: false,
       })}\n`,
       { mode: 0o600 },
@@ -396,6 +800,7 @@ function productionDiscoveryComposition(
   const deps = productionDiscoveryBffDeps({
     stateRoot: join(stateDir, "bff-state"),
     store: services.uiStore,
+    codingRuntimeSnapshotStore: services.codingRuntimeSnapshots,
     workspaceScriptTrust: services.workspaceScriptTrust,
     workspaceProvisioning: services.provisioning,
     workspaceLifecycle: services.lifecycle,
@@ -420,20 +825,62 @@ function collectHtmlDocuments(dir: string): readonly string[] {
   return documents;
 }
 
+// A lingering SSE connection keeps `server.close()`'s callback from ever firing. Bounding the wait
+// turns "the harness eventually kills us" into a deterministic exit we control.
+const SERVER_CLOSE_TIMEOUT_MS = 5_000;
+
 function registerShutdown(server: Server, composition: JourneyComposition): void {
   let closing = false;
   const close = (): void => {
     if (closing) return;
     closing = true;
     void (async (): Promise<void> => {
-      await composition.deps.codingRuntimeOrchestrator?.shutdown();
-      await composition.scripted?.closeAll();
-      await composition.deps.dispose?.();
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
+      // KEIKO-0429: this is the shared shutdown path for every Code-task journey server
+      // (#2385, #2386, #2387, #2483). Unhandled, a rejecting stage surfaced as a bare
+      // unhandled-rejection trace with nothing naming WHICH resource failed to dispose, and a
+      // never-resolving server.close() surfaced as a hang — both read as flake, and each costs a
+      // full CI cycle to re-diagnose. Naming the stage is the whole point: the exit code alone
+      // cannot distinguish an orchestrator that refused to stop from a socket that stayed open.
+      let stage = "codingRuntimeOrchestrator.shutdown";
+      try {
+        await composition.deps.codingRuntimeOrchestrator?.shutdown();
+        stage = "scripted.closeAll";
+        await composition.scripted?.closeAll();
+        stage = "deps.dispose";
+        await composition.deps.dispose?.();
+        stage = "server.close";
+        // The timeout REJECTS rather than resolves. Resolving would have let a socket that never
+        // closed fall through to the exit(0) below — turning the hang this bound exists to surface
+        // back into a silent clean shutdown, which is the defect KEIKO-0429 is about, one layer
+        // further down (review finding on #3159).
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            server.close(() => {
+              resolve();
+            });
+          }),
+          new Promise<void>((_resolve, reject) => {
+            setTimeout(() => {
+              reject(
+                new Error(
+                  `server.close did not complete within ${String(SERVER_CLOSE_TIMEOUT_MS)}ms ` +
+                    "(a connection is still open)",
+                ),
+              );
+            }, SERVER_CLOSE_TIMEOUT_MS).unref();
+          }),
+        ]);
+      } catch (error) {
+        // The STAGE is the diagnostic; the error text can carry a path or payload the disposing
+        // resource was holding. Stage plus error type answers "which resource failed to dispose"
+        // without reproducing what it held (review finding on #3159).
+        process.stderr.write(
+          `[coding-runtime-server] shutdown failed during ${stage}: ${
+            error instanceof Error ? error.constructor.name : typeof error
+          }\n`,
+        );
+        process.exit(1);
+      }
       process.exit(0);
     })();
   };
@@ -480,9 +927,15 @@ function assertProductionDiscovery(deps: UiHandlerDeps): void {
     deps.codingRuntimeHostQualified !== true ||
     deps.codingRuntimeUnavailableReason !== undefined
   ) {
-    throw new Error(
-      `real-binary-journey-unqualified:${String(deps.codingRuntimeUnavailableReason)}`,
-    );
+    // Name the actual composition state instead of losing it: an absent control plane carries NO
+    // unavailable reason (the assembly skipped it entirely — for months this rendered as the
+    // useless "unqualified:undefined"), while a present-but-unqualified host names its reason.
+    const reason =
+      deps.codingRuntimeUnavailableReason ??
+      (deps.codingRuntimeOrchestrator === undefined
+        ? "control-plane-absent (injected store without a codingRuntimeSnapshotStore companion?)"
+        : "unqualified-without-reason");
+    throw new Error(`real-binary-journey-unqualified:${reason}`);
   }
 }
 
@@ -498,6 +951,8 @@ export async function runCodingRuntimeJourneyServer(
   createRepositoryFixture(config, stateDir);
   const port = Number(process.env.KEIKO_E2E_UI_PORT ?? String(config.defaultPort));
   const services = createWorkspaceServices(managedRoot);
+  if (config.issue !== undefined || config.commit === true)
+    services.uiStore.createProject(config.repositoryRoot(stateDir), config.fixtureLabel);
   const composition =
     config.runtime === "scripted"
       ? scriptedComposition(config, stateDir, port, services)
@@ -511,7 +966,13 @@ export async function runCodingRuntimeJourneyServer(
   }
   const staticRoot = join(process.cwd(), "dist", "ui", "static");
   const csp = buildCspHeader(extractInlineScriptHashes(collectHtmlDocuments(staticRoot)));
-  const server = createUiServer({ staticRoot, csp, port, handlerDeps: composition.deps });
+  const server = createUiServer({
+    staticRoot,
+    csp,
+    port,
+    handlerDeps: composition.deps,
+    activityLog: processServerLogSink(),
+  });
   registerShutdown(server, composition);
   await new Promise<void>((resolve) => {
     server.listen(port, UI_HOST, resolve);

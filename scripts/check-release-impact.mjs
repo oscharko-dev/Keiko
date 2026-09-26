@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { PORTABLE_TARGET_NAMES, portableRuntimeContractMatches } from "./portable-runtime.mjs";
 
 export const releaseImpactCatalogFile = "release-impact.catalog.json";
 export const releaseImpactSchemaVersion = 1;
@@ -54,6 +55,7 @@ const requiredStablePublishGates = [
   "workspace-supply-chain",
   "package-surface",
   "qi-supply-chain",
+  "install-smoke",
 ];
 const releaseOwners = new Set(["release-owner"]);
 
@@ -193,123 +195,17 @@ function validateReview(entry, index, failures) {
   if (review.status !== "reviewed" || review.humanApproved !== true) {
     failures.push(failure(`entries[${String(index)}] must have human release-owner review.`));
   }
-  validatePublishApprovalReference(review, index, failures);
 }
 
-function validatePublishApprovalReference(review, index, failures) {
-  if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
-  const reference = review.approvalReference;
-  const parsed = parseGithubReviewReference(reference);
-  if (parsed === undefined) {
-    failures.push(
-      failure(
-        `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish.`,
-      ),
-    );
-    return;
-  }
-  validateGithubReviewApproval(parsed, index, failures);
-}
-
-function parseGithubReviewReference(reference) {
-  const match = /^github-pr-review:([^#/\s]+\/[^#/\s]+)#(\d+)#(\d+)$/u.exec(reference);
-  if (match === null) return undefined;
-  return {
-    repository: match[1],
-    pullRequest: match[2],
-    review: match[3],
-  };
-}
-
-function validateGithubReviewApproval(reference, index, failures) {
-  const repository = currentRepository();
-  if (repository === undefined || reference.repository !== repository) {
-    failures.push(
-      failure(
-        `entries[${String(index)}].review.approvalReference must reference the current GitHub repository.`,
-      ),
-    );
-    return;
-  }
-  const review = readGithubReview(reference);
-  if (review === undefined) {
-    failures.push(
-      failure(
-        `entries[${String(index)}].review.approvalReference could not be verified through GitHub.`,
-      ),
-    );
-    return;
-  }
-  validateGithubReviewState(review, index, failures);
-}
-
-function currentRepository() {
-  if (
-    typeof process.env.GITHUB_REPOSITORY === "string" &&
-    process.env.GITHUB_REPOSITORY.includes("/")
-  ) {
-    return process.env.GITHUB_REPOSITORY;
-  }
-  const result = git(repoRoot, ["remote", "get-url", "origin"]);
-  if (result.status !== 0) return undefined;
-  return githubRepositoryFromRemote(result.stdout);
-}
-
-function githubRepositoryFromRemote(remoteUrl) {
-  const trimmed = remoteUrl.trim();
-  const httpsMatch = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
-  if (httpsMatch !== null) return httpsMatch[1];
-  const sshMatch = /^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
-  return sshMatch?.[1];
-}
-
-function readGithubReview(reference) {
-  const path = `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`;
-  let executable;
-  try {
-    executable = resolveHostExecutable("gh");
-  } catch {
-    return undefined;
-  }
-  const result = spawnSync(executable, ["api", path], { encoding: "utf8", stdio: "pipe" });
-  if (result.status !== 0) return undefined;
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    return undefined;
-  }
-}
-
-function allowedReleaseOwnerLogins() {
-  const value = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
-  if (typeof value !== "string" || value.trim().length === 0) return [];
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
-function validateGithubReviewState(review, index, failures) {
-  if (review.state !== "APPROVED") {
-    failures.push(
-      failure(
-        `entries[${String(index)}].review.approvalReference must point to an APPROVED review.`,
-      ),
-    );
-  }
-  const allowedLogins = allowedReleaseOwnerLogins();
-  if (allowedLogins.length === 0) {
-    failures.push(failure("KEIKO_RELEASE_OWNER_GITHUB_LOGINS must list allowed release owners."));
-    return;
-  }
-  if (!allowedLogins.includes(review.user?.login)) {
-    failures.push(
-      failure(
-        `entries[${String(index)}].review.approvalReference reviewer must be an allowed release owner.`,
-      ),
-    );
-  }
-}
+// The former GitHub-comment/PR-review approval-artifact enforcement — validatePublishApprovalReference,
+// validateApprovalReferenceLive, and their fence/HTML/blockquote line walker — was retired here in
+// favor of the git-level guardrails that already govern the release path: `dev` accepts only signed
+// commits, only allowed release-owners (KEIKO_RELEASE_OWNER_GITHUB_LOGINS, oscharko today) can push,
+// and the version-bump commit itself is the release-owner's signed approval. The structural review
+// claim above (reviewer, humanApproved, reviewedAt, rationale, approvalReference non-empty) stays as
+// the human-readable audit trail. Epic #3495 designed the release chain as "dev grün → publish, no
+// ceremonial"; the enforcement removed here was the last piece that still forced a manual GitHub
+// artifact contrary to that contract.
 
 function validateBreakingException(entry, index, failures) {
   if (entry.breakingException === undefined) return;
@@ -524,11 +420,35 @@ function validateCatalogShape(catalog, failures) {
 function validateDuplicates(entries, failures) {
   const ids = new Set();
   const defaultNotes = new Map();
+  const approvalReferences = new Map();
   for (const [index, entry] of entries.entries()) {
     if (!objectRecord(entry)) continue;
     recordUniqueId(entry, index, ids, failures);
     recordDefaultPatchNotes(entry, index, defaultNotes, failures);
+    recordUniqueApprovalReference(entry, index, approvalReferences, failures);
   }
+}
+
+/**
+ * One issue-comment approval artifact authorizes exactly one catalog record: copying an existing
+ * owner comment reference into a newly appended entry would smuggle unreviewed metadata past the
+ * publish gate (review finding on #3028). Scoped to the issue-comment form deliberately —
+ * unchanged staging contracts reuse their historical PR-review reference across versions by
+ * documented practice (see the 0.3.0 staging-contract entry's rationale).
+ */
+function recordUniqueApprovalReference(entry, index, approvalReferences, failures) {
+  const reference = objectRecord(entry.review) ? entry.review.approvalReference : undefined;
+  if (!nonEmptyString(reference) || !reference.startsWith("github-issue-comment:")) return;
+  const previous = approvalReferences.get(reference);
+  if (previous !== undefined) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference duplicates entries[${String(previous)}] — one approval artifact cannot authorize two catalog records.`,
+      ),
+    );
+    return;
+  }
+  approvalReferences.set(reference, index);
 }
 
 function validateCorrectionReferences(entries, failures) {
@@ -614,6 +534,37 @@ function recordDefaultPatchNotes(entry, index, defaultNotes, failures) {
   }
 }
 
+// A tagged run stages every portable target from the current package's entry and refuses a target its
+// contract does not cover. Historical entries are left alone: each was right for its own release.
+// The tagged release stages only from a current entry that carries the reviewed staging contract
+// (reviewedStagingEntryMatches), so the primary entry of the current version must carry one here
+// too; a correction or superseding record is a non-staging entry and may leave it out.
+function validateStagingContract(entry, failures) {
+  const contract = entry.portableRuntimeArtifactContract;
+  if (contract === undefined) {
+    if (!correctionEntry(entry)) {
+      failures.push(
+        failure(
+          `${entry.id}: portableRuntimeArtifactContract is missing, so a tagged release would ` +
+            "refuse to stage it.",
+        ),
+      );
+    }
+    return;
+  }
+  const uncovered = PORTABLE_TARGET_NAMES.filter(
+    (target) => !portableRuntimeContractMatches(contract, target),
+  );
+  if (uncovered.length > 0) {
+    failures.push(
+      failure(
+        `${entry.id}: portableRuntimeArtifactContract does not cover ${uncovered.join(", ")}, ` +
+          "so a tagged release would refuse to stage it.",
+      ),
+    );
+  }
+}
+
 function validateCurrentPackage(catalog, rootManifest, failures) {
   if (!objectRecord(rootManifest)) return;
   const current = catalog.entries.filter((entry) => currentPackageEntry(entry, rootManifest));
@@ -627,9 +578,11 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
     );
     return;
   }
-  for (const entry of current) {
+  catalog.entries.forEach((entry, _index) => {
+    if (!currentPackageEntry(entry, rootManifest)) return;
     validateCurrentEntry(entry, rootManifest, failures);
-  }
+    validateStagingContract(entry, failures);
+  });
 }
 
 // Stable versions publish under the latest dist-tag; prerelease versions (semver with a
@@ -712,9 +665,22 @@ function validatePublishedEntryRetained(previousEntry, currentById, failures) {
     failures.push(failure(`published entry ${previousEntry.id} must remain in the catalog.`));
     return;
   }
-  if (stableJson(currentEntry) !== stableJson(previousEntry)) {
+  // `review.approvalReference` is audit-metadata now that live GitHub verification is retired;
+  // a corrected reference (e.g., PR #3512's issue-comment fix for 1.0.2) is legitimate and must
+  // not fail the append-only invariant, which continues to guard every load-bearing field.
+  if (
+    stableJson(withoutApprovalReference(currentEntry)) !==
+    stableJson(withoutApprovalReference(previousEntry))
+  ) {
     failures.push(failure(`published entry ${previousEntry.id} changed in place.`));
   }
+}
+
+function withoutApprovalReference(entry) {
+  if (!objectRecord(entry) || !objectRecord(entry.review)) return entry;
+  const rest = { ...entry.review };
+  delete rest.approvalReference;
+  return { ...entry, review: rest };
 }
 
 function git(root, args) {
@@ -770,6 +736,33 @@ function readPreviousPublishedCatalog(root, currentVersion, failures) {
   }
 }
 
+// #3565. A release entry may not run ahead of package.json. While it could, the version bump was a
+// second, purely mechanical pull request, and every release paid a second full required matrix (and
+// one more chance of a transient failure) for a diff no gate can learn anything from. The pull
+// request that declares a release carries its version, so its own matrix proves the tagged tree.
+function entryAheadOf(entry, rootManifest, current) {
+  if (!objectRecord(entry) || entry.packageName !== rootManifest.name) return false;
+  if (correctionEntry(entry) || typeof entry.packageVersion !== "string") return false;
+  const version = parseStableVersion(entry.packageVersion);
+  return version !== undefined && compareStableVersions(version, current) > 0;
+}
+
+function validateNoEntryAhead(catalog, rootManifest, failures) {
+  if (!objectRecord(rootManifest) || typeof rootManifest.version !== "string") return;
+  const current = parseStableVersion(rootManifest.version);
+  if (current === undefined) return;
+  for (const entry of catalog.entries) {
+    if (!entryAheadOf(entry, rootManifest, current)) continue;
+    failures.push(
+      failure(
+        `entry ${String(entry.id)} describes ${entry.packageVersion}, ahead of package.json ` +
+          `${rootManifest.version}. The pull request that adds a release's entry also moves the ` +
+          `version: npm run set-version -- ${entry.packageVersion}`,
+      ),
+    );
+  }
+}
+
 export function validateReleaseImpactCatalog(catalog, rootManifest, options = {}) {
   const failures = [];
   if (!validateCatalogShape(catalog, failures)) return { failures, ok: false };
@@ -779,6 +772,7 @@ export function validateReleaseImpactCatalog(catalog, rootManifest, options = {}
   validateDuplicates(catalog.entries, failures);
   validateCorrectionReferences(catalog.entries, failures);
   validateCurrentPackage(catalog, rootManifest, failures);
+  validateNoEntryAhead(catalog, rootManifest, failures);
   validateCatalogBundled(rootManifest, failures);
   validateAppendOnly(catalog, options.previousCatalog, failures);
   return { failures, ok: failures.length === 0 };
@@ -798,9 +792,10 @@ export function validateReleaseImpactRoot(root = repoRoot, options = {}) {
 }
 
 function runCli() {
-  if (process.argv.includes("--publish")) {
-    process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE = "1";
-  }
+  // --publish and KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE were the switches that armed the retired
+  // live GitHub approval-artifact verification; they are inert now that the enforcement is gone. The
+  // flag stays accepted (release-publish.mjs and any tagged run still pass it) so a caller does not
+  // fail arg-parsing at publish time; it just no longer gates anything.
   const result = validateReleaseImpactRoot();
   if (!result.ok) {
     console.error("release-impact: FAIL");

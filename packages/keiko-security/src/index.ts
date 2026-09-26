@@ -13,6 +13,7 @@ export {
   deepRedactStrings,
   isCredentialKeyName,
   objectContainsCredentialKey,
+  REDACTION_PLACEHOLDER,
 } from "./redaction.js";
 
 export { assertValidRunId } from "./runid.js";
@@ -26,7 +27,71 @@ export { sealString, openString, sealBytes, openBytes, isSealed } from "./secret
 
 // Shared filesystem-hardening primitives (0o700 dirs / 0o600 files) — one owner for the store/vault
 // packages that previously each carried a private copy [GEN-MAINT-COUPLING-005].
-export { DIR_MODE, FILE_MODE, ensureDirHardened, chmodIfPresent } from "./fs-hardening.js";
+export type {
+  OpenSafeArtifactFileOptions,
+  ReplaceSafeArtifactFileOptions,
+  SafeArtifactClass,
+  SafeArtifactArchiveResult,
+  SafeArtifactDirectoryEntryOptions,
+  SafeArtifactFileFailureKind,
+  SafeArtifactOpenMode,
+  SafeArtifactContainmentAssurance,
+  SafeArtifactDurabilityAssurance,
+  SafeArtifactPermissionAssurance,
+  SafeArtifactPublicationEntry,
+  SafeArtifactPublicationOptions,
+  SafeArtifactPublicationResult,
+  SafeArtifactRecoveryOptions,
+  SafeArtifactRecoveryResult,
+  SafeArtifactReceiptOptions,
+} from "./fs-hardening.js";
+export {
+  DIR_MODE,
+  FILE_MODE,
+  MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
+  MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
+  SAFE_ARTIFACT_CLASSES,
+  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
+  SafeArtifactFileError,
+  archiveSafeArtifactFile,
+  acknowledgeSafeArtifactFileSet,
+  ensureDirHardened,
+  chmodIfPresent,
+  openSafeArtifactFile,
+  publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
+  removeSafeArtifactFile,
+  replaceSafeArtifactFile,
+  safeArtifactContainmentAssurance,
+  safeArtifactPermissionAssurance,
+  safeArtifactPublicationSlot,
+  verifySafeArtifactFileDescriptor,
+} from "./fs-hardening.js";
+
+// Shared Windows-gated atomic-publish rename [issue #3352]. Same owner as fs-hardening so CLI,
+// server, vault, and evidence cannot drift onto a private retry loop.
+export type {
+  AtomicPublishRenameFn,
+  AtomicPublishRenameOptions,
+  CwdOutsideTreeOptions,
+} from "./fs-atomic-rename.js";
+export {
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+  WINDOWS_ATOMIC_RENAME_RETRY_CODES,
+  WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS,
+  atomicPublishRename,
+  atomicPublishTreeSwap,
+  withCwdOutsideTree,
+} from "./fs-atomic-rename.js";
+
+// Shared, bounded macOS Keychain key tier — one owner for the vault surfaces that previously each
+// carried a private copy of the same unbounded `security` spawn [GEN-MAINT-COUPLING-006].
+export type { MacosKeychainOptions, MacosKeychainRead } from "./macos-keychain.js";
+export {
+  KEYCHAIN_SPAWN_TIMEOUT_MS,
+  readMacosKeychainSecret,
+  writeMacosKeychainSecret,
+} from "./macos-keychain.js";
 
 // Shared, fs-agnostic SQLite corruption classifier — the pure subset lifted out of the per-store db
 // lifecycles [GEN-DUP-SEMANTIC-019 / GEN-DUP-NEAR-002].
@@ -38,6 +103,18 @@ export {
   isSqliteCorruptionError,
   errorRecord,
 } from "./sqlite-corruption.js";
+
+// Content-free activity-log seam for this package (ADR-0019, w4a-security-log-port) — independent
+// of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret`,
+// `createShardedLocalSecretVault`'s shard reads, and `LocalSecretVault.setMany`. The composition
+// root supplies the real sink.
+export type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
+export {
+  emitSecurityLogEvent,
+  bindSecurityLogCorrelation,
+  nullSecurityLogSink,
+  securityErrorKind,
+} from "./log-port.js";
 
 // Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
 export type {
@@ -52,5 +129,40 @@ export {
   containsRedactableSecret,
   hasCriticalInjectionSignal,
 } from "./promptInjection.js";
+
+// The ONE trusted Windows system-directory decision, shared with keiko-tools (PR #3354 review):
+// keiko-tools depends on keiko-security, never the reverse, so this is the only layer both the
+// cscript/powershell helpers here and the cmd.exe/taskkill.exe resolution there can reach.
+export {
+  DEFAULT_WINDOWS_SYSTEM_ROOT,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  resolveWindowsPowerShellExecutable,
+  resolveWindowsSystemBinary,
+  resolveWindowsSystemDirectory,
+  resolveWindowsSystemExecutable,
+  sameWindowsSystemDirectoryIdentity,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "./windows-system-directory.js";
+export type {
+  WindowsBinaryExistsCheck,
+  WindowsSystemDirectoryIdentityCheck,
+} from "./windows-system-directory.js";
+export type {
+  WindowsShortcutCommandOptions,
+  WindowsShortcutDefinition,
+  WindowsShortcutSpawnFn,
+} from "./windows-shortcuts.js";
+export {
+  WINDOWS_SHORTCUT_MAX_BYTES,
+  WINDOWS_SHORTCUT_TIMEOUT_MS,
+  equivalentWindowsShortcutPath,
+  windowsSystemRoot,
+  parseWindowsShortcutFallback,
+  readWindowsShortcutDefinition,
+  runWindowsShortcutCommand,
+  windowsShortcutFallbackContent,
+  writeWindowsShortcutDefinition,
+} from "./windows-shortcuts.js";
 
 export * from "./errors/index.js";

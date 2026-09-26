@@ -2,7 +2,7 @@
 // and injected negotiation seam exercise lifecycle, SDP signaling, content-free capability offers,
 // content-free replay, idempotency, and deterministic teardown without network, media, or paid calls.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   sweepControlHeartbeat,
   VoiceControlConnection,
@@ -10,6 +10,18 @@ import {
 } from "./voice-realtime.js";
 import type { RealtimeNegotiationOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { VoiceControlMessage, VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+} from "./observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n";
@@ -101,6 +113,10 @@ function resolvePendingNegotiations(calls: readonly PendingNegotiation[]): void 
   for (const call of calls) call.resolve(ok());
 }
 
+// Default connection-scoped correlation id used by tests that don't care about its exact value —
+// distinct from any protocol code/kind string so an accidental field mix-up is easy to spot.
+const TEST_CORRELATION_ID = "conn-correlation-id-1";
+
 function connect(options?: {
   negotiate?: (
     offerSdp: string,
@@ -109,6 +125,8 @@ function connect(options?: {
   ) => Promise<RealtimeNegotiationOutcome>;
   redact?: (value: unknown) => unknown;
   session?: TestSession;
+  correlationId?: string;
+  diagnostics?: ServerDiagnosticSink | undefined;
 }): { socket: FakeSocket; session: TestSession; conn: VoiceControlConnection } {
   const socket = new FakeSocket();
   const session = options?.session ?? makeSession();
@@ -117,6 +135,8 @@ function connect(options?: {
     session,
     negotiate: options?.negotiate ?? okAsync,
     redact: options?.redact ?? ((value: unknown): unknown => value),
+    correlationId: options?.correlationId ?? TEST_CORRELATION_ID,
+    diagnostics: options?.diagnostics,
   });
   return { socket, session, conn };
 }
@@ -261,19 +281,48 @@ describe("VoiceControlConnection proxied-SDP signaling", () => {
     expect(negotiate.mock.calls[0]).toHaveLength(3);
   });
 
-  it("answers a negotiation failure with error negotiation-failed and an ended track", async () => {
+  it("answers a negotiation failure with error negotiation-failed, the connection's correlation id, and an ended track", async () => {
     const { socket, conn } = connect({
       negotiate: (): Promise<RealtimeNegotiationOutcome> =>
         Promise.resolve({ ok: false, kind: "transport" }),
+      correlationId: "negotiation-fail-corr-1",
     });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
     expect(kinds(socket)).toEqual(["media.track.state", "error", "media.track.state"]);
-    expect((socket.sent[1] as unknown as Record<string, unknown>).code).toBe("negotiation-failed");
+    const failure = socket.sent[1] as unknown as Record<string, unknown>;
+    expect(failure.code).toBe("negotiation-failed");
+    expect(failure.correlationId).toBe("negotiation-fail-corr-1");
   });
 
-  it("rejects a malformed SDP offer without calling the provider", async () => {
+  // RB-6 / ADR-0173 D5 regression pin: the correlation id is resolved ONCE per WebSocket connection
+  // (at handleUpgrade, injected here as the connection's constructor option), never re-minted per
+  // failure. Before the fix each negotiation failure on the same connection would have carried an
+  // unrelated fresh id; this proves a second failure on the same connection still matches the first.
+  it("reuses the same connection-scoped correlation id across repeated negotiation failures", async () => {
+    const { socket, conn } = connect({
+      negotiate: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+      correlationId: "repeated-failure-corr-1",
+    });
+    conn.start(false);
+    socket.sent.length = 0;
+
+    await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
+    const firstFailure = socket.sent[1] as unknown as Record<string, unknown>;
+    expect(firstFailure.code).toBe("negotiation-failed");
+    expect(firstFailure.correlationId).toBe("repeated-failure-corr-1");
+
+    socket.sent.length = 0;
+    await conn.receive(clientMessage("signal.sdp.offer", 2, { sdp: OFFER_SDP }));
+    const secondFailure = socket.sent[1] as unknown as Record<string, unknown>;
+    expect(secondFailure.code).toBe("negotiation-failed");
+    expect(secondFailure.correlationId).toBe("repeated-failure-corr-1");
+    expect(secondFailure.correlationId).toBe(firstFailure.correlationId);
+  });
+
+  it("rejects a malformed SDP offer without calling the provider or attaching a correlation id", async () => {
     const negotiate = vi.fn(okAsync);
     const { socket, conn } = connect({ negotiate });
     conn.start(false);
@@ -281,7 +330,9 @@ describe("VoiceControlConnection proxied-SDP signaling", () => {
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: "not-an-sdp" }));
     expect(negotiate).not.toHaveBeenCalled();
     expect(kinds(socket)).toEqual(["error"]);
-    expect((socket.sent[0] as unknown as Record<string, unknown>).code).toBe("invalid-message");
+    const failure = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(failure.code).toBe("invalid-message");
+    expect(failure).not.toHaveProperty("correlationId");
   });
 
   it.each([
@@ -480,6 +531,23 @@ describe("VoiceControlConnection protocol gating & idempotency", () => {
       "not-allowed-for-profile",
     );
   });
+
+  it("KEIKO-0661: denies a capability.select for a profile the session did not negotiate", async () => {
+    // The realtime transport binds one session to one profile ("full-realtime"). Before the fix,
+    // any capability.select (even for a different profile the session was never negotiated for)
+    // returned {decision: "allow"} unconditionally. Now the response must be {decision: "deny"}
+    // for a mismatched profile.
+    const { socket, conn } = connect();
+    conn.start(false);
+    socket.sent.length = 0;
+
+    await conn.receive(clientMessage("capability.select", 1, { profile: "speech-to-text" }));
+
+    expect(socket.sent).toHaveLength(1);
+    const decision = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(decision.kind).toBe("policy.decision");
+    expect(decision.decision).toBe("deny");
+  });
 });
 
 describe("VoiceControlConnection replay & teardown", () => {
@@ -564,5 +632,118 @@ describe("sweepControlHeartbeat (liveness)", () => {
     expect(terminate).not.toHaveBeenCalled();
     expect(ping).toHaveBeenCalledTimes(1);
     expect(fresh.isAlive).toBe(false);
+  });
+});
+
+// w4b-voice-realtime (#2902): voice-realtime.ts had zero logging or diagnostic emission of any
+// kind — mirrors voice-live-dictation.ts's reportNegotiationFailure pattern at session start,
+// session end, and negotiation failure, reusing the connection-scoped correlation id (RB-6 /
+// ADR-0173 D5) rather than minting anything new here.
+describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
+  function captureServerLog(): BufferedServerLogSink {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    return sink;
+  }
+
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("emits a structured diagnostic carrying the connection's correlation id on negotiation failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = { record: (record) => records.push(record) };
+    const { conn } = connect({
+      negotiate: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+      correlationId: "diag-negotiation-fail-1",
+      diagnostics,
+    });
+    conn.start(false);
+
+    await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "diag-negotiation-fail-1",
+      operation: "voice.realtime.negotiate",
+      source: "voice.realtime",
+      code: "transport",
+    });
+  });
+
+  it("records a profile-mismatch policy denial on the activity log alongside the WS frame (#2906 round 3)", async () => {
+    // KEIKO-0661 denies capability.select for a profile the session did not negotiate, but the
+    // decision previously lived only on the ephemeral WS frame -- the activity timeline could not
+    // reconstruct why selection failed. This must be body-free: no profile identifiers.
+    const sink = captureServerLog();
+    const { socket, conn } = connect({ correlationId: "diag-policy-deny-1" });
+    conn.start(false);
+    socket.sent.length = 0;
+    sink.clear();
+
+    await conn.receive(clientMessage("capability.select", 1, { profile: "speech-to-text" }));
+
+    const decision = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(decision).toMatchObject({ kind: "policy.decision", decision: "deny" });
+    expect(sink.events.map((event) => event.op)).toEqual(["voice.realtime.policy-decision"]);
+    expect(sink.events[0]).toMatchObject({
+      category: "http",
+      op: "voice.realtime.policy-decision",
+      correlationId: "diag-policy-deny-1",
+      errorKind: "authority-denied",
+      extra: { decision: "deny", reason: "profile-mismatch" },
+    });
+    expect(JSON.stringify(sink.events[0])).not.toContain("speech-to-text");
+    expect(JSON.stringify(sink.events[0])).not.toContain("full-realtime");
+
+    // Activity Log proof (#3532): the same denial event, formatted exactly as the production file
+    // sink persists it, resolves voice.realtime.policy-decision.reason for the op-catalog.
+    const persisted = expectActivityLogProof(
+      "voice.realtime.policy-decision.reason",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ decision: "deny", reason: "profile-mismatch" });
+  });
+
+  it("brackets a normal session lifecycle with a session-start and a session-end line", () => {
+    const sink = captureServerLog();
+    const { conn } = connect({ correlationId: "diag-lifecycle-1" });
+
+    conn.start(false);
+    conn.dispose();
+
+    const ops = sink.events.map((event) => event.op);
+    expect(ops).toEqual(["voice.realtime.session-started", "voice.realtime.session-ended"]);
+    expect(sink.events[0]).toMatchObject({
+      category: "http",
+      op: "voice.realtime.session-started",
+      correlationId: "diag-lifecycle-1",
+      extra: { profile: "full-realtime", resumed: false },
+    });
+    expect(sink.events[1]).toMatchObject({
+      category: "http",
+      op: "voice.realtime.session-ended",
+      correlationId: "diag-lifecycle-1",
+      extra: {},
+    });
+
+    // Activity Log proofs (#3532): the same start/end events, formatted exactly as the production
+    // file sink persists them, resolve voice.realtime.session-started.profile and
+    // voice.realtime.session-ended.closed for the op-catalog.
+    const startedProof = expectActivityLogProof(
+      "voice.realtime.session-started.profile",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(startedProof).toMatchObject({ profile: "full-realtime", resumed: false });
+
+    const endedProof = expectActivityLogProof(
+      "voice.realtime.session-ended.closed",
+      formatActivityLogProofLine(sink.events[1] ?? {}),
+    );
+    expect(endedProof).toMatchObject({
+      op: "voice.realtime.session-ended",
+      correlationId: "diag-lifecycle-1",
+    });
   });
 });

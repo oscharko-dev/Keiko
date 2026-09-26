@@ -22,6 +22,8 @@ import {
   workspaceTrustPolicyEffect,
   WORKSPACE_TRUST_LEVELS,
   WORKSPACE_TRUST_SCHEMA_VERSION,
+  WORKSPACE_TRUST_REASONS,
+  type WorkspaceTrustReason,
 } from "./workspace-trust.js";
 import type {
   WorkspaceTrustAssessment,
@@ -70,6 +72,13 @@ function trustedRecord(): WorkspaceTrustRecord {
   };
 }
 
+// KEIKO-0244: the suite only ever built TRUSTED records, so the restricted path — which is
+// persisted and re-read from disk on every session — had no accept case at all. A validator that
+// rejected every restricted record would have passed the whole suite.
+function restrictedRecord(reason: WorkspaceTrustReason = "human-revocation"): WorkspaceTrustRecord {
+  return { ...trustedRecord(), trust: "restricted", reason };
+}
+
 function trustedAssessment(): WorkspaceTrustAssessment {
   return { outcome: "known", value: trustedRecord() };
 }
@@ -85,6 +94,26 @@ function trustedStatus(): WorkspaceTrustStatus {
     revision: 3,
   };
 }
+
+describe("restricted workspace trust records", () => {
+  it("accepts a restricted record for every non-grant reason", () => {
+    for (const reason of WORKSPACE_TRUST_REASONS) {
+      if (reason === "human-grant" || reason === "derived-from-trusted-root") continue;
+      expect(validateWorkspaceTrustRecord(restrictedRecord(reason))).toEqual({ ok: true });
+    }
+  });
+
+  it("round-trips a restricted record through JSON, as the persisted store does", () => {
+    const cloned: unknown = JSON.parse(JSON.stringify(restrictedRecord()));
+    expect(validateWorkspaceTrustRecord(cloned)).toEqual({ ok: true });
+  });
+
+  it("still rejects a restricted record decided by a non-server actor", () => {
+    expect(validateWorkspaceTrustRecord({ ...restrictedRecord(), decidedBy: "browser" }).ok).toBe(
+      false,
+    );
+  });
+});
 
 describe("canonical workspace trust", () => {
   it("accepts only server-owned, manifest/root/basis-bound trust", () => {

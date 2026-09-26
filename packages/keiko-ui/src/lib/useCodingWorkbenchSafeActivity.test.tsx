@@ -2,6 +2,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionChannelSnapshot } from "@oscharko-dev/keiko-contracts";
 
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 import {
   useCodingWorkbenchSafeActivity,
   type UseCodingWorkbenchSafeActivityInput,
@@ -10,7 +15,8 @@ import {
 const getSnapshotMock = vi.hoisted(() => vi.fn());
 const streamSnapshotsMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./coding-app-session-client", () => ({
+vi.mock("./coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./coding-app-session-client")>()),
   codingAppSessionPairingSettled: () => Promise.resolve(true),
 }));
 
@@ -20,6 +26,19 @@ vi.mock("./coding-app-session-channel-api", () => ({
 }));
 
 const AT = "2026-07-19T12:00:00.000Z";
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
 
 function snapshot(droppedEventCount = 0, runId = "run-1"): CodingAppSessionChannelSnapshot {
   return {
@@ -89,6 +108,25 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(view.result.current.feed?.runId).toBe("run-1");
     view.rerender({ runState: "paused" });
     expect(view.result.current.status).toBe("paused");
+  });
+
+  it("reopens the app-session channel after a re-pair without a page load (F65)", async () => {
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(streamSnapshotsMock).toHaveBeenCalledTimes(2));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces a burst of stream snapshots into a single re-render with the latest projection", async () => {
@@ -182,6 +220,40 @@ describe("useCodingWorkbenchSafeActivity", () => {
     );
 
     await waitFor(() => expect(view.result.current.status).toBe("unavailable"));
+    expect(view.result.current.feed).toBeNull();
+  });
+
+  // #3610 (W17): Stop purges the run's projection, and the Workbench then said "Activity not
+  // connected" with a Reconnect button that could never bring anything back. A finished run without
+  // a projection has ended; there is no held feed to caption as final.
+  it("reports a finished run without a projection as ended, not as a lost connection", async () => {
+    getSnapshotMock.mockResolvedValue({ schemaVersion: "1", content: null });
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "cancelled",
+        runtimeEventSignal: 0,
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.status).toBe("ended"));
+    expect(view.result.current.feed).toBeNull();
+  });
+
+  it("turns a purged projection into ended once the stopping run settles", async () => {
+    getSnapshotMock.mockResolvedValue({ schemaVersion: "1", content: null });
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(
+      ({ runState }: { readonly runState: "stopping" | "cancelled" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "stopping" as "stopping" | "cancelled" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("unavailable"));
+
+    view.rerender({ runState: "cancelled" });
+
+    expect(view.result.current.status).toBe("ended");
     expect(view.result.current.feed).toBeNull();
   });
 

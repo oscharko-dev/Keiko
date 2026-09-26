@@ -14,24 +14,30 @@
 // and must not, import those private functions or modify agentRoutes.ts. The combined disposition can
 // only be as-or-more restrictive than either governance layer alone (the #2121 stricter-of-two rule).
 
+import type {
+  CodingWorkbenchMode,
+  EditorAgentAction,
+  EditorAgentActionDenyReason,
+  EditorAgentActionPolicyDecision,
+  EditorAgentActionStatus,
+  EditorAgentSessionSnapshot,
+  EditorAgentVerificationRunRequest,
+  WorkspaceTrustLevel,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_ACTION_APPROVAL_RISK,
-  EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_WORKBENCH_ACTION_CLASS,
   classifyEditorAgentAction,
   composeEditorAgentActionPolicyDecision,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
+import {
+  EDITOR_AGENT_SCHEMA_VERSION,
   isContainedAgentPath,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
   parseEditorAgentVerificationRunRequest,
   toRedactedVerificationReport,
-  type CodingWorkbenchMode,
-  type EditorAgentAction,
-  type EditorAgentActionDenyReason,
-  type EditorAgentActionPolicyDecision,
-  type EditorAgentActionStatus,
-  type EditorAgentSessionSnapshot,
-  type EditorAgentVerificationRunRequest,
-  type WorkspaceTrustLevel,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
   editorAgentAuditRootAttribution,
@@ -43,16 +49,24 @@ import {
 } from "./agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import { decideScriptTrust } from "./verificationRunner.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { readJsonObject } from "../files.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
-  editorAgentPathBoundaryReason,
+  editorAgentRootContainmentReason,
   isEditorAgentRootBoundaryDenial,
   resolveEditorAgentActionRoot,
   type EditorAgentRootBoundaryReason,
 } from "./agentRootBoundary.js";
+import {
+  workspaceRootAccessOrUndefined,
+  type WorkspaceRootAccess,
+} from "../task-workspace/workspace-root-access.js";
+import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const MAX_AGENT_VERIFICATION_BODY_BYTES = 8_000;
 
@@ -65,6 +79,11 @@ export interface AgentVerificationRoutePorts {
 
 interface RequestLifecycle {
   readonly signal: AbortSignal;
+  // The request's own correlation id (`RouteContext.correlationId`), carried here because the
+  // lifecycle is the one value already built from the RouteContext and threaded to the run. It
+  // becomes `VerificationRunInput.correlationId`, so the runner's lifecycle evidence, the workspace
+  // resolver's `workspace.root.denied` line and this route's refusal diagnostic all join on one id.
+  readonly correlationId: string | undefined;
   readonly dispose: () => void;
 }
 
@@ -134,20 +153,74 @@ export function verificationAuthorityDenyReason(
 ): EditorAgentActionDenyReason {
   if (reason === "expired") return "authority-expired";
   if (reason === "budget-exceeded") return "authority-budget-exceeded";
+  if (reason === "revoked") return "authority-revoked";
   return "authority-invalid";
 }
 
+type VerificationTrustDeps = Pick<
+  UiHandlerDeps,
+  "workspaceScriptTrust" | "workspaceRootAccessResolver"
+>;
+
+// A managed task worktree carries no standing script-trust grant of its own — production registers
+// it as a project row (deps.ts `ensureManagedTaskWorkspaceIdentity`) but that row is not a trust
+// decision — so `trustLevelForRoot` on the worktree path answers "restricted" and an
+// execution-class request was denied `workspace-restricted` here BEFORE the runner's
+// repository-trust lookup could ever run. The workbench facade calls
+// `verificationRunner.runToReport` directly and bypasses this route, which is why the owner's
+// end-to-end run could pass while `POST /api/editor/verification/agent-runs` (the sidecar /
+// docked-agent entry point) stayed denied (cursor review, PR #3381).
+//
+// Standing script trust belongs to the repository the worktree was bound from, and applies to the
+// worktree only while the worktree's own `package.json` is that same fact; once a governed run has
+// rewritten it, only an explicit human grant recorded for the worktree root itself admits the
+// scripts (ADR-0147 D3). Both are asked of `decideScriptTrust` (verificationRunner.ts) rather than
+// restated here, so this route and the runner cannot disagree about one grant.
 function verificationWorkspaceTrust(
-  deps: UiHandlerDeps,
+  deps: VerificationTrustDeps,
   workspaceRoot: string,
+  correlationId: string | undefined,
 ): WorkspaceTrustLevel {
+  const trust = deps.workspaceScriptTrust;
+  if (trust === undefined) return "restricted";
   try {
-    return deps.workspaceScriptTrust?.trustLevelForRoot(workspaceRoot) === "trusted"
+    const access = verificationTrustAccess(deps, workspaceRoot, correlationId);
+    const standingRoot = access.kind === "managed-task" ? access.repositoryRoot : workspaceRoot;
+    return decideScriptTrust({
+      access,
+      repositoryFs: nodeWorkspaceFs,
+      standingTrust: (): boolean => trust.trustLevelForRoot(standingRoot) === "trusted",
+      worktreeHumanGrant: (): boolean => trust.holdsHumanGrantForRoot(access.canonicalRoot),
+      // The editor agent is not a governed run: no run authority ever admits a manifest here.
+      runAdmittedManifest: (): boolean => false,
+    }).trusted
       ? "trusted"
       : "restricted";
   } catch {
     return "restricted";
   }
+}
+
+// The resolver is asked WITH the request's correlation id, exactly as the containment port is
+// (`resolveEditorAgentContainmentPort`). This lookup can be the one that observes an access change
+// — a revoked lifecycle row, a replaced identity, an unproven gitdir identity — between the two
+// root-binding checks, and the body-free `workspace.root.denied` line it emits then lands on the
+// request's timeline instead of UNKNOWN_CORRELATION_ID. Without it the policy answered
+// `workspace-restricted` and returned before `runAndRespond` could emit its correlated refusal, so
+// the denial that decided the request was unjoinable to it (CodeRabbit, PR #3381).
+function verificationTrustAccess(
+  deps: Pick<UiHandlerDeps, "workspaceRootAccessResolver">,
+  workspaceRoot: string,
+  correlationId: string | undefined,
+): WorkspaceRootAccess {
+  // A root the resolver does not answer for is decided as the ordinary root it names — exactly what
+  // this route did before managed access existed; `decideScriptTrust` then asks that root's own
+  // standing grant and nothing else.
+  return (
+    workspaceRootAccessOrUndefined(
+      deps.workspaceRootAccessResolver?.(workspaceRoot, correlationId),
+    ) ?? { kind: "ordinary", canonicalRoot: workspaceRoot, fs: nodeWorkspaceFs }
+  );
 }
 
 // classify → (resolve envelope) → compose, in the exact order decideActionPolicy uses. "execution" is
@@ -158,6 +231,9 @@ function decideVerificationPolicy(
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
   deps: UiHandlerDeps,
+  // The REQUEST's correlation id (`RouteContext.correlationId`); the policy-time resolver lookup is
+  // recorded under it, so a denial it observes joins the request's timeline (CodeRabbit, PR #3381).
+  requestCorrelationId?: string,
 ): EditorAgentActionPolicyDecision {
   const { targetPath, targetSensitive } = verificationActionTarget(request.targetPath);
   const baseline = classifyEditorAgentAction("requestVerification", {
@@ -181,7 +257,11 @@ function decideVerificationPolicy(
     baseline,
     resolution.envelope,
     EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification,
-    verificationWorkspaceTrust(deps, snapshot.workspaceRoot),
+    verificationWorkspaceTrust(
+      deps,
+      snapshot.workspaceRoot,
+      requestCorrelationId ?? verificationCorrelationId(request),
+    ),
   );
 }
 
@@ -277,21 +357,73 @@ async function runAndRespond(
   runner: VerificationRunnerManager,
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
-  signal: AbortSignal,
+  lifecycle: RequestLifecycle,
+  deps: Pick<UiHandlerDeps, "diagnostics">,
 ): Promise<RouteResult> {
+  const correlationId = correlationIdOrUnknown(
+    lifecycle.correlationId ?? verificationCorrelationId(request),
+  );
   try {
-    const input = { ...verificationRunInput(request), projectId: snapshot.workspaceRoot };
-    const report = await runner.runToReport(input, signal);
+    const input: VerificationRunInput = {
+      ...verificationRunInput(request),
+      projectId: snapshot.workspaceRoot,
+      correlationId,
+    };
+    // The agent route answers with the redacted report only; the orchestrator's output tails travel
+    // exclusively to the governed coding tool (ADR-0126 D3) and are dropped here.
+    const { report } = await runner.runToReport(input, lifecycle.signal);
     return {
       status: 200,
       body: { result: { outcome: "completed", report: toRedactedVerificationReport(report) } },
     };
   } catch (error) {
     if (error instanceof VerificationRunnerError) {
+      emitVerificationRefusalDiagnostic(deps.diagnostics, correlationId, error);
       return { status: error.status, body: errorBody(error.code, error.message) };
     }
     throw error;
   }
+}
+
+// A runner refusal used to leave NOTHING behind at this layer: the route answered 403/404/422/429
+// from an error body and only the coding-tool port — a different entry point — ever logged one, so
+// `keiko support analyze --correlation-id <request>` showed the request and no refusal at all
+// (PR #3381 review). Body-free by construction: the closed runner code as `errorClass` and a
+// catalogued summary as `message`; the error's own text (which names no path, but is still free
+// prose) never reaches the record.
+function emitVerificationRefusalDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  error: VerificationRunnerError,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "editor.verification.execute",
+    source: "editor.agent-verification-route",
+    errorClass: error.code,
+    message: "verification-refused",
+  });
+}
+
+// Body-free: the closed deny reason (or the disposition) as `errorClass`, the catalogued
+// `verification-refused` summary, and the request's own correlation id.
+function emitPolicyRefusalDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  lifecycle: RequestLifecycle,
+  request: EditorAgentVerificationRunRequest,
+  decision: EditorAgentActionPolicyDecision,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationIdOrUnknown(
+      lifecycle.correlationId ?? verificationCorrelationId(request),
+    ),
+    timestamp: new Date().toISOString(),
+    operation: "editor.verification.execute",
+    source: "editor.agent-verification-route",
+    errorClass: decision.denyReason ?? decision.disposition,
+    message: "verification-refused",
+  });
 }
 
 function requestLifecycle(ctx: RouteContext): RequestLifecycle {
@@ -308,6 +440,7 @@ function requestLifecycle(ctx: RouteContext): RequestLifecycle {
   if (ctx.res.destroyed && !ctx.res.writableEnded) abort();
   return {
     signal: controller.signal,
+    correlationId: ctx.correlationId,
     dispose: (): void => {
       ctx.req.removeListener("aborted", abort);
       ctx.res.removeListener("close", onResponseClose);
@@ -323,23 +456,35 @@ async function admitAndRun(
   lifecycle: RequestLifecycle,
   ports: AgentVerificationRoutePorts,
 ): Promise<RouteResult> {
-  const rooted = bindVerificationRoot(request, snapshot, deps.store);
+  const rooted = bindVerificationRoot(request, snapshot, deps, lifecycle.correlationId);
   const audit = ports.audit ?? recordEditorAgentActionAudit;
   if (!rooted.ok) return rejectVerificationRoot(request, snapshot, rooted.reason, audit);
   request = rooted.request;
-  const decision = (ports.decide ?? decideVerificationPolicy)(request, snapshot, deps);
+  const decision = (ports.decide ?? decideVerificationPolicy)(
+    request,
+    snapshot,
+    deps,
+    lifecycle.correlationId,
+  );
   if (decision.disposition !== "allowed") {
+    // The refusal that ends the request here — a restricted workspace, a denied authority — used to
+    // leave the audit row only; the diagnostic that `runAndRespond` emits for a runner refusal was
+    // never reached, so the request's timeline ended without the decision that closed it.
+    emitPolicyRefusalDiagnostic(deps.diagnostics, lifecycle, request, decision);
     return auditVerification(request, snapshot, decision, "conflict", audit)
       ? notRunResult(decision)
       : auditFailure();
   }
   if (!reserveVerification(request, snapshot, deps)) {
     const denied = denyByAuthority(decision, "authority-budget-exceeded");
+    // Same rule as the policy refusal above: a request that ends here never reaches
+    // `runAndRespond`, so the refusal is recorded on its timeline before the audit row.
+    emitPolicyRefusalDiagnostic(deps.diagnostics, lifecycle, request, denied);
     return auditVerification(request, snapshot, denied, "conflict", audit)
       ? notRunResult(denied)
       : auditFailure();
   }
-  const finalRoot = bindVerificationRoot(request, snapshot, deps.store);
+  const finalRoot = bindVerificationRoot(request, snapshot, deps, lifecycle.correlationId);
   if (!finalRoot.ok) {
     rollbackVerificationReservation(request);
     return rejectVerificationRoot(request, snapshot, finalRoot.reason, audit);
@@ -349,19 +494,33 @@ async function admitAndRun(
     rollbackVerificationReservation(request);
     return auditFailure();
   }
-  return runAndRespond(runner, request, snapshot, lifecycle.signal);
+  return runAndRespond(runner, request, snapshot, lifecycle, deps);
 }
 
+// The correlation the containment port's own denial line is recorded under; the synthetic action id
+// carries colons, which the correlation shape rejects.
+function verificationCorrelationId(request: EditorAgentVerificationRunRequest): string | undefined {
+  const runId = request.authorityRef.runId;
+  return isValidCorrelationId(runId) ? runId : undefined;
+}
+
+// Containment runs through the port the root's own authority resolved — the owned-root port a
+// proven managed task worktree minted — via the one shared helper both editor route families now
+// call (`agentRootBoundary.ts`). The former private copy of that resolution here and in
+// agentRoutes.ts was a drift risk on the exact defect this PR closes (cursor review, PR #3381).
 function bindVerificationRoot(
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
-  store: UiHandlerDeps["store"],
+  deps: Pick<UiHandlerDeps, "store" | "workspaceRootAccessResolver">,
+  requestCorrelationId?: string,
 ): RootedVerificationRequest {
-  const root = resolveEditorAgentActionRoot(snapshot, request.rootBinding, store);
+  const root = resolveEditorAgentActionRoot(snapshot, request.rootBinding, deps.store);
   if (!root.ok) return root;
-  const reason = editorAgentPathBoundaryReason(
+  const reason = editorAgentRootContainmentReason(
     root.root,
     request.targetPath === undefined ? [] : [request.targetPath],
+    deps,
+    requestCorrelationId ?? verificationCorrelationId(request),
   );
   if (reason !== null) return { ok: false, reason };
   return {

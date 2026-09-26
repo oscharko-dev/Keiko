@@ -142,6 +142,12 @@ describe("translate", () => {
     expect(translateOptionalWidget("de", "gitDelivery.state.ready-to-execute")).toBe(
       "Bereit zur Ausführung",
     );
+    expect(translateOptionalWidget("de", "gitDelivery.blockReason.authority-denied")).toBe(
+      "Die Laufzeitberechtigung erlaubt diese Aktion nicht mehr",
+    );
+    expect(translateOptionalWidget("en", "gitDelivery.blockReason.authority-denied")).toBe(
+      "Runtime authority no longer permits this action",
+    );
     expect(translateOptionalWidget("de", "promptEnhancer.action.enhance")).toBe(
       "Prompt verbessern",
     );

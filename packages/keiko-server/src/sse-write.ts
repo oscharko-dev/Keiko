@@ -11,7 +11,14 @@
 // via its own signal). Destroying the socket fires "close" on res, which the caller's existing
 // res.on("close", …) listener picks up for any additional cleanup (e.g. registry deregistration).
 
+import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
+import { getServerLogger } from "./observability/index.js";
 
 /**
  * Backpressure signal (GEN-PERF-CHAT-006). Emitted exactly once when a write is rejected because the
@@ -24,6 +31,191 @@ export interface SseBackpressureSignal {
   readonly accepted: false;
 }
 
+type SseStreamCloseReason =
+  "completed" | "client-disconnected" | "backpressure-killed" | "server-error" | "server-shutdown";
+
+const SSE_STREAM_CLOSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "sse.stream.closed",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "sse-write.emitSseStreamClosed",
+  fields: {
+    frameCount: { type: "integer", dataClass: "count", required: true },
+    bytesStreamed: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "completed",
+        "client-disconnected",
+        "backpressure-killed",
+        "server-error",
+        "server-shutdown",
+      ],
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["sse-stream"],
+  proofIds: ["sse.stream.closed.line"],
+  releaseImpact: "patch",
+});
+
+// A server that is shutting down closes every live connection at once. Without this, the streams it
+// tears down are reported as the shapes they LOOK like from the socket — `backpressure-killed` for a
+// stream whose last write was still buffered, `client-disconnected` for the rest — and a customer
+// log shows a run cancelled next to a burst of client problems that never happened (run 9, dev lane,
+// 2026-09-10). The flag is process-wide because the shutdown is.
+let serverShuttingDown = false;
+
+/**
+ * Marks this process as shutting down, so every stream torn down from here on names the shutdown as
+ * its close reason. Called once from the runtime dispose path before connections are closed; there
+ * is deliberately no way back — a process that has begun shutting down does not resume serving.
+ */
+export function markServerShuttingDown(): void {
+  serverShuttingDown = true;
+}
+
+/** Test seam: restores the not-shutting-down state a fresh process starts in. */
+export function resetServerShuttingDownForTests(): void {
+  serverShuttingDown = false;
+}
+
+// Live SSE streams, so the shutdown line can say how many were still open when it began. Counted,
+// never enumerated: a count is body-free, a list of streams is not.
+let openSseStreamCount = 0;
+
+export function currentOpenSseStreamCount(): number {
+  return openSseStreamCount;
+}
+
+interface SseStreamCounterState {
+  frameCount: number;
+  bytesStreamed: number;
+  readonly startedAt: number;
+  backpressureKilled: boolean;
+  serverErrored: boolean;
+  emitted: boolean;
+  correlationId: string | undefined;
+}
+
+// Per-response frame/byte counters (#2902 w5-sse-counters), keyed by the live `ServerResponse` so
+// every SSE write path in the server — `writeOrDestroy` here, plus `sse.ts`'s legacy write path,
+// `writeEvent`/`writeMessageEvent` and the heartbeat — shares ONE count per stream without any of
+// them needing a threaded "deps" object. A `WeakMap` means a stream that never gets tracked (a
+// minimal unit-test double with no `.on`) costs nothing and is never retained past `res`'s own
+// lifetime.
+const sseStreamCounters = new WeakMap<ServerResponse, SseStreamCounterState>();
+
+function sseStreamReason(res: ServerResponse, state: SseStreamCounterState): SseStreamCloseReason {
+  // The shutdown is the CAUSE of every close that follows it, including the ones that look like
+  // backpressure because the socket went away mid-write. It therefore wins over the socket-shaped
+  // diagnoses below; a stream the producer had already ended still reports "completed".
+  if (serverShuttingDown && !res.writableEnded) return "server-shutdown";
+  if (state.backpressureKilled) return "backpressure-killed";
+  if (state.serverErrored) return "server-error";
+  // A stream whose producer called `res.end()` and had it fully flush is "completed"; one whose
+  // socket closed without that — the ordinary shape of a client navigating away or losing network —
+  // is "client-disconnected". This is the same distinction `logRequestOnClose` does not need to make
+  // (a JSON response always ends itself before `close`) but a long-lived SSE stream does.
+  return res.writableEnded ? "completed" : "client-disconnected";
+}
+
+// Emitted exactly once per stream (guarded by `state.emitted`), on `res`'s terminal `close` event —
+// the one event every SSE stream reaches exactly once, whether it finished normally, was killed for
+// backpressure, or the client simply disconnected.
+function emitSseStreamClosed(res: ServerResponse, state: SseStreamCounterState): void {
+  if (state.emitted) return;
+  state.emitted = true;
+  openSseStreamCount = Math.max(0, openSseStreamCount - 1);
+  getServerLogger().info(
+    activityLogEvent(
+      SSE_STREAM_CLOSED_OPERATION,
+      {
+        ...(state.correlationId === undefined ? {} : { correlationId: state.correlationId }),
+        durationMs: Date.now() - state.startedAt,
+      },
+      {
+        frameCount: state.frameCount,
+        bytesStreamed: state.bytesStreamed,
+        reason: sseStreamReason(res, state),
+      },
+    ),
+  );
+}
+
+// Lazily creates and attaches the terminal-line listeners the first time a frame is recorded for
+// `res`; the `WeakMap` guard means `close`/`error` are attached exactly once per stream regardless
+// of how many frames it writes. A response double that does not implement `.on` (several SSE route
+// suites construct a bare `{ write, destroy }` fake) is left untracked rather than throwing — such a
+// fake never reaches a real `close` event either, so there is nothing correct to count.
+function sseStreamState(res: ServerResponse): SseStreamCounterState | undefined {
+  const existing = sseStreamCounters.get(res);
+  if (existing !== undefined) return existing;
+  if (typeof res.on !== "function") return undefined;
+  const state: SseStreamCounterState = {
+    frameCount: 0,
+    bytesStreamed: 0,
+    startedAt: Date.now(),
+    backpressureKilled: false,
+    serverErrored: false,
+    emitted: false,
+    correlationId: undefined,
+  };
+  sseStreamCounters.set(res, state);
+  openSseStreamCount += 1;
+  res.on("close", () => {
+    emitSseStreamClosed(res, state);
+  });
+  res.on("error", () => {
+    state.serverErrored = true;
+  });
+  return state;
+}
+
+/**
+ * Records one SSE frame write against `res`'s per-stream counter (#2902 w5-sse-counters). Closed
+ * over the SAME write path every SSE route already funnels through — `writeOrDestroy` below, plus
+ * `sse.ts`'s legacy write path, `writeEvent`, `writeMessageEvent` and the heartbeat — so no route
+ * handler has to opt in. Never throws: observability must never break a write.
+ */
+export function recordSseStreamFrame(
+  res: ServerResponse,
+  frame: string,
+  correlationId?: string,
+): void {
+  const state = sseStreamState(res);
+  if (state === undefined) return;
+  state.frameCount += 1;
+  state.bytesStreamed += Buffer.byteLength(frame, "utf8");
+  if (correlationId !== undefined && state.correlationId === undefined) {
+    state.correlationId = correlationId;
+  }
+}
+
+/**
+ * Marks `res`'s stream as ended-by-backpressure so the terminal line reports `"backpressure-killed"`
+ * rather than the generic `"client-disconnected"`. Called only from a write path that is about to
+ * `destroy()` the socket as a direct, deterministic consequence of the rejected write — never from
+ * `writeEvent`/`writeMessageEvent`, where a caller-observed `false` does not by itself mean the
+ * stream is being torn down.
+ */
+export function markSseStreamBackpressureKilled(res: ServerResponse): void {
+  const state = sseStreamCounters.get(res);
+  if (state !== undefined) state.backpressureKilled = true;
+}
+
+/** Marks a caught transport failure before destroy(error), which need not emit a response error. */
+export function markSseStreamServerErrored(res: ServerResponse): void {
+  const state = sseStreamCounters.get(res);
+  if (state !== undefined) state.serverErrored = true;
+}
+
 /**
  * Writes `frame` to `res`. When `res.write` returns false (TCP send-buffer full / slow client),
  * aborts `controller` (stops the upstream producer) and destroys the socket.
@@ -33,6 +225,10 @@ export interface SseBackpressureSignal {
  * backpressure kill rather than silently relabeling it as a user cancel. The callback is wrapped in a
  * try/catch so an observer throw can never propagate into the write loop.
  *
+ * `correlationId` is optional (most SSE routes never received a `RouteContext`, mirroring
+ * `readBoundedRequestBody`'s own optional correlation id) and, when supplied, is attached to this
+ * stream's terminal `sse.stream.closed` line.
+ *
  * Returns the raw boolean from `res.write` so callers can short-circuit if needed.
  */
 export function writeOrDestroy(
@@ -40,9 +236,12 @@ export function writeOrDestroy(
   frame: string,
   controller: AbortController,
   onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
 ): boolean {
+  recordSseStreamFrame(res, frame, correlationId);
   const accepted = res.write(frame);
   if (!accepted) {
+    markSseStreamBackpressureKilled(res);
     if (onBackpressure !== undefined) {
       try {
         onBackpressure({ frameBytes: Buffer.byteLength(frame, "utf8"), accepted: false });
@@ -54,4 +253,36 @@ export function writeOrDestroy(
     res.destroy();
   }
   return accepted;
+}
+
+/**
+ * Builds the production `onBackpressure` observer for an SSE route: a body-free operator diagnostic
+ * naming the stream that was killed for not draining. Without this, a slow-client termination is
+ * indistinguishable from an intentional cancel in the operator trail — the protective abort+destroy
+ * happens either way, but nothing records WHY the stream ended.
+ *
+ * Carries only the frame byte count (never body bytes), so it cannot leak model tokens if logged.
+ *
+ * `correlationId` defaults to a fresh mint taken ONCE here, at reporter-construction time (i.e. at
+ * SSE stream setup) — not inside the returned closure, which fires at most once anyway, but
+ * minting eagerly lets a caller that already has the stream's own request/session id in scope
+ * (ADR-0173 D5 / g12) pass it straight through instead of a disconnected one being drawn if and
+ * only if the stream is later killed.
+ */
+export function sseBackpressureReporter(
+  deps: { readonly diagnostics?: ServerDiagnosticSink | undefined },
+  stream: string,
+  correlationId: string = randomUUID(),
+): (signal: SseBackpressureSignal) => void {
+  return (signal: SseBackpressureSignal): void => {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId,
+      timestamp: new Date().toISOString(),
+      operation: `sse.${stream}`,
+      source: `sse.${stream}.backpressure`,
+      errorClass: "SseBackpressureKill",
+      message: "SSE stream destroyed because the client stopped draining.",
+      frameBytes: signal.frameBytes,
+    });
+  };
 }

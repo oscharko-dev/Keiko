@@ -20,7 +20,10 @@ import {
   buildPackExcerptTextResolver,
   reconcileClaimEntailment,
   reconcileInlineCitations,
+  reconcileNumericClaimEntailment,
   type EntailmentJudge,
+  type NumericEntailmentEvidence,
+  type EntailmentOptions,
   type EntailmentReconciliation,
   type EntailmentVerdict,
 } from "./grounded-faithfulness.js";
@@ -47,6 +50,16 @@ interface EntailmentFixture {
   // ([[CONTRADICT]] / [[UNAVAIL]] / neither ⇒ supported) so the scripted judge is trivial and the
   // gate scores the segmentation/reconciliation, not the judge.
   readonly excerpts: Readonly<Record<string, FixtureExcerpt>>;
+  // KEIKO-0659 / KEIKO-0852: per-fixture EntailmentOptions override so a scenario can exercise
+  // the maxClaims / maxTotalMs exhaustion branch in reconcileClaimEntailment without changing
+  // the default budget every other fixture uses. Undefined means "use DEFAULT_ENTAILMENT_OPTIONS".
+  readonly options?: EntailmentOptions | undefined;
+  // Numeric connector evidence is already the exact, prompt-rendered `[n]` candidate text. When
+  // present, the score exercises numeric membership + segmentation + the SAME entailment engine.
+  readonly numericEvidence?: readonly NumericEntailmentEvidence[] | undefined;
+  // Some membership and deduplication fixtures intentionally produce no semantic claim. Pinning the
+  // exact count prevents those cases from passing vacuously when numeric segmentation is removed.
+  readonly expectedJudgedClaims?: number | undefined;
 }
 
 // Distractor-dense shared evidence: every fixture cites into a pack that also holds unrelated,
@@ -56,6 +69,15 @@ interface EntailmentFixture {
 const SUPPORTING = "The retention period is 30 days for audit logs.";
 const CONTRADICTING = "The retention period is 30 days. [[CONTRADICT]]";
 const UNJUDGEABLE = "[[UNAVAIL]]";
+
+// KEIKO-0659: a > 900-char excerpt so collectExcerptText's `truncated` branch fires and
+// verdictForClaim degrades to unavailable (grounded-faithfulness.ts:627-632). Each "sentence" is
+// concrete, distractor-shaped policy text so the excerpt is not a trivially-detectable padding.
+const OVERSIZED_EXCERPT = Array.from(
+  { length: 30 },
+  (_, i) =>
+    `Policy paragraph ${String(i + 1)}: audit-log retention windows, escalation paths, and export procedures follow section rules.`,
+).join(" ");
 
 const FIXTURES: readonly EntailmentFixture[] = [
   {
@@ -119,6 +141,103 @@ const FIXTURES: readonly EntailmentFixture[] = [
       "src/crypto/cipher.ts": { lineRange: { startLine: 10, endLine: 20 }, content: UNJUDGEABLE },
     },
   },
+  // KEIKO-0659: exercises collectExcerptText's multi-citation join for one claim -- one cited
+  // path supports it, the other contradicts. The joined excerpt still contains [[CONTRADICT]],
+  // so the TOKEN_JUDGE must resolve the whole claim as unsupported. Locks in that the
+  // reconciliation combines excerpts BEFORE judging, rather than picking one arbitrarily.
+  {
+    name: "unsupported-multi-citation-mixed-support",
+    variant: "unsupported-claim",
+    answerText:
+      "The retention period is 30 days for audit logs [src/policy/retention.ts:1-8][confluence/ENG/pages/98311.html:2-6].",
+    excerpts: {
+      "src/policy/retention.ts": { lineRange: { startLine: 1, endLine: 8 }, content: SUPPORTING },
+      "confluence/ENG/pages/98311.html": {
+        lineRange: { startLine: 2, endLine: 6 },
+        content: CONTRADICTING,
+      },
+    },
+  },
+  // KEIKO-0659: exercises the excerpt-over-max branch (maxExcerptChars=900 default). The excerpt
+  // exceeds the cap and is cut before the judge sees it; reconcileClaimEntailment must degrade
+  // this claim to unavailable rather than risking a "supported" verdict against a truncated
+  // prefix (grounded-faithfulness.ts:627-632).
+  {
+    name: "unavailable-excerpt-over-max",
+    variant: "unavailable",
+    answerText:
+      "The retention period spans thirty days by policy [src/policy/long-retention.ts:1-50].",
+    excerpts: {
+      "src/policy/long-retention.ts": {
+        lineRange: { startLine: 1, endLine: 50 },
+        content: OVERSIZED_EXCERPT,
+      },
+    },
+  },
+  // KEIKO-0659: exercises the maxClaims/maxTotalMs exhaustion branch in scheduleClaimJudges
+  // (grounded-faithfulness.ts:686). Two supported claims but maxClaims=1 forces the second
+  // claim to be counted as unavailable rather than judged, so the outer scorer sees
+  // unavailableClaims>0 and unentailed.length===0 -- the same "degrade to WARN" shape the
+  // unavailable variant covers, but via the budget path instead of the [[UNAVAIL]] token.
+  {
+    name: "unavailable-budget-exhaustion",
+    variant: "unavailable",
+    answerText:
+      "Audit logs are retained for 30 days [src/policy/retention.ts:1-8]. The wiki agrees [confluence/ENG/pages/98311.html:2-6].",
+    excerpts: {
+      "src/policy/retention.ts": { lineRange: { startLine: 1, endLine: 8 }, content: SUPPORTING },
+      "confluence/ENG/pages/98311.html": {
+        lineRange: { startLine: 2, endLine: 6 },
+        content: SUPPORTING,
+      },
+    },
+    options: { ...DEFAULT_ENTAILMENT_OPTIONS, maxClaims: 1 },
+  },
+  {
+    name: "supported-numeric-connector",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days.[1]",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: SUPPORTING }],
+  },
+  {
+    name: "unsupported-numeric-connector",
+    variant: "unsupported-claim",
+    answerText: "Audit logs are retained for ten years [1].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: CONTRADICTING }],
+  },
+  {
+    name: "unavailable-numeric-connector",
+    variant: "unavailable",
+    answerText: "Audit logs are retained for 30 days 【1】.",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: UNJUDGEABLE }],
+  },
+  {
+    name: "numeric-missing-marker-is-not-semantic-evidence",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days [9].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: CONTRADICTING }],
+    expectedJudgedClaims: 0,
+  },
+  {
+    name: "numeric-duplicate-marker-is-one-claim",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days [1][1].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: SUPPORTING }],
+    expectedJudgedClaims: 1,
+  },
+  {
+    name: "numeric-malformed-marker-is-not-semantic-evidence",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days [not-a-marker] and [0].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: CONTRADICTING }],
+    expectedJudgedClaims: 0,
+  },
 ];
 
 function verdictFromToken(excerptText: string): EntailmentVerdict {
@@ -152,6 +271,14 @@ async function evaluateFixture(
   fixture: EntailmentFixture,
   judge: EntailmentJudge,
 ): Promise<EntailmentReconciliation> {
+  if (fixture.numericEvidence !== undefined) {
+    return reconcileNumericClaimEntailment(
+      fixture.answerText,
+      fixture.numericEvidence,
+      judge,
+      fixture.options ?? DEFAULT_ENTAILMENT_OPTIONS,
+    );
+  }
   const packs = [packFor(fixture)];
   const membership = reconcileInlineCitations(fixture.answerText, buildPackCitationIndex(packs));
   const resolveExcerptText = buildPackExcerptTextResolver(packs);
@@ -160,7 +287,7 @@ async function evaluateFixture(
     membership,
     resolveExcerptText,
     judge,
-    DEFAULT_ENTAILMENT_OPTIONS,
+    fixture.options ?? DEFAULT_ENTAILMENT_OPTIONS,
   );
 }
 
@@ -201,7 +328,11 @@ async function scorePrecision(
   let clean = 0;
   for (const fixture of fixtures) {
     const result = await evaluateFixture(fixture, TOKEN_JUDGE);
-    if (result.unentailed.length === 0) clean += 1;
+    const countMatches =
+      fixture.expectedJudgedClaims === undefined ||
+      result.judgedClaims === fixture.expectedJudgedClaims;
+    if (result.unentailed.length === 0 && countMatches) clean += 1;
+    else if (!countMatches) failures.push(`unexpected judged-claim count in '${fixture.name}'`);
     else failures.push(`false-positive unsupported-claim flag in '${fixture.name}'`);
   }
   return rate(clean, fixtures.length);

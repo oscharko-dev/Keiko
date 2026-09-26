@@ -4,7 +4,7 @@
 //      falls through to the unsupported adapter for known-unsupported formats.
 
 import { describe, expect, it } from "vitest";
-import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 
 import * as parsers from "./index.js";
 import {

@@ -8,19 +8,20 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
+import type {
+  CodingWorkbenchMode,
+  GitRepositoryAgentDenialReason,
+  GitRepositoryAgentOperationKind,
+  GitRepositoryAgentOperationRequest,
+  GitRepositoryAgentOperationResponse,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
-  gitRepositoryAgentMinimumMode,
-  gitRepositoryAgentOperationAdmitted,
   parseGitRepositoryAgentOperationRequest,
-  resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchMode,
-  type GitRepositoryAgentDenialReason,
-  type GitRepositoryAgentOperationKind,
-  type GitRepositoryAgentOperationRequest,
-  type GitRepositoryAgentOperationResponse,
-} from "@oscharko-dev/keiko-contracts";
-import { STREAMING, type RouteContext, type RouteDefinition, type RouteResult } from "../routes.js";
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository-agent";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import { STREAMING } from "../route-outcome.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "../gitRoutes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { createGitDeliveryCommitRouteGroup } from "./commitRoutes.js";
@@ -29,6 +30,8 @@ import { createGitDeliveryMergeRouteGroup } from "./mergeRoutes.js";
 import { createGitDeliveryPrRouteGroup } from "./prRoutes.js";
 import { createGitDeliveryPushRouteGroup } from "./pushRoutes.js";
 import { createGitDeliverySyncRouteGroup } from "./syncRoutes.js";
+import { resolveProjectWorkspace } from "./execution.js";
+import { gitDeliveryAuthorityDenial, logGitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import {
   hasOnlyAllowedKeys,
   isPlainObject,
@@ -196,12 +199,20 @@ function makeRequest(body: unknown, base: IncomingMessage): IncomingMessage {
   return req;
 }
 
+// Both context builders below synthesize a fresh RouteContext for an internally-delegated route
+// handler (F2: the agent facade continues the SAME request into commit/push/pr/merge/local-mutation
+// or the plain git read routes — it is not spawning background work, it AWAITS and wraps the result
+// before this request's own response is produced). The delegated handler reads `ctx.correlationId` as
+// its first line, so dropping it here silently downgrades every line the delegated operation logs to
+// UNKNOWN_CORRELATION_ID even though the real id is sitting in the enclosing `ctx` the whole time
+// (AGENTS.md §8). Threading it keeps the delegated evidence joinable to the originating request.
 function postContext(ctx: RouteContext, pattern: string, body: unknown): RouteContext {
   return {
     req: makeRequest(body, ctx.req),
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${pattern}`),
+    correlationId: ctx.correlationId,
   };
 }
 
@@ -211,6 +222,7 @@ function readContext(ctx: RouteContext, path: string): RouteContext {
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
+    correlationId: ctx.correlationId,
   };
 }
 
@@ -296,19 +308,31 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
   status: new Set(),
   diff: new Set(),
   "branch-list": new Set(),
-  "branch-create": new Set(["branchName", "baseBranchName", "startPointRefHash"]),
-  "branch-switch": new Set(["branchName"]),
-  stage: new Set(["pathspecs", "includeUntracked"]),
-  unstage: new Set(["pathspecs"]),
+  // "approval" (final-audit F1+F2/#3390): forwarded verbatim to the delegated route, which is the
+  // ONLY place that ever parses/consumes it (`delegatedBody` spreads `...payload` unchanged) — this
+  // facade never reads it. Allows a caller holding a claim minted through the delegated route's
+  // own `/approve` endpoint to redeem it via this facade too, exactly as if it had called the
+  // delegated route directly. Omitted only for `commit`, which is redirected to the verified
+  // runtime commit service above.
+  "branch-create": new Set(["branchName", "baseBranchName", "startPointRefHash", "approval"]),
+  "branch-switch": new Set(["branchName", "approval"]),
+  stage: new Set(["pathspecs", "includeUntracked", "approval"]),
+  unstage: new Set(["pathspecs", "approval"]),
   commit: new Set(["messageDraft", "message", "allowEmpty"]),
-  fetch: new Set(["remote"]),
-  pull: new Set(["remote"]),
+  fetch: new Set(["remote", "approval"]),
+  pull: new Set(["remote", "approval"]),
+  // #3394 review: `verifiedCommitSha` is mandatory on the delegated push/pr-create/pr-update
+  // approve/execute routes — omitted here before this fix, so a payload that named it (the only way
+  // to satisfy the now-mandatory field through this facade) was rejected as an unknown key before it
+  // ever reached the delegated route's own validation.
   push: new Set([
     "remoteAlias",
     "remoteBranchName",
     "sourceBranchName",
     "forcePush",
     "setUpstreamTracking",
+    "verifiedCommitSha",
+    "approval",
   ]),
   "pull-request": new Set([
     "kind",
@@ -321,6 +345,8 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "prExternalId",
     "convertToDraft",
     "convertFromDraft",
+    "verifiedCommitSha",
+    "approval",
   ]),
   merge: new Set([
     "kind",
@@ -331,6 +357,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "mergeStrategy",
     "deleteBranchAfterMerge",
     "expectedHeadRefHash",
+    "approval",
   ]),
 };
 
@@ -449,28 +476,6 @@ export function gitAgentEffectiveMode(
   return resolveEffectiveCodingWorkbenchMode(ceiling, ceiling);
 }
 
-// The authority gate for the agent repository facade. It runs BEFORE the idempotency reservation and
-// before any delegation, so a denied operation neither mutates the repository nor occupies a replay
-// slot. A denial is content-free: the operation, the effective mode, and the mode that would have
-// admitted it — never a path, a branch name, or any part of the payload.
-function autonomyDenial(
-  request: GitRepositoryAgentOperationRequest,
-  effectiveMode: CodingWorkbenchMode,
-): RouteResult | undefined {
-  if (gitRepositoryAgentOperationAdmitted(request.operation, request.mode, effectiveMode)) {
-    return undefined;
-  }
-  const required = gitRepositoryAgentMinimumMode(request.operation);
-  return {
-    status: deniedStatus("autonomy-mode-denied"),
-    body: denied(
-      request,
-      "autonomy-mode-denied",
-      `The autonomy mode in effect (${effectiveMode}) does not admit an agent-initiated ${request.operation} execute; ${required} or higher is required.`,
-    ),
-  };
-}
-
 async function parseAgentRequest(req: IncomingMessage): Promise<
   | {
       readonly ok: true;
@@ -559,14 +564,71 @@ export async function handleGitAgentOperationWithDelegate(
   }
 }
 
+function verifiedCommitRequired(
+  ctx: RouteContext,
+  request: GitRepositoryAgentOperationRequest,
+): RouteResult {
+  logGitDeliveryAuthorityDenial(ctx, "commit", "verified-commit-required");
+  return {
+    status: 403,
+    body: denied(
+      request,
+      "autonomy-mode-denied",
+      "Agent commits require the verified runtime commit proposal and its one-use approval.",
+    ),
+  };
+}
+
 export async function handleGitAgentOperation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const parsed = await parseAgentRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
-  const gate = autonomyDenial(parsed.request, gitAgentEffectiveMode(deps));
-  if (gate !== undefined) return gate;
+  // This server-owned route identifies delegated agent work. A run id or client payload cannot
+  // turn the manual Git client into the exact-tree, one-use approved runtime commit service.
+  if (parsed.request.operation === "commit" && parsed.request.mode === "execute") {
+    return verifiedCommitRequired(ctx, parsed.request);
+  }
+  if (parsed.request.mode === "execute") {
+    const workspace = resolveProjectWorkspace(deps, parsed.request.projectId);
+    if (workspace === undefined) {
+      logGitDeliveryAuthorityDenial(ctx, parsed.request.operation, "workspace-unresolvable");
+      return {
+        status: 403,
+        body: denied(
+          parsed.request,
+          "autonomy-mode-denied",
+          "The accepted runtime authority does not admit this repository operation.",
+        ),
+      };
+    }
+    // Final-audit F1+F2/#3390 (ADR-0138 D2): this is a pre-check ahead of delegation, not the final
+    // authority — every op below delegates to the SAME route handler that independently re-runs
+    // `gitDeliveryAuthorityGate`/`gitDeliveryAuthorityDenial` with the correct per-operation
+    // redemption (deferred for delivery ops, peeked against the forwarded `approval` for local
+    // mutations). Deferring uniformly here is therefore safe: it never widens what the delegated
+    // handler itself admits, and avoids re-deriving that same per-operation distinction twice.
+    const gate = gitDeliveryAuthorityDenial(
+      ctx,
+      deps,
+      parsed.request.projectId,
+      workspace,
+      parsed.request.operation,
+      {},
+      { deliveryApprovalDeferred: true },
+    );
+    if (gate !== undefined) {
+      return {
+        status: gate.status,
+        body: denied(
+          parsed.request,
+          "autonomy-mode-denied",
+          "The accepted runtime authority does not admit this repository operation.",
+        ),
+      };
+    }
+  }
   return handleGitAgentOperationWithDelegate(parsed.request, parsed.fingerprint, () =>
     delegateRequest(parsed.request, ctx, deps),
   );

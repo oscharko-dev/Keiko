@@ -17,7 +17,7 @@
 // Composition: real SQLite vault (mkdtemp), capture module, retrieval module. Cleaned up
 // in afterEach.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-eval-tlearn-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-eval-tlearn-"));
   cleanups.push(dir);
   return dir;
 }

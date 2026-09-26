@@ -21,7 +21,7 @@ export {
   CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS as SESSION_PAIRING_CLAIM_MAX_CHARS,
   CODING_APP_SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS as SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS,
   isWellFormedCodingAppSessionPairingAttestation as isWellFormedSessionPairingAttestation,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
 /** A launcher-minted, single-use, process-bound pairing attestation presented at the pair endpoint. */
 export type SessionPairingAttestation = CodingAppSessionPairingAttestation;
@@ -30,6 +30,9 @@ export type SessionPairingAttestation = CodingAppSessionPairingAttestation;
 export type SessionPairingDecision =
   | { readonly outcome: "approved"; readonly principalLabel: string }
   | { readonly outcome: "denied" };
+
+/** The bounded principal a launcher-authorized local Keiko app-session represents. */
+export const LOCAL_APP_SESSION_PRINCIPAL_LABEL = "local-app-session";
 
 /** The pairing authority seam. Synchronous, in-memory, and fail-closed by default. */
 export interface SessionPairingPort {

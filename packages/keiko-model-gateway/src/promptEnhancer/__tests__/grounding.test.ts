@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { EnhancedPrompt, PromptEnhancementRequest } from "@oscharko-dev/keiko-contracts";
+import { analyzePrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-analyzer";
 import {
-  analyzePrompt,
   asEnhancedPromptId,
+  RAG_EVALUATION_DIMENSIONS,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import {
   validateEnhancedPrompt,
   validateGroundingPlan,
-  RAG_EVALUATION_DIMENSIONS,
-  type EnhancedPrompt,
-  type PromptEnhancementRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
 import type { GroundingStrategy } from "@oscharko-dev/keiko-contracts";
 import { planPromptEnhancement } from "../planner.js";
 import { generateEnhancedPrompt } from "../generator.js";

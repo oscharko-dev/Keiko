@@ -9,6 +9,7 @@
     "kind": "local-bare-repository",
     "worktree": "temporary-local-worktree",
     "remote": "temporary-local-bare-remote",
+    "browserProjectPath": "keiko-git-branch-sync-1576",
     "branches": ["main", "feature/local"]
   },
   "routesIntercepted": [

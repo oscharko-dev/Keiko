@@ -11,12 +11,12 @@
 //   GET    /api/containers/events               SSE stream of run lifecycle events (redacted)
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { parseContainerRunRequest } from "@oscharko-dev/keiko-contracts";
+import { parseContainerRunRequest } from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 import type { ContainerRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
+import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "../sse.js";
 import { writeOrDestroy, type SseBackpressureSignal } from "../sse-write.js";
 import { redactedEventJson } from "../sse-frame-cache.js";
 import {
@@ -155,11 +155,26 @@ export async function handleContainerCatalog(
 ): Promise<RouteResult> {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
+  const projectId = ctx.url.searchParams.get("projectId");
+  if (projectId === null || projectId.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Query parameter 'projectId' is required."),
+    };
+  }
+  // KEIKO-0783: mirror handleContainerCapability's registered-project check. Before this fix the
+  // handler proceeded to guard.listCatalog for any projectId string; now an unregistered
+  // projectId fails closed with 403 WORKSPACE_NOT_REGISTERED before any runtime work.
+  if (!deps.store.listProjects().some((project) => project.path === projectId)) {
+    return {
+      status: 403,
+      body: errorBody(
+        "WORKSPACE_NOT_REGISTERED",
+        "The workspace directory is not a registered project.",
+      ),
+    };
+  }
   return runHandler(async () => {
-    const projectId = ctx.url.searchParams.get("projectId");
-    if (projectId === null || projectId.length === 0) {
-      throw new ContainerRunnerError("BAD_REQUEST", "Query parameter 'projectId' is required.");
-    }
     const catalog = await guard.listCatalog(projectId);
     if (!catalog.engineAvailable) {
       throw new ContainerRunnerError(
@@ -217,7 +232,7 @@ export function handleDeleteContainerRun(ctx: RouteContext, deps: UiHandlerDeps)
 export function handleContainerEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
-  openContainerSseStream(ctx.res, guard, deps.redactor);
+  openContainerSseStream(ctx.res, guard, deps.redactor, undefined, ctx.correlationId);
   ctx.req.on("close", () => {
     ctx.res.end();
   });
@@ -232,6 +247,7 @@ export function openContainerSseStream(
   manager: ContainerRunnerManager,
   redactor: UiHandlerDeps["redactor"],
   onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
@@ -253,7 +269,9 @@ export function openContainerSseStream(
     unsubscribe();
   };
   controller.signal.addEventListener("abort", stop, { once: true });
-  res.write(readyMessage());
+  // The ready frame takes the same abort-and-destroy path as every event frame: refused, it aborts
+  // this controller at once, which unsubscribes the stream, so the socket is destroyed exactly once.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
   res.on("close", () => {
     stop();
   });

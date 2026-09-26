@@ -1,7 +1,22 @@
-import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import type { UiStore } from "../store/types.js";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchContextUsage,
+  CodingWorkbenchRuntimeEvent,
+  SkillDiscoveryResultV1,
+} from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import type {
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityMintRequest,
+  GitDeliveryRunAuthorityPort,
+} from "../gitDelivery/runBoundAuthority.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
@@ -10,13 +25,36 @@ import {
   type CodingRuntimeLaunchResolver,
   type CodingRuntimeOrchestrator,
 } from "./codingRuntimeOrchestrator.js";
+import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
 import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+import type { ToolBridgeApprovalRejection } from "./opencodeV2ApprovalRequests.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
+import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
+
+/**
+ * One opened repository semantic index, and the handle that closes it again (#3416). Structurally
+ * the lease `grounded-repo-semantic-search.ts` already hands the grounded path, named here so the
+ * coding runtime can hold it as a TYPE and never import an egress-capable module of its own.
+ */
+export interface RepositorySemanticSearchLease {
+  readonly provider: SemanticSearchProvider | undefined;
+  /** 64-hex identity of the index this lease opened; absent when it opened none. */
+  readonly indexIdentityDigest?: string | undefined;
+  close(): void;
+}
+
+/** Opens that lease for one repository root, for the life of one governed search. */
+export type RepositorySemanticSearchResolver = (
+  repositoryRoot: string,
+  signal: AbortSignal | undefined,
+) => RepositorySemanticSearchLease;
 
 export interface CodingRuntimeHost {
   readonly createManager: (
@@ -30,6 +68,9 @@ export interface CodingRuntimeHost {
   // Server-level registry of read-only research grants (#2387). Present once the runtime host is
   // composed; the orchestrator reads it to project the live grant on the snapshot and to revoke it.
   readonly researchGrants?: ResearchGrantRegistry | undefined;
+  // The operator's view of the approved skills (#3417). Present once the runtime host is composed;
+  // the orchestrator reads it for the authenticated skills channel and nowhere else.
+  readonly approvedSkills?: (() => SkillDiscoveryResultV1) | undefined;
   // Live #2387 research asks awaiting a decision. Present once the runtime host is composed; the
   // orchestrator reads it non-consumingly to project the reviewable host and request line onto the
   // authenticated research channel so the operator can see what they are approving.
@@ -37,6 +78,8 @@ export interface CodingRuntimeHost {
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
+  readonly contextUsage?:
+    { readonly read: (runId: string) => CodingWorkbenchContextUsage | undefined } | undefined;
   readonly runtimeCapabilityAuthenticator?:
     | {
         readonly authenticate: (
@@ -45,27 +88,94 @@ export interface CodingRuntimeHost {
         ) => unknown;
         readonly reservePromptTokens?:
           ((capability: string, promptTokens: number) => unknown) | undefined;
+        readonly unavailableOptionalTools?:
+          ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined) | undefined;
       }
     | undefined;
+  /** Live server-private delivery authority for the currently accepted runtime run. */
+  readonly gitDeliveryAuthority?: GitDeliveryRunAuthorityPort | undefined;
+  // #3399 (epic #3384 correction 4): the server-minted, bounded description authority that admits
+  // description generation and the "pull-request" body-only apply outside a running Code task —
+  // threaded through the exact same chain as `gitDeliveryAuthority` above.
+  readonly gitDeliveryDescriptionAuthority?: GitDeliveryDescriptionAuthorityPort | undefined;
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT half of the
+  // description authority above. Consumed by deps.ts's `attachWorkbenchDescriptionSupport` so the
+  // automatic-description dispatcher can mint a scope before checking it, exactly the way the
+  // Chat-turn admission check and the pull-request route already only READ.
+  readonly mintDescriptionAuthority?:
+    ((request: GitDeliveryDescriptionAuthorityMintRequest) => void) | undefined;
+  // #3401 CI-repair notify: called exactly once, right after this control plane builds its
+  // orchestrator, so a per-run CI-repair controller minted deep inside the runtime resolver (long
+  // before the orchestrator exists) can still reach `CodingRuntimeOrchestrator
+  // .notifyVerifiedHeadAdvanced` once it does. Consumed internally by
+  // `createCodingRuntimeControlPlane` below -- never forwarded past this module.
+  readonly attachVerifiedHeadNotifier?: ((notify: (runId: string) => void) => void) | undefined;
+  /**
+   * Binds the repository semantic index this server can open (#3416). Late-bound for the same
+   * reason `attachVerifiedHeadNotifier` is: the lease is derived from the assembled deps graph,
+   * which does not exist yet when the runtime resolver is composed. A server that never binds one
+   * searches lexically -- the capability is then absent, never a call denied after the fact.
+   */
+  readonly attachRepositorySemanticSearch?:
+    ((resolve: RepositorySemanticSearchResolver) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
+        readonly verifyObserved: (runId: string) => void;
         readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+        readonly refuseChallenge: (runId: string) => void;
         readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
       }
     | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  // ADR-0043 D11-D14 (#3390): the currently active run's governed tool bridge, dispatched
+  // directly by the BFF's `/api/coding-sidecar/tool` route instead of a second loopback listener
+  // the Seatbelt egress profile denies. `resolve` returns `undefined` when no run is active; at
+  // most one run's bridge is ever current (the singleton-run governance gate).
+  readonly toolFacadeBridge?:
+    { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined } | undefined;
+}
+
+/**
+ * The dispatch surface a run's tool bridge exposes to the route -- `handle` plus the single
+ * timing number the route needs to bound body-ingestion by the SAME deadline the admission gate
+ * applies to execution (`requestDeadlineMs`), never the gate's internal admission state (in-flight
+ * count, controllers). Matches `OpenCodeToolBridge`'s shape without importing the OpenCode-specific
+ * type into this transport-agnostic control plane.
+ */
+export interface CodingRuntimeToolFacadeBridge {
+  readonly requestDeadlineMs: number;
+  handle(input: {
+    readonly method: "POST";
+    readonly headers: Headers;
+    readonly body: string;
+    readonly signal?: AbortSignal;
+  }): Promise<{
+    readonly status: number;
+    readonly body: string;
+    readonly rejection?: ToolBridgeApprovalRejection;
+  }>;
 }
 
 export interface CodingRuntimeControlPlaneInput {
+  readonly historyStore?: UiStore | undefined;
+  readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
+  readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly snapshots: CodingRuntimeSnapshotStore;
   readonly evidence: CodingRuntimeEvidenceAggregator;
   readonly workspaceLifecycle: WorkspaceLifecycleService;
   readonly serverPrincipal: () => string | undefined;
   /** Qualified adapters are supplied by #2258; absence is a deliberate unavailable posture. */
   readonly runtimeHost?: CodingRuntimeHost | undefined;
+  /**
+   * When present, mid-stream SSE fan-out write failures are recorded via this sink — one
+   * redacted record per subscriber, correlationId=runId (KEIKO-0225).
+   */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
 }
 
 export interface CodingRuntimeControlPlane {
@@ -75,7 +185,12 @@ export interface CodingRuntimeControlPlane {
   readonly runtimeHostQualified: boolean;
   readonly cancellationRegistry?: CodingRuntimeHost["cancellationRegistry"];
   readonly runtimeCapabilityAuthenticator?: CodingRuntimeHost["runtimeCapabilityAuthenticator"];
+  readonly gitDeliveryAuthority?: CodingRuntimeHost["gitDeliveryAuthority"];
+  readonly gitDeliveryDescriptionAuthority?: CodingRuntimeHost["gitDeliveryDescriptionAuthority"];
+  readonly mintDescriptionAuthority?: CodingRuntimeHost["mintDescriptionAuthority"];
+  readonly attachRepositorySemanticSearch?: CodingRuntimeHost["attachRepositorySemanticSearch"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
+  readonly toolFacadeBridge?: CodingRuntimeHost["toolFacadeBridge"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
 
@@ -87,11 +202,12 @@ interface RuntimeEventReceiver {
  * Constructs exactly one process-lifetime runtime aggregate. An unqualified host still exposes the
  * lifecycle/status API, but start fails before minting launch material or touching a process.
  */
-// eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
 export function createCodingRuntimeControlPlane(
   input: CodingRuntimeControlPlaneInput,
 ): CodingRuntimeControlPlane {
-  const eventHub = new CodingRuntimeEventHub();
+  const eventHub = new CodingRuntimeEventHub(
+    input.diagnostics ? { diagnostics: input.diagnostics } : {},
+  );
   const receiver: RuntimeEventReceiver = {};
   const manager =
     input.runtimeHost?.createManager((event) => {
@@ -99,7 +215,44 @@ export function createCodingRuntimeControlPlane(
     }) ?? unavailableManager();
   const launchResolver = input.runtimeHost?.launchResolver ?? unavailableLaunchResolver();
   const approvalAuthority = input.runtimeHost?.approvalAuthority ?? unavailableApprovalAuthority();
-  const orchestrator = createCodingRuntimeOrchestrator({
+  const orchestrator = createControlPlaneOrchestrator(
+    input,
+    manager,
+    approvalAuthority,
+    eventHub,
+    launchResolver,
+  );
+  receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
+    void orchestrator.ingest(event);
+  };
+  attachVerifiedHeadNotifier(input.runtimeHost, orchestrator);
+  orchestrator.startupReconcileNow();
+  return {
+    orchestrator,
+    eventHub,
+    runtimeHostQualified: input.runtimeHost !== undefined,
+    ...(input.runtimeHost?.safeActivityProjection
+      ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
+      : {}),
+    ...runtimeHostCapabilities(input.runtimeHost),
+  };
+}
+
+// eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
+function createControlPlaneOrchestrator(
+  input: CodingRuntimeControlPlaneInput,
+  manager: CodingRuntimeManager,
+  approvalAuthority: CodingRuntimeApprovalAuthority,
+  eventHub: CodingRuntimeEventHub,
+  launchResolver: CodingRuntimeLaunchResolver,
+): CodingRuntimeOrchestrator {
+  return createCodingRuntimeOrchestrator({
+    history:
+      input.historyStore === undefined
+        ? undefined
+        : new CodingRuntimeHistory(input.historyStore, input.serverPrincipal, input.activityLog),
+    issueIntake: input.issueIntake,
+    deploymentCeiling: input.deploymentCeiling,
     manager,
     approvalAuthority,
     eventHub,
@@ -117,23 +270,31 @@ export function createCodingRuntimeControlPlane(
     ...(input.runtimeHost?.researchGrants
       ? { researchGrants: input.runtimeHost.researchGrants }
       : {}),
+    ...(input.runtimeHost?.approvedSkills
+      ? { approvedSkills: input.runtimeHost.approvedSkills }
+      : {}),
     ...(input.runtimeHost?.pendingResearchApprovals
       ? { pendingResearchApprovals: input.runtimeHost.pendingResearchApprovals }
       : {}),
-  });
-  receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
-    void orchestrator.ingest(event);
-  };
-  orchestrator.startupReconcileNow();
-  return {
-    orchestrator,
-    eventHub,
-    runtimeHostQualified: input.runtimeHost !== undefined,
-    ...(input.runtimeHost?.safeActivityProjection
-      ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
+    ...(input.runtimeHost?.contextUsage
+      ? { contextUsage: input.runtimeHost.contextUsage.read }
       : {}),
-    ...runtimeHostCapabilities(input.runtimeHost),
-  };
+    ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+    ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+  });
+}
+
+// #3401: fills the runtime host's notify slot with the orchestrator's real, public
+// `notifyVerifiedHeadAdvanced` seam now that it exists -- never a second dispatcher. Extracted so
+// `createCodingRuntimeControlPlane` stays under AGENTS.md §6's complexity <=10 ceiling.
+function attachVerifiedHeadNotifier(
+  runtimeHost: CodingRuntimeHost | undefined,
+  orchestrator: CodingRuntimeOrchestrator,
+): void {
+  runtimeHost?.attachVerifiedHeadNotifier?.((runId: string): void => {
+    orchestrator.notifyVerifiedHeadAdvanced(runId);
+  });
 }
 
 function unavailableTaskDispatcher(): CodingRuntimeTaskDispatcher {
@@ -155,29 +316,43 @@ function unavailablePermissionPort(): CodingRuntimePermissionPort {
   return { resolve: () => Promise.resolve(false) };
 }
 
+// Every one of these is an OPTIONAL pass-through: present on `CodingRuntimeHost` only when the
+// production composition supplied it, forwarded onto `CodingRuntimeControlPlane` unchanged. A
+// per-field ternary here would grow this function's cyclomatic complexity by one per capability
+// (AGENTS.md §6's complexity <=10 ceiling), so the ONE decision — "was it supplied?" — is a single
+// loop over the closed key list instead of N branches.
+const RUNTIME_HOST_CAPABILITY_KEYS = [
+  "cancellationRegistry",
+  "runtimeCapabilityAuthenticator",
+  "gitDeliveryAuthority",
+  "gitDeliveryDescriptionAuthority",
+  "mintDescriptionAuthority",
+  "attachRepositorySemanticSearch",
+  "openCodeGatewayReadinessRegistry",
+  "toolFacadeBridge",
+] as const;
+
+type RuntimeHostCapabilities = Pick<
+  CodingRuntimeControlPlane,
+  (typeof RUNTIME_HOST_CAPABILITY_KEYS)[number]
+>;
+
 function runtimeHostCapabilities(
   runtimeHost: CodingRuntimeHost | undefined,
-): Pick<
-  CodingRuntimeControlPlane,
-  "cancellationRegistry" | "runtimeCapabilityAuthenticator" | "openCodeGatewayReadinessRegistry"
-> {
-  return {
-    ...(runtimeHost?.cancellationRegistry
-      ? { cancellationRegistry: runtimeHost.cancellationRegistry }
-      : {}),
-    ...(runtimeHost?.runtimeCapabilityAuthenticator
-      ? { runtimeCapabilityAuthenticator: runtimeHost.runtimeCapabilityAuthenticator }
-      : {}),
-    ...(runtimeHost?.openCodeGatewayReadinessRegistry
-      ? { openCodeGatewayReadinessRegistry: runtimeHost.openCodeGatewayReadinessRegistry }
-      : {}),
-  };
+): RuntimeHostCapabilities {
+  const capabilities: Partial<RuntimeHostCapabilities> = {};
+  if (runtimeHost === undefined) return capabilities;
+  for (const key of RUNTIME_HOST_CAPABILITY_KEYS) {
+    const value = runtimeHost[key];
+    if (value !== undefined) Object.assign(capabilities, { [key]: value });
+  }
+  return capabilities;
 }
 
 function unavailableLaunchResolver(): CodingRuntimeLaunchResolver {
   return {
     resolve: (): never => {
-      throw new Error("coding-runtime-host-unavailable");
+      throw new CodingRuntimeLaunchRejectedError("host-unavailable");
     },
   };
 }

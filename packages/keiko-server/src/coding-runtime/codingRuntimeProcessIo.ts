@@ -185,7 +185,10 @@ class CountOnlyStderrDrainer implements CodingRuntimeStderrDrainer {
   }
 
   private addCount(current: number, increment: number, maximum: number): number {
-    if (increment < maximum - current) return current + increment;
+    // KEIKO-0741: `<=` (was `<`) so a chunk that exactly fills the remaining budget is NOT marked
+    // truncated -- it fits. saturatingCount()'s truncating test just below uses `>`, matching this
+    // symmetric boundary. Overflow (`>`) still fires only when the chunk exceeds the budget.
+    if (increment <= maximum - current) return current + increment;
     this.truncated = true;
     if (increment > maximum - current) this.overflowed = true;
     return maximum;

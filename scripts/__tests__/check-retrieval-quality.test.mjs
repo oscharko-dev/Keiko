@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { binaryNdcgAtK } from "@oscharko-dev/keiko-contracts";
+import { binaryNdcgAtK } from "@oscharko-dev/keiko-contracts/runtime/eval-metrics";
 import {
   evaluateQualityBudget,
   recallAtK,
@@ -273,7 +273,7 @@ describe("check-retrieval-quality regression probes", () => {
       ["exact-technical"],
     );
 
-    expect(result).toEqual({ ok: true, tautological: [], probed: 1, unresolved: [] });
+    expect(result).toEqual({ ok: true, tautological: [], probed: 1, unresolved: [], skipped: [] });
     expect(logs.some((line) => line.includes("observed=below-floors"))).toBe(true);
   });
 
@@ -302,6 +302,7 @@ describe("check-retrieval-quality regression probes", () => {
       tautological: [],
       probed: 0,
       unresolved: ["exact-technical"],
+      skipped: [],
     });
   });
 
@@ -319,6 +320,7 @@ describe("check-retrieval-quality regression probes", () => {
       tautological: [],
       probed: 1,
       unresolved: ["typo-id-that-does-not-exist"],
+      skipped: [],
     });
     expect(logs.some((line) => line.includes("unresolved probe fixture ids"))).toBe(true);
   });

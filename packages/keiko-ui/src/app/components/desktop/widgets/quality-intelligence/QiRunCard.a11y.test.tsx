@@ -76,6 +76,18 @@ describe("QiRunCard — a11y (WCAG 2.2 AA)", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("has no violations when degraded terminal truth is visible (#3186)", async () => {
+    const detail: QualityIntelligenceUiRunDetail = {
+      ...makeDetail("qi-run-degraded-a11y", [], 0),
+      degraded: true,
+      reasonSummary: "qi-judge-unavailable",
+    };
+    const { container } = render(<QiRunCard runId={detail.id} fetchDetailImpl={fetchOk(detail)} />);
+
+    expect(await screen.findByTestId("qi-run-degraded")).toBeVisible();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("conveys each gap status with a text label, not colour alone", async () => {
     const atoms: QualityIntelligenceUiAtomCoverage[] = [
       { atomId: "atom-weak", status: "weakly-covered", confidence: 0.5 },

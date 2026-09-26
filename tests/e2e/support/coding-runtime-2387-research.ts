@@ -4,9 +4,8 @@
 // process) all derive the SAME hermetic state layout from these helpers. Distinct default state id
 // and loopback port keep this journey isolated from the tracer and authority journeys.
 
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "./e2e-state-dir.js";
 
 export const RESEARCH_DEFAULT_UI_PORT = 32487;
 export const RESEARCH_APP_SESSION_LAUNCHER_SECRET =
@@ -24,14 +23,12 @@ export const RESEARCH_JOURNEY_REQUEST_LINE = "/guide/streams topic=backpressure"
 // Deterministic (pid-free) state id: the config, the webServer entry, and the workers each
 // re-derive the identical directory. The config's prepare step wipes it before every boot.
 export function researchStateDir(): string {
-  const override = process.env.KEIKO_E2E_STATE_DIR;
-  if (override !== undefined && override.length > 0) return override;
   const runId = process.env.GITHUB_RUN_ID;
   const stateId =
     runId === undefined || runId.length === 0
       ? "code-task-2387-research"
       : `code-task-2387-research-${runId}`;
-  return join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+  return e2eStateDir(stateId);
 }
 
 // The local git checkout the journey binds through the Coding Workbench "Code setup" section.

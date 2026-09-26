@@ -143,6 +143,42 @@ describe("validateNativeFileDialogRequest", () => {
       expect(result.error).not.toContain("customer");
     }
   });
+
+  // KEIKO-1040: the echo-prevention pin above only covered defaultPath. Extend the same
+  // no-echo guarantee to `title` (too-long path) and to `filters[].name`/`filters[].extensions[]`
+  // (invalid-character / too-long paths), which are just as easily populated with a hostile string
+  // that must not surface in the error message.
+  it("never echoes rejected `title` inside the error message (KEIKO-1040)", () => {
+    const hostileTitle = "internalSecretDatasetCanary";
+    const result = validateNativeFileDialogRequest({
+      mode: "open-file",
+      title: hostileTitle.repeat(50),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain(hostileTitle);
+    }
+  });
+
+  it("never echoes rejected filter name inside the error message (KEIKO-1040)", () => {
+    const hostileName = "canaryCustomerName";
+    const result = validateNativeFileDialogRequest({
+      mode: "open-file",
+      filters: [{ name: `${hostileName}|inject`, extensions: ["ts"] }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).not.toContain(hostileName);
+  });
+
+  it("never echoes rejected filter extension inside the error message (KEIKO-1040)", () => {
+    const hostileExtension = "canaryExtensionSecret";
+    const result = validateNativeFileDialogRequest({
+      mode: "open-file",
+      filters: [{ name: "F", extensions: [hostileExtension] }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).not.toContain(hostileExtension);
+  });
 });
 
 describe("nativeFileDialogSelectionBounds", () => {

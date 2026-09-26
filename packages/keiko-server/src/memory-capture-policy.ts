@@ -1,8 +1,8 @@
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import {
   isCodingWorkbenchMode,
   resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   CaptureOutcome,
   CapturePolicyOptions,

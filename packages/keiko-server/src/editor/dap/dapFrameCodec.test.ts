@@ -33,14 +33,18 @@ describe("dapFrameCodec", () => {
       Buffer.from("Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}", "ascii"),
     ]);
     await expect(async () => {
-      for await (const _frame of createDapFrameReader(source)) void _frame;
+      for await (const _frame of createDapFrameReader(source)) {
+        // drain the reader; this case asserts what it throws, not what it yields
+      }
     }).rejects.toMatchObject({ reason: "MALFORMED_HEADER" });
   });
 
   it("rejects a header over 8 KiB without buffering a body", async () => {
     const source = Readable.from([Buffer.alloc(8_193, 65)]);
     await expect(async () => {
-      for await (const _frame of createDapFrameReader(source)) void _frame;
+      for await (const _frame of createDapFrameReader(source)) {
+        // drain the reader; this case asserts what it throws, not what it yields
+      }
     }).rejects.toBeInstanceOf(DapFrameRejectError);
   });
 
@@ -53,7 +57,9 @@ describe("dapFrameCodec", () => {
       yield Buffer.alloc(1);
     }
     await expect(async () => {
-      for await (const _frame of createDapFrameReader(source())) void _frame;
+      for await (const _frame of createDapFrameReader(source())) {
+        // drain the reader; this case asserts what it throws, not what it yields
+      }
     }).rejects.toMatchObject({ reason: "PAYLOAD_TOO_LARGE" });
     expect(bodyPulled).toBe(false);
   });
@@ -63,7 +69,9 @@ describe("dapFrameCodec", () => {
     Buffer.from("Content-Length: 10\r\n\r\nshort", "ascii"),
   ])("rejects truncated header or body at EOF", async (truncated) => {
     await expect(async () => {
-      for await (const _frame of createDapFrameReader(Readable.from([truncated]))) void _frame;
+      for await (const _frame of createDapFrameReader(Readable.from([truncated]))) {
+        // drain the reader; this case asserts what it throws, not what it yields
+      }
     }).rejects.toMatchObject({ reason: "MALFORMED_HEADER" });
   });
 
@@ -79,7 +87,9 @@ describe("dapFrameCodec", () => {
       [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(failure) }),
     };
     await expect(async () => {
-      for await (const _frame of createDapFrameReader(source)) void _frame;
+      for await (const _frame of createDapFrameReader(source)) {
+        // drain the reader; this case asserts what it throws, not what it yields
+      }
     }).rejects.toBe(failure);
   });
 });

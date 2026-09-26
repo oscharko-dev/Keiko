@@ -5,7 +5,7 @@ import {
   asQualityIntelligenceRunId,
   asQualityIntelligenceTestCaseId,
 } from "../ids.js";
-import { assertCoverageMapInvariant } from "../coverageMap.js";
+import { assertCoverageMapInvariant, isQualityIntelligenceConfidence } from "../coverageMap.js";
 import type { QualityIntelligenceCoverageMap } from "../coverageMap.js";
 
 const goodMap = (confidence: number): QualityIntelligenceCoverageMap => ({
@@ -73,5 +73,58 @@ describe("assertCoverageMapInvariant", () => {
     expect(() => {
       assertCoverageMapInvariant(map);
     }).toThrow(RangeError);
+  });
+
+  // KEIKO-0895: a duplicate atomId would double-count that atom's coverage in every downstream
+  // percentage. The invariant now rejects it explicitly at the naming boundary.
+  it("rejects a map whose mappings share the same atomId (KEIKO-0895)", () => {
+    const map: QualityIntelligenceCoverageMap = {
+      id: asQualityIntelligenceCoverageMapId("cov-1"),
+      runId: asQualityIntelligenceRunId("run-1"),
+      mappings: [
+        {
+          atomId: asQualityIntelligenceEvidenceAtomId("atom-dup"),
+          candidateIds: [asQualityIntelligenceTestCaseId("cand-1")],
+          coverageKind: "manual",
+          confidence: 1,
+        },
+        {
+          atomId: asQualityIntelligenceEvidenceAtomId("atom-dup"),
+          candidateIds: [asQualityIntelligenceTestCaseId("cand-2")],
+          coverageKind: "manual",
+          confidence: 0.5,
+        },
+      ],
+    };
+    expect(() => {
+      assertCoverageMapInvariant(map);
+    }).toThrow(/duplicates atomId/);
+  });
+});
+
+// KEIKO-0185: `isQualityIntelligenceConfidence` is the single exported guard shared by every
+// `confidence` field on the QI contract surface (coverage mapping, requirement-quality finding,
+// UI finding summary, UI atom coverage) — not just the coverage-map invariant above.
+describe("isQualityIntelligenceConfidence", () => {
+  it("rejects NaN", () => {
+    expect(isQualityIntelligenceConfidence(Number.NaN)).toBe(false);
+  });
+  it("rejects a value above 1", () => {
+    expect(isQualityIntelligenceConfidence(1.1)).toBe(false);
+  });
+  it("rejects a negative value", () => {
+    expect(isQualityIntelligenceConfidence(-0.1)).toBe(false);
+  });
+  it("accepts the lower bound 0", () => {
+    expect(isQualityIntelligenceConfidence(0)).toBe(true);
+  });
+  it("accepts the upper bound 1", () => {
+    expect(isQualityIntelligenceConfidence(1)).toBe(true);
+  });
+  it("rejects positive Infinity", () => {
+    expect(isQualityIntelligenceConfidence(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+  it("rejects negative Infinity", () => {
+    expect(isQualityIntelligenceConfidence(Number.NEGATIVE_INFINITY)).toBe(false);
   });
 });

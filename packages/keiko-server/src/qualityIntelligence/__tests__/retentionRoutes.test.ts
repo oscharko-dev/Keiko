@@ -51,6 +51,7 @@ function emptyReq(): IncomingMessage {
 
 function ctx(runId: string | undefined): RouteContext {
   return {
+    correlationId: undefined,
     req: emptyReq(),
     res: {} as RouteContext["res"],
     params: runId === undefined ? {} : { id: runId },

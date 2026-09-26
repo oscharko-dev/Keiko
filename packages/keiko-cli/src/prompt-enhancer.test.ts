@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ConfigInvalidError,
   type GatewayConfig,
@@ -6,6 +6,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import { runPromptEnhancerCli } from "./prompt-enhancer.js";
+import * as lazyModules from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 
 interface Captured {
@@ -73,6 +74,50 @@ describe("runPromptEnhancerCli", () => {
     const code = await runPromptEnhancerCli(["--help"], c.io, {});
     expect(code).toBe(0);
     expect(c.out()).toContain("keiko prompt-enhancer");
+  });
+
+  // KEIKO-0947: `--help` / `--bogus` must not eagerly load the four heavy module graphs;
+  // parsing runs first, and only a real enhancement path pulls in harness/workflows/evidence.
+  it("does not load the product module graphs for --help", async () => {
+    const gatewaySpy = vi.spyOn(lazyModules, "loadModelGateway");
+    const harnessSpy = vi.spyOn(lazyModules, "loadHarness");
+    const workflowsSpy = vi.spyOn(lazyModules, "loadWorkflows");
+    const evidenceSpy = vi.spyOn(lazyModules, "loadEvidence");
+    try {
+      const c = makeIo();
+      const code = await runPromptEnhancerCli(["--help"], c.io, {});
+      expect(code).toBe(0);
+      expect(gatewaySpy).not.toHaveBeenCalled();
+      expect(harnessSpy).not.toHaveBeenCalled();
+      expect(workflowsSpy).not.toHaveBeenCalled();
+      expect(evidenceSpy).not.toHaveBeenCalled();
+    } finally {
+      gatewaySpy.mockRestore();
+      harnessSpy.mockRestore();
+      workflowsSpy.mockRestore();
+      evidenceSpy.mockRestore();
+    }
+  });
+
+  it("does not load the product module graphs for an unknown flag", async () => {
+    const gatewaySpy = vi.spyOn(lazyModules, "loadModelGateway");
+    const harnessSpy = vi.spyOn(lazyModules, "loadHarness");
+    const workflowsSpy = vi.spyOn(lazyModules, "loadWorkflows");
+    const evidenceSpy = vi.spyOn(lazyModules, "loadEvidence");
+    try {
+      const c = makeIo();
+      const code = await runPromptEnhancerCli(["--bogus"], c.io, {});
+      expect(code).toBe(2);
+      expect(gatewaySpy).not.toHaveBeenCalled();
+      expect(harnessSpy).not.toHaveBeenCalled();
+      expect(workflowsSpy).not.toHaveBeenCalled();
+      expect(evidenceSpy).not.toHaveBeenCalled();
+    } finally {
+      gatewaySpy.mockRestore();
+      harnessSpy.mockRestore();
+      workflowsSpy.mockRestore();
+      evidenceSpy.mockRestore();
+    }
   });
 
   it("exits 2 with usage when --input is missing", async () => {

@@ -18,6 +18,7 @@ export { evaluateFloors, runRegressionProbes } from "./quality-helpers.js";
 export type {
   MinimumFloorResult,
   RegressionProbeObservation,
+  RegressionProbeRunResult,
   RunRegressionProbesOptions,
 } from "./quality-helpers.js";
 // Local Knowledge retrieval evaluation suite (Issue #2568; ADR-0152 D5). A namespace avoids
@@ -35,6 +36,12 @@ export * as VoiceTwinEval from "./voice-twin/index.js";
 // Offline acoustic-quality companion gate for voice (P10). Exposed as a single auditable namespace
 // beside VoiceTwinEval; fixtures are deterministic transcript/trace data with no raw audio.
 export * as VoiceAcousticEval from "./voice-acoustic/index.js";
+// KEIKO-0313: Voice Action Governance evaluation suite (Epic #491, Issue #503; ADR-0108). Was
+// previously self-contained (proven by its own suite.test.ts), but the SDK barrel omission left the
+// suite's ~1000 lines of security-gating scorer/runner/fixtures unreachable from the public surface
+// so no CLI or embedding consumer could invoke it. Exposed as a single auditable namespace matching
+// the VoiceTwinEval / VoiceAcousticEval convention.
+export * as VoiceActionEval from "./voice-action/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,
@@ -42,6 +49,7 @@ export {
   fixtureByName,
   isSuiteName,
   type SuiteName,
+  type FixtureLookupResult,
 } from "./fixtures/index.js";
 export {
   EVAL_SCORECARD_SCHEMA_VERSION,

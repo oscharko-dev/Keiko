@@ -2,24 +2,24 @@
 
 ## Status
 
-Proposed (multi-chat epic — issue breakdown drafted alongside this ADR, 2026-07-07).
+Accepted and implemented (2026-08-14).
 
 ## Context
 
-The desktop canvas supports exactly ONE chat window. `WindowsRegistry` pins the `chat`
-window type as `singleton: true`, and `workspaceActions.add()` enforces it by reusing and
-focusing the existing window instead of creating a second one. The singleton is not a UX
-preference — it is a load-bearing guard for the session architecture underneath:
+The desktop canvas originally supported exactly one chat window. `WindowsRegistry` pinned
+`chat` as `singleton: true`, and `workspaceActions.add()` replaced the existing window's
+conversation when a second chat was opened. Before this decision, all window hosts consumed one
+application-wide session:
 
-- `AppShell` calls `useChatSession()` exactly once and shares the instance app-wide
-  through `ChatSessionProvider`. The hook owns ONE `sendControllerRef`, ONE
-  `streamingAssistantMessage`, ONE `messages` array, and ONE `activeChat` slot.
+- `AppShell` called `useChatSession()` once and shared that instance with every chat window through
+  `ChatSessionProvider`. Conversation selection, messages, streaming state, and cancellation were
+  therefore mutable state in the same shared instance.
 - Issue #152 pinned the invariant "opening a different chat must abort any in-flight
   send so a late response from the prior chat never lands here" — correct for one shared
   slot, and exactly what makes a second concurrent conversation impossible.
-- `ChatWindowSessionHost` (widgets/index.tsx) races every mounted chat-typed window to
-  claim the global `activeChat`; with two differently-bound hosts this would ping-pong
-  aborts, which is why the registry forbids the second window in the first place.
+- Every mounted `ChatWindowSessionHost` would have competed to retarget that shared session; two
+  differently bound hosts would have caused ping-pong aborts, which is why the registry previously
+  forbade the second window.
 
 Users ask for several conversations side by side — the canvas product promise ("open
 many windows, many streams") already holds for agent runs, terminals, and containers,
@@ -49,33 +49,31 @@ and chat is the visible exception.
 
 ## Decision
 
-Replace the single shared chat session with **per-conversation session state keyed by
-`chatId`, plus one thin global catalog** — one conversation per window, N windows.
+Use **one isolated chat-session instance per mounted chat window**, while retaining the existing
+application session for global catalog and shell consumers — one conversation per window, N
+windows.
 
-1. **D1 — Conversation state container.** Extract everything conversation-scoped out of
-   `useChatSession` into a module-level conversation store keyed by `chatId`: `messages`,
-   `streamingAssistantMessage`, `sendStatus` + send `AbortController`, `draft`,
-   `pendingAttachments`, `error`, `regeneratingMessageId`, `latestGrounded`,
-   `latestMemory`, `lastSentDocuments`. Windows subscribe via a `useChatConversation(chatId)`
-   hook (external store + selective subscription, the `sharedEventSource` precedent) so a
-   token flush in conversation A never renders conversation B. Conversation entries are
-   created on first bind and disposed (send aborted, state dropped) when the last window
-   unbinds — bounded by the open-window cap (D4).
-2. **D2 — The catalog stays global and thin.** Projects, chats, models, `loading`,
-   `noEligibleModels`, and catalog actions remain one shared slice (the existing
-   `ChatSessionCatalog`). The global `activeChat` DATA slot is retired; "focused
-   conversation" becomes a pure UI concept (window focus) with no data-access authority.
+1. **D1 — Conversation state ownership.** Every `ChatWindowSessionHost` mounts its own
+   `useChatSession({ autoCreate: false })` and nested `ChatSessionProvider`. Messages, streaming
+   assistant deltas, send status and abort controller, draft, attachments, errors, grounded and
+   retrieval results, and latest memory therefore belong to that window instance. Unmounting a
+   window aborts and disposes only that instance. Cold bootstrap requests and chat-mutation
+   notifications remain shared and ref-counted, avoiding N identical network bootstraps while
+   preserving per-window mutable state.
+2. **D2 — Global shell session.** `AppShell` retains one application session for catalog, project,
+   history, and shell consumers. Nested window providers shadow it for all ChatWindow descendants.
+   A window never claims or mutates another window's active conversation state.
 3. **D3 — Issue #152 becomes per-conversation.** "Switching this WINDOW to a different
    conversation aborts THAT conversation's in-flight send" — never a sibling window's.
-   The late-response guard moves from the global `activeChatIdRef` into each
-   conversation entry (responses land keyed by `chatId`, so a settled response can only
-   ever land in its own conversation).
-4. **D4 — Window binding.** `chat` loses `singleton: true`. The per-`chatId` dedupe in
-   `workspaceActions.add()` STAYS: exactly one window per conversation (a second open on
-   the same chat focuses the existing window — split-composer on one conversation is
-   explicitly out of scope for v1). A UI-side open-chat-window cap of 8 (comfortably
-   under the server bulkhead's 16) fails closed with a visible notice instead of
-   degrading resource behavior silently.
+   Each window session owns its late-response guard (responses land keyed by `chatId`, so a settled
+   response can only ever land in its own conversation).
+4. **D4 — Window binding and restoration.** `chat` is not a singleton. The per-`chatId` dedupe in
+   `workspaceActions.add()` stays: opening the same conversation focuses its existing window, while
+   a different conversation creates a collision-safe window identity. Durable window state keeps
+   `chatId`, the owning project path for ordinary history/new-chat flows, and an explicit memory
+   preference. Restoration loads the owning project before the conversation and never silently
+   retargets a missing binding to a sibling chat. Privacy-preserving editor handoffs continue to
+   omit their originating path from window configuration.
 5. **D5 — Server posture is unchanged.** GEN-PERF-CHATSTREAM-001 remains the concurrency
    governance: above the cap, sends degrade per-conversation to the buffered path (already
    wired client-side). No wire, schema, or persistence change is required; memory actions
@@ -85,41 +83,35 @@ Replace the single shared chat session with **per-conversation session state key
    conversation it was started in; other windows render a "voice busy elsewhere"
    affordance instead of a second mic. Dictation/playback affordances stay per-window but
    gate on the same global session.
-7. **D7 — Background windows are fully live.** Every open chat window streams and renders
+7. **D7 — Background windows and memory are independent.** Every open chat window streams and renders
    independently — that IS the feature. The render-cost groundwork already exists
    (GEN-PERF-CHAT-014 settled/streaming slices, GEN-PERF-CHAT-015 turn containment,
-   GEN-PERF-SSE-001 batching); minimized windows keep their streams (an answer is never
-   lost by minimizing) and surface an unread indicator on restore (UX child issue).
-8. **D8 — Migration is slice-wise, no feature flag.** First land the pure extraction
-   (D1) with the singleton still in place and byte-equal behavior (regression suite over
-   the existing ChatWindow/session tests), then per-conversation lifecycle (D3), then the
-   singleton removal (D4). Persisted workspaces restore unchanged (`cfg.chatId` is
-   already the anchor).
+   GEN-PERF-SSE-001 batching). Memory inclusion and token budget are keyed by `chatId`; the
+   MemoriaViva switch in each chat controls only that conversation. The product-wide memory
+   autonomy mode remains global and monotonic, so a window cannot widen governance authority.
+8. **D8 — Resource governance.** Chats have no smaller, chat-specific UI quota: the existing global
+   workspace limit of 128 windows is enforced consistently by live allocation, local persistence,
+   and the BFF snapshot boundary. Active concurrent streams remain governed by
+   GEN-PERF-CHATSTREAM-001 (default 16, hard cap 64), with the existing buffered-request degradation.
+   Idle/open windows do not consume stream slots.
 
 ## Consequences
 
-- Positive: concurrent conversations become a first-class canvas capability; the
-  strangler-style extraction finally decomposes the 2200-line `useChatSession` hook into
-  catalog + conversation units with their own tests; the composer/panel memo work from
-  GEN-PERF-CHAT-014 applies per window unchanged.
-- Costs/risks: per-open-conversation memory (bounded by the window cap, the message
-  fetch dedupe, and the existing turn-windowing); parallel token spend becomes a user
+- Positive: concurrent conversations are a first-class canvas capability. State and cancellation
+  are isolated by component lifetime, the shared bootstrap avoids redundant cold-start traffic,
+  and the composer/panel memo work from GEN-PERF-CHAT-014 applies per window unchanged.
+- Costs/risks: per-open-conversation client memory (bounded by open windows, message-fetch dedupe,
+  and existing turn-windowing); parallel token spend becomes a user
   choice (bounded by the bulkhead + buffered degradation); the D1 refactor is the risk
-  concentration — it must ship behavior-neutral behind the existing test suite before any
-  visible product change; AppShell surfaces that assumed "the one chat" (Files↔Chat
-  binding, footer status, chat history highlighting) need explicit multi-window review.
+  concentration and is protected by the relocated GEN-PERF-CHAT-001 regression; shell surfaces
+  continue to use the global catalog rather than any arbitrary window session.
 - Explicitly out of scope for v1: two windows on the SAME conversation, cross-window
   drag of a running stream, and any change to the voice singleton.
 
-## Delivery plan
+## Verification
 
-Epic + six children (issue bodies drafted with this ADR; sequence is strict):
-1. Extract the per-conversation state container (behavior-neutral, singleton intact).
-2. Conversation-keyed send/stream/abort lifecycle (#152 per conversation).
-3. Window binding: drop the chat singleton, keep per-chatId dedupe, add the open-window
-   cap, rework `ChatWindowSessionHost` to bind-without-claiming.
-4. Catalog & chrome integration: chat history "open in new window", footer/rails,
-   title sync, focused-conversation UI.
-5. Voice, grounded answers, and memory under multi-session (voice global gate).
-6. E2E + evidence: two-parallel-streams smoke, bulkhead 429→buffered e2e, workspace-perf
-   scenario with two streaming chat windows, docs/troubleshooting entry.
+The implementation is pinned at four ownership boundaries: distinct conversations create distinct
+collision-safe windows; opening the same `chatId` focuses instead of duplicating; persisted layouts
+retain multiple chats plus their project and memory preference; and mounted hosts receive distinct
+session providers. Memory-store tests additionally prove that inclusion/budget changes do not cross
+chat IDs while autonomy-mode changes still propagate globally.

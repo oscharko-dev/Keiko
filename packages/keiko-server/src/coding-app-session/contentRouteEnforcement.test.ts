@@ -60,6 +60,7 @@ function sweepContext(cookie?: string): { ctx: RouteContext; res: SweepResponse 
   const res = new SweepResponse();
   return {
     ctx: {
+      correlationId: undefined,
       req,
       res: res as unknown as RouteContext["res"],
       params: { runId: "run-1" },

@@ -21,13 +21,18 @@ import {
 } from "./types.js";
 
 function audit(overrides: Partial<SpokenActionAuditRecord> = {}): SpokenActionAuditRecord {
+  // KEIKO-0242: default is a mutating action denied by the confirmation gate (requiresConfirmation=true,
+  // confirmed=false, outcome=denied) — the only combination that satisfies scoreEvidenceSafety's
+  // routed-without-confirmation defensive check while still exercising the confirmation-required shape
+  // the other dimension tests rely on. Individual tests override outcome/confirmationRequired/confirmed
+  // when they need a different governance verdict.
   return {
     schemaVersion: "1",
     effectClass: "mutating",
     state: "awaiting-confirmation",
     confirmationRequired: true,
     confirmed: false,
-    outcome: "routed",
+    outcome: "denied",
     source: "dictation",
     turnIndex: 0,
     committedSegmentCount: 1,
@@ -160,7 +165,11 @@ describe("confirmation-discipline scorer", () => {
       outcomeFor("confirmation-discipline", fixture(["confirmation-discipline"], oracle), obs),
     ).toBe("fail");
   });
-  it("falls back to the taxonomy when the oracle omits expectedRequiresConfirmation", () => {
+  // KEIKO-0664: expectedRequiresConfirmation and expectedEffectClass must both be independently
+  // authored whenever confirmation-discipline is declared. Omitting either used to pass vacuously
+  // (expectedEffectClass) or tautologically re-derive the expectation from the very function under
+  // test (expectedRequiresConfirmation) -- both now fail closed instead.
+  it("fails closed when the oracle omits expectedRequiresConfirmation", () => {
     const looseOracle = {
       expectedGatingAllowed: true,
       expectsProposal: true,
@@ -172,7 +181,22 @@ describe("confirmation-discipline scorer", () => {
         fixture(["confirmation-discipline"], looseOracle),
         observation(),
       ),
-    ).toBe("pass");
+    ).toBe("fail");
+  });
+
+  it("fails closed when the oracle omits expectedEffectClass", () => {
+    const looseOracle = {
+      expectedGatingAllowed: true,
+      expectsProposal: true,
+      expectedRequiresConfirmation: true,
+    };
+    expect(
+      outcomeFor(
+        "confirmation-discipline",
+        fixture(["confirmation-discipline"], looseOracle),
+        observation(),
+      ),
+    ).toBe("fail");
   });
 
   it("passes a read-only proposal that needs no confirmation", () => {
@@ -260,6 +284,34 @@ describe("evidence-safety scorer", () => {
     const obs = observation({ audit: audit({ bindingDigest: "a".repeat(64) }) });
     expect(outcomeFor("evidence-safety", fixture(["evidence-safety"], oracle), obs)).toBe("pass");
   });
+
+  // ─── KEIKO-0245 — auditKeysAreContentFree branches are pinned ───
+  it("fails when the audit carries a forbidden content-bearing key (rawTranscript)", () => {
+    // Injecting a `rawTranscript` key matches FORBIDDEN_AUDIT_KEY_FRAGMENTS ("raw" and "transcript")
+    // and must flip evidence-safety FAIL — the AC5 content-leak defense the scorer exists to enforce.
+    // Previously no test drove auditKeysAreContentFree's forbidden-key branch, so a mutation that
+    // deleted the forbidden-fragment check would ship green.
+    const tainted = {
+      ...audit(),
+      rawTranscript: "hostile committed text",
+    } as SpokenActionAuditRecord;
+    const obs = observation({ audit: tainted });
+    expect(outcomeFor("evidence-safety", fixture(["evidence-safety"], oracle), obs)).toBe("fail");
+  });
+
+  it("fails when the audit is missing a required content-free key (turnIndex)", () => {
+    // Dropping `turnIndex` from the record forces auditKeysAreContentFree's allRequired branch to false
+    // — the second half of the check, which pins that every closed-vocabulary key stays present.
+    const auditWithoutTurnIndex = (): Omit<SpokenActionAuditRecord, "turnIndex"> => {
+      const full = audit();
+      const rest: Record<string, unknown> = { ...full };
+      delete rest.turnIndex;
+      return rest as Omit<SpokenActionAuditRecord, "turnIndex">;
+    };
+    const withoutTurnIndex = auditWithoutTurnIndex();
+    const obs = observation({ audit: withoutTurnIndex as SpokenActionAuditRecord });
+    expect(outcomeFor("evidence-safety", fixture(["evidence-safety"], oracle), obs)).toBe("fail");
+  });
 });
 
 describe("not-applicable dimensions", () => {
@@ -293,9 +345,13 @@ describe("aggregateVoiceActionQuality", () => {
 });
 
 describe("renderVoiceActionSummary", () => {
-  function scorecard(goNoGo: "GO" | "NO-GO", fullyPassed: boolean): VoiceActionScorecard {
+  function scorecard(
+    goNoGo: "GO" | "NO-GO",
+    fullyPassed: boolean,
+    dimensions: readonly VoiceActionDimension[] = ["capability-gating", "stale-intent-prevention"],
+  ): VoiceActionScorecard {
     const dimResults = scoreVoiceActionQuality(
-      fixture(["capability-gating", "stale-intent-prevention"], {
+      fixture(dimensions, {
         expectedGatingAllowed: fullyPassed,
         expectsProposal: true,
       }),
@@ -333,7 +389,15 @@ describe("renderVoiceActionSummary", () => {
   });
 
   it("renders a GO verdict when every dimension passes", () => {
-    const text = renderVoiceActionSummary(scorecard("GO", true));
+    // KEIKO-0736: the shared scorecard() default dimension set includes stale-intent-prevention,
+    // which scoreStaleIntentPrevention always fails against the default observation() (no staleness
+    // set) -- so the GO/true call used to render a scorecard that in fact contained a FAIL result.
+    // Narrow to a dimension set that genuinely passes, and assert dimResults directly instead of
+    // trusting the rendered text alone.
+    const card = scorecard("GO", true, ["capability-gating"]);
+    const dimResults = card.fixtureResults[0]?.dimensionResults ?? [];
+    expect(dimResults.every((d) => d.outcome !== "fail")).toBe(true);
+    const text = renderVoiceActionSummary(card);
     expect(text).toContain("Verdict: GO");
     expect(text).toContain("=PASS");
   });

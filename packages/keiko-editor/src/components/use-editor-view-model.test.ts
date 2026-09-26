@@ -54,6 +54,7 @@ describe("computeEditorViewModel", () => {
     );
     expect(view.readOnly).toBe(true);
     expect(view.overLimit).toBe(true);
+    expect(view.status.message).toContain("size limit");
   });
 
   it("keeps ready editable buffers writable when they are under the limit", () => {

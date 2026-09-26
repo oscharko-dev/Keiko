@@ -14,18 +14,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import type {
+  WorkspaceKeyChord,
+  WorkspaceKeyChordModifier,
+  WorkspaceKeyChordPlatform,
+  WorkspacePhysicalModifier,
+  WorkspaceKeyboardShortcutBinding,
+  WorkspaceKeyboardShortcutConflict,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type WorkspaceKeyChord,
-  type WorkspaceKeyChordModifier,
-  type WorkspaceKeyChordPlatform,
-  type WorkspacePhysicalModifier,
-  type WorkspaceKeyboardShortcutBinding,
-  type WorkspaceKeyboardShortcutConflict,
   isWorkspaceReservedChord,
   workspaceChordClaimKeys,
   workspaceChordKey,
   workspacePlatformModifiers,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-ui";
 
 export interface UseKeyboardShortcutsResult {
   readonly bindings: ReadonlyArray<WorkspaceKeyboardShortcutBinding>;

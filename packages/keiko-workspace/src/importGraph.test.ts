@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
-import { PathEscapeError } from "@oscharko-dev/keiko-security/errors/workspace";
 import { memFs } from "./_memfs.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
@@ -20,6 +19,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -171,6 +171,7 @@ describe("importGraphAdapter", () => {
     // query specifier must NOT produce atoms.
     const workspace: WorkspaceInfo = {
       root: MEM_ROOT,
+      selectedRoot: MEM_ROOT,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -217,6 +218,7 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     symlinkSync(join(outside, "rogue.ts"), join(root, "src", "linked.ts"));
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -241,6 +243,7 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     linkSync(join(outside, "aliased.ts"), join(root, "src", "alias.ts"));
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -253,11 +256,14 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     let aliasByteReads = 0;
     const trackingFs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileBytes: async (absolutePath, maxBytes) => {
+      readFileBytes: async (absolutePath, maxBytes, hardLinkPolicy, expected) => {
         if (absolutePath.endsWith("/src/alias.ts")) {
           aliasByteReads += 1;
         }
-        return nodeWorkspaceFs.readFileBytes?.(absolutePath, maxBytes) ?? new Uint8Array();
+        return (
+          nodeWorkspaceFs.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
+          new Uint8Array()
+        );
       },
     };
     const atoms = await importGraphAdapter.lookup(
@@ -275,6 +281,7 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
     symlinkSync(outside, join(root, "linked-dir"));
     const workspace: WorkspaceInfo = {
       root,
+      selectedRoot: root,
       name: "demo",
       version: "1.0.0",
       testFramework: "vitest",
@@ -294,6 +301,5 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
       { nowMs: FIXED_NOW },
     );
     expect(atoms).toEqual([]);
-    void PathEscapeError;
   });
 });

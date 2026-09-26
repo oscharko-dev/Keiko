@@ -18,7 +18,6 @@
 //   2. macOS Keychain   — generic password "keiko-figma-vault". The OS protects the key.
 //   3. Keyfile          — <vaultDir>/figma-vault.key, mode 0600. Weakest tier (key next to store).
 
-import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
@@ -30,12 +29,17 @@ import {
   ensureDirHardened,
   FILE_MODE,
 } from "@oscharko-dev/keiko-security/fs-hardening";
+// Shared bounded macOS Keychain owner [GEN-MAINT-COUPLING-006]: the single `security` spawn pair.
+import {
+  readMacosKeychainSecret,
+  writeMacosKeychainSecret,
+  type MacosKeychainOptions,
+} from "@oscharko-dev/keiko-security/macos-keychain";
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 
 const KEY_BYTES = 32;
 const KEYFILE_NAME = "figma-vault.key";
 const KEYCHAIN_SERVICE = "keiko-figma-vault";
-const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 export type FigmaVaultKeySource = "env" | "keychain" | "keyfile";
 
@@ -96,33 +100,28 @@ function isSymlink(path: string): boolean {
   }
 }
 
-function keyFromKeychain(): Buffer | undefined {
-  if (process.platform !== "darwin") return undefined;
+// Delegated to the shared bounded owner, exactly as the memory vault does: a keychain that does not
+// answer (`unavailable`) skips the store attempt rather than spending a second timeout.
+// `options` is a test seam only — production calls it with none.
+export function keyFromKeychain(options: MacosKeychainOptions = {}): Buffer | undefined {
   const account = userInfo().username;
-  try {
-    const found = execFileSync(
-      MACOS_SECURITY_EXECUTABLE,
-      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    return decodeKeyOrThrow(found);
-  } catch {
-    return generateKeychainKey(account);
+  const read = readMacosKeychainSecret(KEYCHAIN_SERVICE, account, options);
+  if (read.kind === "unavailable") return undefined;
+  if (read.kind === "found") {
+    try {
+      return decodeKeyOrThrow(read.secret);
+    } catch {
+      // A stored value we cannot decode is replaced, exactly as before.
+    }
   }
+  return generateKeychainKey(account, options);
 }
 
-function generateKeychainKey(account: string): Buffer | undefined {
+function generateKeychainKey(account: string, options: MacosKeychainOptions): Buffer | undefined {
   const key = randomBytes(KEY_BYTES);
-  try {
-    execFileSync(
-      MACOS_SECURITY_EXECUTABLE,
-      ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", key.toString("base64")],
-      { stdio: ["ignore", "ignore", "ignore"] },
-    );
-    return key;
-  } catch {
-    return undefined;
-  }
+  return writeMacosKeychainSecret(KEYCHAIN_SERVICE, account, key.toString("base64"), options)
+    ? key
+    : undefined;
 }
 
 function keyFromKeyfile(vaultDir: string): Buffer {

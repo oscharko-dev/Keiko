@@ -13,6 +13,7 @@ import {
   createAgentRunBudgetedSpawn,
   createAgentRunGovernance,
   reserveAgentRunBudget,
+  revokeAgentRunGovernance,
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
 
@@ -131,6 +132,47 @@ describe("agent-run governance", () => {
         nowIso: "2026-07-31T08:31:00.001Z",
       }),
     ).toEqual({ ok: false, reason: "authority-expired" });
+  });
+
+  // #2906 round-3 review (KEIKO-0532 sibling finding): createAgentRunGovernance,
+  // authorizeAgentRunMutation, and reserveAgentRunBudget each resolve the same registry and
+  // previously collapsed a revoked authority into the same generic "authority-invalid" reason as a
+  // genuinely malformed envelope. Pinned across all three producers so a regression back to
+  // collapsing revocation is caught regardless of which governed path exercises it first.
+  it("maps a revoked authority to authority-revoked across creation, mutation, and budget", () => {
+    const createInput = {
+      runId: randomUUID(),
+      workflow: "unit-tests" as const,
+      workspaceRoot: "/repo",
+      modelId: "model-1",
+      requestedMode: "supervised-coding" as const,
+      deploymentCeiling: "autonomous-delivery" as const,
+      session: SESSION,
+      nowIso: NOW,
+    };
+    const first = createAgentRunGovernance(createInput);
+    if (!first.ok) throw new Error(first.reason);
+    const binding = first.binding;
+    revokeAgentRunGovernance(binding);
+
+    expect(
+      authorizeAgentRunMutation({ binding, workspaceRoot: "/repo", session: SESSION, nowIso: NOW }),
+    ).toEqual({ ok: false, reason: "authority-revoked" });
+    expect(
+      reserveAgentRunBudget({
+        binding,
+        workspaceRoot: "/repo",
+        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        nowIso: NOW,
+      }),
+    ).toEqual({ ok: false, reason: "authority-revoked" });
+    // Re-registering the identical envelope after revocation hits the registry's
+    // existing-record-is-revoked branch, which createAgentRunGovernance must also surface
+    // distinctly rather than folding into "authority-invalid".
+    expect(createAgentRunGovernance(createInput)).toEqual({
+      ok: false,
+      reason: "authority-revoked",
+    });
   });
 
   it("atomically exhausts prompt budget before model dispatch with a body-free failure", async () => {

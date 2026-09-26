@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sha256 } from "./lib/digest.mjs";
 
 export const SCHEMA_BUNDLE_ALGORITHM = "keiko-codex-schema-bundle-v1";
 
@@ -11,10 +12,6 @@ export const DEFAULT_BUNDLE_DIRECTORY = resolve(
   repoRoot,
   "packages/keiko-server/resources/codex-app-server-schema",
 );
-
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 export function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);

@@ -15,7 +15,7 @@ import type {
   QualityIntelligenceExportBundleEntry,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 interface JsonExportCandidatePayload {
   readonly id: string;

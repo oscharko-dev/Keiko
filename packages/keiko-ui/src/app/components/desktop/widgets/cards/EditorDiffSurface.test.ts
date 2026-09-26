@@ -6,7 +6,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { EditorRuntimeStatus, KeikoEditorLoadState } from "@oscharko-dev/keiko-editor";
-import { buildWorkspaceReplacePatchModel, resolveLoadState } from "./EditorDiffSurface";
+import {
+  buildWorkspaceReplacePatchModel,
+  diffLanguageLoadNotice,
+  resolveLoadState,
+} from "./EditorDiffSurface";
 
 // `EditorDiffSurface.tsx` imports `./editorMonacoRuntime` for its side-effecting, browser-only Monaco
 // bootstrap (real `monaco-editor` value imports, documented as reachable only via a client-only
@@ -49,6 +53,7 @@ function response(
     editCount: overrides.files.reduce((count, file) => count + file.edits.length, 0),
     truncated: false,
     omittedFileCount: 0,
+    searchTruncationReasons: [],
     ...overrides,
   };
 }
@@ -145,6 +150,7 @@ describe("buildWorkspaceReplacePatchModel — omitted file count merge", () => {
           }),
         ],
         omittedFileCount: 2,
+        searchTruncationReasons: [],
       }),
       { "src/only.ts": source("src/only.ts", original) },
     );
@@ -166,6 +172,27 @@ describe("buildWorkspaceReplacePatchModel — omitted file count merge", () => {
     expect(model.omittedFileCount).toBe(0);
     expect(model.totalFileCount).toBe(1);
     expect(model.truncated).toBe(false);
+  });
+
+  // #2906 round-3 review: response.truncated can be true even with omittedFileCount === 0 -- the
+  // upstream search hit its own bound (e.g. "match-cap" mid-file) without this preview's own
+  // maxFiles cap dropping a distinct file. Before this fix the model's `truncated` only looked at
+  // omittedFileCount, so this exact response shape read as a complete preview and could be applied
+  // without warning even though search did not scan every match.
+  it("marks the model truncated when the response is search-truncated with zero omitted files", () => {
+    const original = "const a = 1;";
+    const model = buildWorkspaceReplacePatchModel(
+      response({
+        files: [fileEdit({ path: "src/only.ts", edits: [] })],
+        truncated: true,
+        omittedFileCount: 0,
+        searchTruncationReasons: ["match-cap"],
+      }),
+      { "src/only.ts": source("src/only.ts", original) },
+    );
+
+    expect(model.omittedFileCount).toBe(0);
+    expect(model.truncated).toBe(true);
   });
 });
 
@@ -202,5 +229,17 @@ describe("resolveLoadState", () => {
     const state = resolveLoadState(supportedRuntime, true, hostError);
 
     expect(state).toBe(hostError);
+  });
+});
+
+// F29: the notice is code-owned, because the activity log admits exactly this shape.
+describe("diffLanguageLoadNotice", () => {
+  it("names the language count and the error class, never the error's message", () => {
+    expect(diffLanguageLoadNotice(2, new TypeError("/Users/alice/.env unreadable"))).toBe(
+      "diff-language-load-failed (count=2, error=TypeError)",
+    );
+    expect(diffLanguageLoadNotice(1, "opaque")).toBe(
+      "diff-language-load-failed (count=1, error=string)",
+    );
   });
 });

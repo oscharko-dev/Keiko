@@ -9,10 +9,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  VOICE_PROFILE_MEDIA_TRANSPORT,
-  type VoiceControlMessageKind,
-} from "@oscharko-dev/keiko-contracts";
+import type { VoiceControlMessageKind } from "@oscharko-dev/keiko-contracts";
+import { VOICE_PROFILE_MEDIA_TRANSPORT } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { describe, expect, it } from "vitest";
 import {
   ALL_VOICE_PROFILES,

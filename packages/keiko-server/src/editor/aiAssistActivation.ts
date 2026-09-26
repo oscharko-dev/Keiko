@@ -1,16 +1,18 @@
+import type {
+  EditorM7AiActivationInput,
+  EditorM7AiActivationStatus,
+  EditorM7AiActivationSummary,
+  EditorM7AiFeature,
+  EditorM7ReasonCode,
+  EditorM7SettingId,
+  EditorM11ResolvedSetting,
+  GatewayVerificationState,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   resolveEditorM7AiActivation,
-  UNVERIFIED_GATEWAY,
-  type EditorM7AiActivationInput,
-  type EditorM7AiActivationStatus,
-  type EditorM7AiActivationSummary,
-  type EditorM7AiFeature,
-  type EditorM7ReasonCode,
-  type EditorM7SettingId,
-  type EditorM11ResolvedSetting,
-  type GatewayVerificationState,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 
 import {
   currentGatewayConfigPresent,

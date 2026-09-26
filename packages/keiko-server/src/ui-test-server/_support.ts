@@ -64,6 +64,11 @@ export async function startUiTestServer(
   throw new Error("Unable to bind a fresh UI test server authority");
 }
 
+// `server.close()` alone waits for every already-accepted connection to end on its own before its
+// callback fires (Node's documented `http.Server#close` contract). A still-streaming SSE response a
+// test read from but never cancelled — or any other lingering connection — then keeps teardown
+// pending indefinitely. `closeAllConnections()` force-closes them immediately after `close()` has
+// stopped the server accepting new ones, so teardown always completes (#2902 audit thread 7).
 export function closeUiTestServer(server: Server): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     server.close((error) => {
@@ -73,5 +78,6 @@ export function closeUiTestServer(server: Server): Promise<void> {
       }
       reject(error);
     });
+    server.closeAllConnections();
   });
 }

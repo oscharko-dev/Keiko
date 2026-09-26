@@ -14,6 +14,7 @@ import {
   probeEditorRuntime,
   type MonacoLoaderLike,
 } from "./runtime.js";
+import { stripBlockComments } from "./test-support.js";
 
 const monacoDir = dirname(fileURLToPath(import.meta.url));
 
@@ -115,12 +116,6 @@ describe("describeEditorRuntimeError", () => {
     }
   });
 });
-
-/** Remove block/JSDoc comments so the scan inspects code, not documentation prose (which may name
- * the CDN seam the runtime deliberately avoids). Real CDN URLs would live in string literals/code. */
-function stripBlockComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "");
-}
 
 describe("no-CDN invariant across the Monaco runtime (Issue #1193 AC, ADR-0042 D3)", () => {
   it("contains no CDN host in any runtime source module", () => {

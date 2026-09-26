@@ -1,11 +1,11 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  EDITOR_M7_SCHEMA_VERSION,
-  type DebugActivationSummary,
-  type EditorM11SettingsSnapshot,
+import type {
+  DebugActivationSummary,
+  EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { ApiError } from "@/lib/api";
 import type { EditorSettingsView } from "../cards/useEditorSettings";
 import { useDebuggingSettings } from "./useDebuggingSettings";

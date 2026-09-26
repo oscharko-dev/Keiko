@@ -239,10 +239,10 @@ Coverage floors (`docs/qa/package-coverage-baseline.json`) for the touched packa
 fully covered by their co-located tests, and edits to existing files ship with their own tests, so
 per-package and per-file floors are maintained or raised.
 
-## Post-merge audit gate outcomes
+## Audit-branch gate outcomes (pre-merge; see "Issues remain open" above)
 
-A post-merge audit re-verified all six child issues and the epic against the current code (this
-branch, after af785de1), fixed the confirmed defects in [Known limitations and follow-ups](#known-limitations-and-follow-ups),
+A pre-merge audit on the epic branch re-verified all six child issues and the epic against the
+current code (this branch, after af785de1), fixed the confirmed defects in [Known limitations and follow-ups](#known-limitations-and-follow-ups),
 and re-ran the full local gate set. Recorded by the coordinator (macOS / Node 22.22):
 
 | Gate                                                   | Result                                                                                                                                                                                                                                                                                                                                                                                                                                              |

@@ -114,6 +114,42 @@ describe("deriveEligibleMergeStrategies (AC2)", () => {
     expect(result.selectedDefault).toBe("squash");
   });
 
+  // Epic #3384: the gateway read the base branch's linear-history rule and then ignored it, so a
+  // merge-commit-shaped request was dispatched into a branch that refuses merge commits and came
+  // back as a provider rejection. `provider-default` is included because the provider picks the
+  // method: an observed GitHub merge with no explicit method produced a merge commit.
+  it("refuses merge-commit-shaped strategies when the base branch requires linear history", () => {
+    const linear = deriveEligibleMergeStrategies(
+      "merge-commit",
+      { allowedStrategies: ["squash", "rebase", "merge-commit", "provider-default"] },
+      ["squash", "rebase", "merge-commit"],
+      { linearHistoryRequired: true },
+    );
+    expect(linear.eligible).toEqual(["squash", "rebase"]);
+    expect(linear.requestedEligible).toBe(false);
+    expect(linear.selectedDefault).toBe("squash");
+
+    const providerDefault = deriveEligibleMergeStrategies(
+      "provider-default",
+      { allowedStrategies: ["squash", "provider-default"] },
+      ["squash"],
+      { linearHistoryRequired: true },
+    );
+    expect(providerDefault.eligible).toEqual(["squash"]);
+    expect(providerDefault.requestedEligible).toBe(false);
+  });
+
+  it("leaves every strategy eligible when the base branch has no linear-history rule", () => {
+    const unconstrained = deriveEligibleMergeStrategies(
+      "merge-commit",
+      { allowedStrategies: ["squash", "merge-commit", "provider-default"] },
+      ["squash", "merge-commit"],
+      { linearHistoryRequired: false },
+    );
+    expect(unconstrained.eligible).toEqual(["squash", "merge-commit", "provider-default"]);
+    expect(unconstrained.requestedEligible).toBe(true);
+  });
+
   it("falls back to the first eligible strategy when the requested one is not eligible", () => {
     const result = deriveEligibleMergeStrategies(
       "merge-commit",
@@ -419,6 +455,63 @@ describe("guards + parse", () => {
     expect(isGitMergeReadinessSummary(summary)).toBe(true);
     const parsed = parseGitMergeReadinessSummary(summary);
     expect(parsed.ok).toBe(true);
+  });
+
+  // KEIKO-0329: the two invariants the type documents — `mergeable` is true iff there is no BLOCKING
+  // blocker, and blocking entries precede advisory ones — were unchecked, so a summary crossing a
+  // package or process boundary could claim mergeable while carrying a blocking conflict.
+  it("rejects a summary claiming mergeable while carrying a blocking blocker", () => {
+    const parsed = parseGitMergeReadinessSummary({
+      schemaVersion: "1",
+      mergeable: true,
+      blockers: [{ code: "conflicts", severity: "blocking", remediation: "user-actionable" }],
+    });
+    expect(parsed.ok).toBe(false);
+  });
+
+  // hasBlockingBlocker trusts the SUPPLIED severity, so a payload could relabel a code that
+  // collectMergeBlocking always constructs as "blocking" (e.g. "conflicts") as "advisory" instead,
+  // clear hasBlockingBlocker, and mergeable:true would then pass. Only "checks-failing" is ever
+  // emitted as advisory (collectMergeAdvisory's one branch); every other code must stay blocking.
+  it("rejects a summary claiming mergeable with a real blocker code relabelled advisory", () => {
+    expect(
+      isGitMergeReadinessSummary({
+        schemaVersion: "1",
+        mergeable: true,
+        blockers: [{ code: "conflicts", severity: "advisory", remediation: "user-actionable" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("still accepts checks-failing as advisory (the one code that legitimately can be)", () => {
+    expect(
+      isGitMergeReadinessSummary({
+        schemaVersion: "1",
+        mergeable: true,
+        blockers: [
+          { code: "checks-failing", severity: "advisory", remediation: "user-actionable" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a summary claiming not-mergeable with no blocking blocker", () => {
+    expect(isGitMergeReadinessSummary({ schemaVersion: "1", mergeable: false, blockers: [] })).toBe(
+      false,
+    );
+  });
+
+  it("rejects blockers that are not severity-ranked", () => {
+    expect(
+      isGitMergeReadinessSummary({
+        schemaVersion: "1",
+        mergeable: false,
+        blockers: [
+          { code: "checks-pending", severity: "advisory", remediation: "internal" },
+          { code: "conflicts", severity: "blocking", remediation: "user-actionable" },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("rejects an invalid readiness summary", () => {

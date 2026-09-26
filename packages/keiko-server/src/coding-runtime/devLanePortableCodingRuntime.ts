@@ -1,14 +1,25 @@
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
-import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
+import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { productionUpdateFacts } from "../update-install-mode.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+  NPM_LANE_RUNTIME_APPROVALS,
+  type NpmLaneRuntimeApproval,
+} from "./npmLaneRuntimeApprovals.js";
+import {
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./opencodeProtocolSurface.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 
@@ -16,6 +27,7 @@ export const KEIKO_CODING_RUNTIME_DEV_LANE_ENV = "KEIKO_CODING_RUNTIME_DEV_LANE"
 export const DEV_LANE_STAGED_PAYLOADS_DIR = ".portable-sidecar-payloads";
 export const DEV_LANE_MANIFEST_FILE = "dev-lane-manifest.json";
 export const DEV_LANE_HELPER_RELATIVE_PATH = "native/keiko-secure-workspace-read";
+export const DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH = "native/keiko-runtime-supervisor";
 
 const APPROVALS_CATALOG_FILE = "portable-runtime-approvals.json";
 const SIDECAR_NAME = "opencode-compatible";
@@ -23,8 +35,9 @@ const HELPER_SOURCE_DIR = "native/secure-workspace-read";
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
+const admittedRuntimeSupervisorDigests = new Map<string, string>();
 
-export type DevLaneOpenCodeTarget = "macos-arm64" | "macos-x64";
+export type DevLaneOpenCodeTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
 export type DevLaneOpenCodeRefusalReason =
   | "platform-unsupported"
@@ -33,8 +46,12 @@ export type DevLaneOpenCodeRefusalReason =
   | "payload-missing"
   | "payload-unapproved"
   | "payload-tampered"
+  | "native-helper-directory-untrusted"
   | "secure-read-helper-missing"
   | "secure-read-helper-stale";
+
+/** Which digest-verified, unsigned lane activated the runtime: a checkout, or an npm runtime package. */
+export type DevLaneName = "dev-checkout" | "npm-runtime-package";
 
 export interface DevLaneSecureReadBinding {
   readonly helperPath: string;
@@ -50,12 +67,16 @@ export interface DevLaneSecureReadBinding {
  */
 export interface DevLanePortableOpenCodeRuntime {
   readonly evidenceClass: "functional-not-platform-qualified";
-  readonly lane: "dev-checkout";
+  readonly lane: DevLaneName;
   readonly installRoot: string;
   readonly target: DevLaneOpenCodeTarget;
   readonly sidecar: PortableSidecarRuntimeVerification;
   readonly qualification: LongLivedRuntimeQualification;
   readonly secureRead: DevLaneSecureReadBinding;
+  /** Present on Windows, where the native Job Object supervisor is part of the dev-lane layout. */
+  readonly nativeHelperPath?: string | undefined;
+  /** The verified Windows supervisor digest is re-checked immediately before every spawn. */
+  readonly nativeHelperSha256?: string | undefined;
 }
 
 export type DevLaneOpenCodeDiscovery =
@@ -67,6 +88,12 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly env: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform | undefined;
   readonly arch?: string | undefined;
+  /** The trusted launcher probes before native regeneration without establishing process authority. */
+  readonly admitRuntimeSupervisor?: boolean | undefined;
+  /** Receives the redacted diagnostic of a verification that failed unexpectedly. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** Hermetic test seam; production callers never supply the npm lane's trust anchor. */
+  readonly npmLaneApprovals?: Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
 }
 
 export function devLaneEnvEnabled(value: string | undefined): boolean {
@@ -74,7 +101,7 @@ export function devLaneEnvEnabled(value: string | undefined): boolean {
 }
 
 /**
- * Explicit, opt-in discovery of a locally staged, review-approved OpenCode payload on a macOS
+ * Explicit, opt-in discovery of a locally staged, review-approved OpenCode payload on a supported
  * repository checkout. Structural confinement is evaluated before any payload trust: a package
  * root that carries a packaged-install manifest, or that is not a repository checkout, refuses
  * the lane regardless of what is staged. Packaged installs never reach the verification steps.
@@ -93,7 +120,7 @@ export function discoverDevLaneOpenCode(
 }
 
 function discoverEnabledLane(input: DevLaneOpenCodeDiscoveryInput): DevLaneOpenCodeDiscovery {
-  const target = devLaneTarget(input.platform ?? process.platform, input.arch ?? process.arch);
+  const target = targetFromDiscoveryInput(input);
   if (target === undefined) return refused("platform-unsupported");
   const checkoutRoot = devCheckoutRoot(input.env);
   if (checkoutRoot.refusal !== undefined) return refused(checkoutRoot.refusal);
@@ -104,16 +131,161 @@ function discoverEnabledLane(input: DevLaneOpenCodeDiscoveryInput): DevLaneOpenC
   if (!payload.ok) return refused(payload.refusal);
   const secureRead = verifiedSecureRead(checkoutRoot.root, stagedTargetRoot, target);
   if (!secureRead.ok) return refused(secureRead.refusal);
+  const runtimeSupervisor = verifiedRuntimeSupervisor(
+    checkoutRoot.root,
+    stagedTargetRoot,
+    target,
+    input.admitRuntimeSupervisor ?? true,
+  );
+  if (target === "windows-x64" && runtimeSupervisor === undefined)
+    return refused("payload-missing");
+  if (!trustedNativeHelperDirectory(stagedTargetRoot, target)) {
+    return refused("native-helper-directory-untrusted");
+  }
+  return activatedDevLaneRuntime(
+    "dev-checkout",
+    target,
+    stagedTargetRoot,
+    payload.sidecar,
+    secureRead.binding,
+    runtimeSupervisor,
+  );
+}
+
+const NPM_LANE_RUNTIME_DIR = "runtime";
+
+/**
+ * The npm lane (#3577): an npm-installed Keiko carries no coding engine, so without this lane it
+ * lists its coding models and can never start a run. A customer who cannot install a desktop
+ * package installs `@oscharko-dev/keiko-coding-runtime-<platform>` next to Keiko instead, and this
+ * discovers it through ordinary module resolution from Keiko's own package root.
+ *
+ * It is the dev lane's verification with a different trust anchor, never a weaker one: the OpenCode
+ * executable tree, its license and its SBOM must match the review-approved digests, the helper must
+ * match the digest of the binary Keiko built, and the native directory may hold nothing else. All of
+ * those digests are compiled into this server (npmLaneRuntimeApprovals.ts), so a runtime package
+ * cannot vouch for itself and a planted package of the same name verifies or is refused. No opt-in
+ * is asked: installing the package is the operator's decision. `inactive` means no package is
+ * installed; a present package that fails verification is `refused` and logged.
+ */
+export function discoverNpmLaneOpenCode(
+  input: DevLaneOpenCodeDiscoveryInput,
+): DevLaneOpenCodeDiscovery {
+  const target = targetFromDiscoveryInput(input);
+  if (target === undefined || target === "windows-x64") return { outcome: "inactive" };
+  const approval = (input.npmLaneApprovals ?? NPM_LANE_RUNTIME_APPROVALS)[target];
+  if (approval === undefined) return { outcome: "inactive" };
+  try {
+    const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
+    if (packageRoot === undefined) return { outcome: "inactive" };
+    return discoverNpmLanePackage(join(packageRoot, NPM_LANE_RUNTIME_DIR), target, approval);
+  } catch (error) {
+    // A verification that cannot be completed (an unreadable file, a directory that changed under
+    // the walk) is a refusal, and the reason it could not be completed is evidence of its own.
+    emitServerDiagnostic(
+      input.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: "coding.runtime.discover",
+        source: "coding.runtime.discovery",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
+    return refused("payload-tampered");
+  }
+}
+
+/**
+ * Node's own lookup order for a package requested from Keiko's package root, walked by hand: "not
+ * installed" is the ordinary state of an npm installation and is an empty result here, not an
+ * exception to swallow.
+ */
+function npmLaneRuntimePackageRoot(
+  env: NodeJS.ProcessEnv,
+  packageName: string,
+): string | undefined {
+  const keikoRoot = productionUpdateFacts(env).packageRoot;
+  if (keikoRoot === undefined) return undefined;
+  const lookup = createRequire(join(keikoRoot, "package.json")).resolve.paths(packageName) ?? [];
+  const manifest = lookup
+    .map((directory) => join(directory, packageName, "package.json"))
+    .find((candidate) => existsSync(candidate));
+  return manifest === undefined ? undefined : realpathSync(dirname(manifest));
+}
+
+function discoverNpmLanePackage(
+  runtimeRoot: string,
+  target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
+  approval: NpmLaneRuntimeApproval,
+): DevLaneOpenCodeDiscovery {
+  const payload = verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, approval);
+  if (!payload.ok) return refused(payload.refusal);
+  const helperPath = join(runtimeRoot, helperRelativePath(target));
+  if (!isRegularFile(helperPath)) return refused("secure-read-helper-missing");
+  if (
+    sha256File(helperPath) !== approval.helperSha256 ||
+    statSync(helperPath).size !== approval.helperSizeBytes
+  ) {
+    return refused("secure-read-helper-stale");
+  }
+  if (!trustedNativeHelperDirectory(runtimeRoot, target)) {
+    return refused("native-helper-directory-untrusted");
+  }
+  const secureRead: DevLaneSecureReadBinding = {
+    helperPath,
+    helperSizeBytes: approval.helperSizeBytes,
+    artifact: {
+      target: secureReadTarget(target),
+      installRelativePath: `runtime/${helperRelativePath(target)}`,
+      sha256: approval.helperSha256,
+      protocol: "KSR1/KSS1",
+      sourceCommit: approval.helperSourceCommit,
+      sourceTreeSha256: approval.helperSourceTreeSha256,
+      // Verified by its content digest against the server's own pin, never by a signature chain.
+      signed: true,
+    },
+  };
+  return activatedDevLaneRuntime(
+    "npm-runtime-package",
+    target,
+    runtimeRoot,
+    payload.sidecar,
+    secureRead,
+    undefined,
+  );
+}
+
+function targetFromDiscoveryInput(
+  input: DevLaneOpenCodeDiscoveryInput,
+): DevLaneOpenCodeTarget | undefined {
+  return devLaneTarget(input.platform ?? process.platform, input.arch ?? process.arch);
+}
+
+function activatedDevLaneRuntime(
+  lane: DevLaneName,
+  target: DevLaneOpenCodeTarget,
+  stagedTargetRoot: string,
+  sidecar: PortableSidecarRuntimeVerification,
+  secureRead: DevLaneSecureReadBinding,
+  runtimeSupervisor: VerifiedRuntimeSupervisor | undefined,
+): DevLaneOpenCodeDiscovery {
+  const runtime = {
+    evidenceClass: "functional-not-platform-qualified" as const,
+    lane,
+    installRoot: join(stagedTargetRoot, SIDECAR_NAME),
+    target,
+    sidecar,
+    qualification: devLaneQualification(lane, target, sidecar, secureRead, runtimeSupervisor),
+    secureRead,
+  };
+  if (runtimeSupervisor === undefined) return { outcome: "activated", runtime };
   return {
     outcome: "activated",
     runtime: {
-      evidenceClass: "functional-not-platform-qualified",
-      lane: "dev-checkout",
-      installRoot: join(stagedTargetRoot, SIDECAR_NAME),
-      target,
-      sidecar: payload.sidecar,
-      qualification: devLaneQualification(target, payload.sidecar, secureRead.binding),
-      secureRead: secureRead.binding,
+      ...runtime,
+      nativeHelperPath: runtimeSupervisor.path,
+      nativeHelperSha256: runtimeSupervisor.sha256,
     },
   };
 }
@@ -123,6 +295,7 @@ function refused(reason: DevLaneOpenCodeRefusalReason): DevLaneOpenCodeDiscovery
 }
 
 function devLaneTarget(platform: NodeJS.Platform, arch: string): DevLaneOpenCodeTarget | undefined {
+  if (platform === "win32" && arch === "x64") return "windows-x64";
   if (platform !== "darwin") return undefined;
   if (arch === "arm64") return "macos-arm64";
   return arch === "x64" ? "macos-x64" : undefined;
@@ -157,6 +330,20 @@ interface ApprovedDevLaneSidecar {
   readonly executableTreeSha256: string;
   readonly licenseSha256: string;
   readonly protocolSchemaSha256: string;
+  // KEIKO-0763/KEIKO-0763-r3: catalog-approved SBOM digest for this target. verifiedPayload
+  // compares it against the SBOM file's freshly-hashed contents so a tampered SBOM cannot slip
+  // past the dev lane's payload-verification step. Sourced from the catalog's runtime.archives
+  // [target] entry alongside executableTreeSha256. REQUIRED, not optional: an earlier revision
+  // let a catalog entry that omitted sbomSha256 skip the comparison entirely, so a modified SBOM
+  // was silently accepted (its freshly-computed digest reported back as if it had been verified).
+  // A target
+  // whose catalog entry has no sbomSha256 now fails approvedSidecarShape and is treated exactly
+  // like any other incomplete catalog entry -- refused "payload-unapproved" by the existing
+  // `approved === undefined` check in discoverDevLaneOpenCode, never silently downgraded to
+  // "compare what we can". Restoring the dev lane on the real catalog requires a human,
+  // PR-reviewed addition of the real upstream SBOM digest to portable-runtime-approvals.json (see
+  // that file's own header: digest changes there are the release-approval act).
+  readonly sbomSha256: string;
 }
 
 /** The checked-in redistribution catalog is the dev lane's review-approved trust anchor. */
@@ -166,20 +353,35 @@ function approvedSidecar(
 ): ApprovedDevLaneSidecar | undefined {
   const runtime = approvedCatalogRuntime(join(root, APPROVALS_CATALOG_FILE));
   if (runtime === undefined) return undefined;
-  const adapter = record(runtime.adapterCompatibility);
-  const candidate = {
-    upstreamVersion: record(runtime.upstream)?.version,
-    adapterName: adapter?.adapterName,
-    adapterVersion: adapter?.adapterVersion,
-    executableTreeSha256: record(record(runtime.archives)?.[target])?.executableTreeSha256,
-    licenseSha256: record(runtime.license)?.sha256,
-    protocolSchemaSha256: record(runtime.protocolSchema)?.sha256,
-  };
+  const candidate = candidateSidecarFromCatalog(runtime, target);
   return approvedSidecarShape(candidate) ? candidate : undefined;
 }
 
+/**
+ * Reads the per-target candidate sidecar fields out of the catalog's runtime record. Each field
+ * is read via optional chaining through possibly-absent nested records, so a missing or malformed
+ * catalog entry surfaces here as `undefined` rather than a throw; approvedSidecarShape is the one
+ * place that decides whether the result is complete enough to trust.
+ */
+function candidateSidecarFromCatalog(
+  runtime: Record<string, unknown>,
+  target: DevLaneOpenCodeTarget,
+): Partial<Record<keyof ApprovedDevLaneSidecar, unknown>> {
+  const adapter = record(runtime.adapterCompatibility);
+  const archiveEntry = record(record(runtime.archives)?.[target]);
+  return {
+    upstreamVersion: record(runtime.upstream)?.version,
+    adapterName: adapter?.adapterName,
+    adapterVersion: adapter?.adapterVersion,
+    executableTreeSha256: archiveEntry?.executableTreeSha256,
+    licenseSha256: record(runtime.license)?.sha256,
+    protocolSchemaSha256: record(runtime.protocolSchema)?.sha256,
+    sbomSha256: archiveEntry?.sbomSha256,
+  };
+}
+
 function approvedSidecarShape(
-  candidate: Record<keyof ApprovedDevLaneSidecar, unknown>,
+  candidate: Partial<Record<keyof ApprovedDevLaneSidecar, unknown>>,
 ): candidate is ApprovedDevLaneSidecar {
   return (
     typeof candidate.upstreamVersion === "string" &&
@@ -187,7 +389,8 @@ function approvedSidecarShape(
     typeof candidate.adapterVersion === "string" &&
     isSha256(candidate.executableTreeSha256) &&
     isSha256(candidate.licenseSha256) &&
-    isSha256(candidate.protocolSchemaSha256)
+    isSha256(candidate.protocolSchemaSha256) &&
+    isSha256(candidate.sbomSha256)
   );
 }
 
@@ -209,16 +412,25 @@ function verifiedPayload(
   target: DevLaneOpenCodeTarget,
   approved: ApprovedDevLaneSidecar,
 ): VerifiedDevLanePayload {
-  const executablePath = "payload/bin/opencode";
+  const executablePath = `payload/bin/${target === "windows-x64" ? "opencode.exe" : "opencode"}`;
   const licensePath = "payload/evidence/LICENSE";
   const sbomPath = "payload/evidence/sbom.cdx.json";
   const files = [executablePath, licensePath, sbomPath].map((file) => join(installRoot, file));
   if (!files.every(isRegularFile)) return { ok: false, refusal: "payload-missing" };
   const executableSha256 = sha256File(join(installRoot, executablePath));
-  const executableTreeSha256 = digestText(`bin/opencode\0${executableSha256}\0`);
+  const executableTreeSha256 = digestText(
+    `bin/${target === "windows-x64" ? "opencode.exe" : "opencode"}\0${executableSha256}\0`,
+  );
+  // KEIKO-0763/KEIKO-0763-r3: verify the SBOM's on-disk contents against the catalog-approved
+  // digest the same way the executable-tree and license checks work. approved.sbomSha256 is
+  // REQUIRED (approvedSidecarShape refuses "payload-unapproved" before this function is ever
+  // reached without one), so this comparison always runs -- a drift-only SBOM (identical binary,
+  // mutated provenance) can no longer flow through as "verified" by skipping the comparison.
+  const sbomEvidenceSha256 = sha256File(join(installRoot, sbomPath));
   if (
     executableTreeSha256 !== approved.executableTreeSha256 ||
-    sha256File(join(installRoot, licensePath)) !== approved.licenseSha256
+    sha256File(join(installRoot, licensePath)) !== approved.licenseSha256 ||
+    sbomEvidenceSha256 !== approved.sbomSha256
   ) {
     return { ok: false, refusal: "payload-tampered" };
   }
@@ -233,10 +445,10 @@ function verifiedPayload(
       licenseEvidencePath: licensePath,
       licenseEvidenceSha256: approved.licenseSha256,
       sbomEvidencePath: sbomPath,
-      sbomEvidenceSha256: sha256File(join(installRoot, sbomPath)),
+      sbomEvidenceSha256,
       protocolSchemaRawSha256: approved.protocolSchemaSha256,
-      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
       availability: devLaneAvailability(),
       summary: devLaneSummary(target, approved, payloadRoot, join(installRoot, executablePath)),
     },
@@ -293,7 +505,7 @@ function verifiedSecureRead(
   stagedTargetRoot: string,
   target: DevLaneOpenCodeTarget,
 ): VerifiedDevLaneSecureRead {
-  const helperPath = join(stagedTargetRoot, DEV_LANE_HELPER_RELATIVE_PATH);
+  const helperPath = join(stagedTargetRoot, helperRelativePath(target));
   const manifest = devLaneManifestHelper(join(stagedTargetRoot, DEV_LANE_MANIFEST_FILE), target);
   if (manifest === undefined || !isRegularFile(helperPath)) {
     return { ok: false, refusal: "secure-read-helper-missing" };
@@ -312,18 +524,70 @@ function verifiedSecureRead(
       helperPath,
       helperSizeBytes: manifest.sizeBytes,
       artifact: {
-        target: target === "macos-arm64" ? "darwin-arm64" : "darwin-x64",
-        installRelativePath: "runtime/native/keiko-secure-workspace-read",
+        target: secureReadTarget(target),
+        installRelativePath: `runtime/${helperRelativePath(target)}`,
         sha256: manifest.sha256,
         protocol: "KSR1/KSS1",
         sourceCommit: manifest.sourceCommit,
         sourceTreeSha256: manifest.sourceTreeSha256,
-        // macOS refuses to execute unsigned arm64 binaries; the dev-lane helper carries the
-        // linker's ad-hoc signature. Integrity is proven by digest, never by a signature chain.
+        // The dev-lane helper is verified by its content digest, never by a release signature chain.
         signed: true,
       },
     },
   };
+}
+
+interface VerifiedRuntimeSupervisor {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+function verifiedRuntimeSupervisor(
+  checkoutRoot: string,
+  stagedTargetRoot: string,
+  target: DevLaneOpenCodeTarget,
+  admit: boolean,
+): VerifiedRuntimeSupervisor | undefined {
+  if (target !== "windows-x64") return undefined;
+  const path = join(stagedTargetRoot, runtimeSupervisorRelativePath(target));
+  const manifest = devLaneManifestRuntimeSupervisor(
+    join(stagedTargetRoot, DEV_LANE_MANIFEST_FILE),
+    target,
+  );
+  if (manifest === undefined || !isRegularFile(path)) return undefined;
+  const sha256 = sha256File(path);
+  const valid =
+    sha256 === manifest.sha256 &&
+    statSync(path).size === manifest.sizeBytes &&
+    hashHelperSourceTree(join(checkoutRoot, "native", "runtime-supervisor", "windows")) ===
+      manifest.sourceTreeSha256;
+  if (!valid) return undefined;
+  if (!admit) return { path, sha256 };
+  // `dev:start` regenerates this locally compiled helper before the BFF launches. After this
+  // process admits that fresh digest, neither a rewritten staged manifest nor a replacement
+  // executable may alter the execution authority for the lifetime of the server process.
+  const admitted = admittedRuntimeSupervisorDigests.get(path);
+  if (admitted !== undefined && admitted !== sha256) return undefined;
+  admittedRuntimeSupervisorDigests.set(path, sha256);
+  return { path, sha256 };
+}
+
+function trustedNativeHelperDirectory(
+  stagedTargetRoot: string,
+  target: DevLaneOpenCodeTarget,
+): boolean {
+  const nativeDirectory = join(stagedTargetRoot, "native");
+  const expected = new Set([basename(helperRelativePath(target))]);
+  if (target === "windows-x64") expected.add(basename(runtimeSupervisorRelativePath(target)));
+  try {
+    const entries = readdirSync(nativeDirectory);
+    return (
+      entries.length === expected.size &&
+      entries.every((entry) => expected.has(entry) && isRegularFile(join(nativeDirectory, entry)))
+    );
+  } catch {
+    return false;
+  }
 }
 
 interface DevLaneHelperManifest {
@@ -339,7 +603,22 @@ function devLaneManifestHelper(
 ): DevLaneHelperManifest | undefined {
   const manifest = readRecord(manifestPath);
   if (manifest?.schemaVersion !== 1 || manifest.target !== target) return undefined;
-  const helper = record(manifest.helper);
+  return validDevLaneHelperManifest(record(manifest.helper));
+}
+
+function devLaneManifestRuntimeSupervisor(
+  manifestPath: string,
+  target: DevLaneOpenCodeTarget,
+): DevLaneHelperManifest | undefined {
+  if (target !== "windows-x64") return undefined;
+  const manifest = readRecord(manifestPath);
+  if (manifest?.schemaVersion !== 1 || manifest.target !== target) return undefined;
+  return validDevLaneHelperManifest(record(manifest.runtimeSupervisor));
+}
+
+function validDevLaneHelperManifest(
+  helper: Record<string, unknown> | undefined,
+): DevLaneHelperManifest | undefined {
   if (helper === undefined || !isSha256(helper.sha256) || !isSha256(helper.sourceTreeSha256)) {
     return undefined;
   }
@@ -367,22 +646,40 @@ function isCommitSha(value: unknown): value is string {
  * qualification identity the supervisor requires; it is not a platform qualification receipt.
  */
 function devLaneQualification(
+  lane: DevLaneName,
   target: DevLaneOpenCodeTarget,
   sidecar: PortableSidecarRuntimeVerification,
   secureRead: DevLaneSecureReadBinding,
+  runtimeSupervisor: VerifiedRuntimeSupervisor | undefined,
 ): LongLivedRuntimeQualification {
   const binding = JSON.stringify({
-    lane: "dev-checkout",
+    lane,
     target,
     executableTreeSha256: sidecar.executableTreeSha256,
     helperSha256: secureRead.artifact.sha256,
+    runtimeSupervisorSha256: runtimeSupervisor?.sha256,
   });
   return {
-    platform: "darwin",
+    platform: target === "windows-x64" ? "win32" : "darwin",
     arch: target === "macos-arm64" ? "arm64" : "x64",
-    backend: "macos-app-sandbox",
+    backend: target === "windows-x64" ? "windows-job-object" : "macos-app-sandbox",
     releaseReceipt: `sha256:${digestText(binding)}`,
   };
+}
+
+function helperRelativePath(target: DevLaneOpenCodeTarget): string {
+  return `${DEV_LANE_HELPER_RELATIVE_PATH}${target === "windows-x64" ? ".exe" : ""}`;
+}
+
+function runtimeSupervisorRelativePath(target: DevLaneOpenCodeTarget): string {
+  return `${DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH}${target === "windows-x64" ? ".exe" : ""}`;
+}
+
+function secureReadTarget(
+  target: DevLaneOpenCodeTarget,
+): "win32-x64" | "darwin-arm64" | "darwin-x64" {
+  if (target === "windows-x64") return "win32-x64";
+  return target === "macos-arm64" ? "darwin-arm64" : "darwin-x64";
 }
 
 /** One lstat call: regular, non-symlink, single hard link — mirrors the hardened path helpers. */
@@ -404,12 +701,46 @@ function digestText(value: string): string {
 }
 
 /**
- * In-process payload digest. Mirrors `inspectStagedSidecarPayload`'s tree walk — including its
- * `localeCompare` ordering — because the launch-time re-check recomputes this digest in the same
- * server process and must agree byte-for-byte with the discovery-recorded summary.
+ * KEIKO-0180 (and #3099 P2 follow-up): SINGLE canonical formula shared by the production tree
+ * walker, the discovery pipeline, and tests. Given a set of `(relativePath, sha256)` pairs,
+ * produces the tree digest — locale-sorted (the payload lane matches `localeCompare`). The
+ * production directory walker `hashDirectoryTree` DELEGATES to this function so a formula
+ * change touches one place and every consumer (including the manager test fixture) moves with
+ * it. A test that hand-restated the concatenation could formerly drift silently; that path is
+ * now closed.
+ */
+export function computePortableSidecarPayloadTreeDigest(
+  entries: readonly { readonly relativePath: string; readonly sha256: string }[],
+): string {
+  const hash = createHash("sha256");
+  const sorted = [...entries].sort((left, right) =>
+    left.relativePath.localeCompare(right.relativePath),
+  );
+  for (const entry of sorted) {
+    hash.update(`${entry.relativePath}\0${entry.sha256}\0`);
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * In-process payload digest. Delegates to the canonical
+ * `computePortableSidecarPayloadTreeDigest` above — one formula, one place. Mirrors
+ * `inspectStagedSidecarPayload`'s tree walk (locale-sorted) so the launch-time re-check agrees
+ * byte-for-byte with the discovery-recorded summary.
  */
 function hashDirectoryTree(root: string): string {
-  return hashTree(root, (left, right) => left.localeCompare(right));
+  const entries: { readonly relativePath: string; readonly sha256: string }[] = [];
+  // #3099 R8 KfQ perf: `computePortableSidecarPayloadTreeDigest` re-sorts internally, so
+  // passing a no-op comparator to `listFiles` avoids the redundant O(n log n) sort on the
+  // discovery walk. Array.sort in modern V8 is stable, so `() => 0` preserves insertion order
+  // (irrelevant here — the helper sorts by relativePath itself).
+  for (const file of listFiles(root, () => 0)) {
+    entries.push({
+      relativePath: relative(root, file).split(sep).join("/"),
+      sha256: sha256File(file),
+    });
+  }
+  return computePortableSidecarPayloadTreeDigest(entries);
 }
 
 /**
@@ -418,7 +749,7 @@ function hashDirectoryTree(root: string): string {
  * between those processes and report a false stale helper, so this ordering is plain
  * code-unit comparison — locale-independent by construction. The staging script mirrors it.
  */
-function hashHelperSourceTree(root: string): string {
+export function hashHelperSourceTree(root: string): string {
   return hashTree(root, compareCodeUnits);
 }
 

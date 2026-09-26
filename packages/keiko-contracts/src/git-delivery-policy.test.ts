@@ -488,6 +488,7 @@ describe("policy-pack parsers", () => {
 
 const PUSH_INPUTS: GitDeliveryResolvedInputs = {
   kind: "push",
+  verifiedCommitSha: "a".repeat(40),
   sourceBranchName: "feat/x",
   remoteAlias: "origin",
   remoteBranchName: "dev",
@@ -503,6 +504,7 @@ describe("gitDeliveryPolicyTargetBranchName", () => {
     expect(
       gitDeliveryPolicyTargetBranchName({
         kind: "pr-create",
+        verifiedCommitSha: "a".repeat(40),
         headBranchName: "feat/x",
         baseBranchName: "dev",
         titleByteLength: 1,
@@ -513,6 +515,7 @@ describe("gitDeliveryPolicyTargetBranchName", () => {
     expect(
       gitDeliveryPolicyTargetBranchName({
         kind: "pr-update",
+        verifiedCommitSha: "a".repeat(40),
         prExternalId: "7",
         headBranchName: "feat/x",
         baseBranchName: "main",
@@ -546,15 +549,15 @@ describe("gitDeliveryPolicyTargetBranchName", () => {
     expect(gitDeliveryPolicyTargetBranchName(merge, { mergeBaseBranchName: "dev" })).toBe("dev");
   });
 
-  it("has no branch target for actions that touch no ref by name", () => {
-    expect(
-      gitDeliveryPolicyTargetBranchName({
-        kind: "commit",
-        messageByteLength: 10,
-        stagedPathCount: 1,
-        allowEmptyCommit: false,
-      }),
-    ).toBeUndefined();
+  it("takes the checked-out branch for a commit from trusted worktree operands", () => {
+    const commit: GitDeliveryResolvedInputs = {
+      kind: "commit",
+      messageByteLength: 10,
+      stagedPathCount: 1,
+      allowEmptyCommit: false,
+    };
+    expect(gitDeliveryPolicyTargetBranchName(commit)).toBeUndefined();
+    expect(gitDeliveryPolicyTargetBranchName(commit, { commitBranchName: "dev" })).toBe("dev");
   });
 });
 

@@ -8,7 +8,6 @@
 // All stream payloads carry only ids / counts / safe enums — never prompts, model output, source
 // content, or credentials. A client disconnect aborts the run via the registry.
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isAbsolute } from "node:path";
 import type {
@@ -17,6 +16,7 @@ import type {
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  QualityIntelligenceRunStreamDone,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceSourceSummary,
@@ -25,7 +25,11 @@ import type {
   QualityIntelligenceModelRouting,
   QualityIntelligence as QI,
 } from "@oscharko-dev/keiko-contracts";
-import { resolveQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
+import {
+  deriveQualityIntelligenceTerminalDegradation,
+  isQualityIntelligenceSeed,
+} from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
+import { resolveQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
 import { SSE_HEADERS } from "../sse.js";
 import { writeOrDestroy } from "../sse-write.js";
@@ -47,6 +51,7 @@ import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { QiRunConcurrencyLimitError, qiRunRegistry } from "./runRegistry.js";
 import { buildQiModelRoutingForRun, QiModelPolicyError } from "./modelPolicyRoutes.js";
+import { newReferenceId } from "../reference-id.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_MAX_ACTIVE_QI_RUNS = 2;
@@ -189,11 +194,45 @@ function validateConnectorSource(
   return undefined;
 }
 
+// KEIKO-0891 follow-on: the contract carries an optional `adf` Atlassian Document Format tree
+// that `ingestRequirements` (runIngestion.ts) normalises to text via parseAdfDocument. The
+// previous validator dropped `raw.adf`, so the ADF-normalisation branch was dead code in
+// production (reachable only from direct unit-test calls). Pass a plain-object `adf` through to
+// the ingestion layer; parseAdfDocument already validates the tree grammar and enforces the
+// maxDocumentBytes / maxNodes / maxDepth / maxTextBytes ceilings, and the route body's
+// MAX_BODY_BYTES envelope caps the total request size.
+//
+// KEIKO-0891 follow-up (reviewer P2): a present-but-malformed `adf` (explicit null, or a
+// primitive) must fail closed rather than silently fall back to raw.text — the new trust
+// boundary would otherwise depend on the malformed value's JavaScript type. The extractor returns
+// a discriminated result so the caller distinguishes absent from invalid-present and surfaces
+// QI_BAD_SOURCE for the latter.
+function validateRequirementsSource(
+  label: string,
+  raw: Record<string, unknown>,
+  text: string,
+): QualityIntelligenceInlineSource | RouteResult {
+  const adfOutcome = extractRequirementsAdf(raw);
+  if (adfOutcome.kind === "invalid") {
+    return errorResult(
+      400,
+      "QI_BAD_SOURCE",
+      "Source requirements.adf must be an object or array when present.",
+    );
+  }
+  return {
+    kind: "requirements",
+    label,
+    text,
+    ...(adfOutcome.kind === "present" ? { adf: adfOutcome.value } : {}),
+  };
+}
+
 function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteResult | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
   const label = raw.label;
   if (raw.kind === "requirements" && typeof raw.text === "string") {
-    return { kind: "requirements", label, text: raw.text };
+    return validateRequirementsSource(label, raw, raw.text);
   }
   if (raw.kind === "workspace" && typeof raw.path === "string") {
     return { kind: "workspace", label, path: raw.path };
@@ -202,6 +241,24 @@ function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteRe
     return { kind: "file", label, path: raw.path };
   }
   return validateConnectorSource(label, raw);
+}
+
+// KEIKO-0891 follow-on: the ADF tree is a JSON-value shape (recursive object/array/primitive).
+// Only accept a value parseAdfDocument can meaningfully inspect — a plain object or an array.
+// Discriminated result so the caller can tell absent (field not present, or explicit undefined)
+// from present-but-invalid (null, primitives). Deeper shape validation (grammar, byte cap,
+// node/depth budget) stays in parseAdfDocument.
+type AdfExtractResult =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "present"; readonly value: QI.QualityIntelligenceAdfNode };
+
+function extractRequirementsAdf(raw: Record<string, unknown>): AdfExtractResult {
+  if (!("adf" in raw)) return { kind: "absent" };
+  const value = raw.adf;
+  if (value === undefined) return { kind: "absent" };
+  if (value === null || typeof value !== "object") return { kind: "invalid" };
+  return { kind: "present", value: value as QI.QualityIntelligenceAdfNode };
 }
 
 function isRouteResult(v: unknown): v is RouteResult {
@@ -254,7 +311,9 @@ function collectSources(rawSources: readonly unknown[]): SourcesOutcome {
 
 function parseOptionalSeed(value: unknown): number | null | undefined {
   if (value === undefined) return undefined;
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  // KEIKO-0891: defer the shape check to the contract-owned guard so a widened / deserialized
+  // seed cannot bypass the ceiling. `null` (parse fail) surfaces as QI_BAD_REQUEST above.
+  return isQualityIntelligenceSeed(value) ? value : null;
 }
 
 function parseOptionalModelPolicy(
@@ -298,6 +357,11 @@ function validateRequest(parsed: unknown): ParseOutcome {
       result: errorResult(400, "QI_BAD_REQUEST", "At least one source is required."),
     };
   }
+  // KEIKO-0891: the contract-owned QUALITY_INTELLIGENCE_MAX_RUN_SOURCES cap is enforced by the
+  // ingestion path (drop-overflow with droppedSourceCount on the accepted frame), not the wire —
+  // the constant is imported here so callers can see it in the contract, but the wire never
+  // rejects an over-cap sources array (the ingestion drop contract is pinned by regression tests
+  // at the B1/B2 boundary of runRoutes.test.ts).
   const collected = collectSources(parsed.sources);
   if (!collected.ok) return collected;
   const profileId = typeof parsed.profileId === "string" ? parsed.profileId : undefined;
@@ -503,6 +567,25 @@ function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
   });
 }
 
+function terminalReasonFields(
+  deps: UiHandlerDeps,
+  summary: QiExecutionSummary,
+): Pick<QualityIntelligenceRunStreamDone, "degraded" | "reasonSummary"> {
+  const persistedDegradation = deriveQualityIntelligenceTerminalDegradation(
+    summary.status,
+    summary.evidence?.manifest.modelRouting?.stageFailures,
+  );
+  // Failed-run summaries and persisted degraded reasons are already bounded/redacted server-side;
+  // redact once more at the final browser boundary without inferring degradation from free text.
+  const reason = persistedDegradation?.reasonSummary ?? summary.reasonSummary;
+  const reasonSummary = reason !== undefined ? applyRedactor(deps.redactor, reason) : undefined;
+  if (persistedDegradation !== undefined && reasonSummary !== undefined) {
+    return { degraded: true, reasonSummary };
+  }
+  if (summary.status === "failed" && reasonSummary !== undefined) return { reasonSummary };
+  return {};
+}
+
 export function doneFrameForSummary(
   deps: UiHandlerDeps,
   runId: string,
@@ -510,14 +593,6 @@ export function doneFrameForSummary(
   totals: StreamTotals,
   modelRouting?: QualityIntelligenceModelRouting,
 ): QualityIntelligenceRunStreamMessage {
-  // Surface the bounded reasonSummary for BOTH a terminal failed run and a succeeded-but-degraded run
-  // (model/parser fell back to the deterministic baseline). The reason is already safeReasonSummary-
-  // bounded server-side; re-redact defensively before it reaches the wire.
-  const reasonSummary =
-    summary.reasonSummary !== undefined
-      ? applyRedactor(deps.redactor, summary.reasonSummary)
-      : undefined;
-  const degraded = summary.status === "succeeded" && reasonSummary !== undefined ? true : undefined;
   return {
     type: "done",
     runId,
@@ -526,8 +601,7 @@ export function doneFrameForSummary(
     ...(modelRouting !== undefined
       ? { modelRouting: { resolved: modelRouting.resolved, preflight: modelRouting.preflight } }
       : {}),
-    ...(reasonSummary !== undefined ? { reasonSummary } : {}),
-    ...(degraded !== undefined ? { degraded } : {}),
+    ...terminalReasonFields(deps, summary),
   };
 }
 
@@ -578,7 +652,12 @@ export async function handleStartQiRun(
   const parsed = await parseStartBody(ctx.req);
   if (!parsed.ok) return parsed.result;
 
-  const runId = `qi-run-${randomUUID()}`;
+  // A QI run window persists it as a reference (#3557 review).
+  const runId = newReferenceId({
+    kind: "qi-run",
+    prefix: "qi-run-",
+    correlationId: ctx.correlationId,
+  });
   const registeredAt = new Date().toISOString();
   const maxActiveRuns = resolveMaxActiveQiRuns(deps.env);
   let controller: AbortController;
@@ -602,7 +681,7 @@ export async function handleStartQiRun(
 
   let modelRouting: QualityIntelligenceModelRouting;
   try {
-    modelRouting = await buildQiModelRoutingForRun(deps, parsed.request);
+    modelRouting = await buildQiModelRoutingForRun(deps, parsed.request, runId);
   } catch (error) {
     qiRunRegistry.complete(runId, "failed");
     if (error instanceof QiModelPolicyError) {

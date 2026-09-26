@@ -41,6 +41,10 @@ describe("dependency security configuration", () => {
     expect(dependencyReview).toContain(
       "allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs",
     );
+    // #3609 (owner decision 2026-09-25): eslint-plugin-sonarjs 4.2.1's own new transitive
+    // dependency is the same vendor and the same LGPL-3.0-only license as the already-allowed
+    // plugin, so it is exempted the same way, per package, next to it.
+    expect(dependencyReview).toContain("pkg:npm/@sonarsource/analyzer-commons-configurations");
   });
 
   it("retries incomplete snapshots and exposes remediation and Scorecard context", () => {

@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { ConnectedContextPack, ContextExcerpt } from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
-  type ConnectedContextPack,
-  type ContextExcerpt,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 import { buildAnswerCitations } from "./grounded-citation-projection.js";
 

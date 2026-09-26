@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-07-16).
+Accepted (2026-07-16); amended for the local-only #3347 diagnostic on 2026-09-01; amended
+2026-09-03 to make required pull-request Sonar analysis dev-equivalent and non-incremental.
 
 ## Amends
 
@@ -52,9 +53,9 @@ A check may be GitHub-required for `dev` integration only if it is deterministic
 source tree: type checking, linting, formatting, hermetic unit/integration tests, coverage
 ratchets, architecture rules, static security scans, packaging smokes, bounded-behaviour e2e
 assertions (caps, counts, markers, redaction), and validation of committed evidence documents.
-Wall-clock assertions (latency percentiles, long-task ceilings, memory-over-time) are enforced
-only in controlled measurement contexts: the official D12 producer environment and the scheduled
-performance workflow, both of which set `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`. In required-runner
+Authoritative wall-clock assertions (latency percentiles, long-task ceilings, memory-over-time) are
+enforced only in controlled measurement contexts: the official D12 producer environment and the
+scheduled performance workflow, both of which set `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`. In required-runner
 context the same specs still verify their bounded-cap composition (byte, marker, retained-entry,
 and variable caps) but reduce the repeated latency-sampling loops that exist only to feed those
 percentiles — a full ten-sample stop/flood loop can exceed the E2E timeout on a shared two-core
@@ -62,6 +63,15 @@ runner even when nothing regressed. A shared-runner scheduling spike can therefo
 budget assertion nor time out an integration. The budgets themselves are unchanged and continue to
 be enforced deterministically at PR time through the committed D12 evidence document, which was
 measured under the controlled environment with the full sample count.
+
+Separately, a regression pin for a pure-CPU algorithm may also run as an opt-in developer
+pre-flight micro-benchmark in the version-pinned local Linux gate container when it is not invoked
+by any required CI context, enables the wall-clock environment variable only for its focused child
+process, and separately pins the deterministic behavioral invariant in ordinary tests. Such a
+local check is diagnostic only: it does not produce D12 evidence, confer an integration verdict,
+or widen the set of required wall-clock assertions. This narrow allowance keeps isolated
+algorithmic pins such as the bounded workspace-pattern normalization check available as a focused
+developer pre-flight without reintroducing shared-runner timing into the pull-request path.
 
 ### D2 — Performance evidence binds the measured product, not the repository
 
@@ -109,6 +119,21 @@ makes the first run proportional to the change as well. `--full` restores the co
 and the required CI run on the pull request remains the authoritative full matrix — scoping moves
 local verification effort, never the enforcement bar.
 
+"Full matrix" includes the analysis surface inside each required check. SonarCloud's default PR
+sensor cache previously made that sentence false: the workflow ran, but its JavaScript/TypeScript
+analyzer freshly processed only changed files and could miss a full-tree warning that appeared on
+the subsequent `dev` push. Required Sonar scans therefore disable the analysis cache and the
+scanner-log validator proves full-project breadth before accepting the result.
+
+The matrix also shares one immutable integration subject. Full-tree lanes check out `github.sha`
+and run the repository's merge-candidate consistency script immediately after Node setup and before
+any other repository command. It verifies that the checked-out PR merge commit is clean and that
+its parents exactly match the event base and head. This is not adversarial isolation from a
+candidate-controlled workflow; branch protection, workflow-change review, and exact-current-head
+required checks own that trust boundary. Combined with strict required-status-check branch
+protection, concurrent agents are serialized by GitHub's candidate invalidation and re-check
+semantics rather than by post-merge agent monitoring.
+
 ### D5 — Static guards prefer precision to suppression
 
 Guardrail scanners must not require suppression markers for provably safe constructs. The
@@ -120,9 +145,14 @@ class are treated as gate defects, not as occasions for suppression comments.
 ### D6 — External-service steps retry before they fail
 
 Required steps that call external services (SonarCloud scanner provisioning and analysis
-submission) wrap the call in bounded retry with backoff. A persistent outage still fails closed —
-availability of the review product remains a quality property (ADR-0135 D4) — but a transient
-5xx no longer consumes an integration attempt.
+submission, and npm's shipped-dependency audit endpoint) wrap the call in bounded retry with
+backoff. A persistent outage still fails closed — availability of the review product remains a
+quality property (ADR-0135 D4) — but a transient network failure or 5xx no longer consumes an
+integration attempt. Audit retries preserve npm's original non-zero advisory verdict and bound
+npm's own fetch timeout so all three permitted attempts fit inside the job timeout. The
+coverage/Sonar job has a 50-minute timeout: each of its three permitted full scans has measured
+about 15 minutes, with 30- and 60-second backoff, so the job bound includes the designed worst case
+rather than terminating the final permitted attempt.
 
 ### D7 — Merge-queue readiness removes the up-to-date race
 
@@ -133,7 +163,7 @@ with D2 in place the evidence source-tree binding remains valid across queue int
 the queued merge does not alter measured surfaces, and the scheduled refresh (D3) corrects the
 residual drift.
 
-### D8 — The scanner-log gate exempts one benign SCM-metadata warning class
+### D8 — The scanner-log gate proves warnings and full-analysis breadth
 
 `check-sonar-analysis-log.mjs` fails closed on any scanner `WARN`/`ERROR`, with one precisely
 scoped exception: `File '<path>' was detected as changed but without having changed lines`. This
@@ -142,6 +172,24 @@ still in the changed-file set, which is routine when pull-request analysis runs 
 merge ref. It carries no rule, coverage, or rating signal, and the SonarCloud quality gate keeps
 enforcing all of those independently. The exemption matches only that exact wording, so every other
 warning — including any real SCM failure such as a missing revision — still fails the gate.
+
+The same direct CLI invocation uses `--require-full-analysis`. It requires exactly zero JavaScript/
+TypeScript cache hits, one complete cache-miss receipt, a completed source set, and an explicit
+80-percent floor against the indexed-file inventory for both fresh inventories. Architecture proof
+binds the combined receipt total to SonarJasmin's plan when that plan is emitted and requires each
+receipt independently to be complete, so offsetting `51/50` and `49/50` receipts cannot pass by
+summing to `100/100`. Scanner `8.1.0.6389` PR analysis can omit the plan while still running both
+full architecture sensors. In that shape, and only when no plan or legacy UDG inventory exists, the
+gate requires a closed producer-consumer lifecycle: the separately verified full fresh JS/TS
+inventory must complete before exactly one `JsArchitectureSensor` and one `TsArchitectureSensor`
+run in order; each sensor must discover exactly one matching language-specific UDG location, read
+that producer directory, load exactly its complete positive inventory, and finish before the
+architecture upload receipt and scanner success. Additional, off-sensor, mismatched, malformed, or
+out-of-order receipts fail closed. No ratio approximates UDG breadth because Sonar does not produce
+a UDG for every analyzed source file. Generic scanner success is never architecture evidence. The
+receipt grammar is recorded against scanner CLI `8.1.0.6389` and hosted plugin `13.8.0.44569`;
+future hosted wording or analyzer changes fail closed until the parser and fixtures are
+deliberately updated.
 
 ### D9 — D12 binds dependency state per revision
 
@@ -153,6 +201,12 @@ This makes dependency changes part of the measured candidate while preserving th
 baseline. Requiring both commits to have an identical lockfile would deadlock the first dependency
 change after a baseline was pinned; substituting either lockfile into the other checkout would no
 longer measure an exact commit. Both failure modes are therefore rejected.
+
+The pinned baseline is identified by exact commit and by the source-tree and lockfile digests the
+evidence independently re-derives; it does not need to be a Git ancestor of the candidate. This keeps
+the same D12 reference usable after squash-only integrations without weakening the trust boundary:
+the producer still refuses a dirty baseline checkout, a baseline checkout at any commit other than
+the pin, or a document whose pinned-baseline digest no longer matches the checked-out baseline.
 
 ### D10 — The pull-request lane checks evidence integrity; the regeneration lane owns source freshness
 
@@ -182,6 +236,44 @@ re-measures `dev` daily and fails loudly on a budget breach. Timing evidence may
 most one nightly cycle; it can no longer be silently wrong, hand-edited, or measured with a
 different toolchain. This supersedes the D2/D3 expectation that a pull request touching a measured
 surface regenerates timing evidence in-flight.
+
+### D11 — Coding-runtime performance has a native reference and its own ruler (#2952)
+
+The coding runtime has its own performance target, calibration, and measured document. Its
+deterministic pull-request judge is `check:perf-evidence:coding-runtime`. It validates the closed,
+body-free schema, canonical bytes, sample-derived aggregates, reviewed calibration anchor, measured
+budgets, and the ruler digest when the current diff moved that ruler. It does not start a sidecar
+or assert a hosted runner's wall clock. An unresolved diff base enforces ruler freshness.
+
+The native producer, `perf:evidence:coding-runtime`, exercises production discovery of the approved
+macOS arm64 OpenCode payload, the native supervisor, real managed Git workspaces, authenticated
+mounted HTTP routes, and the protected activity channel. Only the provider response is a bounded,
+deterministic fixture. The recorded class is functional performance evidence; it does not qualify a
+live model, a platform signature, or the complete release journey. Cold start means a new sidecar
+process and new runtime state, with operating-system caches left intact. Readiness is the public
+preflight request; first byte is the first runtime SSE data frame, including its initial replay;
+bounded throughput measures the fixed streamed response through native completion and separately
+requires exact output delivery in the authenticated channel.
+
+This target uses a dedicated, explicitly stamped native macOS arm64 reference. It must not inherit
+the editor's Linux container numbers or compare them with hosted Linux/macOS measurements. Two
+warmups precede thirty retained samples. Initial p95 ceilings derive mechanically from each
+metric's observed maximum plus its full observed range; all samples remain in the calibration.
+The frozen calibration digest and derived ceilings live in the reviewed budget document. Regular
+generation never changes them. Recalibration is a separate, explicit review of the ruler and
+reference class, not an automatic response to a regression. The evidence judge remains responsible
+for overruns after the producer writes trustworthy measurements (ADR-0156 D1/D5).
+
+The producer refuses dirty or changing measured inputs. The reference/release judge adds
+`--enforce-source-freshness`; scheduled hosted automation checks drift and reports the native
+regeneration command rather than producing incomparable timings. ADR-0162 applies unchanged:
+`--report-subject-drift` reports source-tree and candidate-lockfile drift as advisories only when
+full source evaluation is enabled; dirty inputs, ruler drift and evidence defects remain fatal.
+The measured subject includes
+the server and its production package dependencies, entry wiring, native helpers, TypeScript
+configuration and lockfile. UI/editor sources, tests and documentation are excluded; imported
+fixture support and measurement scripts are bound by the separate ruler digest. The complete
+procedure and artifact locations are in [the performance runbook](../qa/perf-evidence.md).
 
 ## Invariants that do not change
 

@@ -2,10 +2,8 @@
 // and sleep, virtual clock, no network, no timers.
 
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_ATLASSIAN_SYNC_BOUNDS,
-  type AtlassianSyncBounds,
-} from "@oscharko-dev/keiko-contracts";
+import type { AtlassianSyncBounds } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   AtlassianHttpBodyPort,
   AtlassianHttpBodyRequest,
@@ -14,6 +12,7 @@ import type {
 import {
   ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS,
   ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS,
+  AtlassianSyncBudgetExhausted,
   runAtlassianSyncFetch,
   type AtlassianSyncFetchContext,
   type AtlassianSyncItem,
@@ -197,6 +196,297 @@ describe("runAtlassianSyncFetch", () => {
     });
     expect(outcome.status).toBe("cancelled");
     expect(fetchedKeys).toEqual(["a"]);
+  });
+
+  it("removes every occurrence of a duplicated key from enumeratedItemKeys once a fetch reports it missing", async () => {
+    // Regression for KEIKO-0598: enumerate lists the same key twice (legitimate re-served page or
+    // a hostile duplicate). The first fetch of the duplicate still finds it (ordinary item); the
+    // second finds it vanished (404/missing) between enumeration and fetch. The former
+    // indexOf/splice removal only ever drops ONE positional occurrence, so one copy of the key
+    // used to survive in enumeratedItemKeys even though the item is gone.
+    const dupKey = "dup";
+    let dupCalls = 0;
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: "a" }, { itemKey: dupKey }, { itemKey: dupKey }, { itemKey: "b" }],
+          complete: true,
+        }),
+      fetchItem: (ref): Promise<AtlassianSyncItemFetchOutcome> => {
+        if (ref.itemKey !== dupKey) {
+          return Promise.resolve({ kind: "item", item: item(ref.itemKey) });
+        }
+        dupCalls += 1;
+        return Promise.resolve(
+          dupCalls === 1 ? { kind: "item", item: item(dupKey) } : { kind: "missing" },
+        );
+      },
+    };
+    const outcome = await runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 1 }),
+    });
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") return;
+    expect(outcome.enumeratedItemKeys.filter((key) => key === dupKey)).toHaveLength(0);
+    expect(outcome.enumeratedItemKeys).toEqual(["a", "b"]);
+  });
+
+  it("drops every fetched item alongside the enumeration key when a duplicate ref's later fetch reports missing (KEIKO-0598 follow-up)", async (): Promise<void> => {
+    // Regression for the KEIKO-0598 follow-up Codex identified on #3279: the earlier fix removed
+    // every occurrence of a duplicated key from enumeratedItemKeys once a fetch reports it
+    // missing, but the ITEM that the first fetch pushed to state.items stayed. That left the two
+    // states inconsistent — applyConnectorSyncRun then indexed the fetched item, saw the absent
+    // enumeration key as a removal signal, pruned the freshly-indexed document, and persisted a
+    // fingerprint that permanently masked the item on subsequent unchanged syncs. This test
+    // asserts BOTH states now agree: the missing outcome for a duplicate drops the item AND the
+    // key, so the diff downstream sees a clean removal (no phantom index → prune → mask race).
+    const dupKey = "dup-item-then-missing";
+    let dupCalls = 0;
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [
+            { itemKey: "a" },
+            { itemKey: dupKey },
+            { itemKey: dupKey },
+            { itemKey: dupKey },
+            { itemKey: "b" },
+          ],
+          complete: true,
+        }),
+      fetchItem: (ref): Promise<AtlassianSyncItemFetchOutcome> => {
+        if (ref.itemKey !== dupKey) {
+          return Promise.resolve({ kind: "item", item: item(ref.itemKey) });
+        }
+        dupCalls += 1;
+        return Promise.resolve(
+          dupCalls < 3 ? { kind: "item", item: item(dupKey) } : { kind: "missing" },
+        );
+      },
+    };
+    const outcome = await runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 1 }),
+    });
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") return;
+    // enumeration key removed by the earlier KEIKO-0598 fix — inherited invariant.
+    expect(outcome.enumeratedItemKeys).toEqual(["a", "b"]);
+    // NEW invariant: state.items agrees — no orphan for the missing key. The two other real
+    // items (a, b) are still there.
+    expect(outcome.items.map((it) => it.itemKey).sort()).toEqual(["a", "b"]);
+    expect(outcome.items.some((it) => it.itemKey === dupKey)).toBe(false);
+  });
+
+  it("does not resurrect a missing duplicate when an earlier item fetch settles later", async (): Promise<void> => {
+    const dupKey = "missing-before-held-item";
+    let duplicateFetchCount = 0;
+    let releaseHeldItem: () => void = () => undefined;
+    const heldItem = new Promise<void>((resolve) => {
+      releaseHeldItem = resolve;
+    });
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: dupKey }, { itemKey: dupKey }],
+          complete: true,
+        }),
+      fetchItem: async (): Promise<AtlassianSyncItemFetchOutcome> => {
+        duplicateFetchCount += 1;
+        if (duplicateFetchCount === 1) {
+          await heldItem;
+          return { kind: "item", item: item(dupKey) };
+        }
+        return { kind: "missing" };
+      },
+    };
+    const outcome = await runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 2 }),
+      onProgress: (progress): void => {
+        if (progress.skippedItems === 1) releaseHeldItem();
+      },
+    });
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") return;
+    expect(outcome.enumeratedItemKeys).toEqual([]);
+    expect(outcome.items).toEqual([]);
+    expect(outcome.progress).toMatchObject({ fetchedItems: 1, skippedItems: 1 });
+  });
+
+  it("waits for every dispatched fetch to settle before returning, so no fetch or onProgress callback fires after the run's promise has settled (budget exhaustion mid-run)", async () => {
+    // Regression for KEIKO-0758: `Promise.all` used to settle on the FIRST worker rejection and
+    // abandon its still-running siblings. Two refs race at maxConcurrency 2: "fast" exhausts the
+    // whole byte budget and then throws on its own second dispatch; "slow" is held open on a gate
+    // we control. The fixed pool must not resolve until "slow" is released too, and once released
+    // must never dispatch the fourth ref ("d") that was still available on the shared cursor.
+    const dispatched: string[] = [];
+    const progressCalls: number[] = [];
+    let releaseSlow: (() => void) | undefined;
+    const slowGate = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const refs = ["fast", "slow", "second", "d"];
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: refs.map((itemKey) => ({ itemKey })),
+          complete: true,
+        }),
+      fetchItem: async (ref, context): Promise<AtlassianSyncItemFetchOutcome> => {
+        dispatched.push(ref.itemKey);
+        if (ref.itemKey === "slow") {
+          await slowGate;
+          return { kind: "item", item: item("slow") };
+        }
+        // "fast" and "second" each pull the whole 100-byte budget; "second" (fetched by the same
+        // worker right after "fast") finds it already exhausted and throws.
+        const result = await context.http({
+          method: "GET",
+          url: "https://tenant.example/x",
+          timeoutMs: 1_000,
+          maxBodyBytes: 100,
+        });
+        if (result.kind !== "response") return { kind: "skipped", reason: "unavailable" };
+        return { kind: "item", item: item(ref.itemKey) };
+      },
+    };
+    const http: AtlassianHttpBodyPort = () =>
+      Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText: "x",
+        bodyBytes: 100,
+        truncated: false,
+      });
+    let settled = false;
+    const promise = runAtlassianSyncFetch({
+      source,
+      http,
+      bounds: bounds({ maxBytes: 100, maxConcurrency: 2 }),
+      onProgress: (p) => progressCalls.push(p.fetchedItems + p.skippedItems),
+    }).then((outcome) => {
+      settled = true;
+      return outcome;
+    });
+    // Flush every pending microtask (the "fast"/"second" chain) without a real timer for "slow".
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dispatched).toEqual(["fast", "slow", "second"]);
+    // "second" has already thrown AtlassianSyncBudgetExhausted by now, but "slow" is still gated —
+    // the run must NOT have settled yet: it must wait for "slow", not abandon it as Promise.all did.
+    expect(settled).toBe(false);
+    releaseSlow?.();
+    const outcome = await promise;
+    expect(settled).toBe(true);
+    expect(outcome).toMatchObject({ status: "truncated", reason: "bounds-exceeded" });
+    // "d" was still available on the shared cursor when "second" threw, but the terminated flag
+    // must have stopped the "slow" worker from ever dispatching it once it finished.
+    expect(dispatched).toEqual(["fast", "slow", "second"]);
+    const progressCountAtSettle = progressCalls.length;
+    const dispatchedCountAtSettle = dispatched.length;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(progressCalls).toHaveLength(progressCountAtSettle);
+    expect(dispatched).toHaveLength(dispatchedCountAtSettle);
+  });
+
+  it("fires the fetchItem AbortSignal on in-flight siblings once one worker throws (KEIKO-0758 follow-up)", async (): Promise<void> => {
+    // Codex flagged that the earlier KEIKO-0758 fix set `terminated=true` on a throw but never
+    // aborted the in-flight siblings' fetches, so a slow-request sibling could carry the run
+    // past `deadlineAt`. The lane-scoped AbortController now fires on first terminal error and
+    // the combined signal is delivered to `fetchItem` via context.signal. This test observes
+    // the signal directly: two workers race, "fast" throws immediately, "slow" awaits its own
+    // abort — a cooperating port sees the signal fire and can settle before the pool's timeout.
+    let releaseFast: (() => void) | undefined;
+    const fastGate = new Promise<void>((resolve) => {
+      releaseFast = resolve;
+    });
+    let slowSignalAborted = false;
+    let slowResolve: (() => void) | undefined;
+    const slowSettled = new Promise<void>((resolve) => {
+      slowResolve = resolve;
+    });
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: "fast" }, { itemKey: "slow" }],
+          complete: true,
+        }),
+      fetchItem: async (ref, context): Promise<AtlassianSyncItemFetchOutcome> => {
+        if (ref.itemKey === "fast") {
+          await fastGate;
+          throw new AtlassianSyncBudgetExhausted("bounds-exceeded");
+        }
+        // Slow worker: attach to context.signal (the lane-scoped combined signal) and settle
+        // when it aborts. A port that does NOT honor signal would hang indefinitely; this test
+        // proves the wire-up so a cooperating port can short-circuit.
+        expect(context.signal).toBeDefined();
+        context.signal?.addEventListener(
+          "abort",
+          () => {
+            slowSignalAborted = true;
+            slowResolve?.();
+          },
+          { once: true },
+        );
+        await slowSettled;
+        return { kind: "skipped", reason: "unavailable" };
+      },
+    };
+    const promise = runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 2 }),
+    });
+    // Yield so both workers are in-flight, then release fast to trigger the throw.
+    await Promise.resolve();
+    await Promise.resolve();
+    releaseFast?.();
+    const outcome = await promise;
+    expect(slowSignalAborted).toBe(true);
+    // The run surfaces the throw as truncated / bounds-exceeded via the
+    // AtlassianSyncBudgetExhausted classification path.
+    expect(outcome).toMatchObject({ status: "truncated", reason: "bounds-exceeded" });
+  });
+
+  it("stops dispatching new work once the run deadline is exceeded (KEIKO-0758 follow-up)", async (): Promise<void> => {
+    // Companion to the abort-propagation test above: the deadline check inside the worker loop
+    // prevents a slow-last-worker from pulling new refs off the shared cursor after the run
+    // budget has already expired. A synthetic `now` clock advances past `maxDurationMs` between
+    // the first two fetches; workers must not dispatch a third even though refs remain.
+    const dispatched: string[] = [];
+    let clock = 0;
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: "a" }, { itemKey: "b" }, { itemKey: "c" }],
+          complete: true,
+        }),
+      fetchItem: (ref): Promise<AtlassianSyncItemFetchOutcome> => {
+        dispatched.push(ref.itemKey);
+        // Advance the clock so `deadlineExceeded()` starts returning true after the second call.
+        if (dispatched.length === 2) clock = 10_000;
+        return Promise.resolve({ kind: "item", item: item(ref.itemKey) });
+      },
+    };
+    await runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 1, maxDurationMs: 5_000 }),
+      now: () => clock,
+    });
+    // The third ref must NEVER dispatch because deadlineExceeded() flipped true first.
+    expect(dispatched.includes("c")).toBe(false);
   });
 
   it("never exceeds maxConcurrency in-flight fetches — boundary exact", async () => {

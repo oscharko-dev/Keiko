@@ -1,0 +1,34 @@
+{
+  "issue": 3184,
+  "verdict": "PASS",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "seriousOrCriticalViolations": 0
+    },
+    {
+      "file": "02-light.png",
+      "seriousOrCriticalViolations": 0
+    },
+    {
+      "file": "03-dark-hc.png",
+      "seriousOrCriticalViolations": 0
+    },
+    {
+      "file": "04-light-hc.png",
+      "seriousOrCriticalViolations": 0
+    },
+    {
+      "file": "05-prefers-contrast.png",
+      "seriousOrCriticalViolations": 0
+    },
+    {
+      "file": "06-forced-colors.png",
+      "seriousOrCriticalViolations": 0
+    },
+    {
+      "file": "07-reduced-motion.png",
+      "seriousOrCriticalViolations": 0
+    }
+  ]
+}

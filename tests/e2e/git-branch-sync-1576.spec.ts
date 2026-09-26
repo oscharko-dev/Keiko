@@ -139,6 +139,7 @@ function projectBody(fixture: GitFixture): unknown {
         createdAt: Date.now(),
         lastOpenedAt: Date.now(),
         available: true,
+        workspaceAvailable: true,
       },
     ],
   };
@@ -329,12 +330,18 @@ function syncExecuteBody(operation: "fetch" | "pull"): unknown {
   };
 }
 
+// #3394 review: `headCommitSha` is the reviewed head SHA the browser must capture from this preview
+// and resubmit as `verifiedCommitSha` at execute time (GitClientWindow.tsx refuses to propose a push
+// whose preview carried none).
+const PUSH_HEAD_COMMIT_SHA = "a".repeat(40);
+
 function pushPreviewBody(): unknown {
   return {
     schemaVersion: "1",
     remoteAlias: "origin",
     remoteBranchName: "main",
     sourceBranchName: "main",
+    headCommitSha: PUSH_HEAD_COMMIT_SHA,
     riskClass: "normal",
     wouldCreateRemoteBranch: false,
     wouldTriggerChecks: true,
@@ -404,6 +411,9 @@ async function installReadRoutes(
   await page.route("**/api/git/diff**", async (route) => {
     await route.fulfill(jsonBody(emptyDiffBody(fixture)));
   });
+  await page.route("**/api/workspaces", async (route) => {
+    await route.fulfill(jsonBody({ manifests: [] }));
+  });
 }
 
 async function installMutationRoutes(
@@ -422,6 +432,25 @@ async function installMutationRoutes(
     calls.branchSwitches.push(parsePostBody(route));
     await route.fulfill(
       jsonBody({ schemaVersion: "1", status: "succeeded", actionKind: "branch-switch" }),
+    );
+  });
+  // #3394 review: pre-existing gap, unrelated to this fix — confirmed still present at the freeze
+  // commit. Epic #3384 correction 5 made every sync/push mutation mint an approval unconditionally
+  // (proposeGitDeliverySync / proposePush, api.ts) before executing, but this fixture never mocked
+  // any */approve route, so those calls fell through to the real running server and failed against
+  // an unregistered project. Mocked here, alongside the fix under test, so this file's own push (and
+  // pull/fetch) evidence — and this fix's own capture-and-resend behavior — are reachable at all.
+  await page.route("**/api/git-delivery/*/approve", async (route) => {
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        approval: {
+          schemaVersion: "1",
+          approvalId: "e2e-1576-approval",
+          approvalToken: "e2e-1576-token",
+        },
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      }),
     );
   });
   await page.route("**/api/git-delivery/fetch/preview", async (route) => {
@@ -517,6 +546,10 @@ function writeEvidenceManifest(): void {
       kind: "local-bare-repository",
       worktree: "temporary-local-worktree",
       remote: "temporary-local-bare-remote",
+      // KEIKO-0995: name the browser-side project path this evidence run is scoped to, matching
+      // the field that git-changes-view-1575, git-pr-merge-1577, and git-client-closeout-1578
+      // all record in their fixture blocks.
+      browserProjectPath: EVIDENCE_PROJECT_PATH,
       branches: ["main", "feature/local"],
     },
     routesIntercepted: MANIFEST_ROUTES,
@@ -585,11 +618,12 @@ async function switchToFeatureBranch(
   fixture: GitFixture,
   calls: RouteCalls,
 ): Promise<void> {
-  await gitWindow.getByRole("combobox", { name: "Branch: main" }).click();
+  await gitWindow.getByRole("button", { name: "Branch: main" }).click();
   await gitWindow.getByRole("searchbox", { name: "Search branches" }).fill("feature");
-  await expect(gitWindow.getByRole("option", { name: /feature\/local/u })).toBeVisible();
+  await expect(gitWindow.getByRole("menuitemradio", { name: /feature\/local/u })).toBeVisible();
   await expect(gitWindow).not.toContainText(fixture.aheadSha);
-  await gitWindow.getByRole("option", { name: /feature\/local/u }).click();
+  await gitWindow.getByRole("menuitemradio", { name: /feature\/local/u }).click();
+  await gitWindow.page().getByRole("button", { name: "Switch branch" }).click();
   await expect
     .poll(() => calls.branchSwitches.length, { message: "branch switch route called" })
     .toBeGreaterThan(0);
@@ -625,15 +659,21 @@ async function verifyHistoryAndPullEvidence(
   calls: RouteCalls,
 ): Promise<void> {
   await gitWindow.getByRole("tab", { name: "History" }).click();
-  await expect(gitWindow.getByRole("listbox", { name: "Commit history" })).toBeVisible();
+  await expect(gitWindow.getByRole("list", { name: "Commit history" })).toBeVisible();
   await expect(
-    gitWindow.getByRole("option", { name: /feat: local branch evidence/u }),
+    gitWindow.getByRole("button", { name: /feat: local branch evidence/u }),
   ).toBeVisible();
   await expect(gitWindow.getByRole("region", { name: "Commit details" })).toContainText(
     fixture.aheadSha,
   );
 
   await gitWindow.getByRole("button", { name: "Run sync: Pull" }).click();
+  await page
+    .getByRole("dialog", { name: "Confirm pull" })
+    .getByRole("button", {
+      name: "Pull changes",
+    })
+    .click();
   await expect
     .poll(() => calls.syncPreviews.length, { message: "pull preview route called" })
     .toBeGreaterThan(0);

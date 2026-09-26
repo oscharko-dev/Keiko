@@ -42,24 +42,59 @@ Implementation status is distinct from documentation-spine coverage: the shipped
 Ready because their migrations landed and were accepted, while [component-template.md](component-template.md)
 records whether each family has full, partial, or worked-example coverage against the ten-section spine.
 
-| Component                      | Status     | Owner     | Since                           | Shipped by  | Board status |
-| ------------------------------ | ---------- | --------- | ------------------------------- | ----------- | ------------ |
-| Button / Field / Toggle / Tabs | Ready      | @core-ui  | v0.1                            | #1293/#1294 | Done         |
-| Messages & Feedback            | Ready      | @core-ui  | v0.2                            | #1294       | Done         |
-| Table & Data Grid              | Ready      | @data-ui  | v0.4                            | #1297       | Done         |
-| Inputs & Forms (extended)      | Ready      | @core-ui  | v0.4                            | #1298       | Done         |
-| Navigation set                 | Ready      | @core-ui  | v0.4                            | #1298       | Done         |
-| AI & Agent surfaces            | Ready      | @agent-ux | v0.4                            | #1296       | Done         |
-| Data Visualisation             | Ready      | @data-ui  | v0.4                            | #1297       | Done         |
-| Update experience window       | Draft      | @core-ui  | v0.2.11 candidate               | #1696       | In Progress  |
-| Coding Workbench               | Draft      | @agent-ux | v0.2.12 candidate               | #1990-#1994 | In Progress  |
-| Legacy 2-way theme toggle      | Deprecated | @core-ui  | migration target: theme-control | replaced    | Done         |
+| Component                       | Status     | Owner     | Since                            | Shipped by          | Board status        |
+| ------------------------------- | ---------- | --------- | -------------------------------- | ------------------- | ------------------- |
+| Button / Field / Toggle / Tabs  | Ready      | @core-ui  | v0.1                             | #1293/#1294         | Done                |
+| Messages & Feedback             | Ready      | @core-ui  | v0.2                             | #1294               | Done                |
+| Table & Data Grid               | Ready      | @data-ui  | v0.4                             | #1297               | Done                |
+| Inputs & Forms (extended)       | Ready      | @core-ui  | v0.4                             | #1298               | Done                |
+| Navigation set                  | Ready      | @core-ui  | v0.4                             | #1298               | Done                |
+| AI & Agent surfaces             | Ready      | @agent-ux | v0.4                             | #1296               | Done                |
+| Data Visualisation              | Ready      | @data-ui  | v0.4                             | #1297               | Done                |
+| Update experience window repair | Draft      | @core-ui  | Existing surface; current repair | #1696; repair #3405 | In Progress (#3405) |
+| Coding Workbench                | Draft      | @agent-ux | v0.2.12 candidate                | #1990-#1994         | In Progress         |
+| Legacy 2-way theme toggle       | Deprecated | @core-ui  | migration target: theme-control  | replaced            | Done                |
 
-**Draft** is a defined status, but no current component uses it — every shipped family is Ready, and the one
-retired family is Deprecated. Register status labels must agree with the **Keiko Product Delivery** board: a
+**Draft** applies to the in-progress rows above; it does not invalidate the previously accepted shipped
+families. The updater's #1696 issue closed on 2026-06-30. Its current Draft row tracks #3405's repair
+and fresh production-BFF/fidelity evidence, not an unmerged #1696 delivery. Register status labels
+must agree with the **Keiko Product Delivery** board: a
 component shown Ready here must not sit in a board state that contradicts shipped delivery, and vice versa.
 This is a Stop Condition — status labels must not conflict with delivery-board states. When the two disagree,
 reconcile before treating either as authoritative (the data-viz reconciliation above is the worked example).
+
+## Component styling register
+
+The product has a global token source and several component-scoped styling conventions. This
+register records the shipped conventions and their migration status; it is separate from the
+component maturity register above.
+
+For new components, the canonical convention is a CSS Module with local class names prefixed with
+`cmp` (for example, `.cmpPanel` or `.cmpAction`). New component styles must consume the existing
+design tokens and must not add rules to `globals.css`, which remains protected by the #1300 visual
+proof gate.
+
+The remaining entries are documented compatibility exceptions, not alternative defaults for new
+components. Their number is shrink-only: do not add a new surface using an exception, and migrate
+an existing surface opportunistically when a feature change already makes the work local and safe.
+The complete, machine-readable **CSS Module** exception inventory lives in
+[`styling-exceptions.json`](styling-exceptions.json). Its UI test fails for an unregistered
+exception, a stale entry, or an increase above the committed inventory size; the same test pins
+the separately documented native-control baseline. This makes the exception budget a ratchet
+rather than a review convention.
+
+| Surface / source                      | Convention                                                                                                  | Status                                           | Evidence                                                      | Migration expectation                                                                                                                                                                                   |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WorkspaceTrust.module.css`           | CSS Module with `cmp`-prefixed local classes                                                                | Canonical                                        | Existing shipped surface; retrospectively registered in #3124 | Use as the pattern for new component styles.                                                                                                                                                            |
+| `WorkspaceSelection.module.css`       | CSS Module with unprefixed local classes                                                                    | Legacy exception (shrink-only)                   | Workspace-selection overlay, #2150                            | Keep the overlap-safe overlay isolated; rename its local classes to `cmp*` when that surface is next changed.                                                                                           |
+| `CodingWorkbenchWindow.module.css`    | CSS Module with unprefixed local classes and a narrowly scoped `:global(.window):has(.shell)` host selector | Legacy exception (shrink-only)                   | Coding Workbench, #1990-#1994                                 | The host selector is coupled to the desktop window contract; do not extend it or introduce a new global host coupling. Rename local classes to `cmp*` when the workbench is next substantially changed. |
+| `connectors.module.css`               | Scoped selector using `.scope` with `:global()`                                                             | Legacy exception (shrink-only)                   | Connector styling boundary, #2245                             | Use only to bridge an existing external or global class contract; new component rules stay local to a `cmp`-prefixed module.                                                                            |
+| `git-client-styles.ts`                | Inline `CSSProperties` objects                                                                              | Legacy exception (shrink-only)                   | Git client shell, #1574 and #1575                             | Keep inline styles only for values that are genuinely runtime-dynamic; move static presentation to a `cmp`-prefixed CSS Module when modifying the surface.                                              |
+| `globals.css` native-control baseline | Global `button` reset and pointer-modality focus suppression                                                | Foundation compatibility exception (shrink-only) | WCAG focus-modality contract, #627                            | Do not add bare native-element styling; component styles stay scoped and use `cmp*` classes. The existing baseline may only be narrowed after all consumers are migrated.                               |
+
+The register does not authorize a second token system, a parallel theme engine, or product-specific
+global selectors. If a proposed component cannot follow the canonical convention, document the
+constraint in the relevant component record before adding a new exception.
 
 ## Per-component documentation template
 
@@ -79,7 +114,9 @@ A change enters the system through three rules, each enforced by a real gate in 
 1. **Resolve to existing tokens.** A change that needs a new colour, hue, or one-off value is a **token
    proposal first**, not a component change. Enforcement: the scope-wide drift guards in
    `packages/keiko-ui/src/app/globals.css.test.ts` parse every in-scope rule and fail when a migrated surface
-   carries a raw, unreviewed value instead of a `--*` token — a new literal cannot land silently.
+   carries a raw, unreviewed value instead of a `--*` token. The same gate scans every CSS Module and
+   production TSX component: a custom-property reference must resolve to a token declared in `globals.css`
+   or provide an explicit safe fallback. New literals and phantom token names cannot land silently.
 2. **Ship the full template before future Ready promotions.** States and accessibility are included; a new or
    promoted component cannot move to Ready until the [component-template.md](component-template.md) spine is
    complete (see above). Existing Ready families with partial migration-note coverage must stay labelled as

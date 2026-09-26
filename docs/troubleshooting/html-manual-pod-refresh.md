@@ -53,8 +53,9 @@ deleting live pages that were simply not visited due to budget constraints.
    Knowledge inspection:
 
    ```bash
-   # Find the UI log to confirm the refresh crawl limit(s) that were applied.
-   tail -n 50 .keiko/ui.log | grep -i "manual\|crawl\|limit"
+   # Find the refresh request and its outcome in the redacted Activity Log.
+   keiko support export --out keiko-support.jsonl
+   keiko support analyze keiko-support.jsonl --clusters
    ```
 
    Look for log lines mentioning page count, byte size, or depth bounds that were hit.
@@ -118,7 +119,9 @@ corrupting the vector index.
 3. Check the UI log to confirm the mismatch:
 
    ```bash
-   tail -n 100 .keiko/ui.log | grep -E "embedding|model.*identity"
+   # Look for failed model calls (http.gateway.fetch.failed) and their errorKind.
+   keiko support export --out keiko-support.jsonl
+   keiko support analyze keiko-support.jsonl --clusters
    ```
 
 **Resolution**
@@ -217,7 +220,9 @@ Reasons the indexing phase can fail or be cancelled include:
 2. Inspect the UI log for the specific error that caused the failure:
 
    ```bash
-   tail -n 200 .keiko/ui.log | grep -E "refresh|error|failed|cancelled"
+   # Look for failed or cancelled refresh requests and their errorKind.
+   keiko support export --out keiko-support.jsonl
+   keiko support analyze keiko-support.jsonl --clusters
    ```
 
    Look for a stack trace or error message that indicates the root cause (gateway error,
@@ -302,7 +307,9 @@ the operator is told to investigate.
 4. Inspect the UI log for crawl diagnostics:
 
    ```bash
-   tail -n 100 .keiko/ui.log | grep -E "crawl|empty|manual"
+   # Look for the refresh request and its errorKind.
+   keiko support export --out keiko-support.jsonl
+   keiko support analyze keiko-support.jsonl --clusters
    ```
 
 **Resolution**

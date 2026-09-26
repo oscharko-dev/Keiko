@@ -49,6 +49,7 @@ import type {
   EmissionRole,
   ScreenEmission,
 } from "./emissionPlan.js";
+import { fnv1aHex } from "./idHash.js";
 import type {
   AlignItems,
   ColorToken,
@@ -101,13 +102,23 @@ function sanitizeScreenFileName(screenId: string): string {
 }
 
 function buildSafeNameIndex(screens: readonly ScreenEmission[]): ReadonlyMap<string, string> {
-  const seen = new Map<string, number>();
+  // KEIKO-0414: keep ONE global occupancy Set across every screen's final name (not just the
+  // per-base counter). A per-base counter can hand out `base-1` while an earlier screen has
+  // already emitted `base-1` as its own base, producing a hidden collision that silently
+  // discards a screen when the artifact is later Map/Set-keyed by path. The while-loop below
+  // walks past any suffix that is already occupied — including bases owned by other screens.
+  const occupied = new Set<string>();
   const result = new Map<string, string>();
   for (const screen of screens) {
     const base = sanitizeScreenFileName(screen.screenId);
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    result.set(screen.screenId, count === 0 ? base : `${base}-${String(count)}`);
+    let candidate = base;
+    let suffix = 0;
+    while (occupied.has(candidate)) {
+      suffix += 1;
+      candidate = `${base}-${String(suffix)}`;
+    }
+    occupied.add(candidate);
+    result.set(screen.screenId, candidate);
   }
   return result;
 }
@@ -124,16 +135,21 @@ const CSS_INJECTION_RE = /[{};]|<\/|\*\/|[\u0000-\u001f\u007f]/gu;
 
 const safeFontFamily = (family: string): string => {
   // Strip unsafe Unicode format chars first — bidi/zero-width/C1 are NOT covered by CSS_INJECTION_RE
-  // (which only strips C0/DEL + structural injection sequences) — then escape embedded quotes. Same
-  // egress invariant as escapeHtml: these chars would otherwise survive into the quoted CSS string.
+  // (which only strips C0/DEL + structural injection sequences) — then escape backslashes BEFORE
+  // quotes, THEN escape embedded quotes. Ordering matters: an attacker-supplied trailing U+005C
+  // would otherwise re-combine with the `\` inserted by the quote escape (KEIKO-0455) and escape
+  // the closing `"` of the emitted string literal, producing an unclosed CSS string that swallows
+  // subsequent declarations. Same egress invariant as escapeHtml: these chars would otherwise
+  // survive into the quoted CSS string.
   const cleaned = stripUnsafeFormatChars(family)
     .replace(CSS_INJECTION_RE, "")
+    .replaceAll("\\", String.raw`\5c `)
     .replaceAll('"', String.raw`\22 `);
   return `"${cleaned}"`;
 };
 
-// Valid CSS hex color: 3, 4, 6, or 8 hex digits.
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/u;
+// Valid CSS hex color: 3, 4, 6, or 8 hex digits (not any length in between).
+const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/u;
 
 const isSafeColor = (value: string): boolean => HEX_COLOR_RE.test(value);
 
@@ -205,14 +221,9 @@ const buildTokenLookups = (tokens: DesignTokens): TokenLookups => {
 // hash to the later class so distinct Figma nodes cannot alias onto one CSS selector.
 
 const sanitizeIdForClass = (id: string): string => id.replace(/[^a-zA-Z0-9]/gu, "-");
-const classHash = (id: string): string => {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < id.length; i += 1) {
-    hash ^= id.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
-};
+// unicodeAware=true: hash by Unicode code point, not UTF-16 code unit, so a screen name containing
+// an emoji or an astral character hashes the same regardless of surrogate-pair splitting.
+const classHash = (id: string): string => fnv1aHex(id, 36, true);
 const nodeClassBase = (id: string): string => `n-${sanitizeIdForClass(id) || "node"}`;
 const nodeClass = (id: string, ctx: ScreenStyleContext): string => {
   const existing = ctx.classMap.get(id);

@@ -426,6 +426,83 @@ describe("KeikoDiffEditor — runtime and load state", () => {
     expect(screen.getByTestId("mock-diff")).toBeInTheDocument();
   });
 
+  it("re-applies the theme on a theme-variant change without remounting (Issue 2.2)", async () => {
+    // jsdom exposes no --ed-* design tokens, so resolveEditorThemeTokensFromDom throws every time it
+    // runs (see diff-mount.test.ts); the throw surfacing again through onRuntimeError on rerender is
+    // the observable that the re-theme path re-ran against the SAME mounted editor instance, not that
+    // a remount re-registered it from scratch. Mirrors KeikoCodeEditor.test.tsx's identical assertion
+    // for the code editor's own Issue 2.2 fix.
+    const onRuntimeError = vi.fn();
+    const { rerender } = render(
+      <KeikoDiffEditor {...baseDiffProps({ onRuntimeError, themeVariant: "dark" })} />,
+    );
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalledTimes(1);
+    onRuntimeError.mockClear();
+
+    rerender(<KeikoDiffEditor {...baseDiffProps({ onRuntimeError, themeVariant: "light" })} />);
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalledTimes(1);
+    // Still the same mounted diff editor -- no remount (hunk navigation still routes to the one
+    // captured Monaco controller).
+    expect(screen.getByTestId("mock-diff")).toBeInTheDocument();
+  });
+
+  it("clears the diff editor's refs when the file becomes non-diffable, so a later theme change is a no-op (P2)", async () => {
+    // Same diffable + binary pairing as the "remounts the diff editor" test above, but this time we
+    // drive the diffable -> binary transition and then change themeVariant while the binary file is
+    // selected, instead of switching back to a diffable file.
+    const model = buildPatchPreview({
+      patch: {
+        patchId: "p",
+        status: "previewed",
+        provenance: { origin: "applied-patch" },
+        changes: [
+          {
+            uri: "keiko://doc/new.ts",
+            isNewFile: true,
+            isDeletion: false,
+            edits: [
+              {
+                range: { start: { line: 0, column: 0 }, end: { line: 0, column: 0 } },
+                newText: "a\n",
+              },
+            ],
+          },
+          { uri: "keiko://doc/logo.png", isNewFile: false, isDeletion: false, edits: [] },
+        ],
+      },
+      sources: {
+        "keiko://doc/logo.png": {
+          content: { relativePath: "assets/logo.png", sizeBytes: 3, text: "bin", truncated: false },
+          binary: true,
+        },
+      },
+    });
+    const onRuntimeError = vi.fn();
+    const { rerender } = render(
+      <KeikoDiffEditor {...baseDiffProps({ model, onRuntimeError, themeVariant: "dark" })} />,
+    );
+    await flushMount();
+    // Mount registers the theme once (jsdom has no --ed-* tokens, so this always errors — see the
+    // "reports a non-fatal theme failure" test above).
+    expect(onRuntimeError).toHaveBeenCalledTimes(1);
+    onRuntimeError.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: /assets\/logo\.png/ }));
+    expect(screen.queryByTestId("mock-diff")).not.toBeInTheDocument();
+
+    rerender(
+      <KeikoDiffEditor {...baseDiffProps({ model, onRuntimeError, themeVariant: "light" })} />,
+    );
+    await flushMount();
+
+    // No live editor is mounted while the binary file is selected, so the theme-variant change must
+    // be a no-op: no reapply, and no theme error, against the monaco/container handles the unmounted
+    // <DiffEditor> left behind.
+    expect(onRuntimeError).not.toHaveBeenCalled();
+  });
+
   it("shows a loading placeholder while the runtime loads", () => {
     render(<KeikoDiffEditor {...baseDiffProps({ loadState: { status: "loading" } })} />);
     expect(screen.getByTestId("keiko-diff-pane-loading")).toBeInTheDocument();

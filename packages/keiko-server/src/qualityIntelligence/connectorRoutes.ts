@@ -15,7 +15,7 @@
 //     any sibling handler.
 
 import type { IncomingMessage } from "node:http";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { QualityIntelligenceIngestion } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

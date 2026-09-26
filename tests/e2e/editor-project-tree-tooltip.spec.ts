@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isBenignWebKitResizeObserverDelivery } from "./support/editorWorkspace.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 // Keep this safely beyond the 175 px project-tree label width across Linux, macOS, and Windows
@@ -29,8 +30,9 @@ function createTooltipFixture(): string {
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
+  const browserName = page.context().browser()?.browserType().name();
   page.on("pageerror", (error) => {
-    errors.push(error.message);
+    if (!isBenignWebKitResizeObserverDelivery(browserName, error)) errors.push(error.message);
   });
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());

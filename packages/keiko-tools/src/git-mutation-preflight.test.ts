@@ -10,10 +10,15 @@ import {
 } from "./git-mutation-preflight.js";
 
 // A clean repository on `main` with one staged file, an upstream, and an `origin` remote.
+// #3394 review: `headSha` defaults to the SAME value the `push` fixture below pins as
+// `verifiedCommitSha`, so the new `verified-commit-drifted` check does not spuriously fire for every
+// existing preflight scenario that never intended to exercise drift. A test that DOES want drift
+// overrides one side or the other explicitly.
 function snapshot(overrides: Partial<GitWorktreeSnapshot> = {}): GitWorktreeSnapshot {
   return {
     headDetached: false,
     currentBranchName: "main",
+    headSha: "a".repeat(40),
     stagedFileCount: 1,
     unstagedFileCount: 0,
     untrackedFileCount: 0,
@@ -164,6 +169,7 @@ describe("preflight — commit", () => {
 describe("preflight — push (upstream readiness and remote reachability)", () => {
   const push: GitDeliveryResolvedInputs = {
     kind: "push",
+    verifiedCommitSha: "a".repeat(40),
     sourceBranchName: "main",
     remoteAlias: "origin",
     remoteBranchName: "main",
@@ -181,8 +187,75 @@ describe("preflight — push (upstream readiness and remote reachability)", () =
     );
   });
 
-  it("blocks when no upstream is configured and none is being set", () => {
-    expect(codes(push, snapshot({ hasUpstream: false }))).toContain("no-upstream-configured");
+  // #3394 review: `no-upstream-configured` used to fire when there was no local tracking relation
+  // AND no pinned commit (`pushNeedsUpstream`'s third condition). Now that `verifiedCommitSha` is
+  // mandatory and always a valid Git object id by construction, that third condition can never be
+  // false, so the whole finding is unreachable for push — deleted rather than left as dead code
+  // (AGENTS.md §7). This proves the deletion: a missing upstream with no tracking requested no
+  // longer blocks, because the immutable pinned source needs no local tracking relation.
+  it("no longer blocks on a missing upstream now that every push carries a pinned commit", () => {
+    expect(codes(push, snapshot({ hasUpstream: false }))).not.toContain("no-upstream-configured");
+    expect(evaluateGitPreflight(push, snapshot({ hasUpstream: false })).ok).toBe(true);
+  });
+
+  // #3394 review, finding 1 — the actual anti-drift gate: the caller-supplied `verifiedCommitSha`
+  // must equal the FRESHLY re-read local head. This is what turns "the branch moved since I
+  // approved this" into a clear, typed, user-actionable block instead of silently publishing a
+  // different commit than was reviewed.
+  it("blocks when the pinned commit no longer matches the freshly-read local head (verified-commit-drifted)", () => {
+    const drifted = snapshot({ headSha: "c".repeat(40) });
+    const report = evaluateGitPreflight(push, drifted);
+    expect(report.ok).toBe(false);
+    expect(report.blocking.map((f) => f.code)).toContain("verified-commit-drifted");
+  });
+
+  it("does not block when the pinned commit matches the freshly-read local head", () => {
+    const current = snapshot({ headSha: "a".repeat(40) });
+    expect(codes(push, current)).not.toContain("verified-commit-drifted");
+  });
+
+  // #3394 review, follow-up on the drift check: `snapshot.headSha` is the head of the CHECKED-OUT
+  // branch, so the pinned-commit comparison only speaks for `sourceBranchName` when that branch is
+  // the checkout. The reviewer's case -- pinned commit equal to the checked-out head, but a different
+  // branch named as the source -- used to pass preflight; it must be refused outright.
+  it("blocks when the named source branch is not the checked-out branch (source-branch-not-checked-out)", () => {
+    const report = evaluateGitPreflight(
+      { ...push, sourceBranchName: "feature/other" },
+      snapshot({ headSha: "a".repeat(40) }),
+    );
+    expect(report.ok).toBe(false);
+    expect(report.blocking.map((f) => f.code)).toContain("source-branch-not-checked-out");
+  });
+
+  it("blocks a push from a detached head, where no checked-out branch vouches for the named source", () => {
+    expect(codes(push, snapshot({ headDetached: true, currentBranchName: undefined }))).toContain(
+      "source-branch-not-checked-out",
+    );
+  });
+
+  it("does not block when the named source branch is the checked-out branch", () => {
+    expect(codes(push, snapshot())).not.toContain("source-branch-not-checked-out");
+  });
+
+  // Keiko for Quality on #3394: a wrong-branch push whose pinned commit also differs from the
+  // checked-out head is ONE root cause. The drift comparison has no valid signal against another
+  // branch's head, and its "retry" hint would contradict the "re-target" hint that explains the
+  // refusal -- so it is reported alone, and the drift finding is reserved for the checked-out branch.
+  it("reports a wrong-branch push once, without the meaningless drift finding for another branch's head", () => {
+    const report = evaluateGitPreflight(
+      { ...push, sourceBranchName: "feature/other", verifiedCommitSha: "b".repeat(40) },
+      snapshot({ headSha: "a".repeat(40) }),
+    );
+    expect(report.ok).toBe(false);
+    expect(report.blocking.map((f) => f.code)).toEqual(["source-branch-not-checked-out"]);
+  });
+
+  it("still reports drift for the checked-out branch when the pinned commit moved", () => {
+    const report = evaluateGitPreflight(
+      { ...push, verifiedCommitSha: "b".repeat(40) },
+      snapshot({ headSha: "a".repeat(40) }),
+    );
+    expect(report.blocking.map((f) => f.code)).toEqual(["verified-commit-drifted"]);
   });
 
   it("permits setting an upstream on first push", () => {
@@ -284,6 +357,7 @@ describe("preflight — provider actions have no local precondition", () => {
   it("returns an ok empty report for pr-create / pr-update / merge", () => {
     const prCreate: GitDeliveryResolvedInputs = {
       kind: "pr-create",
+      verifiedCommitSha: "a".repeat(40),
       headBranchName: "feature",
       baseBranchName: "main",
       titleByteLength: 5,

@@ -6,11 +6,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { VoiceProfile } from "@/lib/types";
-import {
-  DISCUSSION_MODE_PLANS,
-  type DiscussionMode,
-  type VoiceTranscriptSegment,
-} from "@oscharko-dev/keiko-contracts";
+import type { DiscussionMode, VoiceTranscriptSegment } from "@oscharko-dev/keiko-contracts";
+import { DISCUSSION_MODE_PLANS } from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import {
   VOICE_DISCUSSION_INTENTS,
   type DiscussionVoiceBinding,

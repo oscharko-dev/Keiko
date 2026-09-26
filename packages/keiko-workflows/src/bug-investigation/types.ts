@@ -25,7 +25,7 @@ import type { BugWorkflowEventSink } from "./events.js";
 // @oscharko-dev/keiko-contracts in issue #158. Re-exported here so consumers of "./types.js"
 // continue to resolve them unchanged.
 export type { BugWorkflowStatus, BugWorkflowLimits } from "@oscharko-dev/keiko-contracts";
-export { DEFAULT_BUG_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_BUG_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/bug-investigation-events";
 
 // ─── Failure evidence (D7) ──────────────────────────────────────────────────────────
 
@@ -85,8 +85,8 @@ export interface BugInvestigationDeps {
   readonly sink?: BugWorkflowEventSink | undefined;
   // Process environment for runCommand env isolation. Defaults to process.env.
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
-  // Optional verification egress policy override. Defaults to the verification orchestrator's
-  // fail-closed policy unless a test/fake spawn is injected by the caller.
+  // Optional verification egress policy override. Left unset, the verification orchestrator's own
+  // fail-closed policy applies — it is never inferred from which other dependencies are injected.
   readonly verificationNetworkEnforcement?: NetworkEnforcementMode | undefined;
   readonly verificationEnforcedNetworkAvailable?: boolean | undefined;
   // AbortSignal for cancellation.

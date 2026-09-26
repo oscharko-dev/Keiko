@@ -46,7 +46,7 @@ function deps(model: string | (() => Promise<string>)): SalienceDeps {
 function input(overrides: Partial<SalienceInput> = {}): SalienceInput {
   return {
     userText:
-      "I'm building a fintech app called Atlas in Rust with PostgreSQL, my team is in Berlin",
+      "I'm building a fintech app called Atlas. Atlas is written in Rust. Atlas uses PostgreSQL. My team is in Berlin.",
     existingBodies: [],
     context: baseContext({ projectId: "proj-atlas" as ProjectId }),
     ...overrides,
@@ -59,7 +59,7 @@ function candidatesOnly(outcomes: readonly CaptureOutcome[]): readonly CaptureOu
 
 const ATLAS_FACTS = JSON.stringify([
   {
-    body: "The user is building a fintech app called Atlas.",
+    body: "I'm building a fintech app called Atlas.",
     type: "fact",
     confidence: 0.7,
     scope: "project",
@@ -83,7 +83,7 @@ const ATLAS_FACTS = JSON.stringify([
     tags: ["postgresql"],
   },
   {
-    body: "The user's team is in Berlin.",
+    body: "My team is in Berlin.",
     type: "fact",
     confidence: 0.6,
     scope: "user",
@@ -103,9 +103,10 @@ describe("SALIENCE_SYSTEM_PROMPT", () => {
     expect(SALIENCE_SYSTEM_PROMPT).toContain('"source": "user"');
   });
 
-  it("instructs the model to preserve the user's source language", () => {
-    expect(SALIENCE_SYSTEM_PROMPT).toContain("same language");
-    expect(SALIENCE_SYSTEM_PROMPT).toContain("Der Nutzer heißt Paul.");
+  it("requires verbatim user evidence instead of model paraphrases", () => {
+    expect(SALIENCE_SYSTEM_PROMPT).toContain("verbatim");
+    expect(SALIENCE_SYSTEM_PROMPT).toContain("Never paraphrase");
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('"Hallo Keiko, ich bin Paul."');
   });
 });
 
@@ -128,10 +129,10 @@ describe("extractSalientMemories", () => {
     }
   });
 
-  it("preserves German model output for German user facts", async () => {
+  it("preserves verbatim German user evidence", async () => {
     const model = JSON.stringify([
       {
-        body: "Der Nutzer baut Atlas in Rust mit PostgreSQL.",
+        body: "Wir bauen Atlas in Rust mit PostgreSQL.",
         type: "fact",
         confidence: 0.8,
         scope: "project",
@@ -146,7 +147,7 @@ describe("extractSalientMemories", () => {
     const candidates = candidatesOnly(result);
     expect(candidates).toHaveLength(1);
     if (candidates[0]?.kind === "candidate") {
-      expect(candidates[0].proposal.body).toBe("Der Nutzer baut Atlas in Rust mit PostgreSQL.");
+      expect(candidates[0].proposal.body).toBe("Wir bauen Atlas in Rust mit PostgreSQL.");
     }
   });
 
@@ -173,6 +174,135 @@ describe("extractSalientMemories", () => {
     expect(seen[0]?.[1]?.content).toContain("Redis would also be a good fit.");
     expect(seen[0]?.[2]?.content).toContain("I use PostgreSQL for Atlas.");
     expect(seen[0]?.[2]?.content).not.toContain("Redis");
+  });
+
+  it("rejects an assistant-only claim falsely labelled as user-sourced", async () => {
+    const deceptiveOutput = JSON.stringify([
+      {
+        body: "Atlas uses DynamoDB.",
+        type: "fact",
+        confidence: 0.9,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "dynamodb"],
+      },
+    ]);
+    const result = await extractSalientMemories(
+      input({
+        userText: "I am evaluating database options for Atlas.",
+        assistantText: "Atlas uses DynamoDB.",
+      }),
+      {
+        ...deps(deceptiveOutput),
+        callModelMessages: (): Promise<string> => Promise.resolve(deceptiveOutput),
+      },
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it("rejects unsupported content through the legacy flattened model path", async () => {
+    const result = await extractSalientMemories(
+      input({ userText: "I am evaluating database options for Atlas." }),
+      deps(
+        JSON.stringify([
+          {
+            body: "Atlas uses DynamoDB.",
+            type: "fact",
+            confidence: 0.9,
+            scope: "project",
+            source: "user",
+            tags: ["atlas", "dynamodb"],
+          },
+        ]),
+      ),
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it("keeps user evidence verbatim when the assistant paraphrases it", async () => {
+    const userText = "We use PostgreSQL for Atlas.";
+    const result = candidatesOnly(
+      await extractSalientMemories(
+        input({
+          userText,
+          assistantText: "Atlas uses PostgreSQL for transactional data and reporting.",
+        }),
+        deps(
+          JSON.stringify([
+            {
+              body: userText,
+              type: "fact",
+              confidence: 0.9,
+              scope: "project",
+              source: "user",
+              tags: ["atlas", "postgresql"],
+            },
+          ]),
+        ),
+      ),
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.kind === "candidate" ? result[0].proposal.body : undefined).toBe(userText);
+  });
+
+  it("preserves negation instead of accepting a model-inverted fact", async () => {
+    const userText = "Atlas does not use DynamoDB.";
+    const result = await extractSalientMemories(
+      input({ userText }),
+      deps(
+        JSON.stringify([
+          {
+            body: "Atlas uses DynamoDB.",
+            type: "fact",
+            confidence: 0.9,
+            scope: "project",
+            source: "user",
+            tags: ["atlas", "dynamodb"],
+          },
+          {
+            body: userText,
+            type: "fact",
+            confidence: 0.9,
+            scope: "project",
+            source: "user",
+            tags: ["atlas", "dynamodb"],
+          },
+        ]),
+      ),
+    );
+
+    const candidates = candidatesOnly(result);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.kind === "candidate" ? candidates[0].proposal.body : undefined).toBe(
+      userText,
+    );
+  });
+
+  it("rejects questions and partial phrases as provenance evidence", async () => {
+    const userText = "Does Atlas use DynamoDB?";
+    const model = JSON.stringify([
+      {
+        body: userText,
+        type: "fact",
+        confidence: 0.9,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "dynamodb"],
+      },
+      {
+        body: "Atlas use DynamoDB",
+        type: "fact",
+        confidence: 0.9,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "dynamodb"],
+      },
+    ]);
+
+    expect(await extractSalientMemories(input({ userText }), deps(model))).toEqual([]);
   });
 
   it("maps scope hints to the correct MemoryScope kinds", async () => {
@@ -212,7 +342,11 @@ describe("extractSalientMemories", () => {
     ]);
 
     const result = await extractSalientMemories(
-      input({ context: baseContext({ projectId: "proj-atlas" as ProjectId }) }),
+      input({
+        userText:
+          "The user prefers dark mode. Atlas targets Rust. The workspace pins Node 24. Everything everywhere is TypeScript. The organization is Acme.",
+        context: baseContext({ projectId: "proj-atlas" as ProjectId }),
+      }),
       deps(model),
     );
 
@@ -263,7 +397,12 @@ describe("extractSalientMemories", () => {
         tags: [],
       },
     ]);
-    const result = await extractSalientMemories(input(), deps(model));
+    const result = await extractSalientMemories(
+      input({
+        userText: "The user prefers tabs over spaces. The user always deploys on Fridays.",
+      }),
+      deps(model),
+    );
     const confidences = candidatesOnly(result).map((c) =>
       c.kind === "candidate" ? c.proposal.provenance.confidence : -1,
     );
@@ -290,7 +429,10 @@ describe("extractSalientMemories", () => {
         tags: [],
       },
     ]);
-    const result = await extractSalientMemories(input(), deps(model));
+    const result = await extractSalientMemories(
+      input({ userText: `The user's api_key=${apiKey}. The user works at a startup.` }),
+      deps(model),
+    );
     const candidates = candidatesOnly(result);
     expect(candidates).toHaveLength(1);
     if (candidates[0]?.kind === "candidate") {
@@ -376,7 +518,9 @@ describe("extractSalientMemories", () => {
         ],
       },
     ]);
-    const result = candidatesOnly(await extractSalientMemories(input(), deps(model)));
+    const result = candidatesOnly(
+      await extractSalientMemories(input({ userText: "The user prefers pnpm." }), deps(model)),
+    );
     expect(result[0]?.kind).toBe("candidate");
     if (result[0]?.kind === "candidate") {
       expect(result[0].proposal.tags).toEqual([
@@ -445,16 +589,14 @@ describe("extractSalientMemories", () => {
 
   it("dedups a candidate near-identical to an existing body", async () => {
     const result = await extractSalientMemories(
-      input({ existingBodies: ["The user is building a fintech app called Atlas."] }),
+      input({ existingBodies: ["I'm building a fintech app called Atlas."] }),
       deps(ATLAS_FACTS),
     );
     const candidates = candidatesOnly(result);
     expect(candidates).toHaveLength(3);
     for (const candidate of candidates) {
       if (candidate.kind === "candidate") {
-        expect(candidate.proposal.body).not.toBe(
-          "The user is building a fintech app called Atlas.",
-        );
+        expect(candidate.proposal.body).not.toBe("I'm building a fintech app called Atlas.");
       }
     }
   });
@@ -520,7 +662,13 @@ describe("extractSalientMemories", () => {
         tags: [],
       },
     ]);
-    const result = await extractSalientMemories(input(), deps(model));
+    const result = await extractSalientMemories(
+      input({
+        userText:
+          "The user is building a fintech app called Atlas. The user is building a fintech app called Atlas!",
+      }),
+      deps(model),
+    );
     expect(candidatesOnly(result)).toHaveLength(1);
   });
 
@@ -547,7 +695,10 @@ describe("extractSalientMemories", () => {
         tags: [],
       })),
     );
-    const result = await extractSalientMemories(input(), deps(many));
+    const result = await extractSalientMemories(
+      input({ userText: distinctTopics.join(" ") }),
+      deps(many),
+    );
     expect(candidatesOnly(result)).toHaveLength(6);
   });
 
@@ -589,7 +740,10 @@ describe("extractSalientMemories", () => {
         tags: [],
       },
     ]);
-    const result = await extractSalientMemories(input(), deps(model));
+    const result = await extractSalientMemories(
+      input({ userText: `${secretBody}\n${nearDuplicate}` }),
+      deps(model),
+    );
     const candidates = candidatesOnly(result);
     expect(candidates).toHaveLength(1);
     const bodies = candidates.map((c) => (c.kind === "candidate" ? c.proposal.body : ""));

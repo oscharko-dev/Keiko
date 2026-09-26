@@ -40,6 +40,7 @@ export interface NodeManagedLspControlOptions {
 function workspaceForRoot(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown" as const,

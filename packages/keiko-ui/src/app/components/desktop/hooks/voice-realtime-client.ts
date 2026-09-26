@@ -4,12 +4,12 @@
 // with the answer SDP, and then stays quiet. It never touches raw audio or the media plane (AC1).
 // Native WebSocket only — no third-party package added (supply-chain invariant).
 
+import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
   decodeVoiceControlMessage,
-  type VoiceSessionChatContext,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 
 // Upper bound on the whole proxied-SDP handshake (open → session.created → answer). A server that
 // accepts the upgrade but then stalls (no session.created / no answer) would otherwise leave the

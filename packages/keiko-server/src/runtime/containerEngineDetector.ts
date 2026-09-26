@@ -21,16 +21,21 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  ContainerCapabilityResponse,
+  ContainerEngineId,
+  ContainerEngineState,
+  ContainerEngineStatus,
+  ContainerEngineUnavailableReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTAINER_ENGINE_IDS,
   CONTAINER_RUNTIME_SCHEMA_VERSION,
   CONTAINER_TASK_RULES,
-  type ContainerCapabilityResponse,
-  type ContainerEngineId,
-  type ContainerEngineState,
-  type ContainerEngineStatus,
-  type ContainerEngineUnavailableReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 export const DEFAULT_CONTAINER_PROBE_DEADLINE_MS = 4_000 as const; // generous: real daemon round-trip
 export const SUPPORTED_DOCKER_MAJOR = 20 as const; // engine-version floor; below → "unsupported"
@@ -46,6 +51,7 @@ function hostWorkspace(workspace: WorkspaceInfo | undefined): WorkspaceInfo {
   }
   return {
     root: process.cwd(),
+    selectedRoot: process.cwd(),
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -65,6 +71,13 @@ export interface ContainerProbeDeps {
   readonly now: () => number;
   readonly deadlineMs?: number | undefined;
   readonly engines?: readonly ContainerEngineId[] | undefined;
+  // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
+  // Defaults to processServerLogSink() — the same process-wide sink every other server
+  // composition site uses — so production logging works with no wiring required; tests inject a
+  // buffered sink to assert on the emitted line. The probe carries no request-scoped correlation
+  // id (it is a host-level capability check, not a per-request operation), so every line is
+  // stamped UNKNOWN_CORRELATION_ID.
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 interface EngineResolution {
@@ -183,6 +196,7 @@ async function confirmDaemon(
   run: typeof runCommand,
   signal: AbortSignal,
   base: EngineResolution,
+  activityLog: ServerLogSink,
 ): Promise<EngineResolution> {
   try {
     const result = await run(
@@ -192,6 +206,9 @@ async function confirmDaemon(
         cwd: undefined,
         timeoutMs: PER_CALL_TIMEOUT_MS,
         signal,
+        onTerminated: (evidence): void => {
+          logCommandTermination(activityLog, UNKNOWN_CORRELATION_ID, evidence);
+        },
       },
       runDeps,
     );
@@ -214,6 +231,7 @@ async function probeEngine(
   runDeps: RunCommandDeps,
 ): Promise<EngineResolution> {
   const controller = new AbortController();
+  const activityLog = deps.activityLog ?? processServerLogSink();
   let versionResolution: EngineResolution;
   try {
     const result = await deps.runCommand(
@@ -223,6 +241,9 @@ async function probeEngine(
         cwd: undefined,
         timeoutMs: PER_CALL_TIMEOUT_MS,
         signal: controller.signal,
+        onTerminated: (evidence): void => {
+          logCommandTermination(activityLog, UNKNOWN_CORRELATION_ID, evidence);
+        },
       },
       runDeps,
     );
@@ -233,7 +254,14 @@ async function probeEngine(
   if (versionResolution.state !== "available") {
     return versionResolution;
   }
-  return confirmDaemon(engine, runDeps, deps.runCommand, controller.signal, versionResolution);
+  return confirmDaemon(
+    engine,
+    runDeps,
+    deps.runCommand,
+    controller.signal,
+    versionResolution,
+    activityLog,
+  );
 }
 
 function statusFromResolution(
@@ -279,11 +307,23 @@ export async function detectContainerEngines(
     };
   }
   const runDeps = buildProbeDeps(deps);
-  const statuses: ContainerEngineStatus[] = [];
-  for (const engine of engines) {
-    const resolution = await probeEngine(engine, deps, runDeps);
-    statuses.push(statusFromResolution(engine, resolution));
-  }
+  // KEIKO-0312: probe every engine concurrently. Sequentially, worst-case latency was
+  // `engines × 2 × PER_CALL_TIMEOUT_MS` (two calls per engine: `version` then `info`), i.e.
+  // roughly double the deadlineMs this response reports back to its caller — the field was
+  // echoed metadata, never a bound. Concurrently the worst case is one engine's own cost,
+  // `2 × PER_CALL_TIMEOUT_MS` = 4_000ms, which is exactly DEFAULT_CONTAINER_PROBE_DEADLINE_MS,
+  // so the reported deadline becomes structurally true instead of aspirational.
+  //
+  // Parallelising rather than short-circuiting on expiry (the sibling capabilityDetector.ts
+  // approach) is deliberate: every engine still gets a real probe, so a caller never sees an
+  // engine reported unavailable merely because an earlier engine was slow. Each probe keeps
+  // its own AbortController and PER_CALL_TIMEOUT_MS, and runCommand enforces its own resource
+  // limits, so concurrency here is bounded by the (small, fixed) engine list.
+  const statuses: readonly ContainerEngineStatus[] = await Promise.all(
+    engines.map(async (engine) =>
+      statusFromResolution(engine, await probeEngine(engine, deps, runDeps)),
+    ),
+  );
   return {
     schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
     generatedAtMs,

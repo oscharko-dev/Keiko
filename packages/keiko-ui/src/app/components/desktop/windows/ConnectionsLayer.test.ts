@@ -7,6 +7,7 @@ import {
   type ResolvedConn,
 } from "./ConnectionsLayer";
 import type { AppWindow, Connection } from "./types";
+import { groundingIntensity } from "./chatWindowActivity";
 
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -28,6 +29,7 @@ function resolvedConn(patch: Partial<ResolvedConn> = {}): ResolvedConn {
     mid: { x: 250, y: 120 },
     label: "uses docs/",
     dataChannel: true,
+    chatWindowId: "chat-1",
     ...patch,
   };
 }
@@ -125,5 +127,52 @@ describe("connectionBadgeAriaLabel", () => {
     expect(
       connectionBadgeAriaLabel(resolvedConn({ label: "uses docs/" }), false, false, "light"),
     ).toBe("Remove connection: uses docs/");
+  });
+});
+
+describe("groundingIntensity", () => {
+  it("classifies folder traffic by both file count and excerpt bytes", () => {
+    expect(
+      groundingIntensity({
+        groundingKind: "connected-context",
+        contextPack: { usage: { filesRead: 1, excerptBytes: 512 } },
+      }),
+    ).toBe("light");
+    expect(
+      groundingIntensity({
+        groundingKind: "connected-context",
+        contextPack: { usage: { filesRead: 4, excerptBytes: 512 } },
+      }),
+    ).toBe("heavy");
+    expect(
+      groundingIntensity({
+        groundingKind: "connected-context",
+        contextPack: { usage: { filesRead: 1, excerptBytes: 8_192 } },
+      }),
+    ).toBe("heavy");
+  });
+
+  it("classifies hybrid and local-knowledge traffic by reference count", () => {
+    expect(
+      groundingIntensity({
+        groundingKind: "hybrid",
+        contextPack: {
+          folder: { usage: { filesRead: 1, excerptBytes: 512 } },
+          knowledge: { referencesUsed: 4 },
+        },
+      }),
+    ).toBe("heavy");
+    expect(
+      groundingIntensity({
+        groundingKind: "local-knowledge",
+        contextPack: { referencesUsed: 1 },
+      }),
+    ).toBe("light");
+    expect(
+      groundingIntensity({
+        groundingKind: "local-knowledge",
+        contextPack: { referencesUsed: 4 },
+      }),
+    ).toBe("heavy");
   });
 });

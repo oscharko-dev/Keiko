@@ -5,20 +5,27 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type {
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM7SettingsSnapshot,
+  EditorPatchApplyWireResponse,
+  EditorPatchVerificationSummary,
+  EvidenceStore,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   resolveEditorM7Settings,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM7SettingsSnapshot,
-  type EditorPatchApplyWireResponse,
-  type EditorPatchVerificationSummary,
-  type EvidenceStore,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
 import {
   handleEditorPatchApply,
   isPatchApplyEnabledByPolicy,
@@ -43,6 +50,7 @@ function postContext(body: unknown): RouteContext {
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -54,6 +62,7 @@ function rawPostContext(body: string): RouteContext {
   const req = Readable.from([Buffer.from(body, "utf8")]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -281,6 +290,54 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
     expect(evidenceStore.list()).toHaveLength(2);
   });
 
+  it("threads the request's own correlation id into a local-history capture failure instead of minting one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope in handleEditorPatchApply — a local-history capture failure during the apply must
+    // reuse it via ApplyContext.correlationId, not a disconnected `local-history-<uuid>` mint.
+    const diagnostics: { correlationId?: unknown }[] = [];
+    const throwingHistoryStore = {
+      capture: (): never => {
+        throw new Error("history capture backend unavailable");
+      },
+    } as unknown as EditorLocalHistoryStore;
+    const ctx = { ...postContext(body()), correlationId: "req-patch-apply-thread-01" };
+
+    const result = await handleEditorPatchApply(
+      ctx,
+      {
+        ...deps({ env: ENABLED, editorLocalHistoryStore: throwingHistoryStore }),
+        diagnostics: {
+          record: (record: { correlationId?: unknown }): void => {
+            diagnostics.push(record);
+          },
+        },
+      },
+      options(),
+    );
+
+    expect(wire(result).status).toBe("applied");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.correlationId).toBe("req-patch-apply-thread-01");
+  });
+
+  it("threads the request correlation id into post-apply verification", async () => {
+    let verificationCorrelationId: string | undefined;
+    const verification: PostApplyVerificationPort = (args) => {
+      verificationCorrelationId = args.correlationId;
+      return Promise.resolve({ summary: summary(), command: "npx vitest run" });
+    };
+    const ctx = { ...postContext(body()), correlationId: "req-patch-apply-verify-01" };
+
+    const result = await handleEditorPatchApply(ctx, deps({ env: ENABLED }), {
+      verification,
+      verificationPreflight: passingPreflight,
+      now: () => 1_000,
+    });
+
+    expect(wire(result).status).toBe("applied");
+    expect(verificationCorrelationId).toBe("req-patch-apply-verify-01");
+  });
+
   it("records a reject decision and mutates nothing", async () => {
     const result = await handleEditorPatchApply(
       postContext(body({ decision: "reject" })),
@@ -309,6 +366,60 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
     expect(response.status).toBe("disabled");
     expect(await exists("src/a.test.ts")).toBe(false);
     expect(reads).toBeGreaterThanOrEqual(2);
+  });
+
+  // #3347: the activation re-check above closes the M7 half of the preflight window only. The ROOT
+  // capability itself is proved once, at admission, and the whole verification preflight runs before
+  // the mutation — so a managed root revoked or replaced inside that window could still be patched
+  // through the admission-time fs. The route now re-proves the root immediately before
+  // buildRestorePatch/applyPatch and runs both through THAT capability. Revoking from inside the
+  // preflight port puts the revocation exactly in the gap the finding describes.
+  it("denies the patch and constructs no writer when the root is revoked during verification preflight", async () => {
+    let revoked = false;
+    const revokingPreflight: PostApplyVerificationPreflightPort = () => {
+      revoked = true;
+      return Promise.resolve({ ok: true });
+    };
+    const proofs: string[] = [];
+    const revocableDeps = {
+      ...deps({ env: ENABLED }),
+      workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome => {
+        proofs.push(requestedRoot);
+        return revoked
+          ? { decision: "denied" }
+          : grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot));
+      },
+    } as unknown as UiHandlerDeps;
+
+    const result = await handleEditorPatchApply(
+      postContext(body()),
+      revocableDeps,
+      options(summary(), revokingPreflight),
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+    // No writer was constructed and no bytes were written: the create-diff's target never appears.
+    expect(await exists("src/a.test.ts")).toBe(false);
+    // The re-proof ran after the preflight, not merely at admission (admission never consults it).
+    expect(proofs).toEqual([root]);
+  });
+
+  it("applies through a root capability re-proved after the preflight window", async () => {
+    const proofs: string[] = [];
+    const provingDeps = {
+      ...deps({ env: ENABLED }),
+      workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome => {
+        proofs.push(requestedRoot);
+        return grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot));
+      },
+    } as unknown as UiHandlerDeps;
+
+    const result = await handleEditorPatchApply(postContext(body()), provingDeps, options());
+
+    expect(wire(result).status).toBe("applied");
+    expect(await readFile(join(root, "src/a.test.ts"), "utf8")).toBe("it('x', () => {});\n");
+    expect(proofs).toEqual([root]);
   });
 });
 

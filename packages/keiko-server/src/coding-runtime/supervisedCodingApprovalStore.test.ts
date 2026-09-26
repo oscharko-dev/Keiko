@@ -5,6 +5,7 @@ import type { CodingWorkbenchSupervisedActionKind } from "@oscharko-dev/keiko-co
 import {
   createInMemorySupervisedCodingApprovalStore,
   isSupervisedActionTaskGrantable,
+  supervisedCodingTaskScopeDigest,
   type SupervisedCodingApprovalBindingOnce,
   type SupervisedCodingApprovalBindingTask,
 } from "./supervisedCodingApprovalStore.js";
@@ -25,7 +26,11 @@ const taskBinding = (
   runId: "run-1",
   requestId: "request-1",
   actionKind: "verification-command",
-  scopeDigest: "b".repeat(64),
+  scopeDigest: supervisedCodingTaskScopeDigest({
+    runId: "run-1",
+    actionKind: "verification-command",
+    connectorScopes: [],
+  }),
   connectorScopes: [],
   commandTemplateId: "verify.typecheck",
   safeArgumentClasses: ["frozen-argv"],
@@ -128,6 +133,38 @@ describe("SupervisedCodingApprovalStore (task grants)", () => {
     ).toMatchObject({
       grantScope: "task",
     });
+  });
+
+  it("reuses a task grant for a later request in the same task scope", () => {
+    const store = createInMemorySupervisedCodingApprovalStore();
+    const grant = store.issueTaskGrant({
+      binding: taskBinding({ requestId: "request-a" }),
+      approvedByUserId: "u",
+      nowMs: 1,
+    });
+    if (grant === undefined) throw new Error("expected grant");
+
+    expect(
+      store.consume({
+        approval: grant.approval,
+        binding: taskBinding({ requestId: "request-b" }),
+        nowMs: 2,
+      }),
+    ).toMatchObject({ grantScope: "task" });
+  });
+
+  it("refuses a task grant from a different task scope", () => {
+    const store = createInMemorySupervisedCodingApprovalStore();
+    const grant = store.issueTaskGrant({ binding: taskBinding(), approvedByUserId: "u", nowMs: 1 });
+    if (grant === undefined) throw new Error("expected grant");
+
+    expect(
+      store.consume({
+        approval: grant.approval,
+        binding: taskBinding({ runId: "run-2", requestId: "request-b" }),
+        nowMs: 2,
+      }),
+    ).toBeUndefined();
   });
 
   it.each<Partial<SupervisedCodingApprovalBindingTask>>([

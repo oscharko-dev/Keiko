@@ -9,11 +9,8 @@
 // Structurally inspired by Test Intelligence reference (TI) workflow runners, but rewritten
 // end-to-end against the Keiko contracts surface; no TI runtime, no TI IR.
 
-import {
-  QualityIntelligence as QI,
-  type ModelCapability,
-  type NormalizedResponse,
-} from "@oscharko-dev/keiko-contracts";
+import type { ModelCapability, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
+import * as QI from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   deduplicateCandidates,
   deriveIntent,
@@ -241,8 +238,8 @@ export async function runQualityIntelligenceCoverageReview(
       modelGatewayCallCount: ctx.modelGatewayCallCount,
       evidence,
     });
-  } catch (caught: unknown) {
-    return finaliseFailureOrCancellation(ctx, caught, {
+  } catch (error_: unknown) {
+    return finaliseFailureOrCancellation(ctx, error_, {
       candidatesCount: input.candidates.length,
       findings: Object.freeze([]),
       provenanceRefs: input.provenanceRefs,
@@ -386,8 +383,8 @@ export async function runQualityIntelligenceArtifactRefinement(
       modelGatewayCallCount: ctx.modelGatewayCallCount,
       evidence,
     });
-  } catch (caught: unknown) {
-    return finaliseFailureOrCancellation(ctx, caught, {
+  } catch (error_: unknown) {
+    return finaliseFailureOrCancellation(ctx, error_, {
       candidatesCount: input.candidates.length,
       findings: Object.freeze([]),
       provenanceRefs: input.provenanceRefs,

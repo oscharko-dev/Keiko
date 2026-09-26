@@ -12,6 +12,7 @@ import {
   isSuiteName,
   EVALUATION_DIMENSIONS,
 } from "./index.js";
+import { MIN_PILOT_FIXTURES_FOR_TESTS } from "./scorer.js";
 import { materializeFixture, recordingWriter } from "./runner-support.js";
 import type { EvaluationFixture } from "./types.js";
 import { must } from "./_support.js";
@@ -21,6 +22,14 @@ import { must } from "./_support.js";
 describe("ALL_FIXTURES", () => {
   it("contains exactly 6 fixtures", () => {
     expect(ALL_FIXTURES).toHaveLength(6);
+  });
+
+  // KEIKO-0218 sync-check: scorer.ts's MIN_PILOT_FIXTURES coverage precondition is documented as
+  // "equal to ALL_FIXTURES.length". If a fixture is added or removed without updating the constant,
+  // this test flips red so the drift cannot slip through. Relocating MIN_PILOT_FIXTURES is fine; a
+  // silent drift is not.
+  it("ALL_FIXTURES.length equals scorer.MIN_PILOT_FIXTURES (KEIKO-0218 sync-check)", () => {
+    expect(ALL_FIXTURES).toHaveLength(MIN_PILOT_FIXTURES_FOR_TESTS);
   });
 
   it("includes 3 unit-tests fixtures and 3 bug-investigation fixtures", () => {
@@ -198,34 +207,67 @@ describe("fixturesForSuite", () => {
 });
 
 describe("fixtureByName", () => {
-  it("resolves by bare name when the name is unique", () => {
-    const f = fixtureByName("happy-path");
-    // There are two happy-path fixtures (one per kind). fixtureByName returns the first match.
-    expect(f).toBeDefined();
-    expect(f?.name).toBe("happy-path");
+  // KEIKO-0533 (#3310): "happy-path" and "unsafe-action" are each duplicated across the
+  // unit-tests and bug-investigation workflow kinds. A bare selector matching more than one
+  // fixture must be rejected as ambiguous rather than silently resolving to ALL_FIXTURES'
+  // first match.
+  it("rejects a bare name that is ambiguous across workflow kinds ('happy-path')", () => {
+    const result = fixtureByName("happy-path");
+    expect(result.status).toBe("ambiguous");
+    if (result.status === "ambiguous") {
+      expect(result.matches).toHaveLength(2);
+      const kinds = result.matches.map((f) => f.workflowKind).sort();
+      expect(kinds).toEqual(["bug-investigation", "unit-tests"]);
+      expect(result.matches.every((f) => f.name === "happy-path")).toBe(true);
+    }
+  });
+
+  it("rejects a bare name that is ambiguous across workflow kinds ('unsafe-action')", () => {
+    const result = fixtureByName("unsafe-action");
+    expect(result.status).toBe("ambiguous");
+    if (result.status === "ambiguous") {
+      expect(result.matches).toHaveLength(2);
+      const kinds = result.matches.map((f) => f.workflowKind).sort();
+      expect(kinds).toEqual(["bug-investigation", "unit-tests"]);
+    }
+  });
+
+  it("resolves a genuinely-unique bare name ('retry-then-accept')", () => {
+    const result = fixtureByName("retry-then-accept");
+    expect(result.status).toBe("found");
+    if (result.status === "found") {
+      expect(result.fixture.name).toBe("retry-then-accept");
+      expect(result.fixture.workflowKind).toBe("unit-tests");
+    }
   });
 
   it("resolves by <kind>/<name> selector to the correct fixture", () => {
-    const f = fixtureByName("unit-tests/happy-path");
-    expect(f?.workflowKind).toBe("unit-tests");
-    expect(f?.name).toBe("happy-path");
+    const result = fixtureByName("unit-tests/happy-path");
+    expect(result.status).toBe("found");
+    if (result.status === "found") {
+      expect(result.fixture.workflowKind).toBe("unit-tests");
+      expect(result.fixture.name).toBe("happy-path");
+    }
   });
 
   it("resolves bug-investigation/unsafe-action to the bug fixture, not the unit-test one", () => {
-    const f = fixtureByName("bug-investigation/unsafe-action");
-    expect(f?.workflowKind).toBe("bug-investigation");
+    const result = fixtureByName("bug-investigation/unsafe-action");
+    expect(result.status).toBe("found");
+    if (result.status === "found") {
+      expect(result.fixture.workflowKind).toBe("bug-investigation");
+    }
   });
 
-  it("returns undefined for an unknown bare name", () => {
-    expect(fixtureByName("no-such-fixture")).toBeUndefined();
+  it("returns not-found for an unknown bare name", () => {
+    expect(fixtureByName("no-such-fixture")).toEqual({ status: "not-found" });
   });
 
-  it("returns undefined for an unknown <kind>/<name> selector", () => {
-    expect(fixtureByName("unit-tests/no-such-fixture")).toBeUndefined();
+  it("returns not-found for an unknown <kind>/<name> selector", () => {
+    expect(fixtureByName("unit-tests/no-such-fixture")).toEqual({ status: "not-found" });
   });
 
-  it("returns undefined for an unknown kind prefix", () => {
-    expect(fixtureByName("other-kind/happy-path")).toBeUndefined();
+  it("returns not-found for an unknown kind prefix", () => {
+    expect(fixtureByName("other-kind/happy-path")).toEqual({ status: "not-found" });
   });
 });
 

@@ -7,6 +7,7 @@ import {
   runPromptEnhancerEvaluation,
   type PromptEnhancerEvalFixture,
 } from "./index.js";
+import { benignDraftExpectingInjectionSignals } from "./test-support.js";
 
 describe("renderPromptEnhancerSummary", () => {
   it("renders the GO verdict with per-fixture and per-dimension lines", () => {
@@ -36,14 +37,7 @@ describe("renderPromptEnhancerSummary", () => {
   });
 
   it("renders a failed safety gate", (): void => {
-    const failing: PromptEnhancerEvalFixture = {
-      name: "render-safety-fail",
-      category: "adversarial",
-      description: "intentionally failing safety fixture",
-      request: { text: "Hello, please help me write a short note." },
-      dimensions: new Set(["safety"]),
-      oracle: { expectedTaskClasses: ["factual-qa"], expectsInjectionSignals: true },
-    };
+    const failing = benignDraftExpectingInjectionSignals({ name: "render-safety-fail" });
 
     const text = renderPromptEnhancerSummary(runPromptEnhancerEvaluation([failing]));
     expect(text).toContain("Safety gate: FAIL");

@@ -73,6 +73,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Intentionally a private copy of `validateOnlyKeys` (packages/keiko-contracts/src/
+// local-knowledge-validation.ts), not an import of it (audit KEIKO-0530 deduped the other two
+// siblings — local-knowledge-pods.ts and local-knowledge-retrieval-activity.ts — onto that shared
+// export). local-knowledge-validation.ts already imports `validateKnowledgePodModelUsePolicy`
+// (a value import) from this module, so importing `validateOnlyKeys` back from it would form a
+// circular module dependency between the two files. Keep this copy's algorithm — Set membership,
+// first-unknown-key-wins, exact `${field} must not include ${key}` message — identical to the
+// canonical one; local-knowledge-validation.test.ts pins the fact that this is the only sibling
+// still allowed to define it.
 function onlyKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],

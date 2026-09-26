@@ -16,10 +16,13 @@
 //   * max length 256
 //   * no path-traversal segment ("..", "/", "\")
 //   * no NUL or other ASCII control characters
+//   * no bidi-override / zero-width code point (these ids are rendered in the browser)
 //
 // These rules deliberately match the audit-ledger `assertValidRunId` shape (ADR-0010,
 // memory: keiko-issue10-audit-ledger) so an ID minted in QI can be safely composed
 // with that surface in #274 without re-validation.
+
+import { containsBidiOrZeroWidth } from "../text-safety.js";
 
 // ─── Brand carriers ────────────────────────────────────────────────────────────
 declare const QualityIntelligenceRunIdBrand: unique symbol;
@@ -31,6 +34,7 @@ declare const QualityIntelligenceExportBundleIdBrand: unique symbol;
 declare const QualityIntelligenceSourceEnvelopeIdBrand: unique symbol;
 declare const QualityIntelligenceEvidenceAtomIdBrand: unique symbol;
 declare const QualityIntelligenceAuditSummaryIdBrand: unique symbol;
+declare const QualityIntelligenceHandoffIdBrand: unique symbol;
 
 // ─── Branded types ─────────────────────────────────────────────────────────────
 export type QualityIntelligenceRunId = string & {
@@ -59,6 +63,13 @@ export type QualityIntelligenceEvidenceAtomId = string & {
 };
 export type QualityIntelligenceAuditSummaryId = string & {
   readonly [QualityIntelligenceAuditSummaryIdBrand]: true;
+};
+// KEIKO-0593: identifies a Conversation Center handoff envelope (handoffEnvelope.ts). A distinct
+// brand, not a reuse of QualityIntelligenceRunId or another existing brand -- it identifies a
+// different entity (the handoff request, minted by the Conversation Center before any run may
+// exist) per this file's own documented rule that each entity gets its own brand.
+export type QualityIntelligenceHandoffId = string & {
+  readonly [QualityIntelligenceHandoffIdBrand]: true;
 };
 
 // ─── Validation primitive ──────────────────────────────────────────────────────
@@ -111,6 +122,14 @@ export const validateQualityIntelligenceIdString = (
   }
   if (hasControlCharacter(value)) {
     return { ok: false, reason: `${kind} contains control characters` };
+  }
+  // Branded ids are rendered in the browser (run summaries, evidence refs, candidate lists), so an
+  // id carrying U+202E renders as a different id than the one stored, and a zero-width character
+  // makes two visually identical ids distinct — defeating the visual comparison a reviewer uses to
+  // correlate a run with its evidence. The sibling display-surface guard already rejects exactly
+  // these code points; this uses the same canonical predicate rather than a third copy.
+  if (containsBidiOrZeroWidth(value)) {
+    return { ok: false, reason: `${kind} contains invisible or reordering characters` };
   }
   if (hasForbiddenFragment(value)) {
     return { ok: false, reason: `${kind} contains forbidden path fragment` };
@@ -176,3 +195,6 @@ export const asQualityIntelligenceAuditSummaryId = (
   value: string,
 ): QualityIntelligenceAuditSummaryId =>
   construct(value, "QualityIntelligenceAuditSummaryId") as QualityIntelligenceAuditSummaryId;
+
+export const asQualityIntelligenceHandoffId = (value: string): QualityIntelligenceHandoffId =>
+  construct(value, "QualityIntelligenceHandoffId") as QualityIntelligenceHandoffId;

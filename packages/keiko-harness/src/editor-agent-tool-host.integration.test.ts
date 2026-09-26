@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorAgentSessionSnapshot } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   EditorAgentHttpClient,
   EditorAgentToolHost,
   type EditorAgentHttpTransport,
 } from "@oscharko-dev/keiko-tools";
 import { createSession } from "./session.js";
+import { createEditorAgentCatalogFactory } from "./editor-agent-catalog.js";
 import { counterIdSource } from "./fingerprint.js";
 import { MemoryEventSink } from "./sinks.js";
 import { response, scriptedModel, stubClock } from "./_support.js";
@@ -62,10 +61,11 @@ describe("EditorAgentToolHost harness invocation", () => {
     ]);
     const session = createSession(
       { taskType: "investigate-bug", input: { description: "Inspect editor sessions" } },
-      { model: "m", workingDirectory: "/repo" },
+      { model: "m", workingDirectory: "/repo", dryRun: false },
       {
         model: model.port,
         tools,
+        bindToolCatalog: createEditorAgentCatalogFactory(tools),
         sink: new MemoryEventSink(),
         clock: stubClock().clock,
         idSource: counterIdSource(),

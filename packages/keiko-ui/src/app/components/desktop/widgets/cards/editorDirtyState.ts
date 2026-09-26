@@ -1,4 +1,5 @@
-import { editorLayoutPanes, type EditorLayoutStateV2 } from "@oscharko-dev/keiko-contracts";
+import type { EditorLayoutStateV2 } from "@oscharko-dev/keiko-contracts";
+import { editorLayoutPanes } from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 
 /**
  * The editor's per-pane index of files with unsaved buffer changes.

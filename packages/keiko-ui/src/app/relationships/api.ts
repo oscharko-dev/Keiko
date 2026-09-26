@@ -15,7 +15,7 @@ import type {
   RelationshipType,
   RelationshipValidationError,
 } from "@oscharko-dev/keiko-contracts";
-import { RELATIONSHIP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 
 // Shared user-facing copy for transport-level failures. The server is started
 // via `keiko ui` (the CLI has no `serve` subcommand) — keep the hint accurate

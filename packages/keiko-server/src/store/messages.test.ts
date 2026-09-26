@@ -1,6 +1,6 @@
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤200 chars BEFORE persist.
 
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,7 @@ import {
   type UiStore,
   type WorkflowStatus,
 } from "./index.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "../diagnostics-log.js";
 
 let tmp: string;
 let proj: string;
@@ -200,6 +201,18 @@ function tamperAssistantResponseVersionsJson(dbPath: string, messageId: string, 
   }
 }
 
+function tamperGroundedPreviewCitationsJson(dbPath: string, messageId: string, raw: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare("UPDATE chat_messages SET grounded_preview_citations_json = ? WHERE id = ?").run(
+      raw,
+      messageId,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 function createOnDiskStoreFixture(): {
   readonly dbPath: string;
   readonly chatId: string;
@@ -229,6 +242,77 @@ beforeEach(() => {
 afterEach(() => {
   store.close();
   rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("discardLegacyTurnUserMessage", () => {
+  function legacyUserMessage(
+    content: string,
+    timestamp: number,
+  ): Parameters<UiStore["createMessage"]>[0] {
+    return {
+      chatId,
+      role: "user",
+      content,
+      timestamp,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+  }
+
+  function chatUpdatedAt(): number {
+    const chat = store.listChats(proj).find((candidate) => candidate.id === chatId);
+    if (chat === undefined) throw new Error("expected chat");
+    return chat.updatedAt;
+  }
+
+  it("restores the pre-admission chat recency when the discarded row was the only activity", () => {
+    const before = chatUpdatedAt();
+    const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
+    // createMessage touches chats.updated_at — without the restore a REJECTED request still
+    // promotes this chat in the recency-ordered history (the session-resume candidate).
+    const touched = chatUpdatedAt();
+    expect(touched).toBeGreaterThan(before);
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before, touched);
+    expect(store.listMessages(chatId)).toEqual([]);
+    expect(chatUpdatedAt()).toBe(before);
+  });
+
+  it("keeps newer surviving message activity instead of rewinding past it", () => {
+    const before = chatUpdatedAt();
+    const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
+    const survivor = store.createMessage(legacyUserMessage("later surviving turn", 900));
+    const touched = chatUpdatedAt();
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before, touched);
+    expect(store.listMessages(chatId)).toMatchObject([{ id: survivor.id }]);
+    expect(chatUpdatedAt()).toBe(900);
+  });
+
+  it("leaves a concurrent accepted update's newer recency untouched", () => {
+    const before = chatUpdatedAt();
+    const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
+    const touched = chatUpdatedAt();
+    // A rename lands while retrieval is in flight: updateChat advances updated_at past our
+    // admission touch. The rollback owns only its own touch — the compare-and-set must miss
+    // and the rename's newer recency must survive.
+    store.updateChat(chatId, { title: "renamed while retrieval was in flight" });
+    const renamed = chatUpdatedAt();
+    expect(renamed).toBeGreaterThan(touched);
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before, touched);
+    expect(store.listMessages(chatId)).toEqual([]);
+    expect(chatUpdatedAt()).toBe(renamed);
+  });
+
+  it("never deletes a ledger-owned or non-user row and leaves recency untouched", () => {
+    const admission = store.admitChatTurn("turn-ledger-1", legacyUserMessage("ledger turn", 700));
+    if (admission.kind !== "admitted") throw new Error("expected admitted ledger turn");
+    const touched = chatUpdatedAt();
+    store.discardLegacyTurnUserMessage(chatId, admission.userMessage.id, 1, touched);
+    expect(store.listMessages(chatId)).toMatchObject([{ id: admission.userMessage.id }]);
+    expect(chatUpdatedAt()).toBe(touched);
+  });
 });
 
 describe("createMessage", () => {
@@ -453,6 +537,55 @@ describe("createMessage", () => {
     expect(updated.groundedAnswer?.assistantMessageId).toBe(assistant.id);
     expect(store.findGroundedPreviewCitations(assistant.id)).toEqual(previewCitations);
     expect(reloaded).not.toHaveProperty("groundedPreviewCitations");
+  });
+
+  it("logs a content-free diagnostic and drops a corrupted stored citation row (#2902 w4b)", () => {
+    // FAILS BEFORE / PASSES AFTER: prior to this fix, a corrupted
+    // grounded_preview_citations_json row was silently dropped — `records` below stayed empty.
+    // The fix logs a structured, content-free diagnostic (error CLASS + a fixed reason label,
+    // never the malformed row body) before returning `undefined`, exactly as before, to the caller.
+    const fixture = createOnDiskStoreFixture();
+    const assistant = fixture.store.createMessage({
+      chatId: fixture.chatId,
+      role: "assistant",
+      content: "Answer from policy.pdf.",
+      timestamp: 300,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    fixture.store.attachGroundedAnswer(
+      assistant.id,
+      groundedAnswer({ assistantMessageId: assistant.id }),
+      [],
+    );
+    const corruptedRaw = '[{"stableId":"preview-1","marker":';
+    tamperGroundedPreviewCitationsJson(fixture.dbPath, assistant.id, corruptedRaw);
+
+    const records: ServerDiagnosticRecord[] = [];
+    const spy = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation((record) => records.push(record));
+    let result: unknown;
+    try {
+      result = fixture.store.findGroundedPreviewCitations(assistant.id);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(result).toBeUndefined();
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    if (record === undefined) throw new Error("expected a diagnostic record");
+    expect(record.source).toBe("store.messages.parse-grounded-preview-citations");
+    expect(record.operation).toBe("store.messages.grounded-preview-citations.read");
+    expect(record.message).toBe("grounded-preview-citations-row-dropped");
+    expect(record.errorClass.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain(corruptedRaw);
+    expect(serialized).not.toContain("preview-1");
   });
 
   it("rejects grounded answer metadata on non-assistant messages", () => {

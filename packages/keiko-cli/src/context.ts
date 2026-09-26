@@ -4,6 +4,8 @@
 // calls a model: there is no import of the harness/gateway run path in this file.
 
 import type { WorkspaceSummary } from "@oscharko-dev/keiko-workspace";
+// KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
+import { flagValue } from "./cli-arg-parsing.js";
 // GEN-PERF-CLI-001 — the workspace graph loads at dispatch; module scope stays type-only.
 import { loadWorkspaceModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
@@ -22,17 +24,6 @@ interface ContextArgs {
   readonly task: string | undefined;
   readonly budget: number | undefined;
   readonly json: boolean;
-}
-
-// Returns the value of a `--flag value` pair, `undefined` if absent, or `null` if the flag is
-// present but missing its value (a usage error).
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
 }
 
 function parseArgs(args: readonly string[]): ContextArgs | null {

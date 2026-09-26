@@ -19,6 +19,8 @@ import {
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+// Type-only: the sink itself is supplied by the composition root (wiring.ts), never resolved here.
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const CREDENTIALS_SUBDIR = "credentials";
@@ -41,6 +43,8 @@ export interface OpenAtlassianCredentialVaultOptions {
   // Test/non-darwin seam (mirrors the provider vault): inject NO_LOCAL_VAULT_KEYCHAIN to force
   // the keyfile tier deterministically without touching the real login keychain.
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
+  // Optional activity-log seam (ADR-0019); wired with `processServerLogSink()` in wiring.ts.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export function openAtlassianCredentialVault(
@@ -54,6 +58,7 @@ export function openAtlassianCredentialVault(
     keychainService: ATLASSIAN_KEYCHAIN_SERVICE,
     keyfileName: ATLASSIAN_KEYFILE,
     ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
+    sink: options.securityLogSink,
   });
   return createLocalSecretVault({
     key,

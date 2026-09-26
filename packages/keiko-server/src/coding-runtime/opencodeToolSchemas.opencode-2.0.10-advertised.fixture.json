@@ -1,0 +1,428 @@
+[
+  {
+    "name": "keiko_changeset_edit",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "changeset": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "patch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536,
+              "pattern": "^(?:(?:(?:diff --git [^\\r\\n]+ [^\\r\\n]+\\r?\\n)(?:index [^\\r\\n]+\\r?\\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\\r\\n]+\\r?\\n@@ )",
+              "description": "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation."
+            },
+            "files": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+                  },
+                  "expectedContentHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "SHA-256 digest returned by keiko_workspace_read."
+                  }
+                },
+                "required": ["file", "expectedContentHash"]
+              },
+              "description": "Every file changed by patch, bound to its last governed read digest."
+            },
+            "selectedFiles": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+              },
+              "description": "Optional subset of files to apply; each entry must occur in files."
+            }
+          },
+          "required": ["patch", "files"]
+        }
+      },
+      "required": ["changeset"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_child_agent",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        }
+      },
+      "required": ["objective", "maxToolCalls"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_ci_status",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "forceFresh": {
+          "type": "boolean",
+          "description": "Set true to bypass the cached readiness snapshot and force one fresh provider read."
+        }
+      },
+      "required": ["forceFresh"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_git_commit",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "description": "Proposed commit message. This proposes only; a human approval is required."
+        }
+      },
+      "required": ["message"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_git_diff",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["working-tree", "index"]
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "description": "Workspace-relative paths to diff; denied or ignored paths never appear."
+        }
+      },
+      "required": ["scope", "paths"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_git_execute",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["stage", "commit", "push", "pull-request"]
+        },
+        "proposalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(?:stage|delivery|commit)-[0-9]{1,39}$",
+          "description": "The proposalId returned by the matching propose-phase tool call."
+        }
+      },
+      "required": ["kind", "proposalId"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_git_push",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_git_stage",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "description": "Workspace-relative paths to propose staging."
+        }
+      },
+      "required": ["paths"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_git_status",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_pull_request",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\0\\r\\n]+$",
+          "description": "Proposed draft pull-request title."
+        }
+      },
+      "required": ["title"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_repository_search",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["lexical", "literal", "regex", "symbol"],
+          "description": "lexical: natural-language keyword match. literal: exact substring. regex: bounded, ReDoS-safe pattern. symbol: exact identifier (no whitespace)."
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Search text for the selected mode."
+        },
+        "caseSensitive": {
+          "type": "boolean"
+        },
+        "includeGlobs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": "Workspace-relative glob patterns to restrict the search to."
+        },
+        "excludeGlobs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": "Workspace-relative glob patterns to exclude from the search."
+        },
+        "maxResults": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum number of bounded content excerpts to return."
+        }
+      },
+      "required": ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_research_fetch",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 512,
+          "pattern": "^https://"
+        }
+      },
+      "required": ["target"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_skill",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skillId": {
+          "type": "string",
+          "pattern": "^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\\.[0-9]{1,4}){0,2}$",
+          "maxLength": 80
+        }
+      },
+      "required": ["skillId"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_skill_discover",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_verification",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "verifierId": {
+          "type": "string",
+          "enum": ["test", "targeted-test", "typecheck", "lint", "build"]
+        },
+        "targetPath": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4096,
+          "pattern": "^(?:$|(?![\\\\/])(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\).+)$",
+          "description": "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path."
+        }
+      },
+      "required": ["verifierId", "targetPath"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_workspace_discover",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Case-insensitive filename/path keywords. Use a short distinctive term such as safeActivity, timeline, or composer. Use * only when a bounded repository overview is necessary."
+        },
+        "maxResults": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum number of matching workspace-relative file paths to return."
+        }
+      },
+      "required": ["query", "maxResults"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "keiko_workspace_read",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "relativePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
+          "description": "1-based first line of the returned window; pass 1 to start at the file head."
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000,
+          "description": "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file."
+        }
+      },
+      "required": ["relativePath", "startLine", "maxLines"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "question",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "question": {
+                "type": "string",
+                "description": "Complete question"
+              },
+              "header": {
+                "type": "string",
+                "description": "Very short label (max 30 chars)"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "Display text (1-5 words, concise)"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Explanation of choice"
+                    }
+                  },
+                  "required": ["label", "description"],
+                  "additionalProperties": false
+                },
+                "description": "Available choices"
+              },
+              "multiple": {
+                "type": "boolean"
+              }
+            },
+            "required": ["question", "header", "options"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "description": "Questions to ask"
+        }
+      },
+      "required": ["questions"],
+      "additionalProperties": false
+    }
+  }
+]

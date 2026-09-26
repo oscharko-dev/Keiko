@@ -137,6 +137,20 @@ byte-identical shapes. The channel therefore leaks neither the existence of a se
 existence of protected content. This mirrors the existing `idle()` snapshot and the content-free SSE
 reset frame.
 
+A successful content-free terminal SSE snapshot is an accepted write followed by stream closure.
+It is not backpressure. The writer separately handles a false write result and an actual write
+exception, including the initial reset, live snapshot and heartbeat. Closure must not turn a
+successful terminal write into an error or allow a previously queued snapshot to reopen the
+stream. Existing stream counters and correlated activity-log events record genuine write errors.
+The routes log the session's lifecycle body-free (PR #3452, F65): a pairing that issued a session
+(`coding-app-session.paired`), a rotation, a sign-out that revoked a session, each fetch stream's
+opening, live or content-free, and a live stream's close with how long it stayed open. A denied
+pairing or rotation writes no line of its own and stays in the rate-limited aggregate diagnostic
+(KEIKO-0838); a sign-out that revoked nothing (no session behind the cookie, or a repeated sign-out)
+writes none either, so the log never shows a sign-out that did not happen. A
+pairing fragment that arrives by same-document navigation (after a lane restart, say) is redeemed
+like a boot fragment, and every session read in the window runs again after it.
+
 ### D7 — The CI pairing fake mints read authority and is therefore production-unreachable by construction
 
 A deterministic fake pairing port exists for CI so the channel is testable without a real launcher.
@@ -192,7 +206,8 @@ bearer-protection properties, and the BFF is the only receiver on every covered 
 
 ### F3 — Launcher-to-browser attestation delivery (D2 finalization)
 
-The trusted launcher (`keiko start --open`, and `npm run dev:start -- --open` for the dev lane)
+The trusted launcher (`keiko start --open`, and `npm run dev:start` by default for the dev lane;
+`--no-open` is the explicit headless opt-out)
 generates the process-scoped secret, provisions it to the BFF exclusively through the child's
 inherited environment, and hands the browser exactly one single-use, freshness-bounded attestation
 in the boot URL **fragment** (`#keiko-app-session=…`). The fragment never travels over HTTP; the
@@ -212,7 +227,7 @@ sessions, whereas a stolen attestation is one visible, time-bounded redemption) 
 assumption is load-bearing and why the native shell's direct injection remains the target
 posture. The Keiko Native shell replaces this hop with direct cookie injection and retires the
 residual risk; an already-running BFF cannot re-attest (its secret is private to its own
-launch), so `--open` against it opens an honestly unpaired window and says how to re-pair.
+launch), so another start against it reports that a restart is required to pair a fresh window.
 
 ### F4 — Contract promotion (the scheduled D12 batching)
 
@@ -242,14 +257,19 @@ distinct authentication error. The response does not reveal managed-worktree con
 existence. A valid session enables the bounded existing readers; no new Git route, parser, or durable
 content store is introduced.
 
-### F6 — The cookie reaches only the two authenticated API route families
+### F6 — The cookie reaches only authenticated API route families
 
-The same session bearer is issued as two host-scoped cookies, one at `/api/coding-workbench` and one
-at `/api/git`. This reaches both authenticated route families without presenting the bearer to their
-broader `/api` ancestor or unrelated BFF routes. `Path` remains browser hygiene, not a security
-boundary. `HttpOnly`, `SameSite=Strict`, loopback host scope, hashed server storage, rotation,
-revocation, and expiry remain unchanged; sign-out clears both browser projections after revoking the
-single server-side session.
+The same session bearer is issued as host-scoped cookies for the protected route families:
+`/api/coding-workbench`, `/api/git`, `/api/files`, `/api/editor`, `/api/runtime`, `/api/runs`,
+`/api/workspaces`, `/api/desktop/chat`, and `/api/task-workspaces`. The final path carries the
+paired session to issue-bound workspace provisioning (#3384/#3385); preview and provisioning
+independently validate that session before resolving issue content. Cookie issuance and revocation
+share one explicit path list so sign-out clears every browser projection.
+
+No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
+sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains
+browser hygiene, not a security boundary. `HttpOnly`, `SameSite=Strict`, loopback host scope, hashed
+server storage, rotation, revocation, and expiry remain unchanged.
 
 ### F7 — Run-to-worktree binding stays single-sourced and read-only
 
@@ -279,6 +299,18 @@ The general status handler still consumes its request context to enforce an exac
 transport contract: any query parameter is rejected. It does not session-branch the snapshot,
 because doing so would create two general status projections and weaken D3/D6; the stronger
 owner-layer invariant is that neither projection can represent model-selected research content.
+
+## Approved-skill channel (Issue #3417)
+
+The approved skills of a run are catalog state, not model-selected content, but they name what the
+run may do next, so they ride the same authenticated channel rather than the general projection:
+`GET /runs/:runId/skills` answers the paired operator with the closed, body-free record discovery
+reports the model — the pinned `id@version`, the source digest, one closed category, the catalogued
+capability ids, the compatibility range and the readiness the catalog itself can tell. The live
+authority and the remaining budget are facts of one invocation, not of the catalog, so they stay out
+of this view and can never be spent by looking. An unpaired read returns the single
+`{ session: "unpaired" }` projection before run resolution, independent of run, catalog or skill
+existence, and `CodingWorkbenchRuntimeSnapshot` carries none of it.
 
 ## Consequences
 
@@ -330,7 +362,10 @@ the route. Failing closed to the byte-identical content-free projection removes 
 
 Rejected for this wave. A durable bearer store adds an exfiltration surface and defeats free restart
 expiry; the encrypted Code resume store is a deliberate Wave-3 deliverable, and the Wave-1 transient
-authority becomes its feed rather than being reworked.
+authority becomes its feed rather than being reworked. The separate owner-requested Coding
+History workflow (#3560, ADR-0137 D4) reuses the existing local conversation store; it does not
+persist the app-session cookie, runtime authority, or sidecar credentials. History reads and
+updates require a currently paired app session, including after a process restart.
 
 ### Enforce the boundary on the existing content routes in this ADR
 

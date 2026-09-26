@@ -85,8 +85,10 @@ code infers severity from an action-kind string or from shell arguments.
   `recovery-or-rewrite` (the highest) for any unknown kind.
 - `gitDeliveryRiskClassForInputs(inputs)` returns the default class except that a `push` with
   `forcePush: true` escalates to `recovery-or-rewrite`, so a force-push is never under-classified.
-- `gitDeliveryRiskClassWithinCeiling(actionKind, ceiling)` returns true when the action's default
-  severity is at or below the ceiling's severity.
+
+A `risk-class-ceiling` constraint is enforced by comparing these ordinals directly (severity `<=`
+the ceiling's severity), read from the table above — there is exactly one ceiling-comparison
+implementation, in the policy-pack evaluator (`git-delivery-policy.ts`).
 
 ## 4. Policy packs
 

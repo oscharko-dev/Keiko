@@ -1,22 +1,26 @@
 "use client";
 
+import type {
+  EditorM7ActiveKeybinding,
+  EditorM7CommandContext,
+  EditorM7CommandDefinition,
+  EditorM7KeybindingOverride,
+  EditorM7ReasonCode,
+  EditorM7SettingValue,
+  WorkspaceKeyChord,
+  WorkspaceKeyChordModifier,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_COMMAND_REGISTRY,
-  isWorkspaceDispatchableChord,
-  isWorkspaceReservedChord,
   parseEditorM7KeybindingOverrides,
   serializeEditorM7KeybindingOverride,
   validateEditorM7Keybinding,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import {
+  isWorkspaceDispatchableChord,
+  isWorkspaceReservedChord,
   workspaceChordClaimKeys,
-  type EditorM7ActiveKeybinding,
-  type EditorM7CommandContext,
-  type EditorM7CommandDefinition,
-  type EditorM7KeybindingOverride,
-  type EditorM7ReasonCode,
-  type EditorM7SettingValue,
-  type WorkspaceKeyChord,
-  type WorkspaceKeyChordModifier,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-ui";
 import {
   detectKeyboardShortcutPlatform as detectPlatform,
   shortcutLabelForPlatform,

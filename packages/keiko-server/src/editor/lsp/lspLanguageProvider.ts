@@ -4,7 +4,7 @@
 // `describeLanguageCapabilities()` consumes `descriptor.availability` unchanged. A future per-language
 // issue replaces these stubs with real LSP request mappings.
 
-import { lspStatusToProviderDescriptor } from "@oscharko-dev/keiko-contracts";
+import { lspStatusToProviderDescriptor } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 import type {
   LanguageCompletionResult,
   LanguageHoverResult,

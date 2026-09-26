@@ -5,6 +5,7 @@ import {
   collectBestLines,
   looksLikeBlockHeader,
   looksLikeSignatureStart,
+  looksLikeTypedCallStart,
 } from "./repoSearchLineSelection.js";
 
 describe("collectBestLines", () => {
@@ -325,6 +326,37 @@ describe("collectBestLines", () => {
   });
 });
 
+/**
+ * Asserts that a scan grows linearly with input length instead of quadratically -- the S8786
+ * shape every adversarial regression below guards against. The line is timed at `units` and at
+ * `2 * units` back-to-back (minimum of two samples each, so one transient stall cannot pass for
+ * growth); a linear scan roughly doubles, while the pre-fix quadratic patterns grew ~4x per
+ * doubling (measured 18/68/265/1067 ms and 170/717/2976/12085 ms along successive doublings).
+ * The ratio is what makes the guard hermetic: an absolute wall-clock budget (1,500 ms before this
+ * change) inflates with the parallel test-suite load on a hosted runner -- the comma case that
+ * takes ~90 ms here took 1,546 ms in the Node 26 compatibility job of #3394 -- whereas a ratio of
+ * two measurements taken under the same load does not.
+ */
+function assertLinearGrowth(
+  scan: (line: string) => boolean,
+  build: (units: number) => string,
+  units: number,
+): void {
+  const sampleMs = (line: string): number => {
+    let best = Number.POSITIVE_INFINITY;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const start = performance.now();
+      expect(scan(line)).toBe(false);
+      best = Math.min(best, performance.now() - start);
+    }
+    return best;
+  };
+  const small = sampleMs(build(units));
+  const large = sampleMs(build(units * 2));
+  // Below ~20 ms a measurement is dominated by timer and scheduling noise, not by the pattern.
+  expect(large).toBeLessThan(3 * Math.max(small, 20));
+}
+
 describe("looksLikeBlockHeader", () => {
   it("recognises common signature shapes across languages", () => {
     expect(looksLikeBlockHeader("public void foo(int a, int b) {")).toBe(true);
@@ -355,18 +387,10 @@ describe("looksLikeBlockHeader", () => {
   // head-shapes, never followed by `{`) the engine re-walks the greedy-then-backtrack search for
   // a closing `)` from every one of those starting points, which is quadratic in line length. A
   // 40,000-character adversarial line (no keyword, no `{` anywhere) would have taken well over a
-  // second; the bounded parameter-list class keeps this linear. The wall-clock budget below
-  // carries large headroom over that measured cost specifically so it asserts "not quadratic",
-  // not a tight performance SLA — decoupling the regression guard from CI-load-driven timing
-  // noise (same class as PR #2471's code review finding, addressed for other files in this
-  // session).
+  // second; the bounded parameter-list class keeps this linear. `assertLinearGrowth` asserts "not quadratic" as a growth ratio between two
+  // lengths measured under the same load, never as an absolute wall-clock budget.
   it("resolves an adversarial no-brace line in linear time", () => {
-    const adversarialLine = "a b()".repeat(8_000);
-    const start = Date.now();
-    const result = looksLikeBlockHeader(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeBlockHeader, (units) => "a b()".repeat(units), 8_000);
   });
 
   // Second S8786 regression: bounding only the parameter-list class left an independent
@@ -376,17 +400,10 @@ describe("looksLikeBlockHeader", () => {
   // the type-prefix class in isolation from the (already-bounded) parameter-list class. Against
   // the pre-fix pattern (parameter-list bounded, type-prefix left as `*`) this took well over a
   // second at this length with clear quadratic (~4x per doubling) growth; the bounded type-prefix
-  // class keeps it linear. The wall-clock budget below carries large headroom over that measured
-  // cost specifically so it asserts "not quadratic", not a tight performance SLA — decoupling the
-  // regression guard from CI-load-driven timing noise (same class as PR #2471's code review
-  // finding, addressed for other files in this session).
+  // class keeps it linear. `assertLinearGrowth` asserts "not quadratic" as a growth ratio between
+  // two lengths measured under the same load, never as an absolute wall-clock budget.
   it("resolves an adversarial comma-separated no-brace line in linear time", () => {
-    const adversarialLine = "x y(" + "a,".repeat(20_000) + ";z";
-    const start = Date.now();
-    const result = looksLikeBlockHeader(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeBlockHeader, (units) => "x y(" + "a,".repeat(units) + ";z", 20_000);
   });
 
   // Third S8786 regression: the trailing `(?:throws\s+[^{]+)?` clause was left unbounded even
@@ -397,16 +414,11 @@ describe("looksLikeBlockHeader", () => {
   // is itself unbounded, giving the same O(n^2) shape as the first two findings (confirmed via
   // the real exported function: 170/717/2976/12085 ms at 7,500/15,000/30,000/60,000 chars, a
   // clean ~4.2x-per-doubling quadratic curve). Bounding the throws-tail class to 500 characters
-  // (comfortably beyond any real throws-clause) keeps this linear; the wall-clock budget below
-  // carries large headroom over the bounded-linear cost while staying far below what the
-  // unbounded quadratic version took at this length.
+  // (comfortably beyond any real throws-clause) keeps this linear; `assertLinearGrowth` asserts
+  // "not quadratic" as a growth ratio between two lengths measured under the same load, never as
+  // an absolute wall-clock budget.
   it("resolves an adversarial no-brace line with a throws clause in linear time", () => {
-    const adversarialLine = "a b() throws c ".repeat(4_000);
-    const start = Date.now();
-    const result = looksLikeBlockHeader(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeBlockHeader, (units) => "a b() throws c ".repeat(units), 2_000);
   });
 
   // Regression for the follow-up finding that a *narrow* finite bound is itself a behaviour
@@ -464,21 +476,106 @@ describe("looksLikeSignatureStart", () => {
   });
 
   // Same S8786 shape as `looksLikeBlockHeader`'s type-prefix regression, reached via this
-  // function's own `(?:[A-Za-z_$][\w$<>,.[\]?]*\s+)+` fallback regex (used when the keyword and
+  // function's own typed-call fallback (used when the keyword and
   // `looksLikeBlockHeader` branches don't match). Never contains `(`, so the whole pattern must
   // fail. Against the pre-fix pattern (unbounded type-prefix class inside the repeated group)
   // this showed the same clean ~4x-per-doubling quadratic growth as the `looksLikeBlockHeader`
   // finding (18ms/68ms/265ms/1067ms at 8k/16k/32k/64k repetitions); the bounded class keeps it
-  // linear. The wall-clock budget below carries large headroom over that measured cost
-  // specifically so it asserts "not quadratic", not a tight performance SLA — decoupling the
-  // regression guard from CI-load-driven timing noise (same class as PR #2471's code review
-  // finding, addressed for other files in this session).
+  // linear. `assertLinearGrowth` asserts "not quadratic" as a growth ratio between two
+  // lengths measured under the same load, never as an absolute wall-clock budget.
   it("resolves an adversarial comma-separated no-paren line in linear time", () => {
-    const adversarialLine = "a,".repeat(20_000) + ";z";
-    const start = Date.now();
-    const result = looksLikeSignatureStart(adversarialLine);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1500);
-    expect(result).toBe(false);
+    assertLinearGrowth(looksLikeSignatureStart, (units) => "a,".repeat(units) + ";z", 20_000);
+  });
+
+  // Fourth S8786 regression. Bounding the type-token class to `{0,2000}` capped ONE repetition of
+  // the `(?:…\s+)+` group; a plain `.test()` still retried the whole group from every
+  // word-boundary start, and each retry greedily re-consumed every remaining token before
+  // backtracking across repetitions. Chunks of 1,999 identifier characters plus one space (just
+  // under the cap, exactly one word-boundary start each) with no `(` anywhere showed ~4x per
+  // doubling against the regex (742ms/2,939ms/11,811ms at 500/1,000/2,000 chunks) and a
+  // `RangeError: Maximum call stack size exceeded` inside `RegExp.test` at 4,000 chunks. The
+  // comma-list line above never reached this: it has no whitespace, so only one repetition ever
+  // matched. `looksLikeTypedCallStart` now evaluates the same predicate in one pass.
+  // 1,600 chunks, not the 200 that first reproduced the finding: below ~20 ms `assertLinearGrowth`
+  // falls back to its noise floor and the comparison degrades into an absolute 60 ms budget, which
+  // would accept a re-introduced quadratic that happens to measure 4 ms and 16 ms. The fixed scan
+  // takes ~27 ms at 1,600 chunks (3.2M characters) and ~54 ms at 3,200 here, so the assertion stays
+  // the growth ratio the helper documents. The retired pattern needed ~19 s for the small sample.
+  it("resolves an adversarial sparse-whitespace chunked no-paren line in linear time", () => {
+    assertLinearGrowth(
+      looksLikeSignatureStart,
+      (units) => ("a".repeat(1_999) + " ").repeat(units),
+      1_600,
+    );
+  });
+
+  // The growth ratio above cannot see the second failure the retired pattern had on this shape:
+  // at 4,000 chunks `RegExp.test` threw `RangeError: Maximum call stack size exceeded` rather than
+  // running slowly. The single-pass scan has no recursion to exhaust, so the same input must simply
+  // return.
+  it("does not overflow the stack on the line that crashed the retired pattern", () => {
+    expect(looksLikeSignatureStart(("a".repeat(1_999) + " ").repeat(4_000))).toBe(false);
+  });
+});
+
+// `looksLikeTypedCallStart` replaces the retired regex with a hand-written linear pass; these two
+// tests pin that the pass accepts exactly what the regex accepted, on the shapes that distinguish
+// its token, word-boundary and call-name rules and on deterministic pseudo-random lines.
+describe("looksLikeTypedCallStart", () => {
+  const retiredPattern = /\b(?:[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+)+[A-Za-z_$][\w$]*\s*\(/u;
+
+  it("matches the retired pattern on hand-picked token, boundary and name shapes", () => {
+    const lines = [
+      "public void foo(int a, int b)",
+      "Map<String,Object> foo(",
+      "static $foo bar(",
+      "x$foo bar(",
+      "$foo bar(",
+      "foo(bar baz(",
+      "a ,b c(",
+      "1abc foo(",
+      "a $bar(",
+      "a b (",
+      "a\u00a0b(",
+      "Foo.bar(",
+      "x Foo.bar(",
+      "a ( b",
+      "a b",
+      "a b( c(",
+      `${"a".repeat(2_001)} foo(`,
+      `${"a".repeat(2_002)} foo(`,
+      `${"a".repeat(2_002)}$b foo(`,
+      "",
+    ];
+    for (const line of lines) {
+      expect(looksLikeTypedCallStart(line), JSON.stringify(line.slice(0, 40))).toBe(
+        retiredPattern.test(line),
+      );
+    }
+  });
+
+  it("matches the retired pattern on deterministic pseudo-random lines", () => {
+    // Letters, spaces and "(" are over-represented so that the corpus reaches accepting lines.
+    const alphabet = ["a", "a", "b", "B", "_", "$", "1", "<", ">", ",", ".", "[", "]", "?"];
+    alphabet.push(" ", " ", " ", "\t", "(", "(", ")", ";");
+    // Park–Miller minimal standard generator with a fixed seed: hermetic and replayable.
+    let seed = 48_271;
+    const next = (): number => {
+      seed = (seed * 16_807) % 2_147_483_647;
+      return seed;
+    };
+    let accepted = 0;
+    for (let sample = 0; sample < 8_000; sample += 1) {
+      const length = next() % 24;
+      let line = "";
+      for (let position = 0; position < length; position += 1) {
+        line += alphabet[next() % alphabet.length] ?? "";
+      }
+      const expected = retiredPattern.test(line);
+      if (expected) accepted += 1;
+      expect(looksLikeTypedCallStart(line), JSON.stringify(line)).toBe(expected);
+    }
+    // The corpus must exercise both outcomes, or the equivalence claim is vacuous.
+    expect(accepted).toBeGreaterThan(150);
   });
 });

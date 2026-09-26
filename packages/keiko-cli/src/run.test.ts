@@ -5,6 +5,7 @@ import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/k
 import { EvidenceWriteError } from "@oscharko-dev/keiko-evidence";
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
 
 // Replace every filesystem write entry point with a throwing stub. With these mocked, any code path
 // that touched the disk would throw. The run command now writes evidence by DEFAULT, so the tests
@@ -143,6 +144,76 @@ describe("runAgentCli dry-run", () => {
     expect(c.out()).toContain("completed");
   });
 
+  // 2895 audit KEIKO-0903 (Finding D, #3323 follow-up): before this fix, run.ts constructed the
+  // tool-using CLI dispatch (generate-unit-tests / investigate-bug) with only shaperPort -- no
+  // compactionPort -- so a session whose accumulated assistant/tool history genuinely exceeded
+  // maxContextBytes (512,000 -- keiko-contracts/src/harness.ts DEFAULT_LIMITS) hard-failed
+  // HARNESS_LIMIT_CONTEXT_SIZE instead of compacting and continuing, exactly the gap #3323 closed
+  // for the reachable server call sites.
+  //
+  // Each growth round answers with finishReason "tool_calls" and an EMPTY toolCalls array. This is
+  // the same construction keiko-harness/src/loop.test.ts's own "checkModelCallLimits compaction
+  // (KEIKO-0726)" tests use, and for the same documented reason: routeAfterModel (executor.ts)
+  // sends the run to the tool-call state on finishReason alone, and handleToolCall's per-call loop
+  // has nothing to iterate when toolCalls is empty, so it returns straight to model-call WITHOUT
+  // running its own tool-result byte check (selectToolMessage/toolOutputBudgetExceeded). That
+  // per-tool-result check is a narrower, EARLIER gate scoped to whether one new tool message fits
+  // (HarnessShaperPort, ADR-0055 D4) -- growth concentrated in assistant content routes around it
+  // and lands on checkModelCallLimits at the next model-call entry exactly as it would for a real
+  // provider response that narrates large reasoning alongside a request to keep working, which is
+  // the actual target of this fix. 8 rounds of ~70,000 bytes of assistant content comfortably
+  // exceeds 512,000 bytes cumulative before the model finally stops on round 9. A session this
+  // large can only reach `completed` if checkModelCallLimits' compaction attempt
+  // (keiko-harness/src/loop.ts's tryCompact) actually fires and the injected port actually evicts
+  // old turns; the unfixed run.ts hard-fails instead.
+  it("compacts a tool-using session that grows past maxContextBytes and completes, instead of hard-failing (multi-round regression)", async () => {
+    const c = capture();
+    const GROWTH_ROUNDS = 8;
+    let calls = 0;
+    const growingModel: ModelPort = {
+      call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+        calls += 1;
+        if (calls <= GROWTH_ROUNDS) {
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "x".repeat(70_000),
+            finishReason: "tool_calls",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: `req-${String(calls)}`,
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        }
+        return Promise.resolve(response(request.modelId));
+      },
+    };
+    const code = await runAgentCli(
+      [
+        "investigate-bug",
+        "--description",
+        "Grounded answer omits the linked PDF source.",
+        "--no-evidence",
+        "--model",
+        "test-model",
+      ],
+      c.io,
+      {},
+      { model: growingModel },
+    );
+    expect(code).toBe(0);
+    expect(c.err()).not.toContain("HARNESS_LIMIT_CONTEXT_SIZE");
+    expect(c.out()).toContain("run:completed");
+    expect(c.out()).toContain("context:compacted");
+    // The model was called past the growth rounds into its final "stop" response -- the run
+    // reached completion rather than hard-failing partway through the tool-calling loop.
+    expect(calls).toBeGreaterThan(GROWTH_ROUNDS);
+  });
+
   it("returns usage error 2 for an unknown task type", async () => {
     const c = capture();
     const code = await runAgentCli(["frobnicate", "--file", "x"], c.io);
@@ -203,6 +274,77 @@ describe("runAgentCli dry-run", () => {
     expect(result).toBeInstanceOf(Promise);
     expect(await result).toBe(1);
     expect(c.err()).toContain("model gateway configuration problem");
+  });
+
+  // #3409 catalog-B audit: `keiko run` must stay the documented nonproductive dry-run readiness
+  // mode (docs/architecture/governed-tool-migration.md row `cli-composition`; the command's own
+  // usage text says "All tasks run in dry-run mode for tools/files"). ADR-0175 D1 assigns
+  // bound/ready/offer/dispatch to server composition (#3413) and D4 requires an Authority
+  // Envelope before any productive tool is offered -- a bare CLI invocation holds none. Spies on
+  // the real, unmocked createSession to prove no `bindToolCatalog` factory reaches HarnessDeps and
+  // the composed ToolPort is the real DryRunToolPort: it advertises the compiled legacy-native
+  // catalog for honest discovery yet refuses every one of those tools with a closed reason. A
+  // regression that wires a productive catalog into this CLI path without an authority path fails
+  // this test.
+  it("composes explain-plan as the documented nonproductive dry-run readiness mode", async () => {
+    vi.resetModules();
+    const actualHarness = await vi.importActual<typeof import("@oscharko-dev/keiko-harness")>(
+      "@oscharko-dev/keiko-harness",
+    );
+    const capturedConfigs: Parameters<typeof actualHarness.createSession>[1][] = [];
+    const capturedDeps: Parameters<typeof actualHarness.createSession>[2][] = [];
+    vi.doMock("@oscharko-dev/keiko-harness", () => ({
+      ...actualHarness,
+      createSession: (
+        ...args: Parameters<typeof actualHarness.createSession>
+      ): ReturnType<typeof actualHarness.createSession> => {
+        capturedConfigs.push(args[1]);
+        capturedDeps.push(args[2]);
+        return actualHarness.createSession(...args);
+      },
+    }));
+    try {
+      const { runAgentCli: runAgentCliFresh } = await import("./run.js");
+      const c = capture();
+      const code = await runAgentCliFresh(
+        ["explain-plan", "--file", "src/foo.ts", "--no-evidence", "--model", "test-model"],
+        c.io,
+        {},
+        { model: testModel() },
+      );
+      expect(code).toBe(0);
+      expect(capturedConfigs).toHaveLength(1);
+      expect(capturedConfigs[0]?.dryRun).toBe(true);
+      expect(capturedDeps).toHaveLength(1);
+      const deps = capturedDeps[0];
+      expect(deps).not.toHaveProperty("bindToolCatalog");
+      expect(deps?.tools).toBeInstanceOf(actualHarness.DryRunToolPort);
+      const advertised = deps?.tools.listTools() ?? [];
+      expect(advertised.length).toBeGreaterThan(0);
+      const first = advertised[0];
+      if (first === undefined) throw new Error("expected an advertised legacy tool");
+      await expect(
+        deps?.tools.execute({
+          toolCallId: "tc-cli-explain",
+          toolName: first.name,
+          arguments: {},
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow("unavailable");
+      writeToolCatalogQualificationObservation({
+        consumer: "cli-server-sdk",
+        component: "cli",
+        binding: (
+          deps?.tools as InstanceType<typeof actualHarness.DryRunToolPort>
+        ).catalogBinding(),
+        terminalStatus: "unavailable",
+        settlementCount: 0,
+        proof: { kind: "closed-unavailable" },
+      });
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-harness");
+      vi.resetModules();
+    }
   });
 });
 

@@ -1,0 +1,69 @@
+{
+  "issue": 3187,
+  "verdict": "PASS",
+  "harness": "tests/e2e/boot-recovery-3187.spec.ts",
+  "globalsCssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
+  "layoutSha256": "d1f977571138d9c148dfca170622bccb1746ba5872145f2aacf9559e3bd4cba6",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "theme": "dark",
+      "highContrast": false,
+      "forcedColors": "none",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "02-light.png",
+      "theme": "light",
+      "highContrast": false,
+      "forcedColors": "none",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "03-dark-high-contrast.png",
+      "theme": "dark",
+      "highContrast": true,
+      "forcedColors": "none",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "04-forced-colors.png",
+      "theme": "dark",
+      "highContrast": false,
+      "forcedColors": "active",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "05-responsive.png",
+      "theme": "light",
+      "highContrast": false,
+      "forcedColors": "none",
+      "viewport": {
+        "width": 320,
+        "height": 900
+      },
+      "focusedControl": "Reload Keiko",
+      "seriousOrCriticalAxeViolations": 0
+    }
+  ]
+}

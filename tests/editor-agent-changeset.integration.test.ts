@@ -4,19 +4,23 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentAction,
+  EditorAgentGovernedAuthorityReference,
+  EditorAgentSessionSnapshot,
+  ToolCallResult,
+  ToolPort,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentEvent,
-  resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchAuthorityEnvelope,
-  type EditorAgentAction,
-  type EditorAgentGovernedAuthorityReference,
-  type EditorAgentSessionSnapshot,
-  type ToolCallResult,
-  type ToolPort,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { buildPatchPreview, type PatchPreviewSource } from "@oscharko-dev/keiko-editor";
 import {
   EditorAgentHttpClient,
@@ -122,6 +126,7 @@ function postContext(url: string, body: string): RouteContext {
   const req = Readable.from([Buffer.from(body, "utf8")]) as unknown as IncomingMessage;
   req.method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -187,6 +192,7 @@ function connectBridge(bridgeDecisionCapability: string): CapturedBridge {
     bridgeDecisionCapability,
   }).toString();
   const outcome = handleEditorAgentEvents({
+    correlationId: undefined,
     req,
     res,
     params: {},

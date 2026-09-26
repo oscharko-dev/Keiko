@@ -1,12 +1,9 @@
 // Tests for the grounded entailment STAGE (Issue #2563): policy gating, active flagging, fail-closed
 // degradation, and the body-free operator diagnostic. All model calls hit a fake ModelPort.
 
-import { describe, expect, it } from "vitest";
-import {
-  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
-  type ConnectedContextPack,
-  type KnowledgeCapsule,
-} from "@oscharko-dev/keiko-contracts";
+import { describe, expect, it, vi } from "vitest";
+import type { ConnectedContextPack, KnowledgeCapsule } from "@oscharko-dev/keiko-contracts";
+import { KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type {
   GatewayRequest,
   ModelCapability,
@@ -16,7 +13,7 @@ import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "./deps.js";
-import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
@@ -139,6 +136,129 @@ describe("createEntailmentStage — inertness", () => {
     expect(createEntailmentStage(deps, [], "unconfigured-model")).toBeUndefined();
   });
 
+  // KEIKO-0359: going inert used to be entirely silent, so a model whose capability metadata
+  // Gateway Setup never enriched was indistinguishable from one that genuinely cannot do
+  // structured output — and the stage stayed off indefinitely with nothing to act on.
+  it("reports capability-unenriched when the model has no explicit capability entry (KEIKO-0359)", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    // "unconfigured-model" has no config.capabilities entry and is not in the built-in registry,
+    // so findConfiguredCapability serves defaultCapabilityForConfiguredModel's placeholder.
+    const deps = depsWith(portReturning("{}"), (r) => records.push(r));
+    expect(
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+
+    const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
+    expect(inert).toHaveLength(1);
+    expect(inert[0]?.message).toBe("capability-unenriched");
+    expect(inert[0]?.source).toBe("grounded.entailment-stage");
+    expect(inert[0]?.correlationId).toBeTruthy();
+  });
+
+  it("distinguishes a genuinely incompatible model from an unenriched one (KEIKO-0359)", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    // Explicitly enriched, but declares no structured-output support — a real incompatibility,
+    // not a configuration gap, so it must NOT be reported as unenriched.
+    const baseCapability = configWithChatModel().capabilities?.[0];
+    if (baseCapability === undefined) throw new Error("expected a base capability");
+    const incompatible = parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: "declared-incompatible",
+            baseUrl: "https://fake.example.com/v1",
+            apiKey: "k",
+            capability: {
+              ...baseCapability,
+              id: "declared-incompatible",
+              supportsResponseFormat: false,
+            },
+          },
+        ],
+      },
+      {},
+    );
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}"), (r) => records.push(r)),
+      config: incompatible,
+    };
+    expect(
+      createEntailmentStage(deps, [], "declared-incompatible", { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+
+    const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
+    expect(inert).toHaveLength(1);
+    expect(inert[0]?.message).toBe("model-incompatible");
+  });
+
+  it("reports model-port-unavailable for a compatible model with no port (KEIKO-0359)", () => {
+    // The third inert cause: capability is fine, but no ModelPort can be built. Must be
+    // distinguishable from both the unenriched and the incompatible case.
+    const records: ServerDiagnosticRecord[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}"), (r) => records.push(r)),
+      modelPortFactory: () => undefined,
+    };
+
+    expect(
+      createEntailmentStage(deps, [], MODEL_ID, { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+
+    const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
+    expect(inert).toHaveLength(1);
+    expect(inert[0]?.message).toBe("model-port-unavailable");
+  });
+
+  it("never lets a CRLF-bearing correlationId reach the stderr line through its direct sink.record() call", () => {
+    // The stage hands its record to `ServerDiagnosticSink.record()` directly rather than through
+    // `emitServerDiagnostic`; the default sink itself must therefore be the sanitizing writer.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const deps = depsWith(portReturning("{}"));
+      createEntailmentStage(deps, [], "unconfigured-model", {
+        diagnostics: defaultServerDiagnosticSink,
+        correlationId: "corr-1\r\ninjected-fake-log-line-marker",
+      });
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      expect(line).not.toContain("\r\n");
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("stays inert rather than throwing when the diagnostics sink throws (KEIKO-0359)", () => {
+    // Observability must never break the path it observes: an unhealthy diagnostics backend
+    // must not turn a safely-inert stage into a failed grounded ask.
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}")),
+      diagnostics: {
+        record: (): never => {
+          throw new Error("diagnostics backend down");
+        },
+      },
+    };
+
+    expect(() =>
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).not.toThrow();
+    expect(
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the inert diagnostic body-free (KEIKO-0359)", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const deps = depsWith(portReturning("{}"), (r) => records.push(r));
+    createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics });
+    const serialized = JSON.stringify(records);
+    // The reason code carries the whole signal; no capability payload, endpoint, or key.
+    expect(serialized).not.toContain("fake.example.com");
+    expect(serialized).not.toContain("contextWindow");
+    expect(serialized).not.toContain("supportsResponseFormat");
+  });
+
   it("is inert (undefined) when a capsule policy denies answerSynthesis", () => {
     const stage = createEntailmentStage(
       depsWith(portReturning('{"verdict":"unsupported"}')),
@@ -179,6 +299,21 @@ describe("createEntailmentStage — active flagging", () => {
     expect(markers).toEqual([]);
   });
 
+  it("flags an unsupported numeric connector claim through the same judge port", async () => {
+    const stage = createEntailmentStage(
+      depsWith(portReturning('{"verdict":"unsupported"}')),
+      [],
+      MODEL_ID,
+    );
+    const markers = await stage?.evaluateNumeric(
+      "Retention is ten years.[1]",
+      [{ marker: 1, excerptText: "Retention: 30 days" }],
+      NOW,
+    );
+    expect(markers?.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
+    expect(markers?.[0]?.claim).toContain("[1]");
+  });
+
   it("caveats an answer whose cited claims run past the per-answer claim ceiling", async () => {
     // #2670 AC6: the claim budget bounds judge fan-out; it does not bless the untested tail of a
     // long answer. One cited claim over the ceiling must still degrade the answer to WARN, exactly
@@ -198,6 +333,27 @@ describe("createEntailmentStage — active flagging", () => {
       NOW,
     );
     expect(markers?.map((m) => m.kind)).toEqual(["entailment-unavailable"]);
+  });
+
+  it("shares one claim allowance across path and numeric citation grammars", async () => {
+    const port = portReturning('{"verdict":"supported"}');
+    const call = vi.spyOn(port, "call");
+    const stage = createEntailmentStage(depsWith(port), [], MODEL_ID, undefined, undefined, {
+      maxClaims: 1,
+      maxExcerptChars: 900,
+      maxTotalMs: 20_000,
+    });
+    if (stage?.evaluateHybrid === undefined) throw new Error("expected a hybrid evaluator");
+
+    const markers = await stage.evaluateHybrid(
+      "Retention is 30 days [src/policy.ts:1-8]. Support starts in Q3 [1].",
+      [packWithExcerpt("src/policy.ts", "retention: 30 days")],
+      [{ marker: 1, excerptText: "Support starts in Q3" }],
+      NOW,
+    );
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(markers.map((marker) => marker.kind)).toEqual(["entailment-unavailable"]);
   });
 });
 
@@ -252,5 +408,23 @@ describe("createEntailmentStage — fail-closed degradation", () => {
     await expect(
       stage?.evaluate("A [src/a.ts:1-8].", [packWithExcerpt("src/a.ts", "x")], NOW),
     ).resolves.toEqual([expect.objectContaining({ kind: "entailment-unavailable" })]);
+  });
+
+  it("degrades numeric citation verification with the same body-free warning and diagnostic", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const deps = depsWith(portReturning(new Error("gateway down")), (record) =>
+      records.push(record),
+    );
+    const stage = createEntailmentStage(deps, [], MODEL_ID, {
+      diagnostics: deps.diagnostics,
+      correlationId: "corr-numeric",
+    });
+    const markers = await stage?.evaluateNumeric(
+      "Retention is 30 days [1].",
+      [{ marker: 1, excerptText: "connector secret content" }],
+      NOW,
+    );
+    expect(markers?.map((marker) => marker.kind)).toEqual(["entailment-unavailable"]);
+    expect(JSON.stringify(records)).not.toContain("connector secret content");
   });
 });

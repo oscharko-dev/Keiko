@@ -12,10 +12,14 @@
 //   paragraph items · codeBlock with an optional bounded language attribute
 //
 // Hostile input never reaches the provider: oversized input and control characters are rejected
-// with the parser's typed reasons. Output size is linear in input size by construction (every
-// input character lands in exactly one text node), so a valid composition always fits the
-// executors' serialized request-body ceiling for any input within the parser bound.
+// with the parser's typed reasons. The parser character bound is enforced up front, and — because
+// heavy ADF structural overhead (every line becomes a paragraph wrapper) can multiply the
+// serialized bytes by a large constant factor — the composed document's serialized byte length is
+// re-checked here against `ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES` and rejected as
+// `input-too-large` on overflow (KEIKO-0401). This closes the invariant the composer's header
+// advertises to the executor.
 
+import { ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES } from "./atlassian-http-port.js";
 import {
   parseMarkdownLiteBlocks,
   type MarkdownLiteBlock,
@@ -130,18 +134,26 @@ function blockNode(block: MarkdownLiteBlock): AdfComposedBlockNode {
   }
 }
 
+const UTF8_ENCODER = new TextEncoder();
+
 // Compose one bounded markdown-lite input into an ADF v1 document. Deterministic and total over
 // the accepted domain; hostile input is rejected with the parser's typed reason and nothing is
-// composed.
+// composed. Fail-closed here on serialized-byte overflow so the executor never receives a
+// composed document that will be rejected two layers later by the write-lane's byte gate.
 export function composePlainTextToAdf(input: string): PlainTextToAdfResult {
   const parsed = parseMarkdownLiteBlocks(input);
   if (!parsed.ok) return parsed;
-  return {
-    ok: true,
-    doc: {
-      version: ADF_COMPOSED_DOC_VERSION,
-      type: "doc",
-      content: parsed.blocks.map(blockNode),
-    },
+  const doc: AdfComposedDocument = {
+    version: ADF_COMPOSED_DOC_VERSION,
+    type: "doc",
+    content: parsed.blocks.map(blockNode),
   };
+  // The write-lane executor enforces the same limit on the full request body, which wraps this
+  // doc inside a field envelope. Rejecting here on the doc alone is strictly stricter and content-
+  // free.
+  const serializedBytes = UTF8_ENCODER.encode(JSON.stringify(doc)).length;
+  if (serializedBytes > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES) {
+    return { ok: false, reason: "input-too-large" };
+  }
+  return { ok: true, doc };
 }

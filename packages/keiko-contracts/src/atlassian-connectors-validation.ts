@@ -19,6 +19,7 @@ import {
   ATLASSIAN_CONNECTOR_ACTION_DISPOSITIONS,
   ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
   ATLASSIAN_CONNECTOR_HUMAN_INITIATION_REASON,
+  ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS,
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   ATLASSIAN_JQL_MAX_CHARS,
@@ -28,6 +29,7 @@ import {
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
   ATLASSIAN_SYNC_TERMINAL_STATUSES,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+  hasBalancedJqlNesting,
   isAtlassianConnectorActionType,
   isAtlassianConnectorAuthRef,
   isAtlassianConnectorAuthScheme,
@@ -38,6 +40,7 @@ import {
   isAtlassianSyncJobStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianContentPreview,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
@@ -105,10 +108,13 @@ function onlyKnownKeys(
   errors: string[],
 ): void {
   const allowedSet = new Set(allowed);
+  // No early return: these validators exist to catch EVERY credential- or body-like field a hostile
+  // or buggy caller smuggled onto a payload, so stopping at the first understated the scope of what
+  // was rejected. Matches `exactKeys` in coding-workbench-runtime-api-validation.ts and the
+  // enumerate-every-reason convention the rest of the package follows.
   for (const key of Object.keys(value)) {
     if (!allowedSet.has(key)) {
       errors.push(`${field} must not include ${key}`);
-      return;
     }
   }
 }
@@ -240,10 +246,22 @@ const JIRA_SCOPE_KEYS: readonly string[] = ["provider", "projectKeys", "jql", "b
 // parsed and never surfaced in evidence (ADR-0128 D6 hashes or omits it).
 function validateOpaqueJql(value: unknown, errors: string[]): void {
   if (value === undefined) return;
-  if (typeof value !== "string" || value.length === 0 || value.length > ATLASSIAN_JQL_MAX_CHARS) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > ATLASSIAN_JQL_MAX_CHARS ||
+    value.trim().length === 0
+  ) {
     errors.push(
       `scope.jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
     );
+    return;
+  }
+  // Structural (not semantic) precondition of the `project IN (...) AND (<jql>)` composition the
+  // adapter builds: a clause that closes the injected group widens egress past the approved
+  // projects. Rejected here so a scope can never be persisted in that shape (ADR-0128 D5).
+  if (!hasBalancedJqlNesting(value)) {
+    errors.push("scope.jql must have balanced parentheses and terminated string literals");
   }
 }
 
@@ -584,10 +602,11 @@ function validateActivityReasonPairing(input: Record<string, unknown>, errors: s
   if (input.disposition === "denied") {
     if (
       !isOneOfStrings(input.reasonCode, CODING_WORKBENCH_POLICY_DENIAL_REASONS) &&
-      !isOneOfStrings(input.reasonCode, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS)
+      !isOneOfStrings(input.reasonCode, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS) &&
+      !isOneOfStrings(input.reasonCode, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS)
     ) {
       errors.push(
-        "activity.reasonCode must be a policy denial or authority failure reason for a denied attempt",
+        "activity.reasonCode must be a policy denial, authority failure, or registry failure reason for a denied attempt",
       );
     }
     if (input.outcome !== "denied") {
@@ -742,6 +761,8 @@ const PENDING_APPROVAL_KEYS: readonly (keyof AtlassianConnectorPendingApproval)[
   "correlationId",
   "requestedAt",
   "expiresAt",
+  "contentPreview",
+  "contentPreviewUnavailable",
 ];
 
 // The action row is pinned by the D4 table exactly as the activity validator pins it: a tampered
@@ -766,6 +787,27 @@ function validateApprovalActionRow(input: Record<string, unknown>, errors: strin
   }
 }
 
+// The independently-optional fields: an identifier token (targetRef) and the mutually-exclusive
+// content-preview pair (contentPreview / contentPreviewUnavailable, KEIKO-0186 — exactly one of
+// them, or neither, is ever set: never both). Split out so the caller's own complexity stays
+// under the repository's cyclomatic-complexity ceiling.
+function validateApprovalOptionalFields(input: Record<string, unknown>, errors: string[]): void {
+  if (input.targetRef !== undefined && !isSafeAtlassianIdentifier(input.targetRef)) {
+    errors.push("approval.targetRef must be a bounded identifier token when set");
+  }
+  if (input.contentPreview !== undefined && !isSafeAtlassianContentPreview(input.contentPreview)) {
+    errors.push(
+      "approval.contentPreview must be a bounded, control-character-free preview when set",
+    );
+  }
+  if (input.contentPreviewUnavailable !== undefined && input.contentPreviewUnavailable !== true) {
+    errors.push("approval.contentPreviewUnavailable must be true when set");
+  }
+  if (input.contentPreview !== undefined && input.contentPreviewUnavailable !== undefined) {
+    errors.push("approval.contentPreview and approval.contentPreviewUnavailable are exclusive");
+  }
+}
+
 export function validateAtlassianConnectorPendingApproval(
   input: unknown,
 ): AtlassianConnectorValidation<AtlassianConnectorPendingApproval> {
@@ -780,9 +822,7 @@ export function validateAtlassianConnectorPendingApproval(
   if (!isOneOfStrings(input.reviewReason, ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS)) {
     errors.push("approval.reviewReason must be a review reason");
   }
-  if (input.targetRef !== undefined && !isSafeAtlassianIdentifier(input.targetRef)) {
-    errors.push("approval.targetRef must be a bounded identifier token when set");
-  }
+  validateApprovalOptionalFields(input, errors);
   pushTimestamp(errors, "approval.requestedAt", input.requestedAt);
   pushTimestamp(errors, "approval.expiresAt", input.expiresAt);
   if (

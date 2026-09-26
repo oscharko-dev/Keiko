@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-workspace",
-  "version": "0.2.15",
+  "version": "1.1.9",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: Keiko repository context and workspace access — detection, safe reads, path containment, deny/ignore rules, context packs, retrieval, and summaries. Not published independently.",
@@ -15,6 +15,22 @@
       "types": "./dist/fs.d.ts",
       "import": "./dist/fs.js"
     },
+    "./internal/owned-root": {
+      "types": "./dist/ownedRoot.d.ts",
+      "import": "./dist/ownedRoot.js"
+    },
+    "./internal/owned-root-mint": {
+      "types": "./dist/ownedRootMint.d.ts",
+      "import": "./dist/ownedRootMint.js"
+    },
+    "./internal/owned-root-preserve": {
+      "types": "./dist/ownedRootPreserve.d.ts",
+      "import": "./dist/ownedRootPreserve.js"
+    },
+    "./internal/realpath-policy": {
+      "types": "./dist/realpathPolicy.d.ts",
+      "import": "./dist/realpathPolicy.js"
+    },
     "./internal/editor-read": {
       "types": "./dist/editorRead.d.ts",
       "import": "./dist/editorRead.js"
@@ -22,6 +38,22 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
+    },
+    "./code-intelligence": {
+      "types": "./dist/codeIntelligenceSurface.d.ts",
+      "import": "./dist/codeIntelligenceSurface.js"
+    },
+    "./coding-repository-search": {
+      "types": "./dist/codingRepositorySearch.d.ts",
+      "default": "./dist/codingRepositorySearch.js"
+    },
+    "./internal/git-publish": {
+      "types": "./dist/gitPublishView.d.ts",
+      "default": "./dist/gitPublishView.js"
+    },
+    "./internal/git-index": {
+      "types": "./dist/gitIndexTransaction.d.ts",
+      "default": "./dist/gitIndexTransaction.js"
     }
   },
   "scripts": {
@@ -34,11 +66,11 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25"
+    "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.15",
-    "@oscharko-dev/keiko-security": "0.2.15",
+    "@oscharko-dev/keiko-contracts": "1.1.9",
+    "@oscharko-dev/keiko-security": "1.1.9",
     "typescript": "~6.0.3"
   },
   "private": true

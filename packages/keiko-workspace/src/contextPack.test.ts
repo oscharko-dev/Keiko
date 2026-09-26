@@ -9,6 +9,7 @@ const ROOT = "/ws";
 function workspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",

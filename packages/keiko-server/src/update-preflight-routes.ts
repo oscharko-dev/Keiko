@@ -1,13 +1,13 @@
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import {
-  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
-  type ReleaseImpactCatalog,
-  type UpdateInstallMode,
-  type UpdatePreflightBlockerCode,
-  type UpdatePreflightPortableInstallability,
-  type UpdatePreflightReport,
-  type UpdatePortableTarget,
+import type {
+  ReleaseImpactCatalog,
+  UpdateInstallMode,
+  UpdatePreflightBlockerCode,
+  UpdatePreflightPortableInstallability,
+  UpdatePreflightReport,
+  UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { detectUpdateInstallMode, productionUpdateFacts } from "./update-install-mode.js";
@@ -30,17 +30,20 @@ import {
   reportBase,
   updateAvailableReportFromOutcomes,
 } from "./update-preflight-report.js";
+import type { UpdateCandidateAuthority } from "./update-candidate-authority.js";
 
 interface UpdatePreflightRuntimeOptions {
   readonly currentVersion?: string | (() => string);
   readonly bundledCatalog?: ReleaseImpactCatalog | undefined;
   readonly clock?: (() => Date) | undefined;
   readonly installMode?: (() => UpdateInstallMode) | undefined;
+  readonly candidateAuthority?: UpdateCandidateAuthority | undefined;
 }
 
 export interface UpdatePreflightService {
-  getStartupReport(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
-  runManualCheck(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
+  getStartupReport(deps: UiHandlerDeps, correlationId?: string): Promise<UpdatePreflightReport>;
+  runManualCheck(deps: UiHandlerDeps, correlationId?: string): Promise<UpdatePreflightReport>;
+  runValidationCheck?(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
 }
 
 async function updateAvailableReport(
@@ -51,7 +54,8 @@ async function updateAvailableReport(
   registry: Awaited<ReturnType<typeof fetchRegistryLatestVersion>>,
   options: UpdatePreflightRuntimeOptions,
 ): Promise<UpdatePreflightReport> {
-  const catalog = validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk();
+  const catalog =
+    validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk(deps.diagnostics);
   const impactResolution = impactFromCatalog(catalog, currentVersion, targetVersion);
   const github = await fetchGitHubRelease(deps, targetVersion);
   const fallbackRelease = fallbackReleaseFromImpact(targetVersion, impactResolution.impact);
@@ -104,8 +108,14 @@ async function portablePreflightReport(
   currentVersion: string,
   target: UpdatePortableTarget,
   options: UpdatePreflightRuntimeOptions,
+  correlationId: string | undefined,
 ): Promise<UpdatePreflightReport> {
-  const outcome = await fetchPortableGitHubReleaseAssets(deps, currentVersion, target);
+  const outcome = await fetchPortableGitHubReleaseAssets(
+    deps,
+    currentVersion,
+    target,
+    correlationId,
+  );
   if (outcome.status !== "live") {
     return portableReleaseUnavailableReport(
       base,
@@ -124,7 +134,8 @@ async function portablePreflightReport(
       outcome.warnings,
     );
   }
-  const catalog = validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk();
+  const catalog =
+    validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk(deps.diagnostics);
   const impactResolution = impactFromCatalog(catalog, currentVersion, outcome.targetVersion);
   return portableUpdateAvailableReport(
     base,
@@ -160,11 +171,12 @@ async function portableModePreflightReport(
   currentVersion: string,
   mode: UpdateInstallMode,
   options: UpdatePreflightRuntimeOptions,
+  correlationId: string | undefined,
 ): Promise<UpdatePreflightReport | undefined> {
   if (mode.status === "supported" && mode.installKind === "portable-managed") {
     const target = mode.portable?.target;
     if (target !== undefined) {
-      return portablePreflightReport(deps, base, currentVersion, target, options);
+      return portablePreflightReport(deps, base, currentVersion, target, options, correlationId);
     }
   }
   return isPortableInstallMode(mode) ? portableBlockedReport(base, mode) : undefined;
@@ -199,6 +211,7 @@ async function packageManagerPreflightReport(
 export async function runUpdatePreflight(
   deps: UiHandlerDeps,
   options: UpdatePreflightRuntimeOptions = {},
+  correlationId?: string,
 ): Promise<UpdatePreflightReport> {
   const currentVersion =
     typeof options.currentVersion === "function"
@@ -213,8 +226,12 @@ export async function runUpdatePreflight(
     currentVersion,
     mode,
     options,
+    correlationId,
   );
-  return portableReport ?? packageManagerPreflightReport(deps, base, currentVersion, options);
+  const report =
+    portableReport ?? (await packageManagerPreflightReport(deps, base, currentVersion, options));
+  const candidate = options.candidateAuthority?.issue(report, mode, correlationId);
+  return candidate === undefined ? report : { ...report, candidate };
 }
 
 export function createUpdatePreflightService(
@@ -222,12 +239,15 @@ export function createUpdatePreflightService(
 ): UpdatePreflightService {
   let startupPromise: Promise<UpdatePreflightReport> | undefined;
   return {
-    getStartupReport(deps): Promise<UpdatePreflightReport> {
-      startupPromise ??= runUpdatePreflight(deps, options);
+    getStartupReport(deps, correlationId): Promise<UpdatePreflightReport> {
+      startupPromise ??= runUpdatePreflight(deps, options, correlationId);
       return startupPromise;
     },
-    runManualCheck(deps): Promise<UpdatePreflightReport> {
-      return runUpdatePreflight(deps, options);
+    runManualCheck(deps, correlationId): Promise<UpdatePreflightReport> {
+      return runUpdatePreflight(deps, options, correlationId);
+    },
+    runValidationCheck(deps): Promise<UpdatePreflightReport> {
+      return runUpdatePreflight(deps, { ...options, candidateAuthority: undefined });
     },
   };
 }
@@ -252,21 +272,27 @@ function createDefaultServiceRegistry(): {
 
 const defaultServiceRegistry = createDefaultServiceRegistry();
 
-function serviceFor(deps: UiHandlerDeps): UpdatePreflightService {
+export function resolveUpdatePreflightService(deps: UiHandlerDeps): UpdatePreflightService {
   if (deps.updatePreflight !== undefined) return deps.updatePreflight;
   return defaultServiceRegistry.resolve(deps);
 }
 
 export async function handleGetUpdatePreflight(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return { status: 200, body: await serviceFor(deps).getStartupReport(deps) };
+  return {
+    status: 200,
+    body: await resolveUpdatePreflightService(deps).getStartupReport(deps, ctx.correlationId),
+  };
 }
 
 export async function handlePostUpdatePreflightCheck(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return { status: 200, body: await serviceFor(deps).runManualCheck(deps) };
+  return {
+    status: 200,
+    body: await resolveUpdatePreflightService(deps).runManualCheck(deps, ctx.correlationId),
+  };
 }

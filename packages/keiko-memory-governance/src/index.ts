@@ -65,11 +65,14 @@ export {
 // ─── Maintenance planner (#204) ──────────────────────────────────────────────
 export {
   effectiveStrength,
+  planAcknowledgedArchivedForgets,
   planMemoryMaintenance,
   MEMORY_MAINTENANCE_DEFAULTS,
+  type AcknowledgedArchivedForgetCandidate,
   type MemoryAccessStatLike,
   type MemoryMaintenancePlan,
   type MemoryMaintenancePolicy,
+  type PlanAcknowledgedArchivedForgetsOptions,
   type PlanMaintenanceOptions,
 } from "./maintenance.js";
 

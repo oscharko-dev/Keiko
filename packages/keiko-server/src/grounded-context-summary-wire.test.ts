@@ -13,13 +13,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
-import {
-  buildGroundedAnswerContextPackSummary,
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  DEFAULT_CONTEXT_PROFILE,
-  type ConnectedContextPack,
-  type ContextProfile,
-} from "@oscharko-dev/keiko-contracts";
+import type { ConnectedContextPack, ContextProfile } from "@oscharko-dev/keiko-contracts";
+import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import {
@@ -187,6 +184,7 @@ function routeCtx(body: string): RouteContext {
   const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
   res.writableEnded = false;
   return {
+    correlationId: undefined,
     req: fakeReq(body),
     res,
     params: {},

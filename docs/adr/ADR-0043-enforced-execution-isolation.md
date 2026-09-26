@@ -17,7 +17,25 @@ code comments anticipated (no such files existed); those comments are updated to
 
 ## Version
 
-1.0
+1.3 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
+boundary while `keiko-tools` remains the disposable-command spawn boundary, replaces its
+same-uid-discoverable filesystem relay with an anonymous descriptor-transfer channel, and records
+the kernel-proven private diagnostics-descriptor lifecycle. Issue #3451 binds that primitive to the
+release-qualified `linux-x64` runtime and its exact production evidence (2026-09-10).
+
+1.4 — PR #3452 adds D17: the verification orchestrator installs a workspace's declared dependencies
+before its script steps, the one verification command that keeps host network. A managed task
+worktree is a clean checkout, so without it no project created from nothing could be verified
+(Coding Workbench run 15, 2026-09-10). D17 also records the sources such an install may use and its
+refusals (2026-09-11).
+
+1.5 — PR #3452 review: D17's install no longer has open egress. npm reaches the network only
+through a loopback proxy that tunnels to the approved registry, with Git dependencies refused, and
+the install's tunnels and refusals are counted on its summary and activity line (2026-09-11).
+
+1.6 — PR #3452 review: the pre-install check also reads the manifest of every workspace member npm
+would install, and npm itself refuses what the proxy cannot see: `allow-remote=none`,
+`allow-file=none` and `allow-directory=root` join `allow-git=none` (2026-09-11).
 
 ## Context
 
@@ -50,18 +68,25 @@ Introduce `@oscharko-dev/keiko-sandbox`, a near-leaf package (depends only on `k
 the `SandboxPolicy`/`NetworkPolicy`/attestation types). It owns the **isolation strategy only**:
 backend availability probing, deterministic per-platform backend selection, pure construction of the
 wrapper argv/profile that denies egress, a content-free `SandboxAttestation` (`{ backend,
-networkEnforced, platform }`), and the fail-closed verdict. It performs **no process spawning** — the
-wrapper builders and selection are pure functions, the probe is a thin filesystem read. The package is
-the platform's reusable isolation brain, consumable anywhere an enforced run is needed.
+networkEnforced, platform }`), and the fail-closed verdict. The disposable `network: "none"` builders
+and selection remain pure functions and the probe remains a thin filesystem read. The gateway-only
+Linux extension in D12 additionally owns the internal namespace and relay subprocesses because their
+lifecycle is the enforcement boundary itself; consumers still receive one wrapped command. The
+package is the platform's reusable isolation owner, consumable anywhere an enforced run is needed.
 
 ### D2 — One spawn boundary applies the wrapper
 
-The single subprocess boundary remains `keiko-tools/src/exec.ts` `runCommand`. When a caller passes
+The single disposable-command subprocess boundary remains `keiko-tools/src/exec.ts` `runCommand`.
+When a caller passes
 `policy.network === "none"`, `runCommand` asks keiko-sandbox for an enforcing wrapper and spawns the
 wrapped command, recording the attestation on `CommandResult`. No second spawning path is introduced
 (preserving the ADR-0019 invariant that verification and tools share one command boundary). Callers
 that do not request `network: "none"` are unaffected — egress enforcement is opt-in per call, so the
 read-only command tools keep `network: "inherit"` and their existing behaviour.
+
+D12's gateway-only Linux wrapper does not create another product command boundary: the planned child
+is still one command to the consumer, while the package-private launcher owns only the inseparable
+namespace peer, anonymous descriptor relay, and target-child lifecycle needed to enforce that plan.
 
 ### D3 — Hybrid backends, fail-closed
 
@@ -155,33 +180,405 @@ the epic integration branch `feat/keiko-editor` once the required `ci` check is 
 settled. This is the same scoped departure from ADR-0042 D8's owner-gated merge for the editor
 integration line; it does not authorise autonomous merge into the protected release line.
 
-## Amendment — Issue #2951 confines long-lived coding sidecars (2026-09-12)
+## Amendment — Issue #2951 adds long-lived gateway-only egress confinement (2026-09-05)
 
-Issue [#2951](https://github.com/oscharko-dev/Keiko/issues/2951) extends the same fail-closed
-principle to the server-owned, long-lived coding-runtime spawn boundary. It does not reuse the
-single-command `network: "none"` availability result as proof for a sidecar: a network namespace or
-container that removes host loopback cannot satisfy a gateway-mediated sidecar's transport contract.
+Authored for Issue [#2951](https://github.com/oscharko-dev/Keiko/issues/2951) (Audit KEIKO-0061,
+Parent Epic #2886) under the accepted decision to sandbox every long-lived coding sidecar with an
+attested OS-level egress policy. D1–D10 confine a **disposable, short-lived** command run
+(`network: "none"`, egress denied outright). The coding-runtime sidecar (managed OpenCode) is a
+different shape: it is a **long-lived process** that must reach exactly one loopback destination —
+Keiko's own authenticated gateway/BFF endpoint — for the run's whole lifetime, never the public
+network and never any other local port. Denying all egress (D3's `network:"none"`) is too strong for
+this shape; the existing per-platform backends in `backends.ts` had no "deny everything except this
+one loopback port" tier. This amendment records the mechanism built to close that gap and its actual,
+current platform coverage.
 
-### D11 — A policy-specific wrapper is mandatory at the owned-tree spawn boundary
+### D11 — `RuntimeGatewayConfinement`: an attested, gateway-allowlist policy
 
-Before either the native release supervisor or the repository dev-lane backend can spawn a runtime,
-the runtime supervisor plans an OS-enforced egress wrapper for the exact runtime/model-source pair.
-The backend receives only that prepared wrapper. Missing support, invalid binding, or wrapper planning
-failure returns `runtime-egress-unenforceable` with zero runtime or helper spawn. Direct sidecar spawn
-is not a fallback.
+`packages/keiko-sandbox/src/runtime-gateway.ts` adds a policy shape distinct from
+`IsolatedRunPlan`/`SandboxBackend` (D1): `createRuntimeGatewayConfinement` binds the exact loopback
+gateway address/port together with the run's identity (`runId`, `treeBindingId`) and attestation
+digests (`envelopeDigest`, `runtimeArtifactDigest`, `modelProfileDigest`) into one frozen,
+tamper-evident `RuntimeGatewayConfinement` record, closed over a `policyDigest` that a hostile
+accessor cannot influence (`copyRuntimeGatewayConfinement` reads own data descriptors only, never a
+caller-supplied getter). The gateway URL must be `http://127.0.0.1` or `http://[::1]` with no
+credentials, query, or fragment — any other shape is rejected before a policy is even constructed
+(fail-closed, D3's principle applied to this narrower boundary). `buildRuntimeGatewaySeatbeltCommand`
+compiles that policy into a macOS Seatbelt profile: `(deny network*)` by default, with exactly one
+`(allow network-outbound (remote tcp4|tcp6 "localhost:<port>"))` carved out for the attested gateway
+port, plus `(deny mach-lookup)`, `(deny appleevent-send)`, and `(deny lsopen)` to close the
+service-escape surface a long-lived interactive sidecar would otherwise have. `process-fork` is
+allowed because a live run against the pinned OpenCode sidecar (#3390) showed it forks `git` for
+its own session/history endpoints (`POST /sync/history`, `GET /session`), and a fork denial made
+both fail with HTTP 500. Fork does not grant an arbitrary child executable: `process-exec` is
+deny-by-default and allows only the already verified runtime executable plus exactly one Git
+executable, attested per-launch rather than trusted by conventional path (see D16 below — an
+earlier revision of this record allowlisted the conventional Apple/CommandLineTools/Xcode paths
+unconditionally, which a local user can replace). A shell, curl, compiler, second Node binary, or
+any other executable is refused by Seatbelt. Descendants inherit that executable policy and the
+same `(deny network*)` with its one gateway-port carve-out. The real Darwin suite proves both the
+attested Git spawn and an unapproved executable denial, and separately proves network denial
+remains inherited by an allowed same-runtime descendant.
+`packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts` is the sole Seatbelt
+caller: it refuses to spawn the sidecar at all when no
+confinement policy is attached, or when the policy's `runId`/`treeBindingId` drift from the launch
+request, before any process exists.
 
-The initial qualified pairing is macOS Seatbelt for the gateway-mediated OpenCode profile. Its policy
-denies outbound network except loopback and Unix sockets, so the sidecar can reach the authenticated
-Keiko gateway without public-network access. Linux network namespaces and `--network=none`
-containers, and Windows containers with the same semantics, remain unavailable for this profile
-until a release-qualified host-loopback-preserving backend exists. Address-aware enterprise-proxy
-and reviewed direct-egress profiles likewise remain unavailable until their own enforcing backend is
-qualified. These are deliberate fail-closed states, not compatibility claims.
+The runtime supervisor also records a launch-bound, content-free prepared-wrapper attestation for
+the exact runtime/model-source pair. That attestation binds the enforcing backend and platform, the
+closed runtime and model sources, the Authority Envelope digest, the reviewed-egress receipt, and
+the canonical policy digest. Proxy and CA identities, when present, are represented only as digests;
+endpoints, paths, headers, tokens, and credentials are excluded. Any binding drift invalidates the
+attestation and fails the launch before a runtime tree is owned.
 
-### D12 — Confinement evidence is content-free and launch-bound
+### D12 — macOS and Linux are product-wired; Windows remains fail-closed
 
-The prepared wrapper carries a versioned attestation binding the selected backend and platform, the
-closed runtime and model sources, the Authority Envelope digest, a reviewed-egress receipt, and the
-canonical policy digest. Proxy and CA identities, when applicable, are digests only. Endpoints,
-paths, headers, tokens, and credentials are excluded. Changing any binding invalidates attestation
-verification.
+`buildRuntimeGatewaySeatbeltCommand` remains the enforcing macOS product path (ADR-0140). Issue
+#3422 adds the corresponding Linux primitive to the generic isolated-run planner: when bubblewrap
+or unshare is available, `selectGatewayBackend` chooses that native namespace backend and
+`buildWrappedCommand` starts the packaged internal launcher in `runtime.ts`. The host and namespace
+launchers communicate over one anonymous Node IPC socketpair inherited on descriptor 10. The
+namespace peer exposes the validated port on its isolated loopback interface and requests a stream
+with a bounded, monotonically increasing connection id. The host alone connects to the validated
+gateway address and port and passes that already-connected TCP descriptor over the anonymous
+socketpair. There is no filesystem socket name, temporary relay directory, or reconnectable bridge
+capability for a same-uid sidecar to enumerate across concurrent runs. The sidecar starts only after
+the namespace listener is ready and its readiness message has crossed the IPC channel; descendants
+inherit the network namespace. No host network namespace, veth, NAT rule, root, or ambient
+`CAP_NET_ADMIN` is granted. Parent-death, signals, relay failure, and cleanup stay inside the
+wrapper's fail-closed lifecycle.
+
+Launcher failures cross a dedicated descriptor-3 diagnostics channel that the server provisions
+only for the Linux wrapper. The host launcher relocates that pipe to descriptor 9 when entering the
+network namespace and reserves descriptors 3 through 8, keeping Bubblewrap's low-numbered lifecycle
+eventfds away from it. The pipe is not claimed through `--sync-fd`, whose eventfd semantics make it
+unwritable for text diagnostics. The namespace launcher removes both descriptor 9 and its marker
+environment variable before spawning the sidecar. It also closes descriptor 10 and removes Node's
+IPC marker variables, so the sidecar can neither forge launcher evidence nor request or receive a
+gateway handle.
+The server accepts only the closed launcher error vocabulary and records the first failure as
+`runtime.confinement.failed`, with the run correlation id and body-free backend/source fields. A
+missing diagnostics pipe refuses the launch and terminates the just-spawned unowned process tree.
+
+The Linux reference-runner test proves the mechanism rather than an argv string: the unconfined
+child completes a PING/PONG exchange with a hostile ephemeral loopback listener, the same child
+under the planned gateway
+wrapper cannot reach that listener or a concurrent run's port, and two isolated runs can each
+complete the same data round trip only through their own real gateway listener. The hostile second
+sidecar also enumerates the shared temporary directory and tries every legacy `relay.sock` it finds:
+the regression proof fails against the former filesystem bridge because both concurrent gateway
+destinations are reachable, and passes only when no reconnectable bridge exists. Missing namespace
+tools on Linux fail that reference proof. Containers remain ineligible because no equivalent bridge
+is compiled for them.
+
+Issue #3451 establishes Linux product coverage by adding `linux-x64` to the closed long-lived and
+portable target vocabularies, staging the exact launcher, Node.js, OpenCode, USearch, supervisor,
+and secure-read payload, and routing production composition through this namespace gateway. The
+exact staged runtime must pass the non-vacuous reference proof above; its content-bound
+qualification receipt is signed through the protected release environment with GitHub OIDC and is
+verified offline against the embedded Sigstore trust root and exact repository/workflow identity on
+a fresh read-only runner and again at point of use. Missing namespace support, receipt drift,
+component drift, a stale source commit, or a backend other than `linux-namespace-gateway` keeps the
+runtime unavailable before spawn. Windows production composition already attaches the exact gateway
+policy to its native backend, but the native protocol/helper cannot enforce it, so it refuses before
+spawn with `GATEWAY_UNSUPPORTED_ON_HOST_REASON`. Issue #3423 owns the exact-port WFP implementation;
+the cross-platform acceptance criterion remains open only on that Windows-native proof.
+
+### D13 — Does not relax D1–D10
+
+This confinement mechanism is additive: it does not change `network: "none"`, the disposable-run
+backends, their `keiko-tools` spawn boundary, or the CI-proven egress denial in D5. D12's
+package-private launcher is the enforcement implementation for the new gateway-only plan, not a
+second general-purpose command execution API. It is a second, narrower policy shape for a shape of
+execution (long-lived, one-endpoint-allowed) that D1–D10 did not address. macOS enforces it through
+Seatbelt; release-qualified Linux enforces it through D12's anonymous descriptor bridge and private
+network namespace. Neither changes any disposable-run argv.
+
+## Addendum — a contract-level `NetworkGatewayPolicy` and an honest cross-platform posture (2026-09-05)
+
+### D14 — The gateway-allowlist shape moves into `keiko-contracts`, and macOS reuses one Seatbelt formula
+
+`packages/keiko-contracts/src/tools.ts` now carries `NetworkGatewayPolicy` (`{ mode: "gateway",
+host: "127.0.0.1" | "::1", port }`), guarded through `copyNetworkGatewayPolicy` — deliberately not
+a general allowlist: one loopback host, one in-range port, nothing else. The copier accepts only a
+plain/null-prototype object with exactly three own data descriptors, never invokes accessors,
+rejects hidden/symbol/extra fields, and returns a frozen data-only record. It is just as deliberately
+**not** folded into `NetworkPolicy` (`"inherit" | "none"`, the general keiko-tools spawn-boundary
+type every disposable command run's `runCommand` reads): a first attempt at that fold-in was
+reverted during review, because widening `NetworkPolicy` to include the gateway object would make
+the boundary's existing `!== "none"` check true for a gateway policy too and route it onto the
+INHERITED, unconfined path — exactly the fail-open hole `runCommand` must never contain (see that
+file's `resolveSpawnTarget`, now an exhaustive `switch` with a fail-closed default for this reason).
+The gateway shape instead composes into its own, separate union — `IsolatedRunNetworkPolicy =
+NetworkPolicy | NetworkGatewayPolicy` in `keiko-sandbox`'s planning layer only — so
+`IsolatedRunPlan.network` accepts it there without widening the general-purpose type every other
+`runCommand` caller reads. `planIsolatedRun`/`selectGatewayBackend` (new in `keiko-sandbox`) plan a
+gateway-confined run through the SAME `buildWrappedCommand` dispatch every other backend goes
+through. The macOS Seatbelt profile string itself now lives in exactly one place, `backends.ts`'s
+`buildGatewaySeatbeltCommand`; D11's `buildRuntimeGatewaySeatbeltCommand` is now a thin
+thirteen-line wrapper over that same function (its exported name and observable behaviour are
+unchanged, so existing callers and D11's own description above still hold). There is no longer a
+second, independently-maintained copy of the "(deny network*) plus one port-specific allow" formula.
+
+Linux now selects bubblewrap, then unshare, only because D12's packaged anonymous descriptor bridge
+supplies the missing fixed route back to the host gateway without exposing the host network
+namespace or a reusable filesystem capability.
+Absence of both primitives fails closed; a container runtime is never substituted because no
+container bridge implements the same contract. Invalid/accessor-backed gateway values fail as
+`invalid-network-policy` before a child is compiled, rather than being mistaken for the narrower
+`network:"none"` shape.
+
+Windows remains a reasoned refusal rather than silent non-enforcement:
+`nativeRuntimeProcessBackend.ts` (the backend used for the Windows dev lane and every
+release-qualified platform) now accepts an optional `gatewayConfinement` and, when one is attached,
+refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REASON` string
+`planIsolatedRun` would produce, rather than a silent unconfined spawn — its native launch-packet
+protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
+body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
+Windows refusal leaves the same evidence a support bundle can reconstruct. Production composition
+(`productionOpenCodeBackend.ts`) always supplies the exact gateway policy, including Windows dev
+and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
+network launch. Until a native backend can enforce the policy, starting that run refuses before
+spawning a helper and records `runtime.confinement.failed`; omitting the policy to keep a launch
+working is a fail-open defect. The macOS app-sandbox and dev lanes enforce the same policy through
+Seatbelt. #2951 remains open for #3423's Windows-native WFP enforcement. The Linux target is
+represented only after #3451's exact staged payload, offline-attested qualification, fresh-runner
+verification, and reference-runner proof all pass; no source-only or declared Boolean can qualify
+it.
+
+
+## Addendum — the governed tool facade rides the ONE attested loopback destination, never a second (2026-09-05)
+
+### D15 — A second ephemeral loopback listener was a defect, not a second attested destination
+
+A live real-model run under the macOS `keiko-gateway` Seatbelt profile (#3390) showed EVERY
+`keiko_*` tool call failing with Bun's `ConnectionRefused` ("Was there a typo in the url or
+port?") while OpenCode-native tools (`todowrite`, `question`) kept working. Root cause: D11's
+profile allows network-outbound to exactly ONE loopback destination — the attested gateway/BFF
+port, per the `NetworkGatewayPolicy` contract this ADR and `packages/keiko-contracts/src/tools.ts`
+both describe as "one loopback host, one in-range port, nothing else" — but the OpenCode tool
+facade bridge (`packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts`) opened
+its OWN ephemeral `createServer().listen(0, "127.0.0.1")` listener and handed the sidecar a
+SECOND `KEIKO_TOOL_FACADE_URL` on a different port. That second port was never part of any
+attested policy, so the Seatbelt profile correctly denied it — the profile was not the defect; the
+second listener was. Because the functional and scripted harnesses never ran under
+`sandbox-exec`, this was invisible until the live run.
+
+The fix removes the second listener rather than widening the policy to admit it (D13: this
+confinement is additive and stays narrow). The tool facade now rides the SAME single attested
+loopback BFF port `/api/coding-sidecar/gateway/*` already uses, at a sibling route,
+`POST /api/coding-sidecar/tool` (`packages/keiko-server/src/coding-sidecar-tool-facade.ts`),
+dispatching directly to the active run's bridge (`OpenCodeRuntimeComposition.toolBridge.handle`)
+— the SAME bearer-capability authentication and admission gate
+(`maxInFlight`/`requestDeadlineMs`/abort-on-close) the retired listener enforced, reached through
+the BFF's existing request/response instead of a raw socket. Production composition derives both
+`gatewayUrl` and `toolFacadeUrl` from the ONE loopback origin
+(`productionOpenCodeActivation.ts`), never from a second, independently-bound port; nothing in the
+composition module calls `.listen()` for this bridge any more (the public bridge port exposes
+exactly `{ url, requestDeadlineMs, handle }` — a fixed origin, the admission gate's own deadline
+number, and the dispatch function; structurally excluding a listener/socket surface). The scripted
+functional harness's fake sidecar, which needs a real HTTP endpoint to exercise, owns its own
+tiny listener wrapping this SAME `handle` (`opencodeFunctionalHarness/_support.ts`,
+`opencodeRuntime.real.test.ts`'s `createToolFacadeHarness`) — never a second production path.
+
+This does not change D11's policy shape or D14's `NetworkGatewayPolicy` contract: the invariant
+"exactly one attested loopback destination" is unchanged. What changed is that the tool facade now
+actually honours it, instead of silently assuming a second port would be reachable.
+
+**Body-ingestion deadline (2026-09-05 follow-up).** The retired listener read the request body
+itself under the admission gate's `requestDeadlineMs` timer, so a slow or stalled POST was bounded
+by that SAME deadline from the moment the connection was admitted. Routing through the BFF's
+`readJsonObject` initially lost that bound: the gate's timer only starts once `bridge.handle` is
+called, i.e. after the whole body has already arrived, leaving body-ingestion time bounded only by
+Node's generic `http.Server` defaults. The route now bounds ingestion itself
+(`readToolFacadeBody` in `coding-sidecar-tool-facade.ts`), racing `readJsonObject` against the
+SAME `bridge.requestDeadlineMs` the admission gate exposes for exactly this purpose, and responds
+`408 CODING_TOOL_FACADE_DEADLINE_EXCEEDED` (logged as `coding-sidecar.tool-facade.rejected`,
+reason `deadline`) if the body has not finished arriving in time — without destroying `ctx.req`,
+since request and response share one connection and destroying it would prevent that very 408 from
+being sent.
+
+
+## Addendum — the Git executable admitted into the process-exec allowlist is attested, not path-trusted (2026-09-05)
+
+### D16 — Do not allowlist conventional Xcode/CommandLineTools paths unconditionally
+
+Review on PR #3394 (T47) identified that D11's original `process-exec` allowlist admitted every
+conventional Apple Git path unconditionally — `/usr/bin/git`,
+`/Library/Developer/CommandLineTools/usr/bin/git`, and
+`/Applications/Xcode.app/Contents/Developer/usr/bin/git` — by a fixed, hardcoded list
+(`APPLE_GIT_EXECUTABLES` in `backends.ts`). None of those paths is an immutable system binary: a
+local user (the same actor D11's whole boundary exists to contain once inside the sandbox) can
+replace the file at any of them, and the sidecar would then execute that substitute with its
+inherited process context and the D11 gateway egress carve-out still attached. Hardcoding the
+paths meant the allowlist trusted *location* instead of *identity*.
+
+The fix, `packages/keiko-sandbox/src/darwin-git.ts`, resolves and attests the ONE Git executable
+the profile admits, at every launch, instead of trusting any fixed path:
+
+- `resolveDarwinGitExecutable` shells out to `/usr/bin/xcrun --find git` — Apple's own protected
+  resolution launcher, itself attested before it is invoked — rather than guessing among
+  conventional install locations. It first attests the Git selected by `xcode-select`. If that
+  candidate is unavailable or untrusted, it asks the same protected launcher for Git under the
+  fixed `/Library/Developer/CommandLineTools` developer directory and subjects that candidate to
+  the identical attestation. Neither attempt inherits a caller-selected `PATH` or `DEVELOPER_DIR`.
+- `attestDarwinGitExecutable` then independently qualifies the resolved path before it is allowed
+  anywhere near a Seatbelt profile: the candidate must be an absolute, `\0`-free path whose
+  `realpathSync` resolution is itself (no symlink indirection), a regular file with exactly one
+  hard link, owned by `uid 0`, not group- or other-writable: and every directory from its parent up
+  to the filesystem root must be a non-symlink directory, owned by `uid 0`, and not group- or
+  other-writable either. Any failure — including any thrown `fs` error, e.g. the path not existing
+  — is caught and converted into the single closed outcome, `throw new Error(
+  "runtime-gateway-git-untrusted")`. If the selected candidate fails, the fixed Command Line Tools
+  candidate must pass every same check; otherwise launch still fails closed. A qualifying executable's
+  SHA-256 digest is computed and returned alongside its path (`AttestedDarwinGitExecutable`).
+- `buildGatewaySeatbeltCommand` (`backends.ts`) and `buildRuntimeGatewaySeatbeltCommand`
+  (`runtime-gateway.ts`) no longer carry any hardcoded Git path at all: both now take the attested
+  `childExecutable` as a required parameter and admit exactly `{command, childExecutable}` into the
+  `process-exec` allowlist — nothing else, ever. `devLaneRuntimeProcessBackend.ts` calls
+  `resolveDarwinGitExecutable()` once per launch (test seam:
+  `DevLaneRuntimeProcessBackendOptions.resolveGitExecutable`), passes its `path` into
+  `planIsolatedRun`'s new `gatewayChildExecutable` field, pins the resolved executable's directory
+  as the child's `PATH` (so the sidecar cannot shadow-resolve a different `git` off an inherited
+  `PATH`), and records the attested digest and closed selection source — never the literal path or
+  file content — in the existing `runtime.confinement.spawned` activity line's
+  `extra.childExecutableDigest` and `extra.childExecutableSource`
+  (`childExecutablePolicy: "runtime-and-attested-git-only"`). Attestation failure surfaces through
+  the same existing `spawnOwnedTree` try/catch as every other confined-launch failure: a body-free
+  `runtime.confinement.failed` line (`errorKind`, Keiko stack frames, cause chain, the run's
+  correlation id) records the refusal, and the launch fails closed with no process ever spawned.
+
+This narrows D11's process-exec allowlist without widening it: the allowed set is still exactly
+`{runtime executable, one Git executable}`, but the Git member is now qualified by ownership and
+content identity rather than assumed from its location. D13 still holds — this is not a relaxation
+of any D1–D10 denial, only a tightening of what D11 already restricted. The regression pin in
+`backends.test.ts` (`buildGatewaySeatbeltCommand child process policy`) now asserts the profile
+never contains the literal Apple paths or `Xcode.app`/`CommandLineTools` substrings, alongside
+`darwin-git.test.ts`'s coverage of the user-writable-directory rejection and (on a real Darwin
+host) `resolveDarwinGitExecutable`'s successful resolution through `xcrun`.
+
+## Addendum — dependency installation is host-executed network I/O with lifecycle scripts disabled (2026-09-10)
+
+### D17 — The verification orchestrator installs a workspace's declared dependencies before its script steps
+
+D1–D10 confine every verification step to `network: "none"`, and D13 keeps that. A managed task
+worktree, however, is a clean checkout: it has the manifest a governed run wrote and none of the
+dependencies the manifest declares. Every `build` or `typecheck` step therefore failed within
+200 ms on a missing binary, and the run had no governed way to install anything — the tool catalog
+offers no command tool, and the one egress tool (`keiko.research.fetch`) is unavailable to a
+coding run (Coding Workbench run 15, 2026-09-10, PR #3452). Verification of a project created from
+nothing was impossible by construction.
+
+The dependency bootstrap (`packages/keiko-verification/src/dependencies.ts`) closes that gap at the
+layer that owns the plan. Before the first script step of a plan that has one, the orchestrator
+reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
+(`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, or Keiko
+has not recorded a completed install for that tree, it runs
+exactly `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error` through
+the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm
+install` and nothing else, no leading flags, `-c`/`--call` denied), under
+`DEPENDENCY_INSTALL_LIMITS` (240 s wall time, 1 MiB output) and with **host network**. This is the
+one verification command that keeps egress, and the reason it may is the same reason D1–D10 deny
+it elsewhere: those steps EXECUTE untrusted, model-written code. `--ignore-scripts` disables npm's
+lifecycle hooks only. The install runs no project lifecycle script and no dependency's
+`postinstall`, but it is itself a host-network process, and the code it unpacks is executed later
+by the plan's own steps (`npm run …`, `npx`, `node --test`). Those steps run with
+`network: "none"`. The orchestrator's default `networkEnforcement: "enforce-or-fail-closed"`,
+which every server verification path uses, requires an enforcing backend and refuses a step it
+cannot confine; only a caller that explicitly selects the `inherit` compatibility mode lets steps
+inherit host network. The child receives the ephemeral empty HOME every
+governed command receives (C5), so only npm's default registry configuration applies, and a
+project-level `.npmrc` refuses the bootstrap outright (`refused`, `project npm config present`):
+a manifest cannot redirect the install to a registry nobody configured. An unreadable manifest
+refuses too; a manifest without declarations, or a workspace without one, is `none` and nothing
+runs.
+
+Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
+CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
+`dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies`, in the root
+manifest and in the manifest of every workspace member, and each root `overrides` value (npm reads
+no member's), must resolve through the registry: a version, a range, a dist-tag, or an `npm:`
+alias of one. A URL, a Git remote or hosted shorthand, a path or a tarball refuses the bootstrap
+(`refused`, `unapproved-source`), and so does a `workspaces` pattern that leaves the workspace.
+The members are the folders the `workspaces` patterns name, found as npm finds them
+(`node_modules` is never searched and a wildcard never matches a dot-folder) and over-approximated
+where that is safe: a negated pattern is ignored, since it only removes members. Members that
+cannot be enumerated cannot be checked, so a pattern that uses glob syntax other than `*` and `**`,
+that reaches a folder a symbolic link places outside the workspace, or whose search passes its
+bounds refuses the bootstrap (`refused`, `workspaces-unresolved`).
+Each entry of `package-lock.json`, `npm-shrinkwrap.json` and npm's hidden lockfile of the installed
+tree must be the workspace itself, a folder or link inside it, a package bundled in its parent's
+tarball, or a package fetched over HTTPS from the approved registry (`DEPENDENCY_APPROVED_REGISTRY`,
+npm's default `https://registry.npmjs.org/`, without credentials or another port) against a
+Subresource Integrity hash; anything else refuses the bootstrap, and a lockfile that is unreadable
+or older than version 2 refuses it as `lockfile-unreadable`. Holding the host to that one public
+registry excludes private, loopback and link-local destinations by construction.
+
+A registry package may itself declare a URL, Git, tarball-file or folder dependency, which no
+pre-install check can see, so the install is confined as well (`registryEgress.ts`; PR #3452
+review, CWE-918). npm runs with `proxy` and `https-proxy` set to a loopback proxy the bootstrap
+starts for that one install, an empty `noproxy`, the registry pinned, `allow-git=none`,
+`allow-remote=none`, `allow-file=none` and `allow-directory=root`. The proxy tunnels a
+`CONNECT` to the approved registry's own host and port and answers every other destination with
+`403`: another host or port, an IP literal, a plain-HTTP request. It never sees plaintext: what
+flows through a tunnel is npm's TLS session, verified against the registry's certificate. A Git
+dependency therefore fails before git runs, a URL before it is fetched, and a tarball file or a
+folder, which needs no network and so never reaches the proxy, before npm reads it (`EALLOWGIT`,
+`EALLOWREMOTE`, `EALLOWFILE`, `EALLOWDIRECTORY`). `allow-directory` is `root`, not `none`: npm
+holds the links it makes for the workspace's own members to the same gate, so `none` refuses
+every workspace install, and the folders the root and member manifests may name are refused
+before npm runs. npm 11.14.0 added the file, folder and URL gates and 11.15.0 stopped
+`allow-remote=none` blocking registry tarballs (npm/cli#9347); Keiko requires npm 11.16.0 or
+later, and an npm that fetched a URL anyway would still fail at the proxy. Any refused
+destination settles the bootstrap `refused`, including one npm tolerates because it names an
+optional dependency and installs around it: a package in the tree still reached for an unapproved
+source. A proxy that cannot start never runs npm, and a proxy that faults during the install fails
+the bootstrap, because its egress was cut rather than confined. The install reaches the registry directly, as it did before, so a network that requires
+an upstream proxy is not supported. After npm exits, the tree it installed is still held to the
+same rule through its hidden lockfile: an install that left none, or one naming another source, is
+`refused` and its steps are skipped.
+
+The hidden lockfile alone is not completion evidence: npm can write it before returning a failure
+and leave a partly unpacked package behind. A successful bootstrap records a process-owned receipt
+only after npm exits successfully, the installed tree passes the source check, and registry egress
+has no refusal or fault. The receipt is bound to the manifest, lockfiles and installed entries by
+filesystem identity, size and change time; restored modification times cannot preserve it. Keiko
+writes no completion file in the workspace. Repository-written marker files confer no authority.
+The cache holds at most 32 workspaces, enumerates at most 100,000 installed entries, follows no
+directory symlinks and fails closed to reinstall when identity metadata is unavailable. Changed
+entries, eviction and process restart require another successful bootstrap. This receipt records
+installation provenance, not trust in dependency code; source checks and execution isolation remain
+mandatory. The shared verification execution entry point holds the existing workspace mutex across
+dependency planning, installation and all verification steps, preventing another managed verification
+from modifying dependencies during execution. Admission, acquisition and release emit a correlated
+`editor.verification.workspace` event with a workspace digest.
+
+The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
+`present`/`created`/`absent`, npm's exit code, duration, a short redacted detail, the tunnels
+and refusals of its egress) and of the activity log (`editor.verification.dependencies`, the same
+fields, the counts as `egressAllowed` and `egressRefused`), never the install's output.
+`completionReceipt` distinguishes a missing, changed or current receipt; `completionRecorded`
+reports whether the completed operation left a reusable receipt.
+When the bootstrap does not leave the workspace fit for its steps (`refused`, `failed`,
+`timed-out`), the steps are recorded as skipped with that reason and the report is `failed` —
+`matchesOverallStatus` applies the same rule on the wire — so a report whose steps all read
+"skipped" can be read back to the install that left them without their dependencies. The
+bootstrap's redacted output tail reaches the coding model through the orchestrator's
+`onStepOutput` seam exactly like a failed step's does (ADR-0126 D3); it is never persisted.
+
+Two bounds follow from this decision rather than being chosen next to it. The governed
+verification tool is settled by the tool catalog at
+`VERIFICATION_TOOL_MAX_DURATION_MS` (keiko-contracts), derived as the contract's one human-decision
+wait for a package-script trust grant plus the install ceiling plus the one step a governed call
+runs (it names exactly one verifier) at its own wall-time ceiling plus one settlement grace — the
+sandbox default of 30 s never fit a real install-then-build sequence — and the governed-invocation
+registry, the sidecar tool bridge and the generated plugin client each outlive that settlement by
+the contract's grace, so the facade's answer (the report, or the catalog's own timeout) always
+reaches the sidecar. The registry used to hold every invocation for a fixed 30 s whatever its
+budget, which cancelled a longer verification before it could report (PR #3452); it now holds a
+catalog invocation for its descriptor's budget plus that grace, and keeps 30 s only for staged edits
+and cursors, which declare no budget.
+
+D13 still holds: no D1–D10 denial is relaxed for any step that executes code. The bootstrap is a new,
+narrower kind of command — network I/O by a trusted host tool over declarations, with execution of
+the fetched code deferred to the confined steps — and it is admitted only under that shape.

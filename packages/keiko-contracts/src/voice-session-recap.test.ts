@@ -23,24 +23,18 @@ import {
   type VoiceSessionRecapEvidenceSummary,
 } from "./voice-session-recap.js";
 
-const FORBIDDEN_SUBSTRINGS = [
-  "apikey",
-  "secret",
-  "password",
-  "credential",
-  "bearer",
-  "baseurl",
-  "endpoint",
-  "authorization",
-  "privatekey",
-  "accesskey",
-  "token",
+// KEIKO-0919: share the common secret vocabulary with the sibling voice pin; keep the recap-only
+// extension local so it stays scoped to this file's concerns.
+import { SHARED_FORBIDDEN_SECRET_VOCABULARY } from "./forbidden-substrings.test-support.js";
+
+const FORBIDDEN_SUBSTRINGS: readonly string[] = [
+  ...SHARED_FORBIDDEN_SECRET_VOCABULARY,
   "systemprompt",
   "toolauthority",
   "grantedtools",
   "allowedtools",
   "canexecute",
-] as const;
+];
 
 function validAuditRecord(
   overrides: Partial<Record<keyof VoiceSessionRecapAuditRecord, unknown>> = {},

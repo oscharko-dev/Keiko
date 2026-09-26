@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted (Issue #1573, Epic #1572, 2026-06-27)
+Accepted (Issue #1573, Epic #1572, 2026-06-27; amended 2026-08-31)
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Context
 
@@ -21,8 +21,9 @@ exist in `keiko-ui`. The write contract is frozen — no child issue adds a BFF 
 
 Issue #1573 is the **API foundation** child. Its job is precisely the small set of genuine gaps the
 reuse contract isolated in its Section 3, plus the read-only/preview/execute sync surface the
-History and Sync panes need. It is backend + contracts only; it ships no UI, and it changes no
-existing route or contract.
+History and Sync panes need. It began as backend + contracts only. The later continuity-evidence
+correction extends only the existing sync outcome union with `authority-denied`; it adds no route or
+mutation authority.
 
 Three forces shape this ADR.
 
@@ -75,18 +76,20 @@ non-governing sync executor (`gitDelivery/syncExecution.ts`), its sibling eviden
 (`gitDelivery/syncEvidence.ts`), and its routes (`gitDelivery/syncRoutes.ts`); the barrel exports and
 route registrations; tests; and this documentation.
 
-Out of scope: any UI (deferred to #1574–#1578); any change to an existing route, contract, or the
-governed mutation taxonomy; conflict resolution, merge, or push (push remains the governed publish
-gateway, ADR-0085); and any package version bump (all new exports are additive).
+Out of scope: conflict resolution, merge, or push (push remains the governed publish gateway,
+ADR-0085); any widening of the governed mutation taxonomy; and unrelated route or contract changes.
+The additive `authority-denied` sync outcome is in scope because it is the durable reconstruction of
+the already-required continuity gate, not a new execution capability.
 
 ## Decision
 
 ### D1 — Three additive read contracts reusing the existing repository-state unions
 
-Three new strict-leaf contract modules are added in `keiko-contracts`, each pure (no filesystem,
-process, clock, or crypto) and each reusing the `GitRepositoryState`, `GitUnavailableReason`, and
-`GitRepositoryValidation` unions already exported by `git-repository.ts` (Issue #1386). No existing
-union is changed.
+Three strict-leaf contract modules live in `keiko-contracts`, each pure (no filesystem, process,
+clock, or crypto) and each reusing the `GitRepositoryState`, `GitUnavailableReason`, and
+`GitRepositoryValidation` unions already exported by `git-repository.ts` (Issue #1386). The
+repository-state unions remain unchanged; `GitSyncOutcome` is additively extended as described
+below.
 
 - `git-repository-summary.ts` — `GitRepositorySummary` (branch, detached, `GitUpstreamSummary`,
   ahead/behind, staged/unstaged/untracked/conflicted counts, clean flag, `GitRemoteSummary[]`,
@@ -96,7 +99,7 @@ union is changed.
 - `git-history.ts` — `GitHistoryEntry` (sha, shortSha, subject, author, ISO date, refs[],
   parentCount, changedFileCount) and the paginated `GitHistoryResponse` (entries, limit, skip,
   truncated). `GIT_HISTORY_SCHEMA_VERSION = "1"`. Validator `validateGitHistoryResponse`.
-- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (13 members),
+- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (16 members),
   `GitSyncBlockReason`, `GitSyncExecuteRequest`, `GitSyncPreview`, `GitSyncExecuteResponse`,
   `GIT_SYNC_SCHEMA_VERSION = "1"`, the frozen `GIT_SYNC_OPERATIONS` / `GIT_SYNC_OUTCOMES` /
   `GIT_SYNC_BLOCK_REASONS` arrays, the `isGitSyncOperation` / `isGitSyncOutcome` guards, and the
@@ -116,21 +119,31 @@ types in the type block). The exports are additive; `KEIKO_CONTRACTS_VERSION` is
 - `resolveRepository(ctx, deps, options)` for selected-root containment, `rev-parse --show-toplevel`,
   and unsafe-owner / missing classification. An unavailable resolution short-circuits to a
   content-free `available: false` envelope with zeroed counts and empty remotes.
-- `optionsWithDefaults` for the byte-cap/timeout normalization, and `options.runner` (defaulting to
-  `defaultGitProcessRunner`) for the bounded process effect through fixed argv and the hardened
-  `gitEnv()` (`GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `GIT_CONFIG_NOSYSTEM=1`,
-  `GIT_CONFIG_GLOBAL=/dev/null`, no system/global config), with spawn-error → exit code 127 and a
-  byte-cap/timeout truncation flag.
+- `optionsWithDefaults` for the byte-cap/timeout normalization, and `options.runner` for the
+  bounded process effect through fixed argv and the hardened `gitEnv()` (`GIT_TERMINAL_PROMPT=0`,
+  `GIT_PAGER=cat`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, no system/global
+  config), with spawn-error → exit code 127 and a byte-cap/timeout truncation flag. Since the
+  activity-log wiring (AGENTS.md §8 Rule 1), `options.runner` is the supplied runner (defaulting to
+  `defaultGitProcessRunner`) wrapped by `observedGitRunner`, so an UNDECLARED non-zero outcome —
+  including the spawn-boundary refusal — leaves one body-free line under the request's correlation
+  id. A call site may declare an expected non-zero exit through `expectedExitCodes` (`git diff
+  --no-index` exits 1 to say "the files differ"), and a declared one is a success that stays off
+  the log rather than a `warn` contradicting the 200 the route returns. The
+  process effect is unchanged: the wrapper returns the underlying result untouched. The
+  UNOBSERVED runner remains reachable as `options.runnerIdentity` for one purpose only, the
+  git-summary cache's runner partition, because `runner` is now a fresh per-request closure.
 - `classifyFailure` to map a non-zero status read to the existing reason union (`git-missing`,
   `unsafe-repository`, `not-a-repository`, `git-error`).
 - `deps.redactor` applied to every response body, so any URL inside a remote is redacted at the
   boundary.
 
-The only edit to `gitRoutes.ts` is **behavior-preserving**: `resolveRepository`,
+The only edit to `gitRoutes.ts` was **behavior-preserving**: `resolveRepository`,
 `optionsWithDefaults`, `classifyFailure`, `interface RepositoryContext`, and
 `interface NormalizedGitRouteOptions` gain `export` so the sibling file can consume them. No logic
-in `gitRoutes.ts` changes, and the existing `/api/git/status` / `/api/git/diff` / `/api/git/branches`
-routes are byte-for-byte unchanged.
+in `gitRoutes.ts` changed, and the existing `/api/git/status` / `/api/git/diff` /
+`/api/git/branches` routes were byte-for-byte unchanged. `optionsWithDefaults` has since taken the
+request's correlation id as a second parameter so the activity-log wiring above can bind to it; the
+response projections remain unchanged.
 
 The three routes are registered in `routes.ts` immediately after `/api/git/branches`, each as
 `handler: (ctx, deps) => handleX(ctx, deps, deps.gitRouteOptions)`, matching the existing reads'
@@ -158,6 +171,12 @@ through a dedicated bounded executor, **not** the #472 kernel:
   `fetch --no-tags [remote]` and `pull --ff-only --no-edit [remote]`. The `--ff-only` flag makes a
   pull refuse anything but a fast-forward, so a pull can never create a merge commit or rewrite local
   history outside the governed surface.
+- Since the activity-log wiring (AGENTS.md §8 Rule 1), `normalizeSeams` wraps BOTH the local read
+  runner and the credential-capable network runner with `observedGitRunner`, and the route handlers
+  supply `ctx.correlationId` per request. Sync answers every failure with a content-free typed code,
+  so without those lines an auth failure, an unreachable remote, a non-fast-forward or a
+  spawn-boundary refusal on this path left no trace at all. The process effect and the typed
+  response are unchanged; only the operator's evidence is.
 - It does **not** import `runGitMutation`, the policy packs, the approval-token gate, or any
   `GitDeliveryActionKind`. `GitDeliveryActionKind` carries no `fetch`/`pull` member, and this ADR
   does not add one.
@@ -174,6 +193,14 @@ its taxonomy. The deliberate boundary is documented here so a future maintainer 
 asymmetry by routing fetch/pull through the kernel.
 
 #### D4a — Two process environments: hardened for local reads, credential-capable for network sync
+
+> **Amended by [ADR-0115](ADR-0115-governed-git-core-package.md) (2026-07-07):**
+> `gitEnv` / `networkGitEnv` described below were subsequently relocated from `@oscharko-dev/keiko-server`
+> into the leaf package `@oscharko-dev/keiko-git`, which also fixed a locale-passthrough defect (the
+> network profile no longer inherits the host `LANG`/`LC_ALL` — `LC_ALL=C` is now pinned). See
+> `packages/keiko-git/src/env.ts` for the current implementation; `packages/keiko-server/src/gitRoutes.ts`
+> now only re-exports these symbols. The security posture below is unchanged; only the module location and
+> the locale-pinning behaviour were tightened.
 
 The reused runner is parameterized over its environment by a small factory,
 `createGitProcessRunner(buildEnv)`, which holds the unchanged spawn / byte-cap / timeout /
@@ -252,17 +279,25 @@ The group registers four POST routes:
   `GitSyncOutcome` and append content-free `recordGitSyncEvidence`; uninspectable worktrees return a
   409 without invoking network Git.
 
+The execute routes also require the server-owned accepted-run Authority Envelope and re-check its
+identity immediately before the network command. A continuity denial returns the same correlated
+403 contract as admission, emits the body-free no-spawn marker, and appends a content-free
+`authority-denied` sync-evidence record. It never fabricates `git-error`: the distinct outcome says
+that no fetch or pull attempt occurred and preserves the denial in the durable reconstruction
+ledger. This runtime-authority gate does not route fetch/pull through the governed mutation kernel
+or widen its frozen action-kind taxonomy.
+
 The group is registered in `routes.ts` by spreading `...GIT_DELIVERY_SYNC_ROUTE_GROUP` next to the
 other git-delivery groups, with a comment citing #1573.
 
-### D7 — No existing route or contract changed
+### D7 — Routes remain unchanged; the sync outcome extension is additive
 
-The only file with an existing public surface that is edited is `gitRoutes.ts`, and that edit only
-adds `export` to five already-defined symbols — behavior-preserving. `/api/projects`,
-`/api/repositories/clone`, `/api/git/status|diff|branches`, every `gitDelivery/*` route, and every
-existing contract type are byte-for-byte unchanged. `GitDeliveryActionKind`, the governed policy
-packs, the mutation kernel, and `mutationEvidenceLedger.ts` are untouched. All new surface is
-additive, so no package version is bumped.
+No route is added or re-shaped. `/api/projects`, `/api/repositories/clone`,
+`/api/git/status|diff|branches`, and the `gitDelivery/*` endpoint envelopes remain unchanged.
+`GitSyncOutcome` gains the additive `authority-denied` member so the sibling sync ledger can record
+a mid-flight continuity refusal without misclassifying it as `git-error`. `GitDeliveryActionKind`,
+the governed policy packs, the mutation kernel, and `mutationEvidenceLedger.ts` remain untouched;
+the extension grants no new authority and requires no schema-version bump.
 
 ## Consequences
 
@@ -283,7 +318,8 @@ additive, so no package version is bumped.
 - Every response body and evidence record is content-free (counts, typed codes, branch/remote names,
   ISO dates, hashes) and passes through `deps.redactor`, so a remote URL or credential never reaches
   the browser or the ledger.
-- The change is additive end to end (D7); no existing route, contract, or version moves.
+- The current correction is additive end to end (D7): no route or schema version moves, and the
+  sync contract gains only the fail-closed `authority-denied` terminal outcome.
 
 ### Negative
 

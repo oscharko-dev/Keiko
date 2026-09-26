@@ -139,6 +139,24 @@ describe("EditorSurface", () => {
     expect(editor).toHaveAttribute("data-aria-label", "Editor: src/a.ts in /repo");
   });
 
+  // F29: the notice is code-owned, because the activity log admits exactly this shape.
+  it("reports a failed language chunk by language and error class, never the error's message", async () => {
+    ensureMonacoRuntime.mockReturnValue({ supported: true });
+    isMonacoLanguageReady.mockReturnValue(false);
+    ensureMonacoLanguage.mockRejectedValue(new TypeError("/Users/alice/project/.env unreadable"));
+    const onRuntimeError = vi.fn();
+
+    render(<EditorSurface {...buildProps({ onRuntimeError })} />);
+
+    await waitFor(() => {
+      expect(onRuntimeError).toHaveBeenCalledWith(
+        "language-load-failed (language=typescript, error=TypeError)",
+      );
+    });
+    expect(JSON.stringify(onRuntimeError.mock.calls)).not.toContain("/Users/alice");
+    expect(screen.getByTestId("code-editor")).toHaveAttribute("data-load-status", "ready");
+  });
+
   it("holds the editor in loading state while an optional Monaco language chunk loads", async () => {
     ensureMonacoRuntime.mockReturnValue({ supported: true });
     isMonacoLanguageReady.mockReturnValue(false);

@@ -5,7 +5,7 @@
 // least one assertion in this file.
 
 import { describe, expect, it } from "vitest";
-import { GIT_DELIVERY_ACTION_KINDS } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_ACTION_KINDS } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { TERMINAL_COMMAND_RULES, isTerminalCommandAllowed } from "./terminal-policy.js";
 
 describe("TERMINAL_COMMAND_RULES", () => {
@@ -282,6 +282,49 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
 
   it("denies git branch -f main HEAD~5 (force flag)", () => {
     expect(isTerminalCommandAllowed("git", ["branch", "-f", "main", "HEAD~5"]).allowed).toBe(false);
+  });
+
+  // KEIKO-0496: `git branch -uorigin/main` parses identically to `--set-upstream-to=origin/main`,
+  // mutating .git/config upstream-tracking. Before this fix the concatenated form slipped past
+  // the deny set (no `=`, no bare `-u`) AND past the positional check (starts with `-`).
+  it("denies git branch -uorigin/main (concatenated -u<upstream>, mutates upstream tracking)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-uorigin/main"]).allowed).toBe(false);
+  });
+
+  it("denies git branch -Uorigin/main (uppercase concatenated form)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-Uorigin/main"]).allowed).toBe(false);
+  });
+
+  // KEIKO-0496 (round 2): `git branch` parses options through git's parse_options(), which accepts
+  // any UNAMBIGUOUS PREFIX of a long option. Verified against real git 2.50.1 that each spelling
+  // below is accepted and genuinely writes/removes branch.<name>.remote / .merge in .git/config —
+  // i.e. every one of these mutates state through a tool whose entire contract is read-only
+  // inspection. Exact-matching the deny set alone let all of them through.
+  it.each([
+    "--set-upstream-t=origin/main",
+    "--set-upstream-to=origin/main",
+    "--set-upstream-=origin/main",
+    "--set-upstrea=origin/main",
+    "--set-u=origin/main",
+    "--unset-upstream",
+    "--unset-upstrea",
+    "--unset-up",
+    "--unset-",
+  ])("denies the abbreviated git branch upstream flag %s", (arg) => {
+    expect(isTerminalCommandAllowed("git", ["branch", arg]).allowed).toBe(false);
+  });
+
+  it("still allows a read-only long flag that merely shares a prefix with nothing denied", () => {
+    // Guard against over-blocking: `--list` and `--all` are legitimate read-only listing flags and
+    // are not a prefix of any denied long form.
+    expect(isTerminalCommandAllowed("git", ["branch", "--list"]).allowed).toBe(true);
+    expect(isTerminalCommandAllowed("git", ["branch", "--all"]).allowed).toBe(true);
+  });
+
+  it("denies git branch -u origin/main (space-separated form) via the positional-operand path", () => {
+    // The bare -u is in the deny set; even if it were not, `origin/main` would be caught as a
+    // positional operand. Both defenses in the same test to lock the pin down.
+    expect(isTerminalCommandAllowed("git", ["branch", "-u", "origin/main"]).allowed).toBe(false);
   });
 
   it("allows git branch with no args (listing)", () => {

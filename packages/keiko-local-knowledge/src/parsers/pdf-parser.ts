@@ -4,7 +4,7 @@ import type {
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
-import { LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 
 import {
   diagnostic,

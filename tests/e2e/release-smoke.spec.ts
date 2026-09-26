@@ -2,6 +2,15 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+import { expectViewportModal } from "./support/modal.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
+import { enterEmptyEditorBuffer, replaceEditorBuffer } from "./support/editor-chord.js";
+import { isBenignWebKitResizeObserverDelivery } from "./support/editorWorkspace.js";
 
 const CHAT_MODEL_ID = "e2e-chat-model";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -22,11 +31,17 @@ function isBenignMonacoCancellation(error: Error): boolean {
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
+  const browserName = page.context().browser()?.browserType().name();
   page.on("pageerror", (error) => {
     // Monaco can surface a benign cancellation as an unhandled page error when an inline-completion
     // request is superseded while the smoke test continues. Keep the guard strict for all real app
     // errors, but do not fail the release smoke on that editor-internal cancellation noise.
-    if (isBenignMonacoCancellation(error)) return;
+    if (
+      isBenignMonacoCancellation(error) ||
+      isBenignWebKitResizeObserverDelivery(browserName, error)
+    ) {
+      return;
+    }
     errors.push(error.message);
   });
   return () => {
@@ -178,6 +193,31 @@ async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
   }, projectPath);
 }
 
+async function seedModalProofWindow(
+  page: Page,
+  windowEntry: { readonly id: string; readonly type: "governedGit" | "settings" },
+): Promise<void> {
+  await page.addInitScript((entry) => {
+    window.localStorage.setItem(
+      "keiko.workspace.v4",
+      JSON.stringify([
+        {
+          id: entry.id,
+          type: entry.type,
+          x: 36,
+          y: 36,
+          w: 720,
+          h: 640,
+          z: 10,
+          cfg: {},
+          max: false,
+        },
+      ]),
+    );
+    window.localStorage.removeItem("keiko.conns.v1");
+  }, windowEntry);
+}
+
 async function openTreePath(
   filesWindow: ReturnType<Page["getByRole"]>,
   path: string,
@@ -187,19 +227,30 @@ async function openTreePath(
   await row.click();
 }
 
+// Delegates to the shared, fail-closed implementation: it focuses Monaco's actual input surface,
+// invokes a real engine-appropriate Monaco select-all command, and verifies the complete
+// model-backed hot-exit payload instead of letting a silent no-op corrupt the buffer.
 async function replaceMonacoText(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
   text: string,
+  workspaceRoot: string,
 ): Promise<void> {
-  const editor = editorWindow.locator(".monaco-editor").first();
-  await expect(editor).toBeVisible();
-  await editor.click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
-  await page.keyboard.down(modifier);
-  await page.keyboard.press("KeyA");
-  await page.keyboard.up(modifier);
-  await page.keyboard.insertText(text);
+  await replaceEditorBuffer(page, editorWindow, text, workspaceRoot);
+}
+
+async function enterInitialMonacoText(
+  page: Page,
+  editorWindow: ReturnType<Page["getByRole"]>,
+  text: string,
+  workspaceRoot: string,
+  browserName: string,
+): Promise<void> {
+  if (browserName === "firefox") {
+    await enterEmptyEditorBuffer(page, editorWindow, text, workspaceRoot);
+    return;
+  }
+  await replaceMonacoText(page, editorWindow, text, workspaceRoot);
 }
 
 async function stubInlineCompletionRoutes(page: Page): Promise<{
@@ -262,7 +313,7 @@ async function openSmokeEditor(
   await expect(
     editorWindow.getByRole("alertdialog", { name: "Trust this workspace?" }),
   ).toHaveCount(0);
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(filesWindow).toBeHidden();
   return editorWindow;
 }
@@ -362,6 +413,62 @@ test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns t
   expect(noCsrf.status()).toBe(403);
 });
 
+test("window-owned repository confirm preserves viewport modality @smoke", async ({ page }) => {
+  await page.route("**/api/projects**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] }),
+    }),
+  );
+  await seedModalProofWindow(page, { id: "e2e-modal-git", type: "governedGit" });
+  await page.goto("/");
+
+  const gitWindow = page.locator('[data-window-id="e2e-modal-git"]');
+  await expect(gitWindow).toBeVisible();
+  await gitWindow.getByRole("button", { name: "Clone from URL" }).click();
+  const repositoryDialog = page.getByRole("dialog", { name: "Add repository" });
+  await expectViewportModal(page, repositoryDialog);
+  await repositoryDialog.getByRole("button", { name: "Close" }).click();
+});
+
+test("window-owned AI confirm preserves viewport modality @smoke", async ({ page }) => {
+  await page.route("**/api/editor/settings**", (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (requestUrl.pathname !== "/api/editor/settings" || route.request().method() !== "GET") {
+      return route.continue();
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+        storeState: "ready",
+        userRevision: 1,
+        workspaceRevision: 1,
+        revision: 1_000_000,
+        etag: '"modal-proof"',
+        definitions: EDITOR_M7_SETTING_REGISTRY,
+        settings: resolveEditorM11Settings({
+          user: { scope: "user", values: {} },
+          workspace: { scope: "workspace", values: {} },
+        }),
+        eventSequence: 1,
+      }),
+    });
+  });
+  await seedModalProofWindow(page, { id: "e2e-modal-settings", type: "settings" });
+  await page.goto("/");
+
+  const settingsWindow = page.locator('[data-window-id="e2e-modal-settings"]');
+  await expect(settingsWindow).toBeVisible();
+  await settingsWindow.getByRole("button", { name: "Editor" }).click();
+  await settingsWindow.getByRole("checkbox", { name: "Inline AI completion" }).click();
+  const aiDialog = page.getByRole("alertdialog", { name: "Confirm AI-assist activation" });
+  await expectViewportModal(page, aiDialog);
+  await aiDialog.getByRole("button", { name: "Cancel" }).click();
+});
+
 test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
   page,
   request,
@@ -376,7 +483,7 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar's save field.
   const saveField = editorWindow.locator('[data-field="save"]');
   const savedText = "export const e2eFixture = 'saved in browser smoke';\n";
-  await replaceMonacoText(page, editorWindow, savedText);
+  await replaceMonacoText(page, editorWindow, savedText, projectPath);
   await expect(saveField).toHaveText("Unsaved");
   await editorWindow.getByRole("button", { name: "Save" }).click();
   await expect
@@ -386,7 +493,7 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   await expect(editorWindow.getByTestId("editor-local-history-protection")).toHaveCount(0);
 
   const conflictDraft = "export const e2eFixture = 'conflicting browser draft';\n";
-  await replaceMonacoText(page, editorWindow, conflictDraft);
+  await replaceMonacoText(page, editorWindow, conflictDraft, projectPath);
   writeFileSync(absolutePath, "export const e2eFixture = 'external edit';\n", "utf8");
   await editorWindow.getByRole("button", { name: "Save" }).click();
   await expect(editorWindow.getByRole("alert")).toContainText("Save conflict");
@@ -395,13 +502,20 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // Issue #1376 (D1/AC1): reloading from disk over the dirty conflict buffer routes through an
   // explicit discard confirmation before the disk content replaces the unsaved edits.
   await editorWindow.getByRole("button", { name: "Reload", exact: true }).click();
-  await editorWindow.getByRole("button", { name: "Discard and reload" }).click();
+  const reloadDialog = page.getByRole("dialog", { name: "Discard unsaved changes?" });
+  await expectViewportModal(page, reloadDialog);
+  await reloadDialog.getByRole("button", { name: "Discard and reload" }).click();
   await expect(saveField).toHaveText("Saved");
   await expect(editorWindow.getByText("external edit")).toBeVisible();
 
   // Issue #1376 (AC1/D4): a dirty tab close is gated by the in-app dialog (no native confirm), and
   // Cancel preserves the buffer.
-  await replaceMonacoText(page, editorWindow, "export const e2eFixture = 'dirty again';\n");
+  await replaceMonacoText(
+    page,
+    editorWindow,
+    "export const e2eFixture = 'dirty again';\n",
+    projectPath,
+  );
   // 0.3.0 audit: the tab strip now satisfies `aria-required-children`, so the close affordance is a
   // decorative span inside the tab rather than an owned button of the tablist. The keyboard path is
   // the accessible one (WAI-ARIA APG deletable tabs: Delete, or Backspace on Mac keyboards), so the
@@ -411,13 +525,13 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
     .getByRole("tab", { name: new RegExp(escapeRegExp(relativePath), "u") })
     .click();
   await page.keyboard.press("Delete");
-  const dirtyDialog = editorWindow.getByRole("dialog", { name: "Unsaved editor changes" });
-  await expect(dirtyDialog).toBeVisible();
+  const dirtyDialog = page.getByRole("dialog", { name: "Unsaved editor changes" });
+  await expectViewportModal(page, dirtyDialog);
   await dirtyDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dirtyDialog).toBeHidden();
   await expect(saveField).toHaveText("Unsaved");
 
-  await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+  await clickWindowChromeButton(editorWindow, "Close Editor window");
   await expect(editorWindow).toBeHidden();
   assertNoPageErrors();
 });
@@ -468,6 +582,7 @@ test("selected workspace keeps root-relative ids and internal navigation @smoke"
 test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, command palette @smoke", async ({
   page,
   request,
+  browserName,
 }, testInfo) => {
   // Issue #1205: the browser interaction smoke for the VS Code-feeling UX — the unified status bar,
   // accessible tabs, live cursor reporting, and Monaco's native command palette carrying the Keiko
@@ -493,7 +608,7 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
   await expect(editorWindow.getByRole("tabpanel")).toBeVisible();
 
   // Typing updates the live cursor field; "const answer = 42;" is 18 chars → caret at column 19.
-  await replaceMonacoText(page, editorWindow, "const answer = 42;");
+  await enterInitialMonacoText(page, editorWindow, "const answer = 42;", projectPath, browserName);
   await expect(statusBar.locator('[data-field="cursor"]')).toHaveText("Ln 1, Col 19");
 
   // Command palette integration: F1 opens Monaco's native palette carrying the Keiko Generate Tests
@@ -512,7 +627,7 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
     contentType: "image/png",
   });
 
-  await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+  await clickWindowChromeButton(editorWindow, "Close Editor window");
   await expect(editorWindow).toBeHidden();
   assertNoPageErrors();
 });
@@ -520,6 +635,7 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
 test("editor surfaces diagnostics and hover from the governed language service @smoke", async ({
   page,
   request,
+  browserName,
 }) => {
   // Issue #1201: the deterministic server language service drives Monaco markers (diagnostics) and the
   // hover widget (quick info) for a TS/JS buffer. This proves the end-to-end browser path: edit ->
@@ -548,11 +664,17 @@ test("editor surfaces diagnostics and hover from the governed language service @
     name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
   });
   await expect(editorWindow).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
 
   // A buffer with a deliberate type error on line 1 and a hoverable symbol used on line 2.
-  await replaceMonacoText(page, editorWindow, "const greeting: string = 42;\ngreeting;\n");
+  await enterInitialMonacoText(
+    page,
+    editorWindow,
+    "const greeting: string = 42;\ngreeting;",
+    projectPath,
+    browserName,
+  );
 
   // Diagnostics: the type error must surface as a Monaco error squiggle (markers set by the bridge
   // after the governed BFF roundtrip + debounce).
@@ -581,12 +703,16 @@ test("editor surfaces diagnostics and hover from the governed language service @
   await expect(hover).toBeVisible({ timeout: 30_000 });
   await expect(hover).toContainText("greeting");
 
-  await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+  await clickWindowChromeButton(editorWindow, "Close Editor window");
   await expect(editorWindow).toBeHidden();
   assertNoPageErrors();
 });
 
-test("editor inline ghost text renders and Tab accepts it @smoke", async ({ page, request }) => {
+test("editor inline ghost text renders and Tab accepts it @smoke", async ({
+  page,
+  request,
+  browserName,
+}) => {
   const projectPath = createProjectFixture();
   const relativePath = "packages/keiko-cli/src/run.ts";
   const absolutePath = join(projectPath, relativePath);
@@ -595,7 +721,19 @@ test("editor inline ghost text renders and Tab accepts it @smoke", async ({ page
   const assertNoPageErrors = collectPageErrors(page);
 
   const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
-  await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret");
+  if (browserName === "firefox") {
+    // Trusted Gecko key events exercise Monaco's real auto-indent/auto-close behaviour. Type only
+    // the characters a user supplies and verify the complete formatted model they produce.
+    await enterEmptyEditorBuffer(
+      page,
+      editorWindow,
+      "export function answer() {\nret",
+      projectPath,
+      "export function answer() {\n  ret\n}",
+    );
+  } else {
+    await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret", projectPath);
+  }
   await expect.poll(() => inlineRequests.length).toBeGreaterThan(0);
   await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();
 
@@ -666,6 +804,30 @@ test("memory and local-knowledge navigation surfaces load without client errors 
   await expect(
     localKnowledgeWindow.getByRole("button", { exact: true, name: "Create Knowledge Pod" }),
   ).toBeVisible();
+
+  assertNoPageErrors();
+});
+
+// Independent empty-model proof: real key events mutate Monaco's native input path on every
+// required engine without relying on whole-buffer replacement.
+test("editor edits and saves a known-empty governed file on every engine @smoke", async ({
+  page,
+  request,
+  browserName,
+}) => {
+  const projectPath = createProjectFixture();
+  const relativePath = "packages/keiko-cli/src/run.ts";
+  const absolutePath = join(projectPath, relativePath);
+  writeFileSync(absolutePath, "", "utf8");
+  const assertNoPageErrors = collectPageErrors(page);
+
+  const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
+  const content = "export const crossEngineEdit = true;";
+  await enterInitialMonacoText(page, editorWindow, content, projectPath, browserName);
+  await expect(editorWindow.locator('[data-field="save"]')).toHaveText("Unsaved");
+  await editorWindow.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => readFileSync(absolutePath, "utf8")).toBe(content);
+  await expect(editorWindow.locator('[data-field="save"]')).toHaveText("Saved");
 
   assertNoPageErrors();
 });

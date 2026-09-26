@@ -1,0 +1,127 @@
+{
+  "issue": 3185,
+  "epic": 3179,
+  "verdict": "PASS",
+  "generatedAt": "2026-08-17T21:03:37.947Z",
+  "harness": "tests/e2e/config/playwright.config.ts",
+  "route": "/",
+  "appPath": "dev-runner-ui",
+  "globalsCssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
+  "captures": [
+    {
+      "file": "01-dark-success.png",
+      "mode": "dark",
+      "phase": "initial-success",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": false,
+      "alertVisible": false,
+      "retryKeyboardOperable": false,
+      "findingsCountVisible": true,
+      "seriousOrCriticalAxeViolations": []
+    },
+    {
+      "file": "02-light-rate-limited.png",
+      "mode": "light",
+      "phase": "rate-limited",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "light",
+      "dataHc": null,
+      "forcedColors": false,
+      "alertVisible": true,
+      "retryKeyboardOperable": true,
+      "findingsCountVisible": false,
+      "seriousOrCriticalAxeViolations": []
+    },
+    {
+      "file": "03-dark-high-contrast-rate-limited.png",
+      "mode": "dark-high-contrast",
+      "phase": "rate-limited",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": "more",
+      "forcedColors": false,
+      "alertVisible": true,
+      "retryKeyboardOperable": true,
+      "findingsCountVisible": false,
+      "seriousOrCriticalAxeViolations": []
+    },
+    {
+      "file": "04-forced-colors-rate-limited.png",
+      "mode": "forced-colors",
+      "phase": "rate-limited",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": true,
+      "alertVisible": true,
+      "retryKeyboardOperable": true,
+      "findingsCountVisible": false,
+      "seriousOrCriticalAxeViolations": []
+    },
+    {
+      "file": "05-responsive-rate-limited.png",
+      "mode": "responsive-mobile",
+      "phase": "rate-limited",
+      "viewport": {
+        "width": 540,
+        "height": 760
+      },
+      "dataTheme": "light",
+      "dataHc": null,
+      "forcedColors": false,
+      "alertVisible": true,
+      "retryKeyboardOperable": true,
+      "findingsCountVisible": false,
+      "seriousOrCriticalAxeViolations": []
+    }
+  ],
+  "assertions": {
+    "refreshClearsPreviousFindingsCount": true,
+    "rateLimitedErrorIsRecoverable": true,
+    "retryIsKeyboardOperable": true,
+    "laterSuccessReplacesError": true,
+    "darkLightHighContrastForcedColorsAndResponsiveCoverage": true,
+    "routeHandlerIsStrictModeTolerant": true
+  },
+  "routeLedger": [
+    {
+      "initialSuccess": 2,
+      "rateLimited": 0,
+      "recoverySuccess": 0
+    },
+    {
+      "initialSuccess": 2,
+      "rateLimited": 2,
+      "recoverySuccess": 1
+    },
+    {
+      "initialSuccess": 2,
+      "rateLimited": 2,
+      "recoverySuccess": 0
+    },
+    {
+      "initialSuccess": 2,
+      "rateLimited": 2,
+      "recoverySuccess": 0
+    },
+    {
+      "initialSuccess": 2,
+      "rateLimited": 2,
+      "recoverySuccess": 0
+    }
+  ]
+}

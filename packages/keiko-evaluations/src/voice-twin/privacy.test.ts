@@ -1,7 +1,7 @@
 // Unit tests for privacy.ts (Issue #505 — per-module coverage additions).
 //
 // Targets uncovered branches:
-//   - line 83: the scoped-package match branch `denied.startsWith("@") &&
+//   - dependencyMatchesDenied's scoped-package match branch: `denied.startsWith("@") &&
 //     dependencyName.startsWith(denied + "/")` — hit by @daily-co/daily-js matching @daily-co
 //   - canonical sort ordering with multiple hits across different manifests
 //   - ALLOWED_MEDIA_RUNTIME: "ws" is allowed and never flagged
@@ -125,7 +125,7 @@ describe("scanManifestsForDeniedMediaPackages", () => {
 
   // ─── Scoped-package match: @daily-co/daily-js matches @daily-co scope ────────
   it("detects scoped sub-package match: @daily-co/daily-js matches @daily-co", () => {
-    // This covers the branch on line 83: `denied.startsWith("@") && dependencyName.startsWith(denied + "/")`.
+    // This covers dependencyMatchesDenied's scoped-package match branch: `denied.startsWith("@") && dependencyName.startsWith(denied + "/")`.
     // Mutation guard: if that branch is deleted, @daily-co/daily-js is NOT caught.
     const scan = scanManifestsForDeniedMediaPackages([
       { packageName: "some-pkg", dependencyNames: ["@daily-co/daily-js"] },

@@ -13,6 +13,10 @@ import {
   workspaceTrustEventProjectId,
   type WorkspaceTrustFailure,
 } from "@/lib/workspace-trust-api";
+import {
+  WORKSPACE_MANIFEST_CHANGED_EVENT,
+  workspaceManifestEventValue,
+} from "@/lib/workspace-manifest-api";
 
 export interface WorkspaceTrustView {
   readonly status: WorkspaceTrustStatus | undefined;
@@ -69,10 +73,20 @@ export function useWorkspaceTrust(projectId: string | undefined): WorkspaceTrust
     const onChanged = (event: Event): void => {
       if (workspaceTrustEventProjectId(event) === projectId) void refresh();
     };
+    // KEIKO-0352: server-side trust invalidation can also fire as part of a sibling-root manifest
+    // mutation (applyRootBindingChanges → recomputeForRoots), so mirror useWorkspaceManifest's
+    // filter — only refresh when the delivered manifest carries the current projectId as a root.
+    const onManifestChanged = (event: Event): void => {
+      const manifest = workspaceManifestEventValue(event);
+      if (manifest === null || projectId === undefined || projectId.length === 0) return;
+      if (manifest.roots.some((root) => root.canonicalRoot === projectId)) void refresh();
+    };
     window.addEventListener(WORKSPACE_TRUST_CHANGED_EVENT, onChanged);
+    window.addEventListener(WORKSPACE_MANIFEST_CHANGED_EVENT, onManifestChanged);
     return () => {
       requestRef.current += 1;
       window.removeEventListener(WORKSPACE_TRUST_CHANGED_EVENT, onChanged);
+      window.removeEventListener(WORKSPACE_MANIFEST_CHANGED_EVENT, onManifestChanged);
     };
   }, [projectId, refresh]);
 

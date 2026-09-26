@@ -212,6 +212,28 @@ describe("assembleZipBundle", () => {
     const b = assembleZipBundle(entries);
     expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
   });
+
+  it("KEIKO-0828: disambiguates entries that safeZipEntryName reduces to the same basename", () => {
+    // Two distinct inputs with the same basename after safeZipEntryName. Before the fix the
+    // second entry's central-directory record would shadow the first on extraction; now they
+    // are suffixed deterministically as `report.json` and `report-1.json`.
+    const zip = assembleZipBundle([
+      { name: "a/report.json", bytes: ENC.encode("first") },
+      { name: "b/report.json", bytes: ENC.encode("second") },
+      { name: "c/report.json", bytes: ENC.encode("third") },
+    ]);
+    expect(zipCentralNames(zip)).toEqual(["report.json", "report-1.json", "report-2.json"]);
+  });
+
+  it("KEIKO-0828: disambiguation stays byte-deterministic for identical input", () => {
+    const seed = [
+      { name: "a/log.txt", bytes: ENC.encode("1") },
+      { name: "b/log.txt", bytes: ENC.encode("2") },
+    ];
+    const a = assembleZipBundle(seed);
+    const b = assembleZipBundle(seed);
+    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+  });
 });
 
 // ─── safeZipEntryName ────────────────────────────────────────────────────────────

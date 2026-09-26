@@ -169,6 +169,69 @@ function ApprovalMeta({
   );
 }
 
+// KEIKO-0186: the bounded content preview a reviewer needs to see BEFORE Approve/Reject — the
+// one field on this contract that deliberately carries real (bounded, sanitized) action content
+// instead of redacting it. Renders nothing when the server has nothing to preview (a
+// transition-issue action, or a field-only update-issue-fields action).
+//
+// KEIKO-0186 P1 (Codex): when the action HAD text but nothing presentable survived sanitization
+// (e.g. an all-zero-width-space comment), the server sends contentPreviewUnavailable instead of
+// an empty contentPreview. That case renders an explicit, plainly-worded message — never nothing
+// — so a reviewer never mistakes "content existed but could not be safely shown" for "there was
+// never anything to preview." The two fields are mutually exclusive on the wire (validated by
+// isSafeAtlassianContentPreview's contract), so exactly one of the three branches below applies.
+//
+// KEIKO-0186 P5 (Codex): the server's presentability predicate is a heuristic, not a complete
+// classifier — Unicode has no property meaning "renders blank", blank glyphs exist inside Letter
+// categories (HANGUL FILLER, EGYPTIAN HIEROGLYPH FULL/HALF BLANK, and whichever one is reported
+// next), and whether a code point renders at all depends on the reviewer's own fonts, which
+// nothing on this contract can see. So the defence is no longer the predicate alone: every
+// available preview also renders a content-free CHARACTER COUNT alongside it, derived from the
+// preview string already on the wire (no new contract field). A preview that looks empty next to
+// "12 characters" is self-evidently suspicious to a human, and that signal holds for every future
+// blank code point without this component having to recognize which one it is — the requirement
+// was never "classify visibility perfectly", it is "a human must never approve content they
+// cannot see without knowing it". No count is shown for the unavailable branch above: the server
+// has already said plainly that nothing could be previewed, so there is nothing to cross-check.
+function ApprovalContentPreview({
+  approval,
+}: {
+  readonly approval: AtlassianConnectorPendingApproval;
+}): ReactNode {
+  const t = useTranslate();
+  if (approval.contentPreviewUnavailable === true) {
+    return (
+      <p
+        className="acx-content-preview acx-content-preview-unavailable"
+        data-testid="acx-content-preview-unavailable"
+      >
+        {t("atlassianConnectors.approvals.contentPreviewUnavailable")}
+      </p>
+    );
+  }
+  if (approval.contentPreview === undefined) return null;
+  // Array.from, not .length: counts Unicode CODE POINTS, so an astral character (a UTF-16
+  // surrogate pair — CJK extensions, emoji, the P5 hieroglyph blanks) counts as one character,
+  // matching how a reviewer would actually count what they see rather than how UTF-16 encodes it.
+  const characterCount = Array.from(approval.contentPreview).length;
+  return (
+    <>
+      <p className="acx-content-preview" data-testid="acx-content-preview">
+        <span className="acx-content-preview-label">
+          {t("atlassianConnectors.approvals.contentPreview")}
+        </span>
+        {": "}
+        {approval.contentPreview}
+      </p>
+      <p className="acx-muted" data-testid="acx-content-preview-count">
+        {t("atlassianConnectors.approvals.contentPreviewCharacterCount", {
+          count: characterCount,
+        })}
+      </p>
+    </>
+  );
+}
+
 function ApprovalActions({
   id,
   busy,
@@ -215,6 +278,7 @@ function ApprovalRow({
     <li className="acx-card" data-testid="acx-approval" data-approval-id={approval.approvalId}>
       <p className="acx-card-title">{t(actionTypeLabelKey(approval.actionType))}</p>
       <ApprovalMeta approval={approval} />
+      <ApprovalContentPreview approval={approval} />
       {outcome === undefined ? (
         <ApprovalActions
           id={approval.approvalId}

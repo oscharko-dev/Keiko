@@ -5,31 +5,33 @@
 // never routes through the Model Gateway. Provider registration is the only thing that changes to
 // add a language (#1213), so this orchestrator stays language-agnostic.
 
+import type {
+  LanguageCallHierarchyResult,
+  LanguageCodeActionsResult,
+  LanguageCompletionResult,
+  LanguageDefinitionResult,
+  LanguageDiagnosticsResult,
+  LanguageFormattingResult,
+  LanguageHoverResult,
+  LanguageImplementationResult,
+  LanguageInlayHintsResult,
+  LanguageServiceCapabilities,
+  LanguageServiceErrorCode,
+  LanguageProviderDescriptor,
+  LanguageReferencesResult,
+  LanguageRenameApplyResult,
+  LanguageRenamePrepareResult,
+  LanguageServiceLimits,
+  LanguageServiceRequest,
+  LanguageSignatureHelpResult,
+  LanguageSymbolResult,
+  LanguageTypeDefinitionResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  type LanguageCallHierarchyResult,
-  type LanguageCodeActionsResult,
-  type LanguageCompletionResult,
-  type LanguageDefinitionResult,
-  type LanguageDiagnosticsResult,
-  type LanguageFormattingResult,
-  type LanguageHoverResult,
-  type LanguageImplementationResult,
-  type LanguageInlayHintsResult,
-  type LanguageServiceCapabilities,
-  type LanguageServiceErrorCode,
-  type LanguageProviderDescriptor,
-  type LanguageReferencesResult,
-  type LanguageRenameApplyResult,
-  type LanguageRenamePrepareResult,
-  type LanguageServiceLimits,
-  type LanguageServiceRequest,
-  type LanguageSignatureHelpResult,
-  type LanguageSymbolResult,
-  type LanguageTypeDefinitionResult,
-  EDITOR_LANGUAGE_MODE_IDS,
   LANGUAGE_SERVICE_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { EDITOR_LANGUAGE_MODE_IDS } from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { createDeadlineCancellation, isCancellation } from "./languageCancellation.js";
 import {

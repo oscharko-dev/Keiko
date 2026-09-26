@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  MAX_OBSERVATION_EXCERPT_BYTES,
-  validateContextToolObservation,
-  type CommandResult,
-} from "@oscharko-dev/keiko-contracts";
+import type { CommandResult } from "@oscharko-dev/keiko-contracts";
+import { MAX_OBSERVATION_EXCERPT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/context-observations";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
 
 import { shapeCommandObservation } from "./command.js";
 

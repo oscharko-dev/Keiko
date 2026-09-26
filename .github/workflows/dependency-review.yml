@@ -1,11 +1,26 @@
 name: Dependency Review
 
+# KEIKO-0955: the branch lists below must stay identical to ci.yml's. Long-lived integration
+# branches were missing, so pushes to them and pull requests targeting them were never covered.
+# scripts/check-workflow-branch-parity.mjs fails the gate if the three lists drift apart again.
 on:
   pull_request:
     branches:
       - dev
+      - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
       - feat/keiko-editor
       - feat/keiko-agent-native-editor-foundation-and-runtime
+      - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
+      - feat/epic-memoria-viva-2538
+      - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   # ADR-0139 D7: the merge queue re-triggers this workflow so the required check reports on the
   # merge group; the diff itself was already reviewed on the pull request head, so the job is
@@ -34,7 +49,7 @@ jobs:
           fail-on-scopes: development, runtime, unknown
           allow-licenses: >-
             0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, BlueOak-1.0.0, CC-BY-4.0,
-            CC0-1.0, ISC, MIT, Python-2.0, Unlicense, WTFPL
+            CC0-1.0, ISC, MIT, MIT-0, Python-2.0, Unlicense, WTFPL
           # The licence allowlist stays permissive-only: every copyleft licence is refused by
           # default, and `allow-licenses` is NOT scope-aware, so admitting LGPL there would admit it
           # for runtime dependencies too. The exception is therefore taken per PACKAGE, which is what
@@ -46,7 +61,11 @@ jobs:
           # attaches to the library and to works that link it; a linter executed in CI and locally is
           # neither linked into Keiko nor distributed with it. Any other LGPL package still fails,
           # and this one would have to be re-decided if it ever became a runtime dependency.
-          allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs
+          # `@sonarsource/analyzer-commons-configurations` is eslint-plugin-sonarjs 4.2.1's own new
+          # transitive dependency: same vendor, same LGPL-3.0-only license, same development-only
+          # lint tooling that is never linked into or shipped with Keiko. Owner decision 2026-09-25,
+          # #3609; recorded in docs/release/2296-dependency-security-closeout.md.
+          allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs, pkg:npm/@sonarsource/analyzer-commons-configurations
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 120
           show-openssf-scorecard: true

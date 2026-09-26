@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import { MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import type { ConversationAttachmentUploadResponseWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";

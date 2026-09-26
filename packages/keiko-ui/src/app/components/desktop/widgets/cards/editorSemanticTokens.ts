@@ -1,10 +1,12 @@
+import type {
+  ManagedLspSemanticTokenData,
+  ManagedLspSemanticTokenLegend,
+} from "@oscharko-dev/keiko-contracts";
 import {
   managedLspSemanticTokensFitDocument,
   parseManagedLspSemanticTokenData,
   parseManagedLspSemanticTokenLegend,
-  type ManagedLspSemanticTokenData,
-  type ManagedLspSemanticTokenLegend,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 import type {
   EditorLanguageId,
   EditorRequestIdentity,

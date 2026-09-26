@@ -15,7 +15,19 @@
 // `action` item remains (so scripts can detect "manual step required"). `--dry-run`
 // reports without changing anything and exits 1 if any issue (fixable or action) exists.
 
-import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -24,11 +36,14 @@ import {
   isAtlassianConnectorProvider,
   isSafeAtlassianConnectorBaseUrl,
   isSafeAtlassianDisplayName,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  resolvePreferredInstallLayout,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 import { resolveConfigPathFromArgs } from "./gateway-config.js";
 import {
   hashContent,
@@ -56,6 +71,7 @@ import {
   inspectStateRoot,
   resolveStateDir,
   scanRuntimeState,
+  type RetainedNode,
   type RuntimeStateCategory,
   type RuntimeStateNode,
   type StateRootInspection,
@@ -69,6 +85,8 @@ import {
   SecretVaultStoreError,
   readLocalVaultReferences,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 
 const USAGE = `Usage:
   keiko repair [--state-dir PATH] [--config PATH] [--dry-run]
@@ -124,6 +142,7 @@ export interface RepairCliDeps {
   readonly argv?: readonly string[] | undefined;
   readonly homedir?: () => string;
   readonly isProcessAlive?: (pid: number) => boolean;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 function readFlagValue(args: readonly string[], index: number): string | null {
@@ -207,6 +226,8 @@ const RUNTIME_STATE_LABEL: Readonly<Record<RuntimeStateCategory, string>> = {
   evidence: "Evidence store",
   "quality-intelligence": "Quality Intelligence store",
   "update-recovery": "update recovery state",
+  "activity-log": "activity log",
+  "support-incident": "support incident store",
 };
 
 interface LoosePermFinding {
@@ -215,22 +236,138 @@ interface LoosePermFinding {
   readonly observed: string;
 }
 
-// Records every node not already at `targetMode`, applying the fix unless this is a dry-run.
+// Records every node with a permission bit outside `targetMode`, removing those bits unless this is
+// a dry-run. Tightening only ever removes bits: an owner-only mode stricter than the target (a
+// sealed, read-only Activity Log segment is 0o400, #3530) is compliant and keeps its strictness.
+// #KEIKO-0301: guard each node's statSync/chmodSync so one unreadable / vanished artifact
+// is recorded as an "unreadable" finding rather than aborting the whole repair run. The
+// happy path (a stable, readable state tree) is unchanged; only the newly-guarded error
+// paths differ.
 function tightenNodes(
   nodes: readonly RuntimeStateNode[],
   targetMode: number,
   dryRun: boolean,
   findings: LoosePermFinding[],
+  unreadable: LoosePermFinding[],
 ): void {
   for (const node of nodes) {
-    const mode = statSync(node.absPath).mode & 0o777;
-    if (mode === targetMode) continue;
-    findings.push({
-      category: node.category,
-      relPath: node.relPath,
-      observed: `0o${mode.toString(8)}`,
-    });
-    if (!dryRun) chmodSync(node.absPath, targetMode);
+    // PR-review follow-up (Codex thread 3770211419): use lstatSync so a TOCTOU race where
+    // another process replaces the scanned regular file/directory with a symlink between
+    // scanRuntimeState and this call does not silently follow the swap. scanRuntimeState
+    // classifies symlinks as retained and never tightens them, so a symlink observed here
+    // is by definition unexpected and belongs in `unreadable`, not chmodded.
+    let observed: string;
+    let tightenedMode: number;
+    try {
+      const stat = lstatSync(node.absPath);
+      if (stat.isSymbolicLink()) {
+        unreadable.push({
+          category: node.category,
+          relPath: node.relPath,
+          observed: "unreadable",
+        });
+        continue;
+      }
+      const mode = stat.mode & 0o777;
+      tightenedMode = mode & targetMode;
+      if (tightenedMode === mode) continue;
+      observed = `0o${mode.toString(8)}`;
+    } catch {
+      unreadable.push({
+        category: node.category,
+        relPath: node.relPath,
+        observed: "unreadable",
+      });
+      continue;
+    }
+    // PR-review follow-up on KEIKO-0301: only record the node as "fixed" after chmod actually
+    // applied — a chmod failure (read-only filesystem, ownership race) leaves the node loose
+    // and must show up as an unreadable/action finding, not double-reported as fixed AND
+    // unreadable. The dry-run path skips chmod so it always records under findings.
+    if (dryRun) {
+      findings.push({ category: node.category, relPath: node.relPath, observed });
+      continue;
+    }
+    // PR-review follow-up (Codex thread 3770211419): apply the mode through a fresh
+    // O_NOFOLLOW-guarded descriptor so a symlink that lands between the lstat above and this
+    // block cannot redirect the chmod to a target outside the state directory. openSync with
+    // O_NOFOLLOW errors with ELOOP when the final path element is a symlink; fchmodSync then
+    // targets the exact inode we opened. Directories need O_DIRECTORY | O_RDONLY.
+    if (tightenNodeMode(node, tightenedMode)) {
+      findings.push({ category: node.category, relPath: node.relPath, observed });
+    } else {
+      unreadable.push({
+        category: node.category,
+        relPath: node.relPath,
+        observed: "unreadable",
+      });
+    }
+  }
+}
+
+// PR-review follow-up (Codex threads 3770357730 + 3770792796 + 3771011305 + 3771181239):
+// open a genuinely no-follow descriptor and chmod through it. Priority order:
+//   1. O_RDONLY | O_NOFOLLOW — POSIX, for entries readable by the owner.
+//   2. O_WRONLY | O_NOFOLLOW — POSIX fallback for write-only files.
+// An O_PATH candidate stood first here until KfQ thread 3780142203. It never ran and could
+// not have worked: Node exposes no `fs.constants.O_PATH` on any platform (verified on
+// linux/node 24.18.0), so the guard was always false; and forcing the raw Linux value shows
+// `fchmod` on such a descriptor failing with EBADF for both a 0666 file and a 0333 directory,
+// leaving the mode untouched — open(2) excludes fchmod from what an O_PATH descriptor permits.
+// The "no permission bits required" coverage it advertised therefore never existed.
+// If no descriptor strategy works (an execute-only 0333 directory has no readable or writable
+// open mode), REFUSE to tighten via path-based chmod — a symlink/hardlink swap between an lstat
+// check and the chmod call could redirect the mode change outside the state directory. The
+// operator sees the entry as unreadable and can repair it manually.
+function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
+  for (const flags of tightenOpenFlagCandidates()) {
+    if (tightenViaOpenFlag(node, targetMode, flags)) return true;
+  }
+  return false;
+}
+
+function tightenOpenFlagCandidates(): readonly number[] {
+  // `O_NOFOLLOW` is POSIX-only, but `@types/node` declares it as a plain `number`, so a platform
+  // that does not define it yields `undefined` at runtime — and `X | undefined` evaluates to `X`,
+  // silently dropping the very bit these flags exist for. The result would be an open that follows
+  // a symlink, then an fchmod on whatever it pointed at.
+  //
+  // Unreachable today: `checkRuntimeStateArtifacts` returns before this on win32, the only platform
+  // in question. That is exactly why the guard belongs here — otherwise the no-follow guarantee
+  // rests on an early return in another function, and removing that early return would weaken this
+  // one silently (KfQ thread 3780545514). With no candidates, `tightenNodeMode` refuses and the
+  // operator sees the entry reported, which is the documented fail-closed path.
+  const noFollow = (fsConstants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
+  if (noFollow === undefined) return [];
+  return [fsConstants.O_RDONLY | noFollow, fsConstants.O_WRONLY | noFollow];
+}
+
+function tightenViaOpenFlag(node: RuntimeStateNode, targetMode: number, flags: number): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(node.absPath, flags);
+    // PR-review follow-up (Codex thread 3771600808): fstat the opened descriptor and
+    // refuse if a REGULAR file has nlink > 1. Between the scanner's lstat and this open,
+    // another same-user process could have replaced the scanned Keiko-owned file with a
+    // hardlink to an unrelated inode; fchmodSync would otherwise change that inode's
+    // permissions. O_NOFOLLOW already blocks symlink swaps at the final component; the
+    // fstat here covers the hardlink case at the exact inode the fd points at. Directories
+    // inherently have nlink >= 2 ("." + parent), so the check only applies to regular files.
+    const stat = fstatSync(fd);
+    if (stat.isFile() && stat.nlink > 1) return false;
+    fchmodSync(fd, targetMode);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close; a descriptor left dangling here does not weaken the mode we
+        // already applied atomically via fchmodSync.
+      }
+    }
   }
 }
 
@@ -244,6 +381,33 @@ function summarizeLooseCategory(
   const detail = `${String(matches.length)} ${RUNTIME_STATE_LABEL[category]} artifact(s) group/world-readable (e.g. ${example?.relPath ?? "?"} ${example?.observed ?? "?"})`;
   const name = "Runtime state artifacts";
   return dryRun ? fixable(name, detail) : fixed(name, detail);
+}
+
+function collectRuntimeStateFindings(
+  unreadable: readonly LoosePermFinding[],
+  refusedOwned: readonly RetainedNode[],
+  results: CheckResult[],
+): void {
+  // #KEIKO-0301: report each unreadable Keiko-owned artifact as an action item so a
+  // filesystem hiccup during the state walk is visible rather than crashing the CLI.
+  // Path is relative — no raw absolute path, uid, or stack trace escapes.
+  for (const entry of unreadable) {
+    results.push(
+      action(
+        "Runtime state artifacts",
+        `${RUNTIME_STATE_LABEL[entry.category]} artifact could not be inspected (unreadable): ${entry.relPath}`,
+      ),
+    );
+  }
+  for (const entry of refusedOwned) {
+    const kind = entry.reason === "symlink" ? "symlink" : "hardlink";
+    results.push(
+      action(
+        "Runtime state artifacts",
+        `${kind} occupies a Keiko-owned path and was left untouched: ${entry.relPath}`,
+      ),
+    );
+  }
 }
 
 function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckResult[] {
@@ -266,22 +430,15 @@ function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckRes
   }
 
   const findings: LoosePermFinding[] = [];
-  tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings);
-  tightenNodes(scan.files, RUNTIME_STATE_FILE_MODE, dryRun, findings);
+  const unreadable: LoosePermFinding[] = [];
+  tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings, unreadable);
+  tightenNodes(scan.files, RUNTIME_STATE_FILE_MODE, dryRun, findings, unreadable);
 
   const results: CheckResult[] = [];
   for (const category of new Set(findings.map((f) => f.category))) {
     results.push(summarizeLooseCategory(category, findings, dryRun));
   }
-  for (const entry of refusedOwned) {
-    const kind = entry.reason === "symlink" ? "symlink" : "hardlink";
-    results.push(
-      action(
-        "Runtime state artifacts",
-        `${kind} occupies a Keiko-owned path and was left untouched: ${entry.relPath}`,
-      ),
-    );
-  }
+  collectRuntimeStateFindings(unreadable, refusedOwned, results);
   if (results.length === 0) {
     results.push(
       ok(
@@ -495,8 +652,9 @@ function checkPortableManagedInstall(
   stateDir: string,
   env: EnvSource,
   homedir: string,
+  securityLogSink?: SecurityLogSink,
 ): CheckResult {
-  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir, securityLogSink);
   if (recordResult.kind === "error") {
     return action("Portable managed install", recordResult.message);
   }
@@ -532,8 +690,10 @@ function checkPortableRegistration(
   env: EnvSource,
   homedir: string,
   dryRun: boolean,
+  io: CliIo,
+  securityLogSink?: SecurityLogSink,
 ): CheckResult {
-  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir, securityLogSink);
   if (recordResult.kind === "error") {
     return action("Portable registration", recordResult.message);
   }
@@ -553,6 +713,7 @@ function checkPortableRegistration(
     record.managedRoot,
     env,
     homedir,
+    { securityLogSink },
   );
   const status = portableRegistrationStatus(health, dryRun);
   if (status !== "repair") return status;
@@ -562,6 +723,8 @@ function checkPortableRegistration(
     record.managedRoot,
     env,
     homedir,
+    io,
+    { securityLogSink },
   );
   return fixed(
     "Portable registration",
@@ -598,11 +761,15 @@ function readPortableRecordForRepair(
   stateDir: string,
   env: EnvSource,
   homedir: string,
+  securityLogSink?: SecurityLogSink,
 ):
   | { readonly kind: "ok"; readonly record: ReturnType<typeof attestedPortableInstallRecord> }
   | { readonly kind: "error"; readonly message: string } {
   try {
-    return { kind: "ok", record: attestedPortableInstallRecord(stateDir, env, homedir) };
+    return {
+      kind: "ok",
+      record: attestedPortableInstallRecord(stateDir, env, homedir, { securityLogSink }),
+    };
   } catch (error) {
     return {
       kind: "error",
@@ -739,7 +906,7 @@ function readAtlassianMetadataReferences(path: string): readonly string[] {
 function orphanedAtlassianSecretRefs(configPath: string): number {
   const paths = atlassianCredentialPaths(configPath);
   const metadataRefs = new Set(readAtlassianMetadataReferences(paths.metadata));
-  let vaultReferences: readonly string[] = [];
+  let vaultReferences: readonly string[];
   try {
     vaultReferences = existsSync(paths.vault) ? readLocalVaultReferences(paths.vault) : [];
   } catch (error) {
@@ -758,6 +925,7 @@ interface ResolvedRepairDeps {
   readonly argv: readonly string[];
   readonly homedir: () => string;
   readonly isProcessAlive: (pid: number) => boolean;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 function resolveDeps(deps: RepairCliDeps): ResolvedRepairDeps {
@@ -766,6 +934,7 @@ function resolveDeps(deps: RepairCliDeps): ResolvedRepairDeps {
     argv: deps.argv ?? process.argv,
     homedir: deps.homedir ?? defaultHomedir,
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
+    securityLogSinkFactory: deps.securityLogSinkFactory,
   };
 }
 
@@ -790,6 +959,58 @@ function exitCodeFor(results: readonly CheckResult[], dryRun: boolean): number {
   return hasAction ? 1 : 0;
 }
 
+// Runs every repair check and gathers their CheckResults. Extracted so `runRepairCli`
+// can wrap the whole pipeline in a single try/catch (#KEIKO-0301) without exceeding
+// the 50-line max-lines-per-function bar.
+function collectRepairResults(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  parsed: RepairOptions,
+  resolved: ResolvedRepairDeps,
+): readonly CheckResult[] {
+  const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
+  const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
+    env,
+    resolved.homedir(),
+    stateDir,
+  );
+  const stateRoot = inspectStateRoot(stateDir);
+  const stateRootAction = stateRootRefusal(stateRoot);
+  if (stateRootAction === undefined) {
+    writeInstallLayoutOverrideEvidenceWithFactory(resolved.securityLogSinkFactory, stateDir, env);
+  }
+  const securityLogSink =
+    stateRootAction === undefined
+      ? createCliSecurityLogSink(stateDir, resolved.securityLogSinkFactory)
+      : undefined;
+  const stateResults =
+    stateRootAction === undefined
+      ? [
+          checkStalePid(stateDir, resolved.isProcessAlive, parsed.dryRun),
+          checkStateDirPerms(stateDir, parsed.dryRun),
+          ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
+          checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
+          checkPortableManagedInstall(stateDir, env, resolved.homedir(), securityLogSink),
+          checkPortableRegistration(
+            stateDir,
+            env,
+            resolved.homedir(),
+            parsed.dryRun,
+            io,
+            securityLogSink,
+          ),
+        ]
+      : [stateRootAction];
+  return [
+    ...stateResults,
+    checkInstallLayout(resolved.cwd, env),
+    checkLaunchPath(resolved.cwd, resolved.argv),
+    checkGatewayConfig(args, env),
+    ...checkCredentialStorage(args, env, defaultConfigCandidates),
+  ];
+}
+
 export function runRepairCli(
   args: readonly string[],
   io: CliIo,
@@ -806,32 +1027,23 @@ export function runRepairCli(
     return 2;
   }
   const resolved = resolveDeps(deps);
-  const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
-  const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
-    env,
-    resolved.homedir(),
-    stateDir,
-  );
-  const stateRoot = inspectStateRoot(stateDir);
-  const stateRootAction = stateRootRefusal(stateRoot);
-  const stateResults =
-    stateRootAction === undefined
-      ? [
-          checkStalePid(stateDir, resolved.isProcessAlive, parsed.dryRun),
-          checkStateDirPerms(stateDir, parsed.dryRun),
-          ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
-          checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
-          checkPortableManagedInstall(stateDir, env, resolved.homedir()),
-          checkPortableRegistration(stateDir, env, resolved.homedir(), parsed.dryRun),
-        ]
-      : [stateRootAction];
-  const results: CheckResult[] = [
-    ...stateResults,
-    checkInstallLayout(resolved.cwd, env),
-    checkLaunchPath(resolved.cwd, resolved.argv),
-    checkGatewayConfig(args, env),
-    ...checkCredentialStorage(args, env, defaultConfigCandidates),
-  ];
+  // #KEIKO-0301: mirror uninstall.ts's runUninstallCli try/catch — a filesystem
+  // hiccup (missing / unreadable / vanished artifact) during any check must not
+  // crash the command it exists to rescue. On an unexpected error, print an
+  // `[action]` line naming the class of failure (content-free) and return 1 so
+  // scripts can detect "manual step required".
+  let results: readonly CheckResult[];
+  try {
+    results = collectRepairResults(args, io, env, parsed, resolved);
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "UnknownError";
+    io.out("Keiko repair\n");
+    io.out(
+      `  [action] Runtime state artifacts: repair aborted after an unexpected error (${name})\n`,
+    );
+    io.out("\nKeiko repair: review the items marked `action` above.\n");
+    return 1;
+  }
   reportResults(io, results);
   const code = exitCodeFor(results, parsed.dryRun);
   io.out(summaryMessage(results, code));

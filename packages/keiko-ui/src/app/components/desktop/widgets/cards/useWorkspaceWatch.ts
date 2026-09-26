@@ -2,12 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { EditorM7WatchEvent, EditorM7WatchHealth } from "@oscharko-dev/keiko-contracts";
 import {
   parseEditorM7WatchEvent,
   parseEditorM7WatchSnapshot,
-  type EditorM7WatchEvent,
-  type EditorM7WatchHealth,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 
 export interface WorkspaceWatchClientState {

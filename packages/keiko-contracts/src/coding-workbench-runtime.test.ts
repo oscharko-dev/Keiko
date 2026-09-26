@@ -1,6 +1,12 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
+} from "./index.js";
+import { CODING_WORKBENCH_ACTION_CLASSES } from "./coding-workbench.js";
 import {
-  CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
   isLegalCodingWorkbenchRuntimeTransition,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
@@ -9,9 +15,7 @@ import {
   validateCodingWorkbenchRuntimeIntent,
   validateCodingWorkbenchRuntimeMintConfirmation,
   validateCodingWorkbenchRuntimeState,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchRuntimeAuthorityEnvelope,
-} from "./index.js";
+} from "./coding-workbench-runtime.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -129,12 +133,29 @@ describe("Coding Workbench runtime contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("defines all thirteen states and only explicit transitions", () => {
-    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(13);
+  it("defines all twelve states and only explicit transitions", () => {
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(12);
     expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toContain("paused");
     expect(isLegalCodingWorkbenchRuntimeTransition("idle", "starting")).toBe(true);
     expect(isLegalCodingWorkbenchRuntimeTransition("running", "idle")).toBe(false);
     expect(isLegalCodingWorkbenchRuntimeTransition("taken-over", "idle")).toBe(true);
+  });
+
+  // KEIKO-0539: `unavailable` was declared as a legal FSM state with real transitions but no
+  // orchestrator code path ever produced it (host-qualification is reported exclusively through
+  // the unrelated `codingRuntimeUnavailableReason` field). Pin its removal so the state vocabulary
+  // never quietly regrows a state nothing can ever reach.
+  it("removes the unreachable unavailable state from the state vocabulary (KEIKO-0539)", () => {
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(12);
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).not.toContain("unavailable");
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        schemaVersion: "1",
+        state: "unavailable",
+        revision: 0,
+        updatedAt: "2026-07-11T12:00:00.000Z",
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it("pauses and resumes only through the explicit paused transitions", () => {
@@ -161,6 +182,72 @@ describe("Coding Workbench runtime contracts", () => {
         binding: { ...runtimeAuthority().binding, workspaceRootDigest: "b".repeat(64) },
       }),
     ).toMatchObject({ ok: false });
+  });
+
+  // Epic #3384 correction 8: the issue binding is a fact of the run's public snapshot
+  // (`CodingWorkbenchRuntimeSnapshot.issueBinding`) only. Restating it on the execution binding —
+  // embedded in both the runtime authority envelope and the runtime authority facts — would create
+  // a second source of truth for the same fact, so both validators must reject it as an unknown key
+  // even though it is a legal field name on `CodingWorkbenchIssueBinding` elsewhere in this module.
+  it("rejects issueBinding on the execution binding and the authority facts binding (epic #3384 correction 8)", () => {
+    const forgedEnvelopeBinding = {
+      ...runtimeAuthority(),
+      binding: {
+        ...runtimeAuthority().binding,
+        issueBinding: {
+          schemaVersion: "1",
+          repositoryId: "repo-1",
+          remoteDigest: DIGEST,
+          issueNumber: 1,
+          issueIdDigest: DIGEST,
+          contentRevisionDigest: DIGEST,
+          defaultBaseRef: "dev",
+          bindingDigest: DIGEST,
+        },
+      },
+    };
+    expect(validateCodingWorkbenchRuntimeAuthorityEnvelope(forgedEnvelopeBinding)).toMatchObject({
+      ok: false,
+    });
+    const forgedFactsBinding = {
+      binding: {
+        taskId: "task-1",
+        projectId: "project-1",
+        projectDigest: DIGEST,
+        workspaceId: "workspace-1",
+        workspaceRootDigest: DIGEST,
+        branchRef: "issue/2252",
+        branchHeadDigest: DIGEST,
+        issueBinding: {
+          schemaVersion: "1",
+          repositoryId: "repo-1",
+          remoteDigest: DIGEST,
+          issueNumber: 1,
+          issueIdDigest: DIGEST,
+          contentRevisionDigest: DIGEST,
+          defaultBaseRef: "dev",
+          bindingDigest: DIGEST,
+        },
+      },
+      actionClasses: [],
+      connectorScopes: [],
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      budgetDigest: DIGEST,
+      commandPolicyDigest: DIGEST,
+      networkPolicyDigest: DIGEST,
+      gatesDigest: DIGEST,
+      branchConstraintsDigest: DIGEST,
+      modelProfileDigest: DIGEST,
+    };
+    expect(validateCodingWorkbenchRuntimeAuthorityFacts(forgedFactsBinding)).toMatchObject({
+      ok: false,
+    });
+    // The clean binding (no issueBinding) remains valid on both — the removal above is additive
+    // strictness, not a regression in the fields the binding legitimately carries.
+    expect(validateCodingWorkbenchRuntimeAuthorityEnvelope(runtimeAuthority())).toMatchObject({
+      ok: true,
+    });
   });
 
   it.each([
@@ -393,6 +480,25 @@ describe("Coding Workbench runtime contract failure branches", () => {
     ).toMatchObject({ ok: false, errors: ["modelSource is invalid"] });
   });
 
+  // issueBindingDigest is optional on live facts (epic #3384 correction 8: the execution binding
+  // never carries the issue binding itself, only this content-free fingerprint the drift check
+  // compares — see agentAuthorityRegistry.ts's issueBindingDiffers).
+  it("accepts live facts with no bound issue and a valid issueBindingDigest, rejects a malformed one", () => {
+    expect(validateCodingWorkbenchRuntimeAuthorityFacts(facts())).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts(), issueBindingDigest: DIGEST }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({
+        ...facts(),
+        issueBindingDigest: "not-a-digest",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["issueBindingDigest must be a 64-character lowercase hex digest"],
+    });
+  });
+
   it("rejects unknown sources on the adapter start request", () => {
     expect(
       validateCodingWorkbenchRuntimeAdapterStartRequest({ ...adapter(), runtimeSource: "shell" }),
@@ -447,5 +553,21 @@ describe("Coding Workbench runtime contract failure branches", () => {
       ok: false,
       errors: ["modelSource is invalid"],
     });
+  });
+});
+
+describe("coding workbench runtime module structure (KEIKO-0532)", () => {
+  it("does not re-declare the validation primitives owned by coding-workbench-runtime-api-validation.ts", () => {
+    // isRecord, isOneOf, unknownKeys, result, and validateStrictIso used to be re-declared here
+    // byte-for-byte identical to their coding-workbench-runtime-api-validation.ts counterparts
+    // (exactKeys / validateStrictUtcInstant there). This module now imports them instead of
+    // keeping a second copy; a re-introduced local declaration must fail this pin.
+    const source = readFileSync(
+      fileURLToPath(new URL("./coding-workbench-runtime.ts", import.meta.url)),
+      "utf8",
+    );
+    const forbiddenLocalDeclaration =
+      /^function isRecord|^function isOneOf|^function unknownKeys|^function result|^function validateStrictIso/m;
+    expect(forbiddenLocalDeclaration.test(source)).toBe(false);
   });
 });

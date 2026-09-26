@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMPILER_PROBE_OPTIONS,
   evaluateTypeScriptToolchain,
+  readToolchainManifests,
 } from "../check-typescript-toolchain.mjs";
 
 const VALID_MANIFEST = {
@@ -19,6 +20,22 @@ function evaluate(overrides = {}) {
     ...overrides,
   });
 }
+
+describe("readToolchainManifests", () => {
+  it("reads the real root and pinned native-compiler manifests the gate compares", () => {
+    const { manifest, nativeManifest } = readToolchainManifests();
+    expect(manifest.name).toBe("@oscharko-dev/keiko");
+    expect(typeof nativeManifest.version).toBe("string");
+    expect(
+      evaluateTypeScriptToolchain({
+        manifest,
+        compilerResult: { status: 0, stdout: `Version ${nativeManifest.version}\n`, stderr: "" },
+        nativePackageVersion: nativeManifest.version,
+        apiVersion: manifest.dependencies.typescript.replace("~", ""),
+      }).failures,
+    ).toEqual([]);
+  });
+});
 
 describe("evaluateTypeScriptToolchain", () => {
   it("accepts the governed TypeScript 7 compiler and TypeScript 6 API split", () => {

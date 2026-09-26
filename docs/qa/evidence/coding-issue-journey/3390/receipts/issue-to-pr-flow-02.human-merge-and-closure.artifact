@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "human-merge-and-closure",
+  "evidenceClass": "playwright-journey",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "platformTarget": "macos-arm64",
+  "result": "passed",
+  "assertions": [
+    "governed-merge-confirmed:true",
+    "provider-merge-observed:true",
+    "bound-issue-closure-observed:true"
+  ],
+  "usage": {
+    "spendObservability": "unknown",
+    "observedToolCallEvents": 32,
+    "observedRunDurationMs": 560086
+  },
+  "flowBinding": {
+    "flowId": "issue-to-pr-flow-02",
+    "taskRunId": "run-111678487185707850656248526412280804594",
+    "repository": "oscharko/Wegwerf-Repo",
+    "issueNumber": 3,
+    "pullRequestNumber": 44,
+    "pullRequestHeadSha": "a3286377974cbbed336b6915f6b7a8ed212eb1a8",
+    "mergeCommitSha": "12fdb69149d025c0647aa0a90b92a866ff648d9c"
+  }
+}

@@ -19,12 +19,27 @@ export const QUALITY_INTELLIGENCE_COVERAGE_KINDS: readonly QualityIntelligenceCo
   "manual",
 ] as const;
 
+/**
+ * Confidence in `[0, 1]`. NaN, ±Infinity, and out-of-range values are invalid — see
+ * {@link isQualityIntelligenceConfidence}. Shared by every `confidence` field on the QI contract
+ * surface (coverage mapping, requirement-quality finding, UI finding summary, UI atom coverage) so
+ * the unit is documented and enforced in exactly one place (KEIKO-0185). Not "just `number`": this
+ * is the one name those four fields import and retype against, and the return-type target of the
+ * exported guard below — not a single-site local alias, so it earns its keep despite S6564.
+ */
+export type QualityIntelligenceConfidence = number; // NOSONAR typescript:S6564 — see TSDoc above
+
+/** Runtime guard for {@link QualityIntelligenceConfidence}: finite and within `[0, 1]`. */
+export const isQualityIntelligenceConfidence = (
+  value: number,
+): value is QualityIntelligenceConfidence => Number.isFinite(value) && value >= 0 && value <= 1;
+
 export interface QualityIntelligenceCoverageMapping {
   readonly atomId: QualityIntelligenceEvidenceAtomId;
   readonly candidateIds: readonly QualityIntelligenceTestCaseId[];
   readonly coverageKind: QualityIntelligenceCoverageKind;
   /** Confidence in `[0, 1]`. NaN, ±Infinity, and out-of-range values are rejected. */
-  readonly confidence: number;
+  readonly confidence: QualityIntelligenceConfidence;
 }
 
 export interface QualityIntelligenceCoverageMap {
@@ -33,20 +48,20 @@ export interface QualityIntelligenceCoverageMap {
   readonly mappings: readonly QualityIntelligenceCoverageMapping[];
 }
 
-const isValidConfidence = (value: number): boolean =>
-  Number.isFinite(value) && value >= 0 && value <= 1;
-
 /**
- * Throws `RangeError` on any out-of-range confidence (NaN, ±Infinity, < 0, > 1) and
- * on a mapping with an empty `candidateIds` list. Returns `void` on success.
+ * Throws `RangeError` on any out-of-range confidence (NaN, ±Infinity, < 0, > 1), on a mapping with
+ * an empty `candidateIds` list, and (KEIKO-0895) on any duplicate `atomId`. Returns `void` on
+ * success. A duplicate atomId would double-count the same atom's coverage in every downstream
+ * percentage — the producer must resolve the duplication upstream.
  */
 export const assertCoverageMapInvariant = (map: QualityIntelligenceCoverageMap): void => {
+  const seenAtomIds = new Set<QualityIntelligenceEvidenceAtomId>();
   for (let index = 0; index < map.mappings.length; index += 1) {
     const mapping = map.mappings[index];
     if (mapping === undefined) {
       throw new RangeError(`Coverage map mapping[${String(index)}] is missing`);
     }
-    if (!isValidConfidence(mapping.confidence)) {
+    if (!isQualityIntelligenceConfidence(mapping.confidence)) {
       throw new RangeError(
         `Coverage map mapping[${String(index)}] has out-of-range confidence ${String(
           mapping.confidence,
@@ -58,5 +73,11 @@ export const assertCoverageMapInvariant = (map: QualityIntelligenceCoverageMap):
         `Coverage map mapping[${String(index)}] must reference at least one candidate`,
       );
     }
+    if (seenAtomIds.has(mapping.atomId)) {
+      throw new RangeError(
+        `Coverage map mapping[${String(index)}] duplicates atomId ${String(mapping.atomId)}`,
+      );
+    }
+    seenAtomIds.add(mapping.atomId);
   }
 };

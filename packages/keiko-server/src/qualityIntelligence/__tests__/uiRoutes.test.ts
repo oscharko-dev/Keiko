@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { RouteContext, RouteResult } from "../../routes.js";
 import { STREAMING } from "../../routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../index.js";
@@ -47,6 +47,7 @@ const { handleListQiRuns, handleGetQiRun, QI_RUN_LIST_DEFAULT_LIMIT, QI_RUN_LIST
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
+    correlationId: undefined,
     req: {} as RouteContext["req"],
     res: {} as RouteContext["res"],
     params,
@@ -108,6 +109,26 @@ function manifest(runId: string): unknown {
   };
 }
 
+function degradedManifest(runId: string): unknown {
+  return {
+    ...(manifest(runId) as Record<string, unknown>),
+    modelRouting: {
+      policyVersion: 1,
+      requested: {
+        policyVersion: 1,
+        testDesignModelId: "inexpensive-chat",
+        judgeModelId: "structured-judge",
+      },
+      resolved: {
+        testDesignModelId: "inexpensive-chat",
+        judgeModelId: "structured-judge",
+      },
+      preflight: { status: "passed" },
+      stageFailures: [{ stage: "judge", reasonSummary: "qi-judge-unavailable" }],
+    },
+  };
+}
+
 // A sentinel sensitive string that simulates the OS-fs path/EvidenceReadError message that
 // MUST NOT leak through any catch-block response body.
 const SECRET_FS_PATH = "/private/var/folders/secret-evidence-dir/run-x.json";
@@ -138,6 +159,33 @@ describe("handleListQiRuns", () => {
     // FIX A11y-2 (Issue #282): every list item carries a review state; "open" until a reviewer acts.
     expect(body.runs[0]?.reviewState).toBe("open");
     expect(body.runs[1]?.reviewState).toBe("open");
+  });
+
+  it("projects persisted model-stage failures as degraded terminal truth", () => {
+    listMock.mockReturnValue(["run-degraded"]);
+    loadMock.mockReturnValue(degradedManifest("run-degraded"));
+
+    const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
+    const body = result.body as {
+      runs: readonly {
+        id: string;
+        status: string;
+        degraded?: boolean;
+        reasonSummary?: string;
+        totals: { candidates: number };
+        reviewState: string;
+      }[];
+    };
+    expect(body.runs).toEqual([
+      expect.objectContaining({
+        id: "run-degraded",
+        status: "succeeded",
+        degraded: true,
+        reasonSummary: "qi-judge-unavailable",
+        totals: { candidates: 2, findings: 1, exports: 0 },
+        reviewState: "open",
+      }),
+    ]);
   });
 
   it("returns an empty list when the store reports no runs", () => {
@@ -304,10 +352,63 @@ describe("handleGetQiRun", () => {
       handleGetQiRun(ctx("/api/quality-intelligence/runs/run-x", { id: "run-x" }), deps()),
     );
     expect(result.status).toBe(200);
-    const body = result.body as { id: string; status: string; manifestSchemaVersion: number };
+    const body = result.body as {
+      id: string;
+      status: string;
+      manifestSchemaVersion: number;
+      degraded?: boolean;
+      reasonSummary?: string;
+    };
     expect(body.id).toBe("run-x");
     expect(body.status).toBe("succeeded");
     expect(body.manifestSchemaVersion).toBe(1);
+    expect(body.degraded).toBeUndefined();
+    expect(body.reasonSummary).toBeUndefined();
+  });
+
+  it("projects degraded detail without changing status, totals, scores, coverage, or review state", () => {
+    loadMock.mockReturnValue({
+      ...(degradedManifest("run-degraded-detail") as Record<string, unknown>),
+      qualityScore: 75,
+      coverageMatrix: [
+        { atomId: "atom-1", status: "covered", confidence: 1, coveringCandidateIds: ["tc-1"] },
+      ],
+    });
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-degraded-detail", {
+          id: "run-degraded-detail",
+        }),
+        deps(),
+      ),
+    );
+    const body = result.body as {
+      id: string;
+      status: string;
+      degraded?: boolean;
+      reasonSummary?: string;
+      totals: { candidates: number; findings: number; exports: number };
+      reviewState: string;
+      coveragePercentage: number;
+      qualityScore: number | null;
+      findingRefs: readonly { id: string }[];
+      candidateIds: readonly string[];
+      evidenceRefs: readonly { envelopeId: string; atomId: string }[];
+    };
+    expect(body).toMatchObject({
+      id: "run-degraded-detail",
+      status: "succeeded",
+      degraded: true,
+      reasonSummary: "qi-judge-unavailable",
+      totals: { candidates: 2, findings: 1, exports: 0 },
+      reviewState: "open",
+      coveragePercentage: 100,
+      qualityScore: 75,
+      findingRefs: [{ id: "f1" }],
+      candidateIds: ["env-1"],
+      evidenceRefs: [{ envelopeId: "env-1", atomId: "atom-1" }],
+    });
   });
 
   it("projects requirement excerpts onto coverageByAtom and tolerates legacy rows (#790)", () => {

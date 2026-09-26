@@ -325,6 +325,75 @@ function seedFigmaTokenVault(stateDir) {
   );
 }
 
+// Source of truth: packages/keiko-contracts/src/support-incident.ts (#3533). Written directly
+// (rather than through the server's recordRegisteredFailureIncident) because that path also opens
+// a real Activity Log writer under stateDir/logs/, a store this fixture does not otherwise model;
+// the auditor's observability-stores class checks file-name grammar and byte bound, never content,
+// so a representative body-free shape is sufficient here.
+function seedSupportIncident(stateDir) {
+  const dir = join(stateDir, "support-incidents");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const incidentId = "0".repeat(32);
+  const defectFingerprint = "a".repeat(64);
+  const record = {
+    schemaVersion: 1,
+    incidentId,
+    trigger: "registered-failure",
+    state: "candidate",
+    fingerprint: {
+      algorithm: 1,
+      defectFingerprint,
+      surface: "keiko-server",
+      op: "fixture.failure.observed",
+      errorKind: "internal",
+      frameCount: 1,
+    },
+    correlation: { childCorrelationIds: [] },
+    build: {
+      productVersion: "1.0.0",
+      platformClass: "darwin-arm64",
+      registryVersion: 1,
+      schemaDigest: "b".repeat(64),
+      catalogDigest: "c".repeat(64),
+    },
+    window: {
+      fromMs: FIXTURE_TS - 900_000,
+      incidentAtMs: FIXTURE_TS,
+      toMs: FIXTURE_TS + 300_000,
+    },
+    pin: {
+      status: "pinned",
+      pinId: "d".repeat(24),
+      pinnedSegmentCount: 1,
+      pinnedBytes: 512,
+      evidenceLostBeforePin: false,
+    },
+    slotIndex: 0,
+    createdAtMs: FIXTURE_TS,
+    expiresAtMs: FIXTURE_TS + 14 * 24 * 60 * 60 * 1000,
+  };
+  writeFileSync(join(dir, `incident-${incidentId}.json`), `${JSON.stringify(record)}\n`, {
+    mode: 0o600,
+  });
+  // The dedup and quota claims this record's own existence depends on (#3533 review 4050606506).
+  writeFileSync(join(dir, `fingerprint-${defectFingerprint}.claim`), incidentId, { mode: 0o600 });
+  writeFileSync(join(dir, "slot-00.claim"), incidentId, { mode: 0o600 });
+}
+
+// Source of truth: packages/keiko-cli/src/support-segment-manifest-names.ts (grammar, #3531) and
+// support-segment-manifest.ts (content shape, MAX_SEGMENT_MANIFEST_BYTES). Derived, rebuildable
+// metadata over one sealed Activity Log segment; the fixture does not model logs/ itself (see
+// seedSupportIncident above), so this content is representative, not a real rebuild.
+function seedActivityLogManifest(stateDir) {
+  const dir = join(stateDir, "activity-log-manifests");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const segmentId = "20260918T120000000Z-4242-0a1b2c3d-000001";
+  const manifest = { schemaVersion: 1, segmentId, digest: "e".repeat(64) };
+  writeFileSync(join(dir, `manifest-${segmentId}.json`), `${JSON.stringify(manifest)}\n`, {
+    mode: 0o600,
+  });
+}
+
 function seedEditorHotExitVault(stateDir) {
   const dir = join(stateDir, "editor-hot-exit");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -384,6 +453,8 @@ export function createHealthyFixture(stateDir) {
   seedFigmaSnapshot(stateDir);
   seedFigmaTokenVault(stateDir);
   seedEditorHotExitVault(stateDir);
+  seedSupportIncident(stateDir);
+  seedActivityLogManifest(stateDir);
   if (process.platform !== "win32") applyOwnerOnlyModes(stateDir);
   return stateDir;
 }
@@ -406,5 +477,10 @@ export function createDriftedFixture(stateDir) {
       0o644,
     );
   }
+  // A foreign, non-Keiko file name dropped into a closed-grammar store: exactly what
+  // check:local-state's observability-stores class (#3533 audit) must flag.
+  writeFileSync(join(stateDir, "support-incidents", "notes.txt"), "not a Keiko record", {
+    mode: 0o600,
+  });
   return stateDir;
 }

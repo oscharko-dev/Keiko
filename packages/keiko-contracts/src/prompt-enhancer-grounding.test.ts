@@ -1,21 +1,23 @@
 import { describe, expect, it } from "vitest";
+import type {
+  GroundingNeed,
+  GroundingStrategy,
+  PromptCriticality,
+  PromptDomain,
+  PromptEnhancementProfileId,
+  PromptEnhancementRequest,
+  PromptTaskAnalysis,
+  PromptTaskClass,
+} from "./index.js";
+import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
-  analyzePrompt,
   asPromptEnhancementRequestId,
-  planGrounding,
-  validateGroundingPlan,
   GROUNDING_STRATEGIES,
   RAG_EVALUATION_DIMENSIONS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-  type GroundingNeed,
-  type GroundingStrategy,
-  type PromptCriticality,
-  type PromptDomain,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementRequest,
-  type PromptTaskAnalysis,
-  type PromptTaskClass,
-} from "./index.js";
+} from "./prompt-enhancer.js";
+import { planGrounding } from "./prompt-enhancer-grounding.js";
+import { validateGroundingPlan } from "./prompt-enhancer-validation.js";
 
 // ─── Analysis builder ──────────────────────────────────────────────────────────────
 interface AnalysisOverrides {

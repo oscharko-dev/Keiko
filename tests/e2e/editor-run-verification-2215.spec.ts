@@ -1,6 +1,6 @@
 // Issue #2215 (Epic #2092 closeout) — end-to-end evidence for the run → verify → problems → jump →
 // fix → rerun loop, driven against the REAL BFF (no mocked contracts, no mocked AuthorityEnvelope),
-// following the shape of editor-agent-docking-2122.spec.ts (top-level `test(...)` blocks, real-BFF
+// following the shape of editor-agent-pins.spec.ts (top-level `test(...)` blocks, real-BFF
 // fixtures via ./support/editorWorkspace.js). Executed by the CI Studio browser gate (chromium is the
 // reference browser).
 //
@@ -15,7 +15,7 @@
 // visible source line (mirroring editor-baseline-1377.spec.ts's F12/Shift+F12 verification pattern) —
 // not merely that some editor surface remained visible, which would pass even if the jump were broken.
 
-import { readFileSync, symlinkSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
@@ -27,6 +27,18 @@ import {
   openEditorWorkspace,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
+
+// "ControlOrMeta", NOT `editorModifier`: `quick-access.commands` is a PRODUCT shortcut (the
+// UnifiedQuickAccessPalette shell component, i18n key `quickAccess.query.commands` — "Command
+// query" below), and the product resolves its modifier from `navigator.platform`
+// (useKeyboardShortcuts' detectPlatform). Playwright's device presets override the userAgent but
+// NOT navigator.platform, so on a Mac the page still reports "MacIntel" and the product waits for
+// metaKey — which is exactly what the host-derived "ControlOrMeta" sends. `editorModifier` reads
+// the userAgent and would send Control here, failing on every real Mac (see
+// a11y.smoke.spec.ts's `openCommandPalette`, which proves this same chord both ways). It is the
+// right helper for MONACO chords only; see support/editor-chord.ts.
+const PALETTE_CHORD = "ControlOrMeta+Shift+KeyP";
 
 const FAILING_TEST = "src/sum.test.ts";
 const SOURCE = "src/sum.ts";
@@ -70,7 +82,6 @@ const BLOCKING_BUILD = "setInterval(() => undefined, 1_000);\n";
 // third line of the (deliberately minimal) failing-test fixture above.
 const FAILING_LINE = 3;
 
-const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
 function workspace(): { readonly root: string } {
@@ -81,11 +92,13 @@ function workspace(): { readonly root: string } {
     { path: SOURCE, content: BROKEN_SOURCE },
     { path: FAILING_TEST, content: FAILING_TEST_BODY },
   ]);
-  // `npx vitest` resolves from the target workspace, not from Playwright's process PATH. Link the
-  // repository's lockfile-pinned installation into the disposable fixture so the real sandboxed run
-  // is deterministic and never attempts a registry download. The sandbox inherits the host
-  // filesystem policy for verification and separately enforces network:none.
-  symlinkSync(join(process.cwd(), "node_modules"), join(fixture.root, "node_modules"), "dir");
+  // The fixture deliberately ships NO node_modules: the orchestrator's own dependency bootstrap
+  // (ADR-0043 D17) installs the two devDependencies declared above, confined to the approved registry
+  // by its egress proxy, and the scripts then run against that tree with network:none. Seeding the
+  // repository's own installation instead — as a symlink or a copy — cannot work: the install
+  // directory check fails closed on a node_modules whose real path leaves the workspace, and a copied
+  // tree carries workspace packages that `installedTreeRefusal` cannot prove came from the registry,
+  // which refuses the bootstrap after an otherwise successful install.
   return fixture;
 }
 
@@ -113,7 +126,7 @@ async function openEditorFor(page: Page, root: string): Promise<Locator> {
 // top (only) result. Throws (via the `option` locator's own timeout) if the command never becomes
 // available — e.g. because the run-affordance wiring this test exists to prove is broken.
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(PALETTE_CHORD);
   const combobox = page.getByRole("combobox", { name: "Command query" });
   await expect(combobox).toBeVisible();
   await combobox.fill(`>${commandTitle}`);
@@ -198,7 +211,7 @@ test("running a workspace typecheck through the command palette exercises the no
 
   // The command becomes available again once idle — proving the run genuinely reached a terminal
   // state (not merely that the UI stopped showing a spinner for an unrelated reason).
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(PALETTE_CHORD);
   await page.getByRole("combobox", { name: "Command query" }).fill(">Run Typecheck");
   await expect(page.getByRole("option").filter({ hasText: "Run Typecheck" }).first()).toBeVisible();
   await page.keyboard.press("Escape");
@@ -232,7 +245,7 @@ test("cancelling a run mid-flight through the command palette settles without le
     "Verification: cancelled",
   );
 
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(PALETTE_CHORD);
   await page.getByRole("combobox", { name: "Command query" }).fill(">Run Build");
   await expect(page.getByRole("option").filter({ hasText: "Run Build" }).first()).toBeVisible();
   await page.keyboard.press("Escape");
@@ -248,7 +261,8 @@ test("fixing and saving in Monaco before rerunning clears the problem", async ({
   await openProblems(page);
   await awaitProblemsRow(page);
 
-  await page.getByRole("button", { name: "Close Problems window" }).click();
+  const problemsWindow = page.getByRole("region", { name: /^Problems/u });
+  await clickWindowChromeButton(problemsWindow, "Close Problems window");
   await expect(page.locator(`[data-testid="problems-row"]`)).toHaveCount(0);
 
   const editorInput = pane.getByRole("textbox", { name: /^Editor:/u }).first();
@@ -258,6 +272,12 @@ test("fixing and saving in Monaco before rerunning clears the problem", async ({
   // the disk assertion below proves the Save affordance persisted it.
   await page.keyboard.press("Home");
   await page.keyboard.press("Shift+End");
+  // Delete the selection with a REAL key event before inserting. `insertText` bypasses key events,
+  // and whether it replaces an existing selection is engine-dependent: Chromium replaces, Firefox
+  // inserts at the caret and LEAVES the selected text in place — doubling the line instead of
+  // replacing it (the same corruption class support/editor-chord.ts's `replaceEditorBuffer` was
+  // written to catch). Backspace on a selection is unambiguous in both.
+  await page.keyboard.press("Backspace");
   await page.keyboard.insertText(FIXED_SOURCE.trimEnd());
   await workspaceLocator.getByRole("button", { name: "Save", exact: true }).click();
   await expect(workspaceLocator.locator(EDITOR_SELECTORS.saveField)).toHaveText("Saved");

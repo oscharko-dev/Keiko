@@ -14,7 +14,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_TYPES,
-} from "./memory.js";
+} from "./memory-contracts.js";
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
 import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
 import type {
@@ -24,9 +24,10 @@ import type {
   MemoryStatus,
   ProjectId,
   UserId,
+  WorkflowDefinitionId,
   WorkspaceId,
-} from "./memory.js";
-import type { MemoryAuditRecordId } from "./memory.js";
+} from "./memory-contracts.js";
+import type { MemoryAuditRecordId } from "./memory-contracts.js";
 import type { MemoryRecord, MemoryEdge } from "./memory-records.js";
 import {
   checkStatusTransition,
@@ -49,7 +50,13 @@ import {
   validateMemoryUnpin,
   validateMemoryUpdate,
 } from "./memory-operations-validation.js";
-import { isScopeReachable, validateMemoryRetrievalRequest } from "./memory-retrieval-validation.js";
+import {
+  isScopeReachable,
+  MEMORY_RETRIEVAL_MAX_BODY_CHARS,
+  MEMORY_RETRIEVAL_MAX_RESULTS,
+  scopeCoordinateKey,
+  validateMemoryRetrievalRequest,
+} from "./memory-retrieval-validation.js";
 import { validateMemoryAuditRecord } from "./memory-audit-validation.js";
 import {
   assertNeverMemoryType,
@@ -66,6 +73,15 @@ const audit = (s: string): MemoryAuditRecordId => s as MemoryAuditRecordId;
 const user = (s: string): UserId => s as UserId;
 const ws = (s: string): WorkspaceId => s as WorkspaceId;
 const proj = (s: string): ProjectId => s as ProjectId;
+
+describe("memory status transitions", () => {
+  it("freezes the transition map and every destination list", () => {
+    expect(Object.isFrozen(MEMORY_STATUS_TRANSITIONS)).toBe(true);
+    for (const status of MEMORY_STATUSES) {
+      expect(Object.isFrozen(MEMORY_STATUS_TRANSITIONS[status])).toBe(true);
+    }
+  });
+});
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 function happyProvenance(): Record<string, unknown> {
@@ -265,14 +281,14 @@ describe("frozen-constant arrays", () => {
 
 // ─── Status transition matrix ─────────────────────────────────────────────────
 describe("MEMORY_STATUS_TRANSITIONS", () => {
-  it("rejected and forgotten are absorbing", () => {
-    expect(MEMORY_STATUS_TRANSITIONS.rejected).toEqual([]);
+  it("forgotten is absorbing while rejected can be acknowledged for deletion", () => {
+    expect(MEMORY_STATUS_TRANSITIONS.rejected).toEqual(["forgotten"]);
     expect(MEMORY_STATUS_TRANSITIONS.forgotten).toEqual([]);
   });
 
-  it("allows reviewed proposals to settle as superseded or conflicted", () => {
+  it("allows proposed captures to settle or be acknowledged for deletion", () => {
     expect([...MEMORY_STATUS_TRANSITIONS.proposed].sort()).toEqual(
-      ["accepted", "conflicted", "expired", "rejected", "superseded"].sort(),
+      ["accepted", "conflicted", "expired", "forgotten", "rejected", "superseded"].sort(),
     );
   });
 
@@ -288,8 +304,9 @@ describe("MEMORY_STATUS_TRANSITIONS", () => {
     );
   });
 
-  it("archived can be restored to accepted (non-destructive)", () => {
+  it("archived can be restored to accepted or acknowledged for deletion", () => {
     expect(MEMORY_STATUS_TRANSITIONS.archived).toContain("accepted");
+    expect(MEMORY_STATUS_TRANSITIONS.archived).toContain("forgotten");
   });
 
   it("conflicted and expired can return to accepted (rehabilitation)", () => {
@@ -835,6 +852,31 @@ describe("isScopeReachable", () => {
   });
 });
 
+// ─── scopeCoordinateKey (#2906 KEIKO-0546) ───────────────────────────────────
+// Pins the exact string encoding for every MemoryScopeKind so the shared partition-key
+// projection cannot silently diverge between callers (governance conflict/forget scans and
+// consolidation dedupe/ordering all read this one function).
+describe("scopeCoordinateKey", () => {
+  it("uses the shared 'kind:coordinate' encoding for every scope kind", () => {
+    expect(scopeCoordinateKey({ kind: "global" })).toBe("global:");
+    expect(scopeCoordinateKey({ kind: "user", userId: user("u-1") })).toBe("user:u-1");
+    expect(scopeCoordinateKey({ kind: "workspace", workspaceId: ws("w-1") })).toBe("workspace:w-1");
+    expect(scopeCoordinateKey({ kind: "project", projectId: proj("p-1") })).toBe("project:p-1");
+    expect(
+      scopeCoordinateKey({
+        kind: "workflow",
+        workflowDefinitionId: "wf-1" as WorkflowDefinitionId,
+      }),
+    ).toBe("workflow:wf-1");
+  });
+
+  it("yields distinct kind prefixes so two coordinates cannot collide across kinds", () => {
+    const userKey = scopeCoordinateKey({ kind: "user", userId: user("shared") });
+    const wsKey = scopeCoordinateKey({ kind: "workspace", workspaceId: ws("shared") });
+    expect(userKey).not.toBe(wsKey);
+  });
+});
+
 // ─── Operation validators ────────────────────────────────────────────────────
 describe("operation validators", () => {
   it("validateMemoryProposal accepts the happy proposal", () => {
@@ -1003,6 +1045,25 @@ describe("operation validators", () => {
     expect(validateMemoryRetrievalRequest({ ...base, maxResults: 0 }).ok).toBe(false);
     expect(validateMemoryRetrievalRequest({ ...base, maxResults: 10 }).ok).toBe(true);
     expect(validateMemoryRetrievalRequest({ ...base, includeArchived: "yes" }).ok).toBe(false);
+    // KEIKO-1027: MEMORY_RETRIEVAL_MAX_RESULTS and MEMORY_RETRIEVAL_MAX_BODY_CHARS bound the
+    // retrieval budget hints at the naming boundary. A hostile producer asking the store to scan
+    // 100_000 rows or project a 10 MB body must be refused as a contract violation, not a request
+    // the store silently clamps.
+    expect(
+      validateMemoryRetrievalRequest({ ...base, maxResults: MEMORY_RETRIEVAL_MAX_RESULTS + 1 }).ok,
+    ).toBe(false);
+    expect(
+      validateMemoryRetrievalRequest({ ...base, maxResults: MEMORY_RETRIEVAL_MAX_RESULTS }).ok,
+    ).toBe(true);
+    expect(
+      validateMemoryRetrievalRequest({
+        ...base,
+        maxBodyChars: MEMORY_RETRIEVAL_MAX_BODY_CHARS + 1,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateMemoryRetrievalRequest({ ...base, maxBodyChars: MEMORY_RETRIEVAL_MAX_BODY_CHARS }).ok,
+    ).toBe(true);
   });
 });
 
@@ -1264,7 +1325,7 @@ describe("type-level scope coordinate invariants", () => {
     // object to a `MemoryScope` variable is the exact site that fails compilation.
     const userScopeMissingId = { kind: "user" as const };
     // @ts-expect-error — scope.kind="user" requires `userId`; the structural omission is rejected.
-    const assigned: import("./memory.js").MemoryScope = userScopeMissingId;
+    const assigned: import("./memory-contracts.js").MemoryScope = userScopeMissingId;
     expect(assigned.kind).toBe("user");
   });
 
@@ -1416,7 +1477,4 @@ const _unusedTypeAnchor = (): void => {
     createdAt: 0,
   };
   const _b: MemoryAuditRecordId = audit("ar-1");
-  void _a;
-  void _b;
 };
-void _unusedTypeAnchor;

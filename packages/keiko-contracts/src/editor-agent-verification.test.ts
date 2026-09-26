@@ -163,6 +163,51 @@ describe("toRedactedVerificationReport", () => {
     expect(serialized).not.toContain("outputSummary");
     expect(serialized).not.toContain("command");
   });
+
+  // KEIKO-0424: toRedactedVerificationReport used to copy failure locations straight through with no
+  // bound or path check, while parseLocation (the paired consumer-side parser a few lines down in
+  // this same file) already rejects an absolute file, an over-limit message, or more than
+  // VERIFICATION_MAX_FAILURE_LOCATIONS entries. A producer report carrying any of those was therefore
+  // emitted at 200 and then hard-rejected wholesale by isEditorAgentVerificationResult on the
+  // receiving side. These three cases each round-tripped isEditorAgentVerificationResult === false
+  // before the fix; each must now be true, with the offending location entry dropped -- never
+  // truncated -- rather than the whole result becoming unparseable.
+  it("drops a failure location whose file escapes the workspace, and the report still round-trips (KEIKO-0424)", () => {
+    const redacted = toRedactedVerificationReport(
+      report({ locations: [{ file: "/abs/outside.ts", line: 1, message: "escaped workspace" }] }),
+    );
+    expect(redacted.steps[0]?.locations).toEqual([]);
+    expect(isEditorAgentVerificationResult({ outcome: "completed", report: redacted })).toBe(true);
+  });
+
+  it("drops an over-limit failure location without truncating it, keeping valid siblings (KEIKO-0424)", () => {
+    const redacted = toRedactedVerificationReport(
+      report({
+        locations: [
+          { file: "src/valid.ts", line: 3, message: "ok", ruleId: "TS1" },
+          {
+            file: "src/also-valid-path.ts",
+            message: "x".repeat(VERIFICATION_FAILURE_MESSAGE_MAX_CHARS + 1),
+          },
+          { file: "src/no-line.ts", column: 5, message: "column without a line is invalid too" },
+        ],
+      }),
+    );
+    expect(redacted.steps[0]?.locations).toEqual([
+      { file: "src/valid.ts", line: 3, message: "ok", ruleId: "TS1" },
+    ]);
+    expect(isEditorAgentVerificationResult({ outcome: "completed", report: redacted })).toBe(true);
+  });
+
+  it("clamps failure locations to VERIFICATION_MAX_FAILURE_LOCATIONS and still round-trips (KEIKO-0424)", () => {
+    const tooMany = Array.from({ length: VERIFICATION_MAX_FAILURE_LOCATIONS + 5 }, (_, i) => ({
+      file: `src/a${i.toString()}.ts`,
+      message: "x",
+    }));
+    const redacted = toRedactedVerificationReport(report({ locations: tooMany }));
+    expect(redacted.steps[0]?.locations).toHaveLength(VERIFICATION_MAX_FAILURE_LOCATIONS);
+    expect(isEditorAgentVerificationResult({ outcome: "completed", report: redacted })).toBe(true);
+  });
 });
 
 describe("isEditorAgentVerificationResult", () => {

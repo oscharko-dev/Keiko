@@ -1,12 +1,14 @@
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
+  CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   isCodingWorkbenchModeWidening,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchAuxiliaryStatus,
   type CodingWorkbenchContentTrust,
   type CodingWorkbenchModelSource,
+  type CodingWorkbenchOperatorDecision,
   type CodingWorkbenchMode,
   type CodingWorkbenchPermissionRequest,
   type CodingWorkbenchRuntimeEventKind,
@@ -29,9 +31,23 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+  type CodingWorkbenchIssueBinding,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
+import type { CodingWorkbenchTurnFailureCode } from "./coding-workbench-runtime-constants.js";
+import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
+export type { CodingWorkbenchTurnFailureCode } from "./coding-workbench-runtime-constants.js";
+import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
+export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
+import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
+import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
+import { isDraftDeliveryRecord, type DraftDeliveryRecord } from "./draft-delivery.js";
+import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
+import {
+  isWorkbenchDescriptionStatus,
+  type WorkbenchDescriptionStatus,
+} from "./workbench-description-status.js";
 
 /** Browser-level preference, deliberately not an adapter, model, profile, or endpoint selector. */
 export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscription";
@@ -40,6 +56,7 @@ export const CODING_WORKBENCH_RUNTIME_PREFERENCES: readonly CodingWorkbenchRunti
   Object.freeze(["managed-gateway", "codex-subscription"] as const);
 
 export const CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS = 128;
+export const CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS = 200;
 export const CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS = 128;
 
 export interface CodingWorkbenchRuntimeReadinessRequest {
@@ -74,6 +91,18 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "runtime-unqualified",
   ] as const);
 
+/**
+ * How much evidence backs an AVAILABLE runtime. `platform-qualified` is the release-signed,
+ * notarized/Authenticode-attested packaged artifact. `functional-not-platform-qualified` covers
+ * every runtime whose integrity is proven by recomputed digests alone and that carries no platform
+ * signature chain — the supported dev lane (ADR-0140) and the packaged evaluation lane (ADR-0163 D9).
+ */
+export type CodingWorkbenchRuntimeEvidenceClass =
+  "platform-qualified" | "functional-not-platform-qualified";
+
+export const CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES: readonly CodingWorkbenchRuntimeEvidenceClass[] =
+  Object.freeze(["platform-qualified", "functional-not-platform-qualified"] as const);
+
 /** Content-free server authority and runtime-composition projection used before Start is enabled. */
 export interface CodingWorkbenchRuntimeReadiness {
   readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
@@ -83,14 +112,47 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly runtimeAvailable: boolean;
   /** Present exactly when `runtimeAvailable` is false; names the first failed prerequisite. */
   readonly runtimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  /**
+   * Present exactly when `runtimeAvailable` is true. An available runtime must always say how
+   * strong its evidence is: an absent field that read as "verified" would be a fail-open default
+   * and would reproduce the green-readiness-over-an-unverified-runtime class (audit F-01).
+   */
+  readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
+}
+
+export interface CodingWorkbenchRuntimeProjectMemoryRequest {
+  readonly enabled: boolean;
 }
 
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
   readonly taskIntent: string;
+  /** Durable conversation identity; never grants execution authority. */
+  readonly conversationId?: string | undefined;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
+  readonly modelId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  /**
+   * The GitHub issue the run must be bound to (#3385): the raw text the user pasted — an issue URL,
+   * `owner/repo#n` or `#n` — never a structured repository/number pair the browser could author.
+   * The server resolves it against the ACTIVE workspace's own repository into a content-free
+   * `CodingWorkbenchIssueBinding` before any run is minted; a deployment without that resolver
+   * refuses the field outright, so supplying it can never silently start a generic run. Transient
+   * intent like `taskIntent`: it is parsed, never persisted.
+   */
+  readonly issueRef?: string | undefined;
+  /** Optimistic precondition from the accepted preview; never authority. */
+  readonly expectedIssueBindingDigest?: string | undefined;
+  /** A prompt link supplies context; only an explicit delivery request binds the run to delivery. */
+  readonly issuePurpose?: "context" | "delivery" | undefined;
+  /**
+   * Operator preference only. The browser can turn project memory context on/off for this run, but
+   * it cannot choose scopes, paths, user memory, or credentials. The server derives those from the
+   * active workspace binding and defaults an omitted field to enabled for older clients.
+   */
+  readonly projectMemory?: CodingWorkbenchRuntimeProjectMemoryRequest | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -138,6 +200,9 @@ export interface CodingWorkbenchRuntimeApprovalDecisionRequest {
   readonly requestId: string;
   readonly expectedRevision: number;
   readonly decision: CodingWorkbenchRuntimeApprovalDecision;
+  readonly grantScope?: "once" | "task" | undefined;
+  readonly commandTemplateId?: string | undefined;
+  readonly safeArgumentClasses?: readonly string[] | undefined;
 }
 
 // Body for POST /runs/:runId/research/revoke (#2387). Bound to the observed revision and the exact
@@ -170,6 +235,41 @@ export interface CodingWorkbenchRuntimeResult {
   readonly error: CodingWorkbenchRuntimeProcessSummary;
 }
 
+export type CodingWorkbenchContextUsageSource = "estimated" | "provider-reported";
+
+/** Optional measured attribution. Omitted categories were not reported and must not be inferred. */
+export interface CodingWorkbenchContextUsageBreakdown {
+  readonly conversationMessagesTokens?: number | undefined;
+  readonly systemContextTokens?: number | undefined;
+  readonly toolDefinitionTokens?: number | undefined;
+  readonly providerAccountingAdjustmentTokens?: number | undefined;
+}
+
+export interface CodingWorkbenchContextCompaction {
+  readonly count: number;
+  readonly lastCompactedAt?: string | undefined;
+  readonly thresholdTokens?: number | undefined;
+}
+
+export type CodingWorkbenchContextUsage =
+  | {
+      readonly state: "unavailable";
+      readonly updatedAt: string;
+    }
+  | {
+      readonly state: "available";
+      readonly source: CodingWorkbenchContextUsageSource;
+      readonly capacityTokens: number;
+      readonly usedInputTokens: number;
+      readonly reservedOutputTokens: number;
+      readonly freeTokens: number;
+      readonly breakdown?: CodingWorkbenchContextUsageBreakdown | undefined;
+      readonly cumulativePromptTokens: number;
+      readonly runPromptBudgetTokens?: number | undefined;
+      readonly compaction?: CodingWorkbenchContextCompaction | undefined;
+      readonly updatedAt: string;
+    };
+
 /**
  * Content-free status projection. `runId` is intentionally optional for unbound availability
  * states; task/workspace/authority/process/model content never crosses this boundary.
@@ -187,12 +287,40 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  /** Honest runtime/provider accounting; unavailable never implies a guessed model limit. */
+  readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
   /** Present only when durable server truth records acknowledgement for a recovery-required run. */
   readonly recoveryAcknowledged?: true | undefined;
   /** Present exactly while the runtime is awaiting an operator decision. */
   readonly pendingPermission?: CodingWorkbenchRuntimePendingPermission | undefined;
+  /**
+   * Why the run is `paused`. Absent means an operator paused it from the Workbench, which is what
+   * `paused` used to mean unconditionally. A value names a decision only a local human can make and
+   * a governed tool is waiting in place for; the run resumes itself once that decision lands, so
+   * the operator's action is the decision, not a Resume click.
+   */
+  readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   /** Terminal, body-free process outcome; never contains stdout or stderr content. */
   readonly result?: CodingWorkbenchRuntimeResult | undefined;
+  /**
+   * Present exactly when the run was started from an accepted GitHub issue (#3385). Digests, a
+   * number and a branch name only — the issue's text never crosses this boundary.
+   */
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
+  /** Latest durable commit receipt; no message, paths, command or approval token. */
+  readonly verifiedCommitResult?: VerifiedCommitResult | undefined;
+  /** Durable repository delivery facts; no authored text, command, credentials or approval grant. */
+  readonly draftDelivery?: DraftDeliveryRecord | undefined;
+  /** Last bounded CI observation. Its timestamp and head binding confer no execution authority. */
+  readonly ciReadiness?: ReadinessSnapshot | undefined;
+  /**
+   * Present exactly when a stable succeeded head has an automatic description-draft attempt
+   * (#3401). No title, body, diff or model text ever crosses this boundary — see
+   * `WorkbenchDescriptionStatus`. Generation grants no remote-write authority: applying the draft
+   * still uses #3399's existing PR preview, policy and one-use approval.
+   */
+  readonly descriptionStatus?: WorkbenchDescriptionStatus | undefined;
+  readonly conversationId?: string | undefined;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -228,7 +356,8 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly state: CodingWorkbenchRuntimeStateName;
       readonly revision: number;
       readonly eventKind: CodingWorkbenchRuntimeEventKind;
-      readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      readonly failureCode?:
+        CodingWorkbenchRuntimeFailureCode | CodingWorkbenchTurnFailureCode | undefined;
       /**
        * The normalized #2387 outcome for a research-performed / skill-invoked / child-run-* frame.
        * `limit-reached` and `stopped` stay distinct from `denied` so the timeline never mislabels an
@@ -244,31 +373,116 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly contentTrust?: CodingWorkbenchContentTrust | undefined;
     };
 
+function validateTaskIntent(value: unknown, errors: string[]): void {
+  if (typeof value !== "string" || value.length === 0 || value.length > 65_536) {
+    errors.push("taskIntent must be a bounded non-empty string");
+  }
+}
+
+function validateRuntimePreference(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isOneOf(value, CODING_WORKBENCH_RUNTIME_PREFERENCES)) {
+    errors.push("runtimePreference is invalid");
+  }
+}
+
+function containsControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code <= 31 || code === 127;
+  });
+}
+
+function validateRuntimeModelId(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS ||
+    containsControlCharacter(value)
+  ) {
+    errors.push("modelId must be bounded safe text");
+  }
+}
+
+function validateReasoningEffort(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isOneOf(value, MODEL_REASONING_EFFORTS)) {
+    errors.push("reasoningEffort is invalid");
+  }
+}
+
+// Transport shape only: one bounded, control-character-free string, sharing the parser's own
+// length bound so a reference the contract admits is never one the parser refuses for size. What
+// the text MEANS is decided by the server-side resolver against the active repository.
+function validateIssueRef(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > GITHUB_ISSUE_REFERENCE_MAX_CHARS ||
+    containsControlCharacter(value)
+  ) {
+    errors.push("issueRef must be bounded safe text");
+  }
+}
+
+function validateIssuePurpose(value: unknown, issueRef: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (issueRef === undefined || (value !== "context" && value !== "delivery")) {
+    errors.push("issuePurpose requires an issue reference and a supported purpose");
+  }
+}
+
+function validateProjectMemoryRequest(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("projectMemory must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["enabled"], "projectMemory"));
+  if (typeof value.enabled !== "boolean") errors.push("projectMemory.enabled must be boolean");
+}
+
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
   const errors = exactKeys(
     value,
-    ["requestId", "taskIntent", "requestedMode", "runtimePreference"],
+    [
+      "requestId",
+      "taskIntent",
+      "conversationId",
+      "requestedMode",
+      "runtimePreference",
+      "modelId",
+      "reasoningEffort",
+      "issueRef",
+      "expectedIssueBindingDigest",
+      "issuePurpose",
+      "projectMemory",
+    ],
     "startRequest",
   );
   validateRequestId(value.requestId, errors);
-  if (
-    typeof value.taskIntent !== "string" ||
-    value.taskIntent.length === 0 ||
-    value.taskIntent.length > 65_536
-  ) {
-    errors.push("taskIntent must be a bounded non-empty string");
-  }
+  validateTaskIntent(value.taskIntent, errors);
+  if (value.conversationId !== undefined)
+    validateSafeId(value.conversationId, "conversationId", errors, 128);
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
     errors.push("requestedMode is invalid");
   }
+  validateRuntimePreference(value.runtimePreference, errors);
+  validateRuntimeModelId(value.modelId, errors);
+  validateReasoningEffort(value.reasoningEffort, errors);
+  validateIssueRef(value.issueRef, errors);
+  validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
+  validateProjectMemoryRequest(value.projectMemory, errors);
   if (
-    value.runtimePreference !== undefined &&
-    !isOneOf(value.runtimePreference, CODING_WORKBENCH_RUNTIME_PREFERENCES)
+    value.expectedIssueBindingDigest !== undefined &&
+    (value.issueRef === undefined ||
+      typeof value.expectedIssueBindingDigest !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.expectedIssueBindingDigest))
   ) {
-    errors.push("runtimePreference is invalid");
+    errors.push("expectedIssueBindingDigest requires an issue reference and sha256 digest");
   }
   return result(value, errors);
 }
@@ -322,7 +536,14 @@ export function parseCodingWorkbenchRuntimeApprovalDecisionRequest(
   if (!isRecord(value)) return invalid("approval decision must be an object");
   const errors = exactKeys(
     value,
-    ["requestId", "expectedRevision", "decision"],
+    [
+      "requestId",
+      "expectedRevision",
+      "decision",
+      "grantScope",
+      "commandTemplateId",
+      "safeArgumentClasses",
+    ],
     "approvalDecision",
   );
   validateRequestId(value.requestId, errors);
@@ -332,7 +553,52 @@ export function parseCodingWorkbenchRuntimeApprovalDecisionRequest(
   if (!isOneOf(value.decision, CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS)) {
     errors.push("decision is invalid");
   }
+  validateApprovalGrantFields(value, errors);
   return result(value, errors);
+}
+
+function validateApprovalGrantFields(value: Record<string, unknown>, errors: string[]): void {
+  if (
+    value.grantScope !== undefined &&
+    value.grantScope !== "once" &&
+    value.grantScope !== "task"
+  ) {
+    errors.push("grantScope is invalid");
+  }
+  if (value.commandTemplateId !== undefined) {
+    validateSafeId(
+      value.commandTemplateId,
+      "commandTemplateId",
+      errors,
+      CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+    );
+  }
+  validateSafeArgumentClasses(value.safeArgumentClasses, errors);
+  if (
+    value.decision !== "approved" &&
+    (value.grantScope !== undefined ||
+      value.commandTemplateId !== undefined ||
+      value.safeArgumentClasses !== undefined)
+  ) {
+    errors.push("denied decisions cannot carry grant fields");
+  }
+}
+
+function validateSafeArgumentClasses(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    if (value !== undefined) errors.push("safeArgumentClasses must be an array");
+  } else if (value.length > 16) {
+    errors.push("safeArgumentClasses exceeds 16 entries");
+  } else {
+    value.forEach((entry, index) => {
+      validateSafeId(
+        entry,
+        `safeArgumentClasses[${String(index)}]`,
+        errors,
+        CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+      );
+    });
+  }
 }
 
 export function parseCodingWorkbenchRuntimeResearchRevokeRequest(
@@ -375,13 +641,29 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "runtimeSource",
       "modelSource",
       "failureCode",
+      "contextUsage",
       "recoveryAcknowledged",
       "pendingPermission",
+      "pauseReason",
       "result",
+      "issueBinding",
+      "verifiedCommitResult",
+      "draftDelivery",
+      "ciReadiness",
+      "descriptionStatus",
+      "conversationId",
     ],
     "runtimeSnapshot",
   );
   validateSnapshotFields(value, errors);
+  if (value.conversationId !== undefined)
+    validateSafeId(value.conversationId, "conversationId", errors, 128);
+  validateContextUsage(value.contextUsage, errors);
+  validateIssueBinding(value.issueBinding, errors);
+  validateSnapshotVerifiedCommit(value, errors);
+  validateSnapshotDraftDelivery(value, errors);
+  validateSnapshotCiReadiness(value, errors);
+  validateSnapshotDescriptionStatus(value, errors);
   validateRuntimeResult(value.result, errors);
   if (
     value.result !== undefined &&
@@ -390,6 +672,214 @@ export function validateCodingWorkbenchRuntimeSnapshot(
     errors.push("result is permitted only on a terminal snapshot");
   }
   return result(value, errors);
+}
+
+function validateContextUsage(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("contextUsage must be an object");
+    return;
+  }
+  if (value.state === "unavailable") {
+    errors.push(...exactKeys(value, ["state", "updatedAt"], "contextUsage"));
+    validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
+    return;
+  }
+  validateAvailableContextUsage(value, errors);
+}
+
+function validateAvailableContextUsage(value: Record<string, unknown>, errors: string[]): void {
+  errors.push(
+    ...exactKeys(
+      value,
+      [
+        "state",
+        "source",
+        "capacityTokens",
+        "usedInputTokens",
+        "reservedOutputTokens",
+        "freeTokens",
+        "breakdown",
+        "cumulativePromptTokens",
+        "runPromptBudgetTokens",
+        "compaction",
+        "updatedAt",
+      ],
+      "contextUsage",
+    ),
+  );
+  if (value.state !== "available") errors.push("contextUsage.state is invalid");
+  if (value.source !== "estimated" && value.source !== "provider-reported") {
+    errors.push("contextUsage.source is invalid");
+  }
+  validateContextCounts(value, errors);
+  validateContextBreakdown(value.breakdown, Number(value.usedInputTokens), errors);
+  validateContextCompaction(value.compaction, errors);
+  validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
+}
+
+function validateContextCounts(value: Record<string, unknown>, errors: string[]): void {
+  const fields = [
+    "capacityTokens",
+    "usedInputTokens",
+    "reservedOutputTokens",
+    "freeTokens",
+    "cumulativePromptTokens",
+  ] as const;
+  for (const field of fields) {
+    if (!validBoundedCount(value[field], Number.MAX_SAFE_INTEGER)) {
+      errors.push(`contextUsage.${field} is invalid`);
+    }
+  }
+  if (
+    fields.every((field) => validBoundedCount(value[field], Number.MAX_SAFE_INTEGER)) &&
+    Number(value.capacityTokens) !==
+      Number(value.usedInputTokens) + Number(value.reservedOutputTokens) + Number(value.freeTokens)
+  ) {
+    errors.push("contextUsage token geometry is inconsistent");
+  }
+  if (
+    value.runPromptBudgetTokens !== undefined &&
+    (!validBoundedCount(value.runPromptBudgetTokens, Number.MAX_SAFE_INTEGER) ||
+      Number(value.runPromptBudgetTokens) < Number(value.cumulativePromptTokens))
+  ) {
+    errors.push("contextUsage.runPromptBudgetTokens is invalid");
+  }
+}
+
+function validateContextBreakdown(value: unknown, usedTokens: number, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("contextUsage.breakdown must be an object");
+    return;
+  }
+  const fields = [
+    "conversationMessagesTokens",
+    "systemContextTokens",
+    "toolDefinitionTokens",
+    "providerAccountingAdjustmentTokens",
+  ] as const;
+  errors.push(...exactKeys(value, fields, "contextUsage.breakdown"));
+  const reported: unknown[] = fields.flatMap((field) =>
+    value[field] === undefined ? [] : [value[field]],
+  );
+  if (!reported.every((count) => validBoundedCount(count, Number.MAX_SAFE_INTEGER))) {
+    errors.push("contextUsage.breakdown contains an invalid count");
+  } else if (reported.reduce<number>((sum, count) => sum + Number(count), 0) > usedTokens) {
+    errors.push("contextUsage.breakdown exceeds usedInputTokens");
+  }
+}
+
+function validateContextCompaction(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("contextUsage.compaction must be an object");
+    return;
+  }
+  errors.push(
+    ...exactKeys(value, ["count", "lastCompactedAt", "thresholdTokens"], "contextUsage.compaction"),
+  );
+  if (!validBoundedCount(value.count, Number.MAX_SAFE_INTEGER)) {
+    errors.push("contextUsage.compaction.count is invalid");
+  }
+  if (value.lastCompactedAt !== undefined) {
+    validateStrictUtcInstant(
+      value.lastCompactedAt,
+      "contextUsage.compaction.lastCompactedAt",
+      errors,
+    );
+  }
+  if (
+    value.thresholdTokens !== undefined &&
+    !validBoundedCount(value.thresholdTokens, Number.MAX_SAFE_INTEGER)
+  ) {
+    errors.push("contextUsage.compaction.thresholdTokens is invalid");
+  }
+}
+
+function validateIssueBinding(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const validated = validateCodingWorkbenchIssueBinding(value);
+  if (!validated.ok) errors.push(...validated.errors);
+}
+
+function validateSnapshotVerifiedCommit(snapshot: Record<string, unknown>, errors: string[]): void {
+  const receipt = snapshot.verifiedCommitResult;
+  if (receipt === undefined) return;
+  if (!isVerifiedCommitResult(receipt)) {
+    errors.push("verifiedCommitResult must be a closed verified commit receipt");
+    return;
+  }
+  const issue = snapshot.issueBinding;
+  const issueDigest = isRecord(issue) ? issue.bindingDigest : undefined;
+  if (receipt.runId !== snapshot.runId || receipt.issueBindingDigest !== issueDigest) {
+    errors.push("verifiedCommitResult must match the snapshot run and issue binding");
+  }
+}
+
+function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors: string[]): void {
+  const delivery = snapshot.draftDelivery;
+  if (delivery === undefined) return;
+  if (!isDraftDeliveryRecord(delivery)) {
+    errors.push("draftDelivery must be a closed durable delivery record");
+    return;
+  }
+  const issue = snapshot.issueBinding;
+  const target = delivery.binding;
+  if (
+    !isRecord(issue) ||
+    ![
+      target.runId === snapshot.runId,
+      target.issueBindingDigest === issue.bindingDigest,
+      target.remoteDigest === issue.remoteDigest,
+      target.issueIdDigest === issue.issueIdDigest,
+      target.issueNumber === issue.issueNumber,
+      target.baseRef === issue.defaultBaseRef,
+    ].every(Boolean)
+  ) {
+    errors.push("draftDelivery must match the snapshot run and frozen issue binding");
+  }
+}
+
+function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: string[]): void {
+  const readiness = snapshot.ciReadiness;
+  if (readiness === undefined) return;
+  const draft = snapshot.draftDelivery;
+  if (!isReadinessSnapshot(readiness) || !isDraftDeliveryRecord(draft)) {
+    errors.push("ciReadiness must be a closed observation of a confirmed delivery");
+    return;
+  }
+  if (
+    ![
+      readiness.runId === snapshot.runId,
+      readiness.remoteDigest === draft.binding.remoteDigest,
+      readiness.repository.toLowerCase() === draft.binding.repository.toLowerCase(),
+      readiness.prNumber === draft.pullRequest?.number,
+      readiness.headRef === draft.binding.headRef,
+      readiness.headSha === draft.binding.headSha,
+      readiness.baseRef === draft.binding.baseRef,
+    ].every(Boolean)
+  )
+    errors.push("ciReadiness must match the snapshot run and confirmed delivery target");
+}
+
+// The status can outlive the LATEST `verifiedCommitResult` shown on the snapshot (that field
+// reflects the most recent proposal attempt, which may be a later failed/blocked one, while the
+// description job binds the last SUCCESSFUL head — codingRuntimeVerifiedCommitAuthorityStore.ts /
+// epic #3384 correction 5), so only the run identity is cross-checked here.
+function validateSnapshotDescriptionStatus(
+  snapshot: Record<string, unknown>,
+  errors: string[],
+): void {
+  const status = snapshot.descriptionStatus;
+  if (status === undefined) return;
+  if (!isWorkbenchDescriptionStatus(status)) {
+    errors.push("descriptionStatus must be a closed durable description status");
+    return;
+  }
+  if (status.runId !== snapshot.runId) {
+    errors.push("descriptionStatus must match the snapshot run");
+  }
 }
 
 function validateRuntimeResult(value: unknown, errors: string[]): void {
@@ -457,6 +947,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
       "effectiveMode",
       "runtimeAvailable",
       "runtimeUnavailableReason",
+      "runtimeEvidenceClass",
     ],
     "runtimeReadiness",
   );
@@ -467,6 +958,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
     if (!isOneOf(value[field], CODING_WORKBENCH_MODES)) errors.push(`${field} is invalid`);
   }
   validateRuntimeUnavailableReason(value, errors);
+  validateRuntimeEvidenceClass(value, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -504,6 +996,28 @@ function validateRuntimeUnavailableReason(value: Record<string, unknown>, errors
   }
 }
 
+/**
+ * The exact mirror of the unavailable reason, bound to the AVAILABLE branch. Requiring it there is
+ * the load-bearing half: an optional field whose absence reads as "verified" would let an
+ * unverified runtime render as plain green.
+ */
+function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: string[]): void {
+  const evidenceClass = value.runtimeEvidenceClass;
+  if (
+    evidenceClass !== undefined &&
+    !isOneOf(evidenceClass, CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES)
+  ) {
+    errors.push("runtimeEvidenceClass is invalid");
+    return;
+  }
+  if (value.runtimeAvailable === true && evidenceClass === undefined) {
+    errors.push("runtimeEvidenceClass is required when the runtime is available");
+  }
+  if (value.runtimeAvailable === false && evidenceClass !== undefined) {
+    errors.push("runtimeEvidenceClass must be absent when the runtime is unavailable");
+  }
+}
+
 export function validateCodingWorkbenchRuntimeSseEvent(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSseEvent> {
@@ -538,6 +1052,19 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateFailureCode(value.failureCode, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
+  validatePauseReason(value, errors);
+}
+
+// A pause reason outside `paused` would describe a state the run is not in. The converse is
+// deliberately permitted: an operator-initiated pause carries no reason, which is what `paused`
+// meant before a governed tool could ask for a decision.
+function validatePauseReason(value: Record<string, unknown>, errors: string[]): void {
+  if (value.pauseReason === undefined) return;
+  if (!isOneOf(value.pauseReason, CODING_WORKBENCH_OPERATOR_DECISIONS)) {
+    errors.push("pauseReason is invalid");
+    return;
+  }
+  if (value.state !== "paused") errors.push("pauseReason is only allowed when state is paused");
 }
 
 function validateRecoveryAcknowledgement(value: Record<string, unknown>, errors: string[]): void {

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type {
+  AuxiliaryCapabilityRequestV1,
+  CodeTaskSha256Digest,
+  CodingWorkbenchRuntimeEvent,
+} from "@oscharko-dev/keiko-contracts";
 import {
   validateAuxiliaryCapabilityOutcomeV1,
   validateAuxiliaryCapabilityRequestV1,
-  validateCodingWorkbenchRuntimeEvent,
-  type AuxiliaryCapabilityRequestV1,
-  type CodeTaskSha256Digest,
-  type CodingWorkbenchRuntimeEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import {
   createServerApprovedSkillCatalog,
   type SkillCatalog,
@@ -44,7 +46,13 @@ function skillRequest(
 
 function catalogWith(implicitAllowed: boolean): SkillCatalog {
   const entries: readonly SkillCatalogEntryInput[] = [
-    { skillId: SKILL_ID, implicitAllowed, category: "public-research" },
+    {
+      skillId: SKILL_ID,
+      implicitAllowed,
+      category: "public-research",
+      capabilities: ["keiko.research.fetch"],
+      compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+    },
   ];
   return createServerApprovedSkillCatalog(entries);
 }

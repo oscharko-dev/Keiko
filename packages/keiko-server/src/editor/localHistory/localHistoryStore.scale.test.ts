@@ -25,7 +25,7 @@ vi.mock("node:fs", async () => {
   return {
     ...actual,
     renameSync: (from: string, to: string): void => {
-      let bytes = 0;
+      let bytes: number;
       try {
         bytes = actual.statSync(from).size;
       } catch {

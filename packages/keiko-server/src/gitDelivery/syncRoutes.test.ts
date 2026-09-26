@@ -6,24 +6,47 @@
 //   * request hardening (404 unknown project, 400 bad/forbidden/extra-key/unsafe-ref, 413 oversize).
 //   * a content-free sync evidence record lands after execute (no URLs / secrets).
 
-import { mkdtempSync } from "node:fs";
+import { captureActivityLog } from "../activityLogCapture.test-support.js";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { GitSyncExecuteResponse, GitSyncPreview } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitSyncExecuteResponse,
+  GitSyncPreview,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
 import type { GitProcessResult, GitProcessRunner } from "../gitRoutes.js";
-import { createHandleSyncExecute, createHandleSyncPreview } from "./syncRoutes.js";
+import {
+  createGitDeliverySyncRouteGroup,
+  createHandleSyncApprove,
+  createHandleSyncExecute,
+  createHandleSyncPreview,
+} from "./syncRoutes.js";
 import type { GitDeliverySyncSeams } from "./syncExecution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  deriveTaskBranchName,
+  deriveWorkspaceId,
+} from "../task-workspace/naming.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
+const FETCH_APPROVE = "/api/git-delivery/fetch/approve";
 const FETCH_EXECUTE = "/api/git-delivery/fetch/execute";
 const PULL_PREVIEW = "/api/git-delivery/pull/preview";
+const PULL_APPROVE = "/api/git-delivery/pull/approve";
 const PULL_EXECUTE = "/api/git-delivery/pull/execute";
 
 // --- porcelain-v2 fixtures (NUL-separated) ---------------------------------
@@ -40,7 +63,9 @@ interface StatusFixture {
 function porcelain(fixture: StatusFixture = {}): string {
   const lines: string[] = [];
   lines.push(
-    fixture.detached ? "# branch.head (detached)" : `# branch.head ${fixture.branch ?? "main"}`,
+    fixture.detached
+      ? "# branch.head (detached)"
+      : `# branch.head ${fixture.branch ?? "feature/test"}`,
   );
   if (fixture.upstream !== undefined) lines.push(`# branch.upstream ${fixture.upstream}`);
   if (fixture.ahead !== undefined || fixture.behind !== undefined) {
@@ -167,6 +192,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }
@@ -176,11 +202,89 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 function syncBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schemaVersion: "1", projectId, ...overrides };
+}
+
+// A genuine `git worktree add` linkage rooted at `sourceRepo`; matches the fixture in
+// commitRoutes.test.ts / localMutationRoutes.test.ts so the sibling managed-worktree test uses the
+// same identity that the production managed-workspace resolver actually accepts (#3347).
+function buildManagedGitWorktree(
+  sourceRepo: string,
+  worktreePath: string,
+  taskBranch: string,
+): string {
+  execFileSync("git", ["init", "-q"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: sourceRepo });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
+  mkdirSync(dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {
+    cwd: sourceRepo,
+  });
+  const inspection = inspectManagedGitdirIdentity(worktreePath, sourceRepo);
+  if (inspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return inspection.identity;
+}
+
+function managedWorkspaceDeps(taskId = "task-443"): {
+  readonly instance: WorkspaceInstance;
+  readonly override: Partial<UiHandlerDeps>;
+  readonly cleanup: () => void;
+} {
+  const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-sync-managed-")));
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-sync-repo-")));
+  assertManagedRootOwned(managedRoot);
+  const repositoryId = deriveRepositoryId(repoRoot);
+  const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
+  const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  const taskBranch = deriveTaskBranchName({ taskId });
+  const gitdirIdentity = buildManagedGitWorktree(repoRoot, managedWorktreePath, taskBranch);
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId,
+    repositoryId,
+    repositoryRoot: repoRoot,
+    baseBranch: "main",
+    taskBranch,
+    managedWorktreePath,
+    gitdirIdentity,
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: "2026-06-26T00:00:00.000Z",
+    updatedAt: "2026-06-26T00:00:00.000Z",
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: workspaceId,
+  };
+  return {
+    instance,
+    override: {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: {
+        getInstance: (id: string) => (id === workspaceId ? instance : undefined),
+        provision: () => Promise.reject(new Error("not used")),
+        activate: () => Promise.reject(new Error("not used")),
+      },
+    },
+    cleanup: (): void => {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(managedRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 beforeEach(() => {
@@ -336,6 +440,86 @@ describe("fetch execute — outcomes", () => {
     expect(body.operation).toBe("fetch");
   });
 
+  it("does not fetch and records authority denial when admitted authority is replaced", async () => {
+    const scripted = scriptedRunner({ fetch: ok("") });
+    const evidence = capturingEvidenceStore();
+    const activity = captureActivityLog();
+    const baseAuthority = permittedGitDeliveryAuthority(() => projectId);
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        runner: scripted.runner,
+        now: () => 1_700_000_000_000,
+        activityLog: activity.sink,
+      },
+    });
+
+    const res = await handler(
+      {
+        ...ctxFor(FETCH_EXECUTE, syncBody()),
+        correlationId: "request-correlation-fetch-continuity",
+      },
+      deps({ gitDeliveryAuthority: authority, evidenceStore: evidence.store }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+        correlationId: "request-correlation-fetch-continuity",
+      },
+    });
+    expect(res.headers).toEqual({
+      "X-Keiko-Correlation-Id": "request-correlation-fetch-continuity",
+    });
+    expect(reads).toBe(2);
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+    expect(evidence.records()).toHaveLength(1);
+    expect(evidence.records()[0]).toMatchObject({
+      operation: "fetch",
+      outcome: "authority-denied",
+      recordedAtMs: 1_700_000_000_000,
+    });
+    expect(activity.events).toContainEqual(
+      expect.objectContaining({
+        op: "git.delivery.dispatch.no-spawn",
+        status: 403,
+        correlationId: "request-correlation-fetch-continuity",
+        extra: { completeness: "complete", loss: "none", operation: "fetch" },
+      }),
+    );
+    expect(
+      activity.events
+        .filter((event) => event.op.startsWith("git.delivery.authority."))
+        .map((event) => event.extra?.phase),
+    ).toEqual(["admission", "continuity"]);
+  });
+
+  it("does not fetch when the live branch is outside the active branch envelope", async () => {
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ branch: "release/v9" })),
+      fetch: ok(""),
+    });
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps());
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+  });
+
   it("reports auth-failed on a credential rejection", async () => {
     const body = await runFetch({
       fetch: fail("fatal: Authentication failed for 'https://x'", 128),
@@ -480,6 +664,42 @@ describe("pull execute — outcomes", () => {
     expect(body.behind).toBe(0);
   });
 
+  it("returns 403 and records authority denial when continuity authority changes", async () => {
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ upstream: "origin/main", behind: 1 })),
+      pull: ok("Updating a1b2..c3d4\nFast-forward\n"),
+    });
+    const evidence = capturingEvidenceStore();
+    const baseAuthority = permittedGitDeliveryAuthority(() => projectId);
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const handler = createHandleSyncExecute("pull", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+
+    const res = await handler(
+      ctxFor(PULL_EXECUTE, syncBody()),
+      deps({ gitDeliveryAuthority: authority, evidenceStore: evidence.store }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+    expect(evidence.records()).toHaveLength(1);
+    expect(evidence.records()[0]).toMatchObject({
+      operation: "pull",
+      outcome: "authority-denied",
+      recordedAtMs: 1_700_000_000_000,
+    });
+  });
+
   it("reports up-to-date when already up to date", async () => {
     const body = await runPull({ pull: ok("Already up to date.\n") });
     expect(body.status).toBe("up-to-date");
@@ -590,6 +810,323 @@ describe("pull execute — outcomes", () => {
   });
 });
 
+// ─── explicit approval mint and admission redemption below autonomous-delivery ───────────────────
+
+describe("sync approval mint", () => {
+  const CASES = [
+    ["governed-assist", "fetch", FETCH_APPROVE, FETCH_EXECUTE],
+    ["governed-assist", "pull", PULL_APPROVE, PULL_EXECUTE],
+    ["supervised-coding", "fetch", FETCH_APPROVE, FETCH_EXECUTE],
+    ["supervised-coding", "pull", PULL_APPROVE, PULL_EXECUTE],
+  ] as const;
+
+  it.each(CASES)(
+    "mints and redeems a one-use %s approval for %s through mounted routes",
+    async (mode, operation, approvePath, executePath) => {
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const activity = captureActivityLog();
+      const scripted = scriptedRunner({
+        status: ok(porcelain({ upstream: "origin/main" })),
+        fetch: ok(""),
+        pull: ok("Already up to date.\n"),
+      });
+      const options = {
+        execution: {
+          runner: scripted.runner,
+          now: (): number => 1_700_000_000_000,
+          approvalStore,
+          activityLog: activity.sink,
+        },
+      };
+      const routes = createGitDeliverySyncRouteGroup(options);
+      expect(routes.map((route) => route.pattern)).toContain(approvePath);
+      const approve = createHandleSyncApprove(operation, options);
+      const execute = createHandleSyncExecute(operation, options);
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
+      });
+      const approveResult = await approve(
+        { ...ctxFor(approvePath, syncBody()), correlationId: "corr-sync-approve" },
+        modeDeps,
+      );
+      expect(approveResult.status).toBe(200);
+      const issued = approveResult.body as {
+        readonly schemaVersion: "1";
+        readonly approval: { readonly approvalId: string; readonly approvalToken: string };
+      };
+      const executeResult = await execute(
+        ctxFor(executePath, syncBody({ approval: issued.approval })),
+        modeDeps,
+      );
+      expect(executeResult.status).toBe(200);
+      expect(scripted.calls()).toContain(operation);
+
+      const mintEvents = activity.events.filter(
+        (event) => event.op === "git.delivery.sync.approval.minted",
+      );
+      expect(mintEvents).toHaveLength(1);
+      expect(mintEvents[0]).toMatchObject({
+        correlationId: "corr-sync-approve",
+        status: 200,
+        extra: { operation },
+      });
+      expect(JSON.stringify(mintEvents)).not.toContain("origin");
+
+      const replay = await execute(
+        ctxFor(executePath, syncBody({ approval: issued.approval })),
+        modeDeps,
+      );
+      expect(replay.status).toBe(403);
+      expect(scripted.calls().filter((call) => call === operation)).toHaveLength(1);
+    },
+  );
+
+  it("does not mint when run-bound authority rejects before approval", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const issue = vi.spyOn(approvalStore, "issue");
+    const activity = captureActivityLog();
+    const approve = createHandleSyncApprove("fetch", {
+      execution: {
+        approvalStore,
+        activityLog: activity.sink,
+        now: () => 1_700_000_000_000,
+      },
+    });
+    const result = await approve(
+      { ...ctxFor(FETCH_APPROVE, syncBody()), correlationId: "corr-sync-denied" },
+      deps({ gitDeliveryAuthority: { current: () => undefined } }),
+    );
+
+    expect(result.status).toBe(403);
+    expect(issue).not.toHaveBeenCalled();
+    const denied = activity.events.filter((event) => event.op === "git.delivery.authority.denied");
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({
+      op: "git.delivery.authority.denied",
+      correlationId: "corr-sync-denied",
+      extra: { operation: "fetch" },
+    });
+    expect(activity.events.some((event) => event.op === "git.delivery.sync.approval.minted")).toBe(
+      false,
+    );
+  });
+});
+
+// ─── admission redemption below autonomous-delivery (final-audit F2 repair, #3390) ────────────────
+//
+// Before this fix, fetch/pull below `autonomous-delivery` were the one gap `deliveryApprovalDeferred`
+// could not close: unlike push/pr/merge/commit, they have no `GitDeliveryActionKind` / kernel policy
+// pack of their own to defer approval enforcement to (syncExecution.ts's header comment), so the
+// coarse admission gate's "approval-required" disposition was permanently unredeemable for them.
+// Redeemed the SAME way `localMutationRoutes.ts` redeems local mutations: a non-consuming peek
+// against a claim bound to `{projectId, operation, command}` (no run identity), minted through the
+// guarded `/approve` routes pinned above. FAILING BEFORE THE FIX: every case in the first `it.each` below returned
+// 403 GIT_DELIVERY_AUTHORITY_DENIED at `gitDeliveryAuthorityGate`, never reaching `runSyncExecute`
+// — reproduced by temporarily dropping this describe's `approval`/`approvalStore`/`approvalBinding`
+// wiring from `syncAuthorityGate` and rerunning (see the item's report for the exact command).
+
+describe("sync execute — admission redemption below autonomous-delivery", () => {
+  const MODES = ["governed-assist", "supervised-coding"] as const;
+  const OPERATIONS = ["fetch", "pull"] as const;
+  const CASES = MODES.flatMap((mode) => OPERATIONS.map((operation) => [mode, operation] as const));
+
+  function pathFor(operation: (typeof OPERATIONS)[number]): string {
+    return operation === "fetch" ? FETCH_EXECUTE : PULL_EXECUTE;
+  }
+
+  it.each(CASES)("mints and consumes a %s approval end to end at %s", async (mode, operation) => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const issued = approvalStore.issue({
+      binding: { projectId, operation, command: { kind: operation, remote: undefined } },
+      approvedByUserId: "local-operator",
+      nowMs: 1_700_000_000_000,
+    });
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ upstream: "origin/main" })),
+      fetch: ok(""),
+      pull: ok("Already up to date.\n"),
+    });
+    const handler = createHandleSyncExecute(operation, {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000, approvalStore },
+    });
+    const modeDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        mode,
+      ),
+    });
+    const res = await handler(
+      ctxFor(pathFor(operation), syncBody({ approval: issued.approval })),
+      modeDeps,
+    );
+    expect(res.status).toBe(200);
+    expect((res.body as GitSyncExecuteResponse).operation).toBe(operation);
+    expect(scripted.calls()).toContain(operation);
+  });
+
+  // Reviewer thread (PR #3506): pin that the userInitiated bypass in syncRoutes.ts's
+  // requiresRunAuthority (line 521) does NOT extend to managed task worktrees — the code path
+  // matches the one in localMutationRoutes.ts:285 and commitRoutes.ts, whose route tests already
+  // pin this ("keeps managed task worktrees bound to their accepted run even for user-initiated
+  // local mutations" and "keeps managed task worktrees bound to run authority for user-initiated
+  // commits"). syncRoutes.test.ts only had the happy-path admission test before this.
+  it("keeps managed task worktrees bound to their accepted run even for user-initiated syncs", async () => {
+    const managed = managedWorkspaceDeps();
+    const scripted = scriptedRunner({});
+    try {
+      const handler = createHandleSyncExecute("fetch", {
+        execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+      });
+      const modeDeps = deps({
+        ...managed.override,
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          "autonomous-delivery",
+        ),
+      });
+
+      const res = await handler(
+        ctxFor(
+          FETCH_EXECUTE,
+          syncBody({
+            projectId: managed.instance.managedWorktreePath,
+            remote: "origin",
+            userInitiated: true,
+          }),
+        ),
+        modeDeps,
+      );
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+      expect(scripted.calls()).toEqual([]);
+    } finally {
+      managed.cleanup();
+    }
+  });
+
+  it("admits an explicit local-user fetch without minting a run approval", async () => {
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ upstream: "origin/main" })),
+      fetch: ok(""),
+    });
+    const activity = captureActivityLog();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        runner: scripted.runner,
+        now: () => 1_700_000_000_000,
+        activityLog: activity.sink,
+      },
+    });
+    const modeDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+
+    const res = await handler(
+      ctxFor(FETCH_EXECUTE, syncBody({ remote: "origin", userInitiated: true })),
+      modeDeps,
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as GitSyncExecuteResponse).operation).toBe("fetch");
+    expect(scripted.calls()).toContain("fetch");
+    expect(activity.events).toContainEqual(
+      expect.objectContaining({
+        op: "git.delivery.authority.admitted",
+        status: 200,
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "fetch",
+          phase: "admission",
+          source: "local-user",
+        },
+      }),
+    );
+  });
+
+  it.each(CASES)(
+    "still returns approval-required (never mode-denied) at %s for %s when execute carries no approval",
+    async (mode, operation) => {
+      const scripted = scriptedRunner({});
+      const activity = captureActivityLog();
+      const handler = createHandleSyncExecute(operation, {
+        execution: {
+          runner: scripted.runner,
+          now: () => 1_700_000_000_000,
+          activityLog: activity.sink,
+        },
+      });
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
+      });
+      const res = await handler(ctxFor(pathFor(operation), syncBody()), modeDeps);
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+      expect(scripted.calls()).toEqual([]);
+      // Distinguishes this from a hard, non-redeemable "mode-denied" — the activity log line is the
+      // only place the two 403s (identical response body) differ.
+      const denials = activity.events.filter(
+        (event) => event.op === "git.delivery.authority.denied",
+      );
+      expect(denials).toHaveLength(1);
+      expect(denials[0]).toMatchObject({ extra: { reason: "approval-required", operation } });
+    },
+  );
+
+  it("does not let a claim minted for fetch redeem a pull (bound to the exact operation)", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const issued = approvalStore.issue({
+      binding: { projectId, operation: "fetch", command: { kind: "fetch", remote: undefined } },
+      approvedByUserId: "local-operator",
+      nowMs: 1_700_000_000_000,
+    });
+    const scripted = scriptedRunner({});
+    const handler = createHandleSyncExecute("pull", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000, approvalStore },
+    });
+    const modeDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+    const res = await handler(
+      ctxFor(PULL_EXECUTE, syncBody({ approval: issued.approval })),
+      modeDeps,
+    );
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(scripted.calls()).toEqual([]);
+  });
+
+  it("autonomous-delivery still executes without any approval (unaffected by the redemption wiring)", async () => {
+    const scripted = scriptedRunner({ fetch: ok("") });
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps());
+    expect(res.status).toBe(200);
+    expect((res.body as GitSyncExecuteResponse).status).toBe("succeeded");
+    expect(scripted.calls()).toContain("fetch");
+  });
+});
+
 // ─── request hardening ────────────────────────────────────────────────────────
 
 describe("request hardening", () => {
@@ -674,5 +1211,139 @@ describe("evidence — content-free recording", () => {
     expect(records).toHaveLength(1);
     expect(records[0]?.outcome).toBe("auth-failed");
     expect(records[0]?.operation).toBe("pull");
+  });
+});
+
+describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
+  // A fetch/pull answers every failure with a content-free typed code (GIT_DELIVERY_SYNC_*), by
+  // design. Before this wiring that meant an auth failure, an unreachable remote, a
+  // non-fast-forward or a spawn-boundary refusal on the sync path left NOTHING in `server.log` —
+  // the operator's whole record of a failed sync was one `http`/`request` line and a status code.
+
+  function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
+    return { ...ctxFor(path, body), correlationId };
+  }
+
+  it("reports a failed sync read under the request's correlation id", async () => {
+    const activity = captureActivityLog();
+    const handler = createHandleSyncPreview("fetch", {
+      execution: {
+        ...seams({ status: fail("fatal: not a git repository", 128) }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_PREVIEW, syncBody(), "corr-sync-000001"), deps());
+
+    const failures = activity.events.filter((event) => event.op === "git.process.failed");
+    expect(failures).not.toHaveLength(0);
+    expect(failures[0]).toMatchObject({
+      category: "diagnostic",
+      correlationId: "corr-sync-000001",
+      errorKind: "unavailable",
+      extra: { subcommand: "status", failureKind: "not-a-repository" },
+    });
+    // The response stays content-free; the log is where the reason lives.
+    expect(JSON.stringify(failures[0])).not.toContain("not a git repository");
+  });
+
+  it("observes the NETWORK runner, not only the local reads", async () => {
+    // normalizeSeams wraps two runners: the config-isolated local reads and the credential-capable
+    // fetch/pull command. Wrapping only the first would leave the actual remote dispatch — the one
+    // that can fail on auth, host keys or a non-fast-forward — unobserved, and a preview-only test
+    // could not tell the difference.
+    const activity = captureActivityLog();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        ...seams({
+          status: ok(porcelain({ ahead: 0, behind: 0, upstream: "origin/main" })),
+          remote: ok("origin\n"),
+          fetch: fail("fatal: Authentication failed for 'https://example.invalid/r.git'", 128),
+        }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_EXECUTE, syncBody(), "corr-sync-network-1"), deps());
+
+    const failures = activity.events.filter((event) => event.op === "git.process.failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      correlationId: "corr-sync-network-1",
+      extra: { subcommand: "fetch" },
+    });
+    // The remote URL and git's auth message are in the runner's own output; neither may appear.
+    const serialized = JSON.stringify(failures[0]);
+    expect(serialized).not.toContain("example.invalid");
+    expect(serialized).not.toContain("Authentication failed");
+  });
+
+  it.each([
+    {
+      label: "a non-fast-forward pull",
+      stderr: "fatal: Not possible to fast-forward, aborting.",
+      kind: "not-fast-forward",
+    },
+    {
+      label: "a dirty worktree",
+      stderr: "error: Your local changes would be overwritten by merge.",
+      kind: "dirty-worktree",
+    },
+    {
+      label: "a missing upstream",
+      stderr: "There is no tracking information for the current branch.",
+      kind: "no-upstream",
+    },
+  ])(
+    "names $label in the log with the same outcome the response reports",
+    async ({ stderr, kind }) => {
+      // `classifyGitRemoteFailure` has no member for any of these — they are Keiko-side sync
+      // vocabulary derived from git's stderr, not remote-facing phrases — so the observer would
+      // report the generic remote kind while the response and the evidence ledger already named the
+      // specific outcome. The call site threads its OWN classifier through `classifyFailure` so all
+      // three artifacts agree about one event.
+      const activity = captureActivityLog();
+      const handler = createHandleSyncExecute("pull", {
+        execution: {
+          ...seams({
+            status: ok(porcelain({ ahead: 0, behind: 2, upstream: "origin/main" })),
+            remote: ok("origin\n"),
+            pull: fail(stderr, 1),
+          }),
+          activityLog: activity.sink,
+        },
+      });
+
+      await handler(ctxWithCorrelation(PULL_EXECUTE, syncBody(), "corr-sync-pullkind"), deps());
+
+      const failures = activity.events.filter((event) => event.op === "git.process.failed");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({
+        correlationId: "corr-sync-pullkind",
+        errorKind: "internal",
+        extra: { failureKind: kind },
+      });
+      // Still body-free. The closed-vocabulary KIND (`not-fast-forward`) is the point of the line;
+      // what must never appear is git's own prose, which is what the classifier read to derive it.
+      const serialized = JSON.stringify(failures[0]);
+      expect(serialized).not.toContain("aborting");
+      expect(serialized).not.toContain("would be overwritten");
+      expect(serialized).not.toContain("tracking information");
+      expect(serialized).not.toContain("Your local changes");
+    },
+  );
+
+  it("threads the correlation id on the execute route too, not only preview", async () => {
+    const activity = captureActivityLog();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        ...seams({ status: fail("fatal: not a git repository", 128) }),
+        activityLog: activity.sink,
+      },
+    });
+
+    await handler(ctxWithCorrelation(FETCH_EXECUTE, syncBody(), "corr-sync-000002"), deps());
+
+    expect(activity.events.map((event) => event.correlationId)).toContain("corr-sync-000002");
   });
 });

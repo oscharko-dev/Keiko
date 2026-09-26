@@ -44,6 +44,13 @@ interface ActiveVectorSpaceRow {
   readonly vector_metric: string;
 }
 
+// PR-review follow-up (Codex thread 3771600800): the ON CONFLICT branch computes the new
+// created_at from BOTH the caller's nowMs (excluded.created_at) and the row's existing
+// value (memory_embeddings.created_at + 1) atomically inside SQLite. Two concurrent
+// connections each running their own autocommit UPSERT cannot both land the same
+// created_at, because the later commit's UPDATE reads the earlier commit's persisted
+// created_at (SQLite serializes writers via WAL). Removes the SELECT-then-UPSERT race
+// where a stale-read revision let --force snapshot precondition accept a concurrent update.
 const UPSERT_SQL = `
 INSERT INTO memory_embeddings (
   memory_id, provider, model_id, model_revision, vector_dimensions,
@@ -56,7 +63,7 @@ ON CONFLICT(memory_id) DO UPDATE SET
   vector_dimensions = excluded.vector_dimensions,
   vector_metric = excluded.vector_metric,
   vector = excluded.vector,
-  created_at = excluded.created_at
+  created_at = MAX(excluded.created_at, memory_embeddings.created_at + 1)
 `;
 
 const SELECT_SQL = "SELECT * FROM memory_embeddings WHERE memory_id = ?";
@@ -141,6 +148,9 @@ export function upsertEmbeddingRow(
   // The vector is memory CONTENT (ADR-0035), so the packed LE bytes are sealed before they touch
   // the BLOB column. vector_dimensions / vector_metric stay cleartext for retrieval-side dispatch.
   const bytes = cipher.sealBytes(encodeVectorLE(embedding.vector));
+  // The UPSERT SQL itself enforces created_at > previous (Codex thread 3771600800) — no
+  // second SELECT is needed. Two concurrent connections each running their own autocommit
+  // UPSERT still see monotonic per-row created_at because SQLite serialises writers.
   cachedPrepare(db, UPSERT_SQL).run(
     memoryId,
     embedding.provider,

@@ -25,8 +25,9 @@ LOG_FILE="$STATE_DIR/ui.log"
 LOOPBACK_ORIGIN="http://${HOST}:${PORT}"
 LOOPBACK_DISPLAY="${HOST}:${PORT} (loopback HTTP)"
 HEALTH_URL="${LOOPBACK_ORIGIN}/api/health"
-# Health-poll and graceful-stop budgets in whole seconds, overridable for slow
-# environments. The poll/stop loops tick twice a second, so iterations = seconds x 2.
+# Health-poll and graceful-stop budgets in whole seconds, overridable for slow environments.
+# The health poll (cmd_start) checks wall-clock elapsed time against this budget directly; the
+# graceful-stop wait (cmd_stop) ticks twice a second, so its iterations = seconds x 2.
 START_TIMEOUT_SECS="${KEIKO_START_TIMEOUT_SECS:-20}"
 STOP_TIMEOUT_SECS="${KEIKO_STOP_TIMEOUT_SECS:-10}"
 
@@ -83,7 +84,12 @@ is_keiko_ui() {
 # Clears a stale/invalid pid file as a side effect.
 running_pid() {
   [[ -f "$PID_FILE" ]] || return 1
-  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  local pid
+  if ! IFS= read -r pid < "$PID_FILE"; then
+    return 1
+  fi
+  pid="${pid%$'\r'}"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
   if is_keiko_ui "$pid"; then
     echo "$pid"
     return 0
@@ -130,23 +136,34 @@ cmd_start() {
   pid=$!
   echo "$pid" >"$PID_FILE"
 
-  # Poll the health endpoint until the server answers, it dies, or we time out.
-  start_iters=$((START_TIMEOUT_SECS * 2))
-  i=0
-  while [[ "$i" -lt "$start_iters" ]]; do
+  # Poll the health endpoint until the server answers, it dies, or we time out. This is a
+  # wall-clock deadline, computed once, not an iteration count: bounding each curl attempt
+  # (--max-time below) bounds that one attempt, but it does NOT bound the total when attempts
+  # are chained in a loop — an iteration count of START_TIMEOUT_SECS*2 at a 0.5s sleep assumes
+  # every attempt returns instantly, and a curl that legitimately takes up to its own 2s budget
+  # on every iteration inflates the real wait to as much as 5x START_TIMEOUT_SECS. Checking
+  # elapsed wall-clock time instead holds the budget regardless of how long individual attempts
+  # take.
+  start_deadline=$((SECONDS + START_TIMEOUT_SECS))
+  while [[ "$SECONDS" -lt "$start_deadline" ]]; do
     if ! kill -0 "$pid" 2>/dev/null; then
       echo "Keiko UI failed to start. Last log lines:" >&2
       tail -n 20 "$LOG_FILE" >&2 2>/dev/null || true
       rm -f "$PID_FILE"
       return 1
     fi
+    # --max-time still bounds each individual attempt: if the port is held by something that
+    # accepts the connection but never answers (e.g. another process won the ephemeral-port race
+    # against this pid), one hung attempt must not consume the whole remaining budget on its own.
+    # It can still run up to 2s past start_deadline in the worst case (an attempt that starts an
+    # instant before the deadline), but that overshoot is now a fixed ~2.5s regardless of
+    # START_TIMEOUT_SECS, not a multiple of it.
     # S5332: HEALTH_URL derives only from the strict loopback allowlist validated before startup.
-    if curl -fsS "$HEALTH_URL" 2>/dev/null | grep -q '"status":"ok"'; then # NOSONAR
+    if curl -fsS "$HEALTH_URL" --max-time 2 2>/dev/null | grep -q '"status":"ok"'; then # NOSONAR
       echo "Keiko UI running on ${LOOPBACK_DISPLAY} (pid ${pid})."
       echo "Logs: ${LOG_FILE}"
       return 0
     fi
-    i=$((i + 1))
     sleep 0.5
   done
 

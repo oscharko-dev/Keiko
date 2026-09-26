@@ -3,6 +3,8 @@
 // capability of its own. keiko-server is the sole composition root: it owns the concrete vault
 // instance, the metadata store, and the gatewayFetch-backed AtlassianHttpPort adapter.
 
+export { KEIKO_CONNECTORS_VERSION } from "./version.js";
+
 export {
   ATLASSIAN_ACCOUNT_EMAIL_MAX_CHARS,
   ATLASSIAN_API_TOKEN_MAX_CHARS,

@@ -3,6 +3,11 @@
 // SSE framing mirrors /api/browser/*/events.
 
 import type { ServerResponse, IncomingMessage } from "node:http";
+import {
+  sseBackpressureReporter,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import {
   buildTerminalPolicySummary,
@@ -12,6 +17,8 @@ import {
   type TerminalExecutionManager,
 } from "./terminal.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { requiresConfiguredManagedWorkspaceAuthority } from "./task-workspace/workspace-root-access.js";
+import { recordWorkspaceRootDenied } from "./workspace-root-denial-log.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
 import {
@@ -153,6 +160,32 @@ export function handleTerminalPolicy(_ctx: RouteContext, _deps: UiHandlerDeps): 
   return { status: 200, body: buildTerminalPolicySummary() };
 }
 
+// #3347 owner P2 — `resolveWorkspaceRootAccess` is OPTIONAL on the manager interface, so a
+// composition that lacks it used to leave `access` undefined and let listDirectories fall back to
+// plain `nodeWorkspaceFs`: a registered project under the configured managed task-workspace root
+// could then be enumerated with no lifecycle or gitdir proof behind it. A managed-classified root
+// now fails CLOSED here — before the store lookup and before any filesystem read — and leaves a
+// correlated, body-free record behind, in the same op/category/decision vocabulary the managed-root
+// prover itself emits. `projectId` IS the registered root path on this surface (the store matches
+// projects by path), and the classifier is lexical for a candidate under the managed root.
+function assertManagedRootAuthorityAvailable(
+  deps: UiHandlerDeps,
+  projectId: string,
+  correlationId: string | undefined,
+): void {
+  if (deps.terminal?.resolveWorkspaceRootAccess !== undefined) return;
+  if (!requiresConfiguredManagedWorkspaceAuthority(deps, projectId)) return;
+  recordWorkspaceRootDenied(
+    {
+      reason: "managed-authority-unavailable",
+      failureKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
+      errorKind: "authority-denied",
+    },
+    { correlationId },
+  );
+  throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+}
+
 export async function handleTerminalDirectories(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -163,7 +196,15 @@ export async function handleTerminalDirectories(
       throw new TerminalToolError("BAD_REQUEST", "Query parameter 'projectId' is required.");
     }
     const requestedPath = ctx.url.searchParams.get("path") ?? undefined;
-    const listing = await listDirectories(deps.store, projectId, requestedPath);
+    assertManagedRootAuthorityAvailable(deps, projectId, ctx.correlationId);
+    const access = deps.terminal?.resolveWorkspaceRootAccess?.(projectId, ctx.correlationId);
+    const listing = await listDirectories(
+      deps.store,
+      projectId,
+      requestedPath,
+      ctx.correlationId,
+      access,
+    );
     return { status: 200, body: listing };
   });
 }
@@ -189,6 +230,7 @@ export async function handleCreateTerminalExecution(
       ...(cwd === undefined ? {} : { cwd }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
       ...(requestId === undefined ? {} : { requestId }),
+      correlationId: ctx.correlationId,
     };
     const raw = await guard.execute(input);
     // A4 (M3) — Layer-2 redaction on the synchronous POST response body. runCommand already
@@ -222,28 +264,65 @@ export function handleDeleteTerminalExecution(ctx: RouteContext, deps: UiHandler
 export function handleTerminalEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireTerminal(deps);
   if (isRouteResult(guard)) return guard;
-  openTerminalSseStream(ctx.res, guard, deps.redactor);
+  // Threads the request's own correlation id (ADR-0173 D5 / g12) so a later backpressure kill
+  // joins back to the request that opened this stream instead of a disconnected mint.
+  openTerminalSseStream(
+    ctx.res,
+    guard,
+    deps.redactor,
+    sseBackpressureReporter(deps, "terminal", ctx.correlationId),
+    ctx.correlationId,
+  );
   ctx.req.on("close", () => {
     ctx.res.end();
   });
   return STREAMING;
 }
 
-function openTerminalSseStream(
+// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
+// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
+// because the client is not draining, before the socket is destroyed.
+export function openTerminalSseStream(
   res: ServerResponse,
   manager: TerminalExecutionManager,
   redactor: UiHandlerDeps["redactor"],
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
+  // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
+  // which unsubscribes from the manager so no further frames are produced for a dead socket. The
+  // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
+  // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
+  // (hence no abort) can occur before `unsubscribe` is assigned.
+  const controller = new AbortController();
+  // correlationId (#2902 w5-sse-counters) is threaded to every write path below so whichever one
+  // runs first attaches it: sse-write.ts's per-stream state is set-once-wins. The heartbeat's own
+  // write is deferred to its interval timer, so the ready frame just below is the actual first
+  // write in practice — it also carries correlationId for that reason.
+  startSseHeartbeat(res, undefined, undefined, {
+    controller,
+    ...(onBackpressure === undefined ? {} : { onBackpressure }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
   let seq = 0;
   const unsubscribe = manager.subscribe((event) => {
     seq += 1;
-    writeTerminalEvent(res, event, seq, redactor);
+    writeTerminalEvent(res, event, seq, redactor, controller, onBackpressure);
   });
-  res.write(readyMessage());
-  res.on("close", () => {
+  let unsubscribed = false;
+  const stop = (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
     unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
+  // The ready frame goes through the same protective path: a client that is already not draining
+  // must abort and unsubscribe here too, rather than leaving the subscription live until some
+  // later event happens to trip writeOrDestroy.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
+  res.on("close", () => {
+    stop();
   });
 }
 
@@ -252,14 +331,14 @@ function writeTerminalEvent(
   event: TerminalEventEnvelope,
   seq: number,
   redactor: UiHandlerDeps["redactor"],
+  controller: AbortController,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
   // the per-connection `id:` cursor differs between them.
   const data = redactedEventJson(redactor, event);
   const frame = `id: ${String(seq)}\nevent: terminal:${event.kind}\ndata: ${data}\n\n`;
-  if (!res.write(frame)) {
-    res.destroy();
-  }
+  writeOrDestroy(res, frame, controller, onBackpressure);
 }
 
 // Re-export for the unused-import lint: callers can map a terminal error code → HTTP status if

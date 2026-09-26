@@ -18,9 +18,11 @@
 
 import {
   MEMORY_FORGET_REASON_USER_REQUEST,
+  checkStatusTransition,
   type MemoryForget,
   type MemoryRecord,
   type MemoryScope,
+  scopeCoordinateKey,
   validateMemoryForget,
 } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -34,29 +36,9 @@ import type {
 
 // ─── Scope coordinate equality ────────────────────────────────────────────────
 // Pure: two scopes match when their discriminator AND coordinate field match exactly.
-// Implemented via a canonical "kind:coordinate" string projection to collapse the
-// per-kind branching (memory pattern from issue #205 scopeCoordinateKey).
-function unsupportedScope(_scope: never): never {
-  throw new GovernanceError("unsupported-selector", "unknown MemoryScope kind");
-}
-
-function scopeCoordinateKey(scope: MemoryScope): string {
-  switch (scope.kind) {
-    case "user":
-      return `user:${scope.userId}`;
-    case "workspace":
-      return `workspace:${scope.workspaceId}`;
-    case "project":
-      return `project:${scope.projectId}`;
-    case "workflow":
-      return `workflow:${scope.workflowDefinitionId}`;
-    case "global":
-      return "global:";
-    default:
-      return unsupportedScope(scope);
-  }
-}
-
+// Delegates to the shared scopeCoordinateKey in @oscharko-dev/keiko-contracts/memory
+// (#2906 KEIKO-0546 — one canonical projection for governance + consolidation +
+// retrieval-validation callers).
 function scopeEquals(a: MemoryScope, b: MemoryScope): boolean {
   return scopeCoordinateKey(a) === scopeCoordinateKey(b);
 }
@@ -153,11 +135,36 @@ export function selectMemoriesForForget(
 // ─── Envelope construction ────────────────────────────────────────────────────
 const DEFAULT_FORGET_REASON = MEMORY_FORGET_REASON_USER_REQUEST;
 
+function assertForgettable(record: MemoryRecord): void {
+  const check = checkStatusTransition(record.status, "forgotten");
+  if (check.ok) return;
+  throw new GovernanceError(
+    "illegal-status-transition",
+    check.reason ?? `illegal transition: ${record.status} -> forgotten`,
+    [`memoryId: ${record.id}`, `from: ${record.status}`, "to: forgotten"],
+  );
+}
+
+function assertArchivedForgetAcknowledged(
+  record: MemoryRecord,
+  options: BuildForgetOperationsOptions,
+): void {
+  if (record.status === "archived" && !options.acknowledgedArchivedMemoryIds?.includes(record.id)) {
+    throw new GovernanceError(
+      "destructive-acknowledgement-required",
+      "archived memory requires an explicit retention acknowledgement",
+      [`memoryId: ${record.id}`],
+    );
+  }
+}
+
 function buildForgetEnvelope(
   record: MemoryRecord,
   context: GovernanceContext,
   options: BuildForgetOperationsOptions,
 ): MemoryForget {
+  assertForgettable(record);
+  assertArchivedForgetAcknowledged(record, options);
   const env: MemoryForget = {
     schemaVersion: "1",
     memoryId: record.id,

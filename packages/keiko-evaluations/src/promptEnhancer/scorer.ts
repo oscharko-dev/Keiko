@@ -14,6 +14,8 @@
 // vocabulary labels, numeric scores) — they never echo the untrusted draft (ADR-0044 §5).
 
 import type { PromptCriticDimension } from "@oscharko-dev/keiko-contracts";
+import { BASELINE_LEAST_PRIVILEGE } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety";
+import { PromptEnhancer } from "@oscharko-dev/keiko-model-gateway";
 import {
   PROMPT_QUALITY_DIMENSIONS,
   type EnhancementObservation,
@@ -28,11 +30,23 @@ import { meetsFiniteCeiling, meetsFiniteFloor } from "../quality-helpers.js";
 const DEFAULT_MIN_CLARITY = 0.85;
 const DEFAULT_MIN_COMPLETENESS = 0.2;
 const DEFAULT_MIN_TOKEN_EFFICIENCY = 0.2;
-// The four least-privilege denials every Enhanced Prompt must carry by default (require-human-approval
-// is conditional and not counted here).
-const BASELINE_LEAST_PRIVILEGE_DENIALS = 4;
+// The least-privilege denial count every Enhanced Prompt must carry by default. Derived from the
+// producer (`BASELINE_LEAST_PRIVILEGE` in keiko-contracts) so a change to the baseline posture cannot
+// silently leave the scorer's threshold stale — the #2643 fixture-parity rule for constants.
+// `require-human-approval` is conditional and not counted here (it is not in the baseline set).
+const BASELINE_LEAST_PRIVILEGE_DENIALS = BASELINE_LEAST_PRIVILEGE.length;
 // The grounded-grounding-rule count the deterministic critic also treats as the readiness threshold.
-const GROUNDED_MIN_RULES = 3;
+// Derived from the producer (`GROUNDING_READINESS_MIN_RULES` in keiko-model-gateway's critic) so the
+// scorer's structural gate matches the critic's continuous grading — same #2643 discipline.
+const GROUNDED_MIN_RULES = PromptEnhancer.GROUNDING_READINESS_MIN_RULES;
+// KEIKO-0770: the "output controllability" quality criterion is now anchored on a single shared
+// constant exported by keiko-model-gateway's promptEnhancer critic. The generator writes
+// OUTPUT_CONTROLLABILITY_CRITERION verbatim; the critic scores on the prefix; the evaluator
+// (below) matches on the same prefix — so a wording change in the producer propagates to both
+// checks in one edit, with no drift. Follows the same #2643 fixture-parity discipline as
+// GROUNDED_MIN_RULES above.
+const OUTPUT_CONTROLLABILITY_CRITERION_PREFIX =
+  PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX;
 
 interface Check {
   readonly label: string;
@@ -207,7 +221,9 @@ function scoreFormatAdherence(
       { label: "format hints present", ok: s.hints.length > 0 },
       {
         label: "output-controllability criterion present",
-        ok: obs.prompt.qualityCriteria.some((c) => c.startsWith("Output controllability")),
+        ok: obs.prompt.qualityCriteria.some((c) =>
+          c.startsWith(OUTPUT_CONTROLLABILITY_CRITERION_PREFIX),
+        ),
       },
     );
   }

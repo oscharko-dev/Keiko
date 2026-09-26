@@ -1,21 +1,44 @@
 name: CodeQL
 
+# KEIKO-0955: the branch lists below must stay identical to ci.yml's. Long-lived integration
+# branches were missing, so pushes to them and pull requests targeting them were never covered.
+# scripts/check-workflow-branch-parity.mjs fails the gate if the three lists drift apart again.
 on:
   push:
     branches:
       - dev
+      - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
       - feat/keiko-editor
       - feat/keiko-agent-native-editor-foundation-and-runtime
       - feat/prompt-enhancer-1307
       - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
+      - feat/epic-memoria-viva-2538
+      - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   pull_request:
     branches:
       - dev
+      - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
       - feat/keiko-editor
       - feat/keiko-agent-native-editor-foundation-and-runtime
       - feat/prompt-enhancer-1307
       - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
+      - feat/epic-memoria-viva-2538
+      - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   # ADR-0139 D7: code scanning also validates merge-queue groups.
   merge_group:
@@ -30,6 +53,12 @@ jobs:
   Analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    # ADR-0135 D4: a required workflow carries a repository-owned timeout appropriate to the
+    # pull-request feedback loop. The `actions` matrix arm completes in ~1 min; the
+    # `javascript-typescript` matrix arm reaches ~20 min on this monorepo when improved incremental
+    # analysis has to fall back to a full analysis (run #33043921592 truncated at 20m). 60 bounds a
+    # hung download or stalled query without truncating a healthy full JS/TS analysis.
+    timeout-minutes: 60
     permissions:
       actions: read
       contents: read
@@ -43,11 +72,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           languages: ${{ matrix.language }}
           build-mode: none
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           category: "/language:${{ matrix.language }}"

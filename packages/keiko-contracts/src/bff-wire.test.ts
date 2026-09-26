@@ -5,29 +5,39 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
   canonicalDesktopChatTurnReferenceSeed,
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   classifyAttachmentMime,
+  GIT_CHANGE_BLOCKED_REASONS,
   DEFAULT_GROUNDING_LIMITS,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
   DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
   GROUNDED_RERANKER_FAILURE_KINDS,
   eventIsDesktopChatStreamTerminal,
   GROUNDING_LIMIT_CEILINGS,
+  isExpandableDirectory,
   isGroundedRerankerFailureKind,
   isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MIME_BYTES,
   MAX_CONNECTED_SOURCES,
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
+  MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
   normalizeAttachmentMime,
+  parseUpdateGitHubIssueReaderAuthorizationWire,
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
+  UNKNOWN_REPOSITORY_ERROR_CODE,
   type Chat,
+  type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
+  type GitChangeBlockedReason,
   type DesktopChatSendRequestWire,
   type DesktopChatStreamTerminalEvent,
+  type FilesTreeEntry,
   type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
   type GroundedAnswerContextSummary,
@@ -204,6 +214,62 @@ describe("parseUpdateMemoryAutonomyPolicyWire", () => {
     { requestedMode: "governed-assist", expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
   ])("rejects malformed policy update payload %#", (value) => {
     expect(parseUpdateMemoryAutonomyPolicyWire(value)).toBeUndefined();
+  });
+});
+
+describe("parseUpdateGitHubIssueReaderAuthorizationWire", () => {
+  const update = {
+    repositoryPath: "/workspace/keiko",
+    authorized: true,
+    expectedRevision: 0,
+  };
+
+  it("accepts a well-formed grant at revision zero", () => {
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(update)).toEqual(update);
+  });
+
+  it("accepts a revocation at the maximum safe revision", () => {
+    const revocation = { ...update, authorized: false, expectedRevision: Number.MAX_SAFE_INTEGER };
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(revocation)).toEqual(revocation);
+  });
+
+  it("pins both ends of the repository path bound", () => {
+    const longest = "/".padEnd(MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS, "a");
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: longest }),
+    ).toEqual({ ...update, repositoryPath: longest });
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: `${longest}a` }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a repository path containing a NUL byte", () => {
+    expect(
+      parseUpdateGitHubIssueReaderAuthorizationWire({ ...update, repositoryPath: "/a\0/b" }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {},
+    undefined,
+    null,
+    [],
+    "/workspace/keiko",
+    { ...update, extra: true },
+    { authorized: true, expectedRevision: 0 },
+    { repositoryPath: "/workspace/keiko", expectedRevision: 0 },
+    { repositoryPath: "/workspace/keiko", authorized: true },
+    { ...update, repositoryPath: "" },
+    { ...update, repositoryPath: 7 },
+    { ...update, repositoryPath: null },
+    { ...update, authorized: "true" },
+    { ...update, authorized: 1 },
+    { ...update, expectedRevision: "0" },
+    { ...update, expectedRevision: -1 },
+    { ...update, expectedRevision: 0.5 },
+    { ...update, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+  ])("rejects malformed authorization update payload %#", (value) => {
+    expect(parseUpdateGitHubIssueReaderAuthorizationWire(value)).toBeUndefined();
   });
 });
 
@@ -723,6 +789,109 @@ describe("local-knowledge multi-source contract (#189)", () => {
   });
 });
 
+// Issue #3400 (epic #3384) — the THIRD, sibling Git-change Chat scope list (contract corrections
+// 2, 3 and 6). No legacy single-source field: this scope kind was never overloaded onto an
+// earlier shape, unlike connectedScope/localKnowledgeScope.
+describe("git-change Chat scope contract (#3400)", () => {
+  function gitChangeScope(patch: Partial<ChatGitChangeScope> = {}): ChatGitChangeScope {
+    return {
+      kind: "git-change",
+      relationshipId: "rel-1",
+      remoteDigest: "d".repeat(64),
+      comparisonLabel: "main...feature/x",
+      baseRef: "main",
+      headRef: "feature/x",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      mergeBaseSha: "c".repeat(40),
+      snapshotDigest: "e".repeat(64),
+      fileCount: 3,
+      totalFiles: 3,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: 10,
+      ...patch,
+    };
+  }
+
+  it("pins the frozen 6-member description-status vocabulary (contract correction 3)", () => {
+    expect([...CHAT_GIT_CHANGE_DESCRIPTION_STATUSES]).toEqual([
+      "current",
+      "stale",
+      "partial",
+      "fallback",
+      "blocked",
+      "failed",
+    ]);
+  });
+
+  it("is addressable as a third, sibling list on Chat and UpdateChatPatch", () => {
+    const base = {
+      id: "c1",
+      projectPath: "/p",
+      title: "t",
+      selectedModel: "m",
+      branchLabel: undefined,
+      status: undefined,
+      connectedScope: undefined,
+      localKnowledgeScope: undefined,
+      createdAt: 1,
+      updatedAt: 1,
+    } as const;
+    const scope = gitChangeScope();
+    const chat: Chat = { ...base, gitChangeScopes: [scope] };
+    expect(chat.gitChangeScopes).toEqual([scope]);
+    expect(chat.connectedScopes).toBeUndefined();
+    expect(chat.localKnowledgeScopes).toBeUndefined();
+
+    const patch: import("./bff-wire.js").UpdateChatPatch = { gitChangeScopes: [scope] };
+    expect(patch.gitChangeScopes).toEqual([scope]);
+    const cleared: import("./bff-wire.js").UpdateChatPatch = { gitChangeScopes: null };
+    expect(cleared.gitChangeScopes).toBeNull();
+  });
+
+  it("carries the remoteDigest identity, never repositoryId (contract correction 6)", () => {
+    const scope = gitChangeScope({ remoteDigest: "f".repeat(64) });
+    expect(scope.remoteDigest).toBe("f".repeat(64));
+    expect(Object.hasOwn(scope, "repositoryId")).toBe(false);
+  });
+
+  it("every description status is a valid ChatGitChangeDescriptionStatus", () => {
+    for (const status of CHAT_GIT_CHANGE_DESCRIPTION_STATUSES) {
+      const scope = gitChangeScope({ descriptionStatus: status });
+      expect(scope.descriptionStatus).toBe(status);
+    }
+  });
+
+  // F30 (epic #3384 final audit): the blocked-reason vocabulary is owned once here
+  // (keiko-contracts) rather than hand-restated in both the browser client and the server
+  // route; this pin is the single source both importers are checked against.
+  it("pins the GitChangeBlockedReason vocabulary (F30)", () => {
+    expect([...GIT_CHANGE_BLOCKED_REASONS]).toEqual([
+      "detached-head",
+      "unborn-head",
+      "missing-ref",
+      "identical-refs",
+      "no-pull-request",
+      "ambiguous-pull-request",
+      "reader-unauthorized",
+      "remote-unresolved",
+      "repository-unavailable",
+      "snapshot-unavailable",
+      "snapshot-failed",
+      "chat-project-unavailable",
+    ]);
+  });
+
+  it("every blocked reason is a valid GitChangeBlockedReason", () => {
+    for (const reason of GIT_CHANGE_BLOCKED_REASONS) {
+      const typed: GitChangeBlockedReason = reason;
+      expect(GIT_CHANGE_BLOCKED_REASONS as readonly string[]).toContain(typed);
+    }
+  });
+});
+
 // ─── GroundingLimits contract ────────────────────────────────────────────────────
 describe("GroundingLimits defaults and back-compat constants", () => {
   it("DEFAULT_GROUNDING_LIMITS.maxConnectedSources is 16", () => {
@@ -988,5 +1157,229 @@ describe("classifyAttachmentMime (GEN-DUP-SEMANTIC-013 / -014)", () => {
 
   it("pins the per-attachment ceiling at 8 MiB", () => {
     expect(MAX_ATTACHMENT_BYTES).toBe(8_388_608);
+  });
+});
+
+// #2906 review (comment 3863185718) / PR #3289 review (comment 3865167775): FilesTreeEntry used to
+// be one shape with independently optional sizeBytes/modifiedAt, so a "directory" entry carrying
+// real stat metadata -- exactly what a symlink-to-directory entry did before the server-side fix
+// -- type-checked even though it was never a value the contract actually meant to allow. A first
+// discriminated-union pass (two variants: "directory" vs "file" | "symlink") pinned that, but still
+// carried a separate `symlink: boolean` field that could disagree with `kind`, and let a "file"
+// entry carry `symlinkTargetKind`. It is now THREE full variants with `kind` as the sole
+// discriminant -- no `symlink` field on any variant, `symlinkTargetKind` on "symlink" only -- so
+// this suite pins every combination the type must reject alongside the ones it must accept.
+describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review, PR #3289 review)", () => {
+  it("rejects a directory-kind entry that claims real stat metadata", () => {
+    // @ts-expect-error — sizeBytes/modifiedAt must be `undefined` (or omitted) on a "directory"
+    // entry; a real directory is never stat'd per entry, so the type no longer permits a number.
+    const hostile: FilesTreeEntry = {
+      name: "src",
+      path: "src",
+      kind: "directory",
+      sizeBytes: 42,
+      modifiedAt: 1_700_000_000_000,
+      extension: null,
+      readable: true,
+    };
+    // The runtime shape is exactly what was written -- the compile-time rejection above is the
+    // proof this suite exists to pin; @ts-expect-error only suppresses the type ERROR, not
+    // construction of the (still hostile-shaped) value.
+    expect(hostile.sizeBytes).toBe(42);
+  });
+
+  it("requires sizeBytes and modifiedAt on a file-kind entry", () => {
+    // @ts-expect-error — sizeBytes/modifiedAt are REQUIRED on the "file" variant; a file entry is
+    // always lstat'd, so the type no longer permits omitting them.
+    const incomplete: FilesTreeEntry = {
+      name: "app.ts",
+      path: "src/app.ts",
+      kind: "file",
+      extension: "ts",
+      readable: true,
+    };
+    expect(incomplete.kind).toBe("file");
+  });
+
+  it("carries symlinkTargetKind on a symlink whose target resolved to a directory", () => {
+    const entry: FilesTreeEntry = {
+      name: "link",
+      path: "link",
+      kind: "symlink",
+      sizeBytes: 96,
+      modifiedAt: 1_700_000_000_000,
+      extension: null,
+      readable: true,
+      symlinkTargetKind: "directory",
+    };
+    expect(entry.kind).toBe("symlink");
+    expect(entry.symlinkTargetKind).toBe("directory");
+    // Metadata-bearing even though it BEHAVES like a directory -- unlike a real "directory" entry,
+    // whose sizeBytes/modifiedAt the type above pins as unavailable.
+    expect(entry.sizeBytes).toBe(96);
+  });
+
+  // PR #3289 review (comment 3865167775): the two-variant shape still accepted every one of these
+  // three contradictions -- `kind` and `symlink` disagreeing in either direction, and a "file"
+  // entry carrying `symlinkTargetKind`. There is no `symlink` field left on ANY variant (kind alone
+  // is the discriminant), so all three are now excess-property errors.
+  it("rejects a directory-kind entry claiming a symlink field", () => {
+    const hostile: FilesTreeEntry = {
+      name: "src",
+      path: "src",
+      kind: "directory",
+      extension: null,
+      readable: true,
+      // @ts-expect-error — the "directory" variant has no `symlink` field at all; `kind` alone
+      // says whether an entry is a symlink. (Excess-property errors anchor to the offending
+      // property's own line, not the object literal's opening line — unlike the missing/wrong-type
+      // cases above.)
+      symlink: true,
+    };
+    expect(hostile.kind).toBe("directory");
+  });
+
+  it("rejects a symlink-kind entry claiming a symlink field", () => {
+    const hostile: FilesTreeEntry = {
+      name: "link",
+      path: "link",
+      kind: "symlink",
+      sizeBytes: 1,
+      modifiedAt: 1,
+      extension: null,
+      readable: true,
+      symlinkTargetKind: "file",
+      // @ts-expect-error — the "symlink" variant has no `symlink` field either; it would always be
+      // `true` and is redundant with `kind`, so the type does not carry it.
+      symlink: false,
+    };
+    expect(hostile.kind).toBe("symlink");
+  });
+
+  it("rejects a file-kind entry claiming symlinkTargetKind", () => {
+    const hostile: FilesTreeEntry = {
+      name: "app.ts",
+      path: "src/app.ts",
+      kind: "file",
+      sizeBytes: 1,
+      modifiedAt: 1,
+      extension: "ts",
+      readable: true,
+      // @ts-expect-error — symlinkTargetKind belongs only to the "symlink" variant; a "file" entry
+      // (by definition not a symlink) cannot carry it.
+      symlinkTargetKind: "directory",
+    };
+    expect(hostile.kind).toBe("file");
+  });
+
+  // Compile-time exhaustiveness pin: if a fourth FilesTreeEntry variant is ever added without
+  // updating this switch, the `default` branch's call to assertNeverFilesTreeEntryKind fails to
+  // compile (its parameter type is `never`, and the un-narrowed remainder would no longer be).
+  it("exhausts every FilesTreeEntry variant through its kind discriminant", () => {
+    function describeKind(entry: FilesTreeEntry): string {
+      switch (entry.kind) {
+        case "directory":
+          return "directory";
+        case "file":
+          return "file";
+        case "symlink":
+          return entry.symlinkTargetKind;
+        default:
+          return assertNeverFilesTreeEntryKind(entry);
+      }
+    }
+    expect(
+      describeKind({
+        name: "src",
+        path: "src",
+        kind: "directory",
+        extension: null,
+        readable: true,
+      }),
+    ).toBe("directory");
+  });
+});
+
+// #2906 review (comment 3865167721): the one predicate the server and the UI both import to
+// decide whether a tree entry behaves like a navigable directory, so FilesWidget's
+// expansion/navigation/context-menu/drag-drop gating can never drift from what the walk allows.
+describe("isExpandableDirectory (#2906 review)", () => {
+  it("is true for a real directory entry", () => {
+    expect(
+      isExpandableDirectory({
+        name: "src",
+        path: "src",
+        kind: "directory",
+        extension: null,
+        readable: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("is true for a symlink whose target resolved to a directory", () => {
+    expect(
+      isExpandableDirectory({
+        name: "link",
+        path: "link",
+        kind: "symlink",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: null,
+        readable: true,
+        symlinkTargetKind: "directory",
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for a symlink whose target resolved to a file", () => {
+    expect(
+      isExpandableDirectory({
+        name: "link",
+        path: "link",
+        kind: "symlink",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: null,
+        readable: true,
+        symlinkTargetKind: "file",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for a symlink whose target could not be resolved", () => {
+    expect(
+      isExpandableDirectory({
+        name: "link",
+        path: "link",
+        kind: "symlink",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: null,
+        readable: true,
+        symlinkTargetKind: "unknown",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for a plain file entry", () => {
+    expect(
+      isExpandableDirectory({
+        name: "app.ts",
+        path: "src/app.ts",
+        kind: "file",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: "ts",
+        readable: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("UNKNOWN_REPOSITORY_ERROR_CODE", () => {
+  // Two routes emit and two Coding Workbench surfaces read this exact wire code; changing it is a
+  // wire change for every producer and consumer at once (PR #3452 review).
+  it("is the BFF wire code for a repository the workspace has not opened", () => {
+    expect(UNKNOWN_REPOSITORY_ERROR_CODE).toBe("UNKNOWN_REPOSITORY");
   });
 });

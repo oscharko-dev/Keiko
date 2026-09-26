@@ -20,7 +20,11 @@ import type { ReactNode } from "react";
 import { useRelationshipActivityStream, N_VISIBLE } from "./useRelationshipActivityStream";
 import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
-import { RELATIONSHIP_ACTIVITY_STATES } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_ACTIVITY_STATES } from "@oscharko-dev/keiko-contracts/runtime/relationships";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+} from "../../../../../lib/client-diagnostics";
 
 expect.extend(toHaveNoViolations);
 
@@ -36,6 +40,9 @@ class FakeEventSource {
   private readonly listeners: Map<string, MessageHandler[]> = new Map();
   public onmessage: MessageHandler | null = null;
   public onerror: (() => void) | null = null;
+  // Real EventSource is CLOSED (2) by the time `onerror` typically fires for a fatal failure;
+  // tests that care about a different observed state override this before triggering onerror.
+  public readyState = 2;
 
   constructor(_url: string) {
     FakeEventSource.last = this;
@@ -161,6 +168,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllTimers();
   vi.useRealTimers();
+  resetClientDiagnosticWriter();
 });
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
@@ -524,6 +532,28 @@ describe("useRelationshipActivityStream", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
+    // Wave 5 of epic #3233 (g6): every EventSource.onerror handler reports a client diagnostic
+    // carrying the observed readyState and a closed reason label.
+    it("reports a client diagnostic with readyState and a reason label on stream error", () => {
+      vi.useFakeTimers();
+      const reported: string[] = [];
+      setClientDiagnosticWriter((message) => reported.push(message));
+
+      render(<HookHarness onState={() => undefined} />);
+      expect(FakeEventSource.last).not.toBeNull();
+      const source = FakeEventSource.last;
+      if (source === null) throw new Error("Expected stream.");
+      source.readyState = 0;
+
+      act(() => {
+        source.onerror?.();
+      });
+
+      expect(reported).toEqual([
+        "[keiko] relationship-activity sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+      ]);
+    });
+
     it("pauses expiry and reconnect while the page is hidden, then resumes on visibility", async () => {
       vi.useFakeTimers();
       let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
@@ -684,6 +714,100 @@ describe("useRelationshipActivityStream", () => {
       expect(state.activityMap.has("rel-0")).toBe(false);
       // Most recent entries survive.
       expect(state.activityMap.has("rel-512")).toBe(true);
+
+      // KEIKO-0665: the hook must distinguish "evicted for capacity" from "never reported" — a
+      // consumer looking up an id absent from activityMap could not otherwise tell them apart.
+      expect(state.evictedIds.has("inactive-victim")).toBe(true);
+      expect(state.evictedIds.has("rel-0")).toBe(true);
+      // A surviving (non-evicted) id must not be marked evicted.
+      expect(state.evictedIds.has("rel-512")).toBe(false);
+      // An id that was never reported at all is not "evicted" either — the two are distinct.
+      expect(state.evictedIds.has("rel-never-reported")).toBe(false);
+    });
+
+    // PR #3289 review (comment 3865167740): evictedIds retained every one-off evicted id
+    // indefinitely unless that exact id emitted again, so a high-cardinality stream moved the
+    // unbounded growth MAX_TRACKED_RELATIONSHIPS prevents on activityMap into this Set instead.
+    // Three disjoint-namespace waves, each over capacity and each followed by a prune tick, cycle
+    // far more than 512 DISTINCT ids through eviction in total even though the activity map itself
+    // never exceeds the cap -- an unbounded evictedIds retains every one of them.
+    it("bounds evictedIds instead of retaining every tombstone forever", async () => {
+      vi.useFakeTimers({ now: 1_000_000 });
+      let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
+
+      render(
+        <HookHarness
+          onState={(state) => {
+            captured = state;
+          }}
+        />,
+      );
+      const source = FakeEventSource.last;
+      expect(source).not.toBeNull();
+
+      for (let wave = 0; wave < 3; wave += 1) {
+        act(() => {
+          for (let i = 0; i < 600; i += 1) {
+            vi.advanceTimersByTime(1);
+            source?.dispatch(
+              "relationship:activity",
+              makeActivityEvent(`wave${String(wave)}-${String(i)}`, "active"),
+            );
+          }
+        });
+        act(() => {
+          vi.advanceTimersByTime(15_000);
+        });
+      }
+
+      const state = requireCapturedState(captured);
+      // Sanity check: the activity map itself stays capped (already true before this fix).
+      expect(state.activityMap.size).toBeLessThanOrEqual(512);
+      // The fix under test: evictedIds must be bounded too, matching the activity-map cap, instead
+      // of retaining all ~1,288 distinct ids evicted across the three waves above.
+      expect(state.evictedIds.size).toBeLessThanOrEqual(512);
+    });
+
+    it("clears evictedIds for an id once a new event re-tracks it", async () => {
+      vi.useFakeTimers({ now: 1_000_000 });
+      let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
+
+      render(
+        <HookHarness
+          onState={(state) => {
+            captured = state;
+          }}
+        />,
+      );
+      const source = FakeEventSource.last;
+      expect(source).not.toBeNull();
+
+      act(() => {
+        for (let i = 0; i < 513; i += 1) {
+          vi.advanceTimersByTime(1);
+          source?.dispatch(
+            "relationship:activity",
+            makeActivityEvent(`rel-${String(i)}`, "active"),
+          );
+        }
+      });
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+
+      expect(requireCapturedState(captured).evictedIds.has("rel-0")).toBe(true);
+      expect(requireCapturedState(captured).activityMap.has("rel-0")).toBe(false);
+
+      // A fresh event for the evicted id means it is live-tracked again — no longer usefully
+      // "evicted", since a real current state now exists for it.
+      act(() => {
+        vi.advanceTimersByTime(1);
+        source?.dispatch("relationship:activity", makeActivityEvent("rel-0", "active"));
+      });
+
+      const state = requireCapturedState(captured);
+      expect(state.activityMap.has("rel-0")).toBe(true);
+      expect(state.evictedIds.has("rel-0")).toBe(false);
     });
   });
 });

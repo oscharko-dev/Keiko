@@ -8,6 +8,8 @@ import type {
   ModelCapability,
   NormalizedResponse,
   GatewayRequest,
+  ProviderEndpointStyle,
+  RealtimeAuthMode,
   VoicePersona,
 } from "@oscharko-dev/keiko-contracts";
 import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -18,8 +20,10 @@ export type {
   LatencyClass,
   ModelTokenAccountingSource,
   ModelTokenAccounting,
+  ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -28,6 +32,7 @@ export type {
   ChatMessageImageUrlContentPart,
   ChatMessageTextContentPart,
   ToolDefinition,
+  ToolCallingVerification,
   ResponseFormat,
   GatewayRequest,
   GatewaySamplingParameterIssue,
@@ -49,6 +54,8 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  MODEL_REASONING_EFFORTS,
+  isCodingWorkbenchModel,
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
   VOICE_PROVIDER_LOCALITIES,
@@ -61,7 +68,7 @@ export {
   describeVoiceProviderAvailability,
   listVoicePersonas,
   validateGatewaySamplingParameters,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
 
@@ -75,8 +82,11 @@ export interface VoicePersonaVoice {
   readonly voiceId: string;
 }
 
-export type ProviderEndpointStyle = "openai-compatible" | "azure-openai-deployment";
-export type RealtimeAuthMode = "api-key" | "ephemeral-session";
+// The endpoint-protocol unions moved to the contract seam so the UI upload parser and the server
+// setup route validate against the same wire values without importing this package (#3037
+// follow-up; ADR-0019 keeps keiko-ui off the gateway package). Re-exported here so every
+// existing consumer keeps its import path.
+export type { ProviderEndpointStyle, RealtimeAuthMode };
 export type OutputTokenParameter = "max_tokens" | "max_completion_tokens";
 
 export interface ModelProviderConfig {
@@ -88,6 +98,8 @@ export interface ModelProviderConfig {
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly outputTokenParameter?: OutputTokenParameter | undefined;
+  // Bounds ONE attempt. The whole buffered call is bounded by the budget `providerRequestBudgetMs`
+  // (resilience.ts) derives from this and `maxRetries`.
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
@@ -96,6 +108,13 @@ export interface ModelProviderConfig {
   // only on voice providers that advertise speech output or realtime voice. Credential-tier: dropped
   // by omission from `toSafeObject`'s allowlist and never serialised to the browser.
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // Per-provider circuitBreaker override (audit KEIKO-0167). Optional and present-only: when
+  // undefined the gateway constructs the provider's CircuitBreaker with the top-level
+  // GatewayConfig.circuitBreaker policy, so every existing config keeps parsing and behaving
+  // unchanged. Operators can single out a flaky provider (e.g. a LiteLLM proxy) with a more
+  // forgiving threshold/cooldown, or tighten a latency-sensitive provider, without changing the
+  // shared default for the rest.
+  readonly circuitBreaker?: CircuitBreakerConfig | undefined;
 }
 
 export interface RerankerConfig {
@@ -124,6 +143,26 @@ export interface OutboundHttpEgressConfig {
   // posture where a loopback target is blocked, so a public research fetch can never be steered
   // at a local service. It only tightens (never widens) the SSRF surface.
   readonly denyLoopback?: boolean | undefined;
+  // Opt-in, off by default (ADR-0038 D6). When a forward proxy is configured for this request,
+  // gatewayFetch normally cannot apply its DNS-based address policy (enforceOutboundTargetPolicy's
+  // dnsLookup step): the proxy resolves the target hostname independently at its own connect time,
+  // so a pre-proxy lookup cannot be trusted as rebinding protection (see
+  // refuseUnpinnableResearchEgress's doc comment in http.ts) and is skipped rather than pretending
+  // to guard something it cannot. Setting this flag makes gatewayFetch resolve and vet the target's
+  // DNS itself, the same way it already does for the unproxied path (AUDIT-SEC-001), and then pin
+  // the proxy's own CONNECT tunnel (or, for a plain-HTTP target, the forwarded absolute-URI) to
+  // that exact vetted address — closing the gap instead of masking it. Like `denyLoopback`, this
+  // only tightens the SSRF surface and is never config-file/env-mapped; a caller must construct it
+  // explicitly, because a proxy that filters CONNECT/forwarded requests by hostname (a legitimate,
+  // common corporate-proxy pattern) would see an IP-literal target instead and could reject it —
+  // an operator must confirm their proxy tolerates that before opting in.
+  readonly pinProxiedConnectTarget?: boolean | undefined;
+  // Explicit deployment acknowledgement for ordinary proxied HOSTNAME egress. Keiko cannot
+  // validate a proxy's independently-resolved address at connect time, so this delegates the
+  // blocked-address policy to that proxy; it is not proof that the proxy enforces it. This
+  // config-file-only acknowledgement never relaxes research, literal-address, or private/metadata
+  // address-class denials.
+  readonly acknowledgeProxiedHostnamePolicy?: boolean | undefined;
 }
 
 export interface CircuitBreakerConfig {
@@ -136,6 +175,18 @@ export interface FigmaConnectorConfig {
   readonly accessToken?: string | undefined;
 }
 
+/**
+ * Server-owned branding for generated PR descriptions (#3398). `logoUrl` is an operator-declared
+ * candidate only — never trusted as-is downstream. `resolvePrDescriptionBrandingFromConfig`
+ * (config.ts) is the sole place that turns it into a `PrDescriptionBranding`, reusing
+ * `validatedPrDescriptionLogoUrl` (prDescription/render.ts) to decide whether it actually clears
+ * the immutable public HTTPS SVG bar; an absent or invalid value falls back to text-only
+ * attribution rather than failing config load, since branding is decorative, never load-bearing.
+ */
+export interface GatewayBrandingConfig {
+  readonly logoUrl?: string | undefined;
+}
+
 export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
@@ -144,6 +195,7 @@ export interface GatewayConfig {
   readonly reranker?: RerankerConfig | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly figma?: FigmaConnectorConfig | undefined;
+  readonly branding?: GatewayBrandingConfig | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────
@@ -156,16 +208,26 @@ export type GatewayStreamChunk =
   | { readonly type: "delta"; readonly token: string }
   | { readonly type: "done"; readonly response: NormalizedResponse };
 
+// The bounds of one streamed read (ADR-0003): `silenceMs` is the longest the provider may stay
+// silent (before its response starts, until its first data event and between two data events), and
+// `budgetMs` the most the whole read may take, however live.
+export interface StreamReadBounds {
+  readonly silenceMs: number;
+  readonly budgetMs: number;
+}
+
 export interface ProviderAdapter {
   readonly call: (
     request: GatewayRequest,
     config: ModelProviderConfig,
   ) => Promise<NormalizedResponse>;
   // Optional streaming variant. Absent on adapters that only support buffered calls;
-  // the Gateway synthesises a single delta+done from `call` in that case.
+  // the Gateway synthesises a single delta+done from `call` in that case. With `bounds` it reads
+  // the answer of a buffered attempt, bounded by them instead of one `timeoutMs`.
   readonly callStream?: (
     request: GatewayRequest,
     config: ModelProviderConfig,
+    bounds?: StreamReadBounds,
   ) => AsyncIterable<GatewayStreamChunk>;
 }
 

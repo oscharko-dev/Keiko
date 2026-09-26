@@ -13,12 +13,12 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
-import {
-  CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
-  type CodingWorkbenchRuntimeQuestion,
-  type CodingWorkbenchRuntimeQuestionRequest,
-  type CodingWorkbenchRuntimeStateName,
+import type {
+  CodingWorkbenchRuntimeQuestion,
+  CodingWorkbenchRuntimeQuestionRequest,
+  CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import {
   useCodingWorkbenchQuestions,
@@ -191,7 +191,15 @@ function questionStatusMessage(
   t: CodingWorkbenchTranslate,
 ): string {
   if (failure !== null) {
-    return actionFailureAlert(`codingWorkbench.questions.${failure.action}Failed`, failure, t);
+    const rejectedAnswer =
+      failure.action === "answer" && failure.code === "CODING_RUNTIME_QUESTION_ANSWER_REJECTED";
+    return actionFailureAlert(
+      rejectedAnswer
+        ? "codingWorkbench.questions.answerRejected"
+        : `codingWorkbench.questions.${failure.action}Failed`,
+      failure,
+      t,
+    );
   }
   return status === "ready"
     ? t("codingWorkbench.questions.ready", { count })

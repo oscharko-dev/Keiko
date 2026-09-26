@@ -1,0 +1,31 @@
+/* #3532 - the footer's Activity Log readiness indicator. Token-only colours per ADR-0123 D4,
+   component-scoped so the global stylesheet's visual-proof gate stays untouched, and canonically
+   cmp-prefixed with locally scoped selectors only, so it adds no styling-exception entry. The text
+   colour is mixed toward the primary text colour, the pattern the repository focus badge already
+   uses to keep small status text above WCAG 1.4.3 contrast on both themes. */
+.cmpReadinessBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 24px;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid color-mix(in oklch, var(--feedback-warning) 45%, var(--border-subtle));
+  border-radius: var(--radius-pill);
+  color: color-mix(in oklch, var(--feedback-warning) 78%, var(--text-primary));
+  background: color-mix(in oklch, var(--feedback-warning-surface) 68%, transparent);
+  white-space: nowrap;
+}
+
+.cmpReadinessBadge[data-readiness="unavailable"] {
+  border-color: color-mix(in oklch, var(--feedback-danger) 45%, var(--border-subtle));
+  color: color-mix(in oklch, var(--feedback-danger) 78%, var(--text-primary));
+  background: color-mix(in oklch, var(--feedback-danger-surface) 68%, transparent);
+}
+
+/* The centred version signature leaves little room on a narrow footer: the badge keeps its icon
+   and its screen-reader description there and drops the visible word. */
+@media (max-width: 640px) {
+  .cmpReadinessLabel {
+    display: none;
+  }
+}

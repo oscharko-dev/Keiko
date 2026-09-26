@@ -344,6 +344,7 @@ describe("handlePromptEnhancement (cancellation + stream errors)", () => {
     const req = Object.assign(new EventEmitter(), { resume: (): undefined => undefined });
     const res = Object.assign(new EventEmitter(), { writableEnded: false });
     const ctx: RouteContext = {
+      correlationId: undefined,
       req: req as unknown as IncomingMessage,
       res: res as unknown as ServerResponse,
       params: {},

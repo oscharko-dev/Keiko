@@ -95,16 +95,25 @@ Manual/browser gates:
 
 - The model-delta generation request was too broad for large evidence sets. A 9-atom failed run
   stopped after one gateway call with zero candidates; the fixed path caps the model delta while
-  preserving deterministic baseline coverage.
+  preserving deterministic baseline coverage
+  (`packages/keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.ts:302-311`).
 - Provider/parser failures now fall back to deterministic baseline candidates with a redacted
-  `generationFallbackReason`, instead of leaving the run without test cases where evidence exists.
+  `generationFallbackReason`, instead of leaving the run without test cases where evidence exists
+  (`packages/keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.ts:446`; regression
+  fixture at `packages/keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.test.ts:1707`).
 - Coverage and validation now evaluate the same candidate set that is persisted for the user, rather
-  than only the model-delta subset. This removed false coverage gaps in large runs.
+  than only the model-delta subset. This removed false coverage gaps in large runs
+  (`packages/keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.ts:384-385`).
 - Deterministic baseline candidates now include the source atom's canonical requirement text in the
-  candidate body, making the fallback usable and reviewable instead of an atom-id-only stub.
+  candidate body, making the fallback usable and reviewable instead of an atom-id-only stub
+  (`packages/keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.ts:314-329`;
+  `packages/keiko-quality-intelligence/src/domain/testDesignModel.ts:82-145`).
 - Step-repeat validation now rejects immediate duplicate steps but allows repeated actions after a
-  context-changing step, which is required for boundary-value and retry-flow tests.
+  context-changing step, which is required for boundary-value and retry-flow tests
+  (`packages/keiko-quality-intelligence/src/domain/validation.ts:205-220`; regression coverage at
+  `packages/keiko-quality-intelligence/src/__tests__/validation.test.ts:68-113`).
 - QI run deletion used the JSON BFF helper without a body. The server's state-changing request gate
   requires JSON headers for all mutating methods, so `DELETE /api/quality-intelligence/runs/:id`
   failed with `UNSUPPORTED_MEDIA_TYPE`. JSON helpers now send `Content-Type: application/json` and
-  `X-Keiko-CSRF: 1` for every non-GET/HEAD request, including bodyless DELETE requests.
+  `X-Keiko-CSRF: 1` for every non-GET/HEAD request, including bodyless DELETE requests
+  (`packages/keiko-ui/src/lib/api.ts:248-256`).

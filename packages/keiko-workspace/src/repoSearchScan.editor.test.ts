@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
+import { PathDeniedError, PathEscapeError, WORKSPACE_CODES, WorkspaceReadError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { memFs } from "./_memfs.js";
 import {
@@ -21,7 +22,9 @@ import { buildMatcher, fingerprintFor } from "./repoSearchMatchers.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import {
   buildWorkspaceIndexLexicalRecord,
+  workspaceIndexFileMetadata,
   type PreparedWorkspaceIndexEntry,
+  type WorkspaceIndexRecord,
 } from "./workspaceIndex.js";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
@@ -31,6 +34,7 @@ const MEM_ROOT = "/ws";
 function workspace(): WorkspaceInfo {
   return {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -89,6 +93,38 @@ function discoveredFile(relativePath: string, sizeBytes = 10): DiscoveredFile {
   return { relativePath, sizeBytes };
 }
 
+function cachedIndexEntry(content: string, includeMtime = true): PreparedWorkspaceIndexEntry {
+  return {
+    scopePath: "src/a.ts",
+    absolutePath: `${MEM_ROOT}/src/a.ts`,
+    file: discoveredFile("src/a.ts", content.length),
+    ...(includeMtime ? { mtimeMs: 1 } : {}),
+    record: {
+      scopePath: "src/a.ts",
+      sizeBytes: content.length,
+      ...(includeMtime ? { mtimeMs: 1 } : {}),
+      kind: "text",
+      lexical: buildWorkspaceIndexLexicalRecord(content),
+    },
+    stale: false,
+  };
+}
+
+function cachedRunner(
+  fs: WorkspaceFs,
+  entry: PreparedWorkspaceIndexEntry,
+  stalePaths: string[],
+): SearchTextRunner {
+  return {
+    ...buildRunner(fs),
+    workspaceIndex: {
+      entries: new Map([[entry.scopePath, entry]]),
+      onRecord: () => undefined,
+      onStale: (scopePath) => stalePaths.push(scopePath),
+    },
+  };
+}
+
 function freshState(): RunState {
   return { filesScanned: 0, matchesReturned: 0, truncated: false };
 }
@@ -118,7 +154,9 @@ describe("probeBinary – zero-size file", () => {
 });
 
 describe("probeBinary – no readFileBytes on fs", () => {
-  it("falls back to readFileUtf8 when readFileBytes is absent", async () => {
+  // Bounded primitive present -> use it; absent -> the probe is unavailable. probeBinary must
+  // never fall back to an unbounded readFileUtf8 and slice to the cap after the fact.
+  it("throws a body-free WorkspaceReadError instead of an unbounded readFileUtf8 fallback", async () => {
     const plainText = "hello world\n";
     const base = memFs(MEM_ROOT, { "src/a.ts": plainText });
     const fs: WorkspaceFs = {
@@ -127,16 +165,15 @@ describe("probeBinary – no readFileBytes on fs", () => {
       readDir: base.readDir,
       realPath: base.realPath,
       exists: base.exists,
-      // Deliberately omit readFileBytes to trigger the utf8 fallback branch.
+      // Deliberately omit readFileBytes to exercise the "unavailable" branch.
     };
-    const result = await probeBinary(fs, `${MEM_ROOT}/src/a.ts`, plainText.length);
-    expect(result).toBe(false);
+    await expect(probeBinary(fs, `${MEM_ROOT}/src/a.ts`, plainText.length)).rejects.toBeInstanceOf(
+      WorkspaceReadError,
+    );
   });
 
-  it("detects binary content via readFileUtf8 fallback when readFileBytes is absent", async () => {
-    // A NUL byte makes looksBinary return true.
-    const binaryContent = String.fromCharCode(0x00) + "PNG data";
-    const base = memFs(MEM_ROOT, { "img.png": binaryContent });
+  it("shapes the unavailable-primitive error as an IO error so every probeBinary caller's TOCTOU degrade path still catches it", async () => {
+    const base = memFs(MEM_ROOT, { "src/a.ts": "hello world\n" });
     const fs: WorkspaceFs = {
       readFileUtf8: base.readFileUtf8,
       stat: base.stat,
@@ -144,8 +181,12 @@ describe("probeBinary – no readFileBytes on fs", () => {
       realPath: base.realPath,
       exists: base.exists,
     };
-    const result = await probeBinary(fs, `${MEM_ROOT}/img.png`, binaryContent.length);
-    expect(result).toBe(true);
+    try {
+      await probeBinary(fs, `${MEM_ROOT}/src/a.ts`, 12);
+      expect.unreachable("probeBinary must throw when readFileBytes is unavailable");
+    } catch (error) {
+      expect(isIoError(error)).toBe(true);
+    }
   });
 });
 
@@ -207,9 +248,9 @@ describe("scanFile – aborted after binary check", () => {
     if (baseReadFileBytes === undefined) throw new Error("memFs always provides readFileBytes");
     const interceptedFs: WorkspaceFs = {
       ...fs,
-      readFileBytes: async (abs, max): Promise<Uint8Array> => {
+      readFileBytes: async (abs, max, hardLinkPolicy, expected): Promise<Uint8Array> => {
         controller.abort();
-        return await baseReadFileBytes(abs, max);
+        return await baseReadFileBytes(abs, max, hardLinkPolicy, expected);
       },
     };
 
@@ -285,6 +326,313 @@ describe("scanFile – cached metadata validation", () => {
       scanFile(runner, discoveredFile("src/a.ts", content.length), freshState(), [], []),
     ).rejects.toThrow("unexpected cached stat shape");
   });
+
+  it("bypasses a same-size cached record when no modification timestamp is available", async () => {
+    const cachedContent = "needle\n";
+    const liveContent = "actual\n";
+    const base = memFs(MEM_ROOT, { "src/a.ts": liveContent });
+    const readFileBytes = base.readFileBytes;
+    if (readFileBytes === undefined) throw new Error("memFs always provides readFileBytes");
+    let contentReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
+        contentReads += 1;
+        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
+      },
+    };
+    const stalePaths: string[] = [];
+    const atoms: EvidenceAtom[] = [];
+
+    await scanFile(
+      cachedRunner(fs, cachedIndexEntry(cachedContent, false), stalePaths),
+      discoveredFile("src/a.ts", liveContent.length),
+      freshState(),
+      atoms,
+      [],
+    );
+
+    expect(atoms).toHaveLength(0);
+    expect(stalePaths).toEqual(["src/a.ts"]);
+    expect(contentReads).toBe(2);
+  });
+
+  it("invalidates a cached record when its current path becomes a hard link", async () => {
+    const content = "needle\n";
+    const base = memFs(MEM_ROOT, { "src/a.ts": content });
+    let contentReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath) => {
+        const stat = base.stat(absolutePath);
+        return stat.isFile ? { ...stat, hardLinkCount: 2, mtimeMs: 1 } : stat;
+      },
+      readFileUtf8: (absolutePath) => {
+        contentReads += 1;
+        return base.readFileUtf8(absolutePath);
+      },
+      readFileBytes: async (): Promise<Uint8Array> => {
+        contentReads += 1;
+        return await Promise.resolve(new Uint8Array());
+      },
+    };
+    const stalePaths: string[] = [];
+    const atoms: EvidenceAtom[] = [];
+    const candidates: CandidateFile[] = [];
+
+    await scanFile(
+      cachedRunner(fs, cachedIndexEntry(content), stalePaths),
+      discoveredFile("src/a.ts", content.length),
+      freshState(),
+      atoms,
+      candidates,
+    );
+
+    expect(atoms).toHaveLength(0);
+    expect(candidates.map(({ scopePath, omitted }) => ({ scopePath, omitted }))).toEqual([
+      { scopePath: "src/a.ts", omitted: "ignored" },
+    ]);
+    expect(stalePaths).toEqual(["src/a.ts"]);
+    expect(contentReads).toBe(0);
+  });
+
+  it("invalidates and rejects a cached record whose real path escapes the workspace", async () => {
+    const content = "needle\n";
+    const base = memFs(MEM_ROOT, { "src/a.ts": content });
+    let contentReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      realPath: (absolutePath) =>
+        absolutePath === `${MEM_ROOT}/src/a.ts` ? "/outside/a.ts" : base.realPath(absolutePath),
+      readFileUtf8: (absolutePath) => {
+        contentReads += 1;
+        return base.readFileUtf8(absolutePath);
+      },
+      readFileBytes: async (): Promise<Uint8Array> => {
+        contentReads += 1;
+        return await Promise.resolve(new Uint8Array());
+      },
+    };
+    const stalePaths: string[] = [];
+
+    await expect(
+      scanFile(
+        cachedRunner(fs, cachedIndexEntry(content), stalePaths),
+        discoveredFile("src/a.ts", content.length),
+        freshState(),
+        [],
+        [],
+      ),
+    ).rejects.toBeInstanceOf(PathEscapeError);
+
+    expect(stalePaths).toEqual(["src/a.ts"]);
+    expect(contentReads).toBe(0);
+  });
+
+  it("invalidates matching cached metadata beneath a denied real workspace root", async () => {
+    const content = "needle\n";
+    const scopePath = "src/a.ts";
+    const realRoot = "/private/.git/retargeted-root";
+    const realPath = `${realRoot}/${scopePath}`;
+    const base = memFs(MEM_ROOT, { [scopePath]: content });
+    const currentStat = base.stat(`${MEM_ROOT}/${scopePath}`);
+    const metadata = workspaceIndexFileMetadata(scopePath, currentStat);
+    let contentReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      realPath: (absolutePath): string => {
+        if (absolutePath === MEM_ROOT) return realRoot;
+        if (absolutePath === `${MEM_ROOT}/${scopePath}` || absolutePath === realPath)
+          return realPath;
+        return base.realPath(absolutePath);
+      },
+      stat: (absolutePath) => (absolutePath === realPath ? currentStat : base.stat(absolutePath)),
+      readFileUtf8: (): string => {
+        contentReads += 1;
+        return content;
+      },
+      readFileBytes: (): Promise<Uint8Array> => {
+        contentReads += 1;
+        return Promise.resolve(new TextEncoder().encode(content));
+      },
+    };
+    const entry: PreparedWorkspaceIndexEntry = {
+      scopePath,
+      absolutePath: realPath,
+      file: discoveredFile(scopePath, content.length),
+      ...(metadata.mtimeMs === undefined ? {} : { mtimeMs: metadata.mtimeMs }),
+      ...(metadata.fileIdentityHash === undefined
+        ? {}
+        : { fileIdentityHash: metadata.fileIdentityHash }),
+      ...(metadata.mtimeNs === undefined ? {} : { mtimeNs: metadata.mtimeNs }),
+      ...(metadata.ctimeNs === undefined ? {} : { ctimeNs: metadata.ctimeNs }),
+      ...(metadata.hardLinkCount === undefined ? {} : { hardLinkCount: metadata.hardLinkCount }),
+      record: {
+        ...metadata,
+        kind: "text",
+        lexical: buildWorkspaceIndexLexicalRecord(content),
+      },
+      stale: false,
+    };
+    const stalePaths: string[] = [];
+
+    await expect(
+      scanFile(
+        cachedRunner(fs, entry, stalePaths),
+        discoveredFile(scopePath, content.length),
+        freshState(),
+        [],
+        [],
+      ),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+
+    expect(stalePaths).toEqual([scopePath]);
+    expect(contentReads).toBe(0);
+  });
+});
+
+describe("scanFile – live candidate retargeting", () => {
+  it.each([
+    { retargetedPath: "/outside/a.ts", errorType: PathEscapeError },
+    { retargetedPath: `${MEM_ROOT}/.env`, errorType: PathDeniedError },
+  ])(
+    "rethrows a candidate retargeted to $retargetedPath instead of masking the denial",
+    async ({ retargetedPath, errorType }) => {
+      const content = "needle\n";
+      const base = memFs(MEM_ROOT, { "src/a.ts": content });
+      let candidateRealPathCalls = 0;
+      let contentReads = 0;
+      const fs: WorkspaceFs = {
+        ...base,
+        realPath: (absolutePath): string => {
+          if (absolutePath !== `${MEM_ROOT}/src/a.ts`) return base.realPath(absolutePath);
+          candidateRealPathCalls += 1;
+          return candidateRealPathCalls === 1 ? absolutePath : retargetedPath;
+        },
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
+          contentReads += 1;
+          return await (base.readFileBytes?.(absolutePath, maxBytes, hardLinkPolicy, expected) ??
+            Promise.resolve(new Uint8Array()));
+        },
+      };
+      const candidates: CandidateFile[] = [];
+
+      await expect(
+        scanFile(
+          buildRunner(fs),
+          discoveredFile("src/a.ts", content.length),
+          freshState(),
+          [],
+          candidates,
+        ),
+      ).rejects.toBeInstanceOf(errorType);
+      expect(candidates).toEqual([]);
+      expect(contentReads).toBe(0);
+    },
+  );
+});
+
+describe("scanFile – stable persistence metadata", () => {
+  it("does not bind descriptor bytes to replacement metadata", async () => {
+    const files = { "src/a.ts": "needle\n" };
+    const base = memFs(MEM_ROOT, files);
+    const baseReadFileBytes = base.readFileBytes;
+    if (baseReadFileBytes === undefined) throw new Error("memFs always provides readFileBytes");
+    let version = 1;
+    let scheduleReplacement = false;
+    let replacementScheduled = false;
+    const fs: WorkspaceFs = {
+      ...base,
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
+        const bytes = await baseReadFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
+        if (maxBytes === limits().maxBytesPerFileScanned) scheduleReplacement = true;
+        return bytes;
+      },
+      stat: (absolutePath) => {
+        const stat = base.stat(absolutePath);
+        const snapshot = stat.isFile
+          ? {
+              ...stat,
+              fileIdentity: `1:${String(version)}`,
+              mtimeMs: version,
+              ctimeMs: version,
+              mtimeNs: `${String(version)}000000`,
+              ctimeNs: `${String(version)}000000`,
+            }
+          : stat;
+        if (scheduleReplacement && !replacementScheduled && stat.isFile) {
+          replacementScheduled = true;
+          queueMicrotask(() => {
+            files["src/a.ts"] = "actual\n";
+            version = 2;
+          });
+        }
+        return snapshot;
+      },
+    };
+    const records: WorkspaceIndexRecord[] = [];
+    const runner: SearchTextRunner = {
+      ...buildRunner(fs),
+      workspaceIndex: {
+        entries: new Map(),
+        onRecord: (record) => records.push(record),
+        onStale: () => undefined,
+      },
+    };
+
+    await scanFile(runner, discoveredFile("src/a.ts", 7), freshState(), [], []);
+
+    expect(version).toBe(2);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ kind: "text", scopePath: "src/a.ts", mtimeMs: 1 });
+  });
+
+  // readForScan's UTF-8 lane (readUtf8TextForScan) only ran when readFileBytes was absent. Since
+  // probeBinary no longer falls back to an unbounded readFileUtf8 either, binaryOmission now
+  // fails closed for every non-empty file on a WorkspaceFs missing readFileBytes — the file never
+  // reaches readForScan at all, so that lane's own stat-race handling can no longer be exercised
+  // this way. What IS still true, and worth pinning, is that this degrades to a clean
+  // tool-unavailable omission rather than reading unbounded and persisting a workspace-index
+  // record built from unbounded text.
+  it("omits a non-empty file as tool-unavailable, and persists no record, when readFileBytes is absent", async () => {
+    const files = { "src/a.ts": "needle\n" };
+    const base = memFs(MEM_ROOT, files);
+    const { readFileBytes: removedReadFileBytes, ...baseWithoutBytes } = base;
+    if (removedReadFileBytes === undefined) throw new Error("memFs always provides readFileBytes");
+    const fs: WorkspaceFs = baseWithoutBytes;
+    const records: WorkspaceIndexRecord[] = [];
+    const candidates: CandidateFile[] = [];
+    const runner: SearchTextRunner = {
+      ...buildRunner(fs),
+      workspaceIndex: {
+        entries: new Map(),
+        onRecord: (record) => records.push(record),
+        onStale: () => undefined,
+      },
+    };
+
+    await scanFile(runner, discoveredFile("src/a.ts", 7), freshState(), [], candidates);
+
+    expect(records).toHaveLength(0);
+    expect(candidates.map(({ scopePath, omitted }) => ({ scopePath, omitted }))).toEqual([
+      { scopePath: "src/a.ts", omitted: "tool-unavailable" },
+    ]);
+  });
 });
 
 // ─── hitEmissionLimit – AbortSignal during emission (lines 316-317) ─────────
@@ -306,9 +654,9 @@ describe("hitEmissionLimit – AbortSignal fires during emission loop", () => {
     let byteReads = 0;
     const interceptedFs: WorkspaceFs = {
       ...base,
-      readFileBytes: async (abs, max): Promise<Uint8Array> => {
+      readFileBytes: async (abs, max, hardLinkPolicy, expected): Promise<Uint8Array> => {
         byteReads += 1;
-        const result = await baseReadFileBytes(abs, max);
+        const result = await baseReadFileBytes(abs, max, hardLinkPolicy, expected);
         if (byteReads === 2) {
           controller.abort();
         }
@@ -376,6 +724,13 @@ describe("isIoError", () => {
 
   it("returns false when code property exists but is not a string", () => {
     expect(isIoError({ code: 42 })).toBe(false);
+  });
+
+  it("returns false for path trust denials, including code-equivalent errors", () => {
+    expect(isIoError(new PathEscapeError("escape", "../outside"))).toBe(false);
+    expect(isIoError(new PathDeniedError("denied", ".env"))).toBe(false);
+    expect(isIoError({ code: WORKSPACE_CODES.PATH_ESCAPE })).toBe(false);
+    expect(isIoError({ code: WORKSPACE_CODES.PATH_DENIED })).toBe(false);
   });
 });
 

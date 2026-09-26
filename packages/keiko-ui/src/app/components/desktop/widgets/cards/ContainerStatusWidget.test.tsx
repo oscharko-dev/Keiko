@@ -4,7 +4,7 @@
 // state (catalog tasks + run control), api errors rendered as a muted code-tagged message that never
 // leaks URLs/credentials, and an axe a11y assertion (zero serious/critical).
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -277,6 +277,45 @@ describe("ContainerStatusWidget", () => {
     const source = FakeEventSource.last;
     unmount();
     expect(source?.closed).toBe(true);
+  });
+
+  it("KEIKO-0204 — excludes a foreign run's events from the recent events log", async () => {
+    vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
+    vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
+    vi.mocked(createContainerRun).mockImplementation(() => new Promise<never>(() => undefined));
+    const { unmount } = render(<ContainerStatusWidget projectPath="/proj" />);
+    const runButton = await screen.findByRole("button", { name: /run diagnostic/i });
+    await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
+    await userEvent.click(runButton);
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    // A concurrent run from another window on the shared SSE channel (ADR-0018 D7) — its
+    // requestId does not match this widget's own pendingRequestIdRef ("req-own").
+    FakeEventSource.last?.dispatch(
+      "container:run-completed",
+      JSON.stringify({
+        kind: "run-completed",
+        runId: "run-foreign",
+        payload: { failureReason: "foreign-reason", durationMs: 3, requestId: "req-foreign" },
+      }),
+    );
+    // This widget's own run, echoing the requestId captured at submit time.
+    FakeEventSource.last?.dispatch(
+      "container:run-completed",
+      JSON.stringify({
+        kind: "run-completed",
+        runId: "run-own",
+        payload: { failureReason: "own-reason", durationMs: 5, requestId: "req-own" },
+      }),
+    );
+    // Scoped to the events log (role=log): the engine-status panel above also renders a
+    // <ul>/<li> (one per detected engine) that shares the listitem role.
+    const log = await screen.findByRole("log");
+    await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(log).getByText(/own-reason/)).toBeInTheDocument();
+    expect(within(log).queryByText(/foreign-reason/)).toBeNull();
+    // Close the widget's shared SSE subscription so it never leaks into the next test.
+    unmount();
+    expect(FakeEventSource.last?.closed).toBe(true);
   });
 
   it("renders the policy-blocked engine state with its danger tone", async () => {

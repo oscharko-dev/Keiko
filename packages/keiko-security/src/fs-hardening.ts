@@ -7,7 +7,31 @@
 // keiko-security depends only on keiko-contracts and is depended upon by the store/vault packages, so
 // hoisting this module here introduces no dependency cycle.
 
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  writeSync,
+} from "node:fs";
+import type { BigIntStats } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import {
+  SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT,
+  type SafeArtifactDirectoryMutationOperation,
+  type SafeArtifactDirectoryMutationRequest,
+} from "./safe-artifact-directory-mutation-protocol.js";
 
 // Owner-only directory: rwx for the owner, nothing for group/other.
 export const DIR_MODE = 0o700;
@@ -41,4 +65,2580 @@ export function chmodIfPresent(path: string, mode: number): void {
   } catch {
     // The sidecar (-wal/-shm) may not exist yet; best-effort.
   }
+}
+
+export const SAFE_ARTIFACT_CLASSES = [
+  "activity-log",
+  "support-report",
+  "replay-fixture",
+  "manifest",
+  "integrity-artifact",
+] as const;
+
+export const SAFE_ARTIFACT_FILE_FAILURE_KINDS = [
+  "invalid-publication",
+  "close-failed",
+  "durability-failed",
+  "open-failed",
+  "permission-failed",
+  "permission-unsafe",
+  "publish-failed",
+  "publish-unsupported",
+  "read-failed",
+  "recovery-conflict",
+  "replace-failed",
+  "target-exists",
+  "target-mutated",
+  "unsafe-ancestor",
+  "unsafe-target",
+  "write-failed",
+] as const;
+
+export type SafeArtifactClass = (typeof SAFE_ARTIFACT_CLASSES)[number];
+export type SafeArtifactContainmentAssurance = "private-root-guarded" | "platform-inherited";
+export type SafeArtifactDurabilityAssurance = "verified" | "directory-sync-unavailable";
+export type SafeArtifactPermissionAssurance = "verified-private" | "platform-inherited";
+export type SafeArtifactOpenMode =
+  "append-existing-or-create" | "exclusive-create" | "read" | "read-write-existing";
+export type SafeArtifactFileFailureKind = (typeof SAFE_ARTIFACT_FILE_FAILURE_KINDS)[number];
+
+const SAFE_ARTIFACT_CLASS_SET: ReadonlySet<string> = new Set(SAFE_ARTIFACT_CLASSES);
+const SAFE_ARTIFACT_FAILURE_SET: ReadonlySet<string> = new Set(SAFE_ARTIFACT_FILE_FAILURE_KINDS);
+
+export function isSafeArtifactClass(value: unknown): value is SafeArtifactClass {
+  return typeof value === "string" && SAFE_ARTIFACT_CLASS_SET.has(value);
+}
+
+export function isSafeArtifactFailureKind(value: unknown): value is SafeArtifactFileFailureKind {
+  return typeof value === "string" && SAFE_ARTIFACT_FAILURE_SET.has(value);
+}
+
+/** A closed, body-free filesystem failure safe to project into diagnostics. */
+export class SafeArtifactFileError extends Error {
+  public override readonly name = "SafeArtifactFileError";
+  public readonly artifactClass: SafeArtifactClass;
+  public readonly kind: SafeArtifactFileFailureKind;
+
+  public constructor(artifactClass: unknown, kind: unknown) {
+    const closedClass = isSafeArtifactClass(artifactClass) ? artifactClass : "manifest";
+    const closedKind = isSafeArtifactFailureKind(kind) ? kind : "open-failed";
+    super(`safe artifact ${closedClass} failed: ${closedKind}`);
+    this.artifactClass = closedClass;
+    this.kind = closedKind;
+  }
+}
+
+export interface OpenSafeArtifactFileOptions {
+  readonly artifactClass: SafeArtifactClass;
+  readonly mode: SafeArtifactOpenMode;
+  readonly trustedRoot: string;
+}
+
+/** Windows inherits privacy from the operator-selected root ACL; Node cannot attest that DACL. */
+export function safeArtifactPermissionAssurance(): SafeArtifactPermissionAssurance {
+  return process.platform === "win32" ? "platform-inherited" : "verified-private";
+}
+
+/** Node has no portable descriptor-relative create; containment inherits the guarded root. */
+export function safeArtifactContainmentAssurance(): SafeArtifactContainmentAssurance {
+  return process.platform === "win32" ? "platform-inherited" : "private-root-guarded";
+}
+
+function safeFileError(
+  artifactClass: SafeArtifactClass,
+  kind: SafeArtifactFileFailureKind,
+): SafeArtifactFileError {
+  return new SafeArtifactFileError(artifactClass, kind);
+}
+
+function closeArtifactDescriptor(descriptor: number, artifactClass: SafeArtifactClass): void {
+  try {
+    closeSync(descriptor);
+  } catch {
+    throw safeFileError(artifactClass, "close-failed");
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function pathExists(path: string, artifactClass: SafeArtifactClass): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw safeFileError(artifactClass, "open-failed");
+  }
+}
+
+interface DirectoryGuard {
+  readonly path: string;
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly descriptor: number | undefined;
+}
+
+type GuardedDirectoryMutationResult =
+  "success" | "target-exists" | "unsupported" | "entry-mismatch" | "failed";
+type DirectoryGuardAuthority = "owner-only-mutation" | "standard";
+
+/** The device/inode the helper must still find at the source name; BigIntStats satisfies it. */
+interface EntryIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+export interface SafeArtifactDirectoryEntryOptions {
+  readonly artifactClass: SafeArtifactClass;
+  readonly trustedRoot: string;
+}
+
+export type SafeArtifactArchiveResult =
+  "hard-link-winner" | "archive-exists" | "source-missing" | "rename-fallback";
+
+const DIRECTORY_MUTATION_TIMEOUT_MS = 5_000;
+
+function directoryMutationHelperPath(): string {
+  const modulePath = fileURLToPath(import.meta.url);
+  const moduleDirectory = dirname(modulePath);
+  return modulePath.endsWith(".ts")
+    ? resolve(moduleDirectory, "../dist/safe-artifact-directory-mutation.js")
+    : join(moduleDirectory, "safe-artifact-directory-mutation.js");
+}
+
+function guardedParent(
+  guards: readonly DirectoryGuard[],
+  parent: string,
+  artifactClass: SafeArtifactClass,
+): DirectoryGuard {
+  const parentKey = filesystemComparisonPath(parent);
+  const guard = guards.find((candidate) => filesystemComparisonPath(candidate.path) === parentKey);
+  if (guard === undefined || !guards.every(directoryGuardStillMatches)) {
+    throw safeFileError(artifactClass, "target-mutated");
+  }
+  return guard;
+}
+
+function mutationExitResult(status: number | null): GuardedDirectoryMutationResult {
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success) return "success";
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.targetExists) return "target-exists";
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported) return "unsupported";
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch) return "entry-mismatch";
+  return "failed";
+}
+
+function mutationFailureKind(result: GuardedDirectoryMutationResult): SafeArtifactFileFailureKind {
+  if (result === "entry-mismatch") return "target-mutated";
+  return result === "unsupported" ? "publish-unsupported" : "publish-failed";
+}
+
+function directoryMutationRequest(
+  operation: SafeArtifactDirectoryMutationOperation,
+  guard: DirectoryGuard,
+  path: string,
+  targetPath: string | undefined,
+  entry: EntryIdentity,
+): SafeArtifactDirectoryMutationRequest {
+  const common = {
+    operation,
+    expectedDev: guard.dev.toString(),
+    expectedIno: guard.ino.toString(),
+    source: basename(path),
+    expectedEntryDev: entry.dev.toString(),
+    expectedEntryIno: entry.ino.toString(),
+  };
+  return targetPath === undefined ? common : { ...common, target: basename(targetPath) };
+}
+
+// Mutates the name at `path` only while it still names the inode behind `held`. Between the
+// caller's check and the helper's syscall, a concurrent process may have replaced the name: an
+// unlink would then delete the new file, and a link or rename would publish it. The caller keeps
+// `held` open until this returns, so the inode stays allocated and its number cannot be recycled
+// for the replacement; Linux file systems reuse a freed inode number at once.
+function runGuardedDirectoryMutation(
+  operation: SafeArtifactDirectoryMutationOperation,
+  path: string,
+  held: number,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+  targetPath?: string,
+  authority: DirectoryGuardAuthority = "standard",
+): GuardedDirectoryMutationResult {
+  const parent = dirname(resolve(path));
+  if (targetPath !== undefined && dirname(resolve(targetPath)) !== parent) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
+  const guards = captureDirectoryGuards(trustedRoot, path, artifactClass, authority);
+  try {
+    const guard = guardedParent(guards, parent, artifactClass);
+    if (!directoryGuardsStillAuthorized(guards, trustedRoot, path, authority)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+    const source = fstatSync(held, { bigint: true });
+    const request = directoryMutationRequest(operation, guard, path, targetPath, source);
+    // The child validates the OS-established cwd identity, then mutates only relative basenames.
+    // Keep those names off argv and suppress child output so no path value reaches diagnostics.
+    const child = spawnSync(process.execPath, [directoryMutationHelperPath()], {
+      cwd: parent,
+      input: JSON.stringify(request),
+      stdio: ["pipe", "ignore", "ignore"],
+      timeout: DIRECTORY_MUTATION_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    if (!directoryGuardsStillAuthorized(guards, trustedRoot, path, authority)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+    if (child.error !== undefined || child.signal !== null) return "failed";
+    return mutationExitResult(child.status);
+  } finally {
+    closeDirectoryGuards(guards, artifactClass);
+  }
+}
+
+// A concurrent Keiko process may have recreated a shared name such as server.log; the guarded
+// unlink then refuses instead of deleting the new file and the lines in it.
+function unlinkGuardedPath(
+  path: string,
+  held: number,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+  authority: DirectoryGuardAuthority = "standard",
+): void {
+  const result = runGuardedDirectoryMutation(
+    "unlink",
+    path,
+    held,
+    trustedRoot,
+    artifactClass,
+    undefined,
+    authority,
+  );
+  if (result !== "success") throw safeFileError(artifactClass, mutationFailureKind(result));
+}
+
+function archiveDescriptor(
+  path: string,
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): number | undefined {
+  const guards = captureDirectoryGuards(
+    options.trustedRoot,
+    path,
+    options.artifactClass,
+    "owner-only-mutation",
+  );
+  let descriptor: number | undefined;
+  try {
+    const noFollow = noFollowFlag();
+    if (noFollow === 0) refuseSymlinkFallback(path, options.artifactClass);
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | noFollow);
+    const opened = fstatSync(descriptor, { bigint: true });
+    const pathname = lstatSync(path, { bigint: true });
+    if (
+      !archiveSourceIsSafe(descriptor, path, target, opened, pathname) ||
+      !directoryGuardsStillAuthorized(guards, options.trustedRoot, path, "owner-only-mutation")
+    ) {
+      throw safeFileError(options.artifactClass, "unsafe-target");
+    }
+    closeDirectoryGuards(guards, options.artifactClass);
+    return descriptor;
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    if (errorCode(error) === "ENOENT") return undefined;
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, "unsafe-target");
+  }
+}
+
+function archiveSourceIsSafe(
+  descriptor: number,
+  path: string,
+  target: string,
+  opened: BigIntStats,
+  pathname: BigIntStats,
+): boolean {
+  const checks = [
+    opened.isFile(),
+    descriptorOwnerIsTrusted(opened),
+    permissionIsPrivate(opened.mode),
+    new Set([1n, 2n]).has(opened.nlink),
+    opened.dev === pathname.dev,
+    opened.ino === pathname.ino,
+  ];
+  if (!checks.every(Boolean)) return false;
+  if (opened.nlink === 1n) return true;
+  return linkedArchiveMatches(descriptor, path, target);
+}
+
+function linkedArchiveMatches(descriptor: number, source: string, target: string): boolean {
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    const sourceStat = lstatSync(source, { bigint: true });
+    const targetStat = lstatSync(target, { bigint: true });
+    return (
+      opened.isFile() &&
+      descriptorOwnerIsTrusted(opened) &&
+      permissionIsPrivate(opened.mode) &&
+      opened.nlink === 2n &&
+      sourceStat.dev === opened.dev &&
+      sourceStat.ino === opened.ino &&
+      targetStat.dev === opened.dev &&
+      targetStat.ino === opened.ino
+    );
+  } catch {
+    return false;
+  }
+}
+
+function movedArchiveMatches(descriptor: number, target: string): boolean {
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    const targetStat = lstatSync(target, { bigint: true });
+    return (
+      descriptorIsSafeArtifact(opened) &&
+      permissionIsPrivate(opened.mode) &&
+      targetStat.dev === opened.dev &&
+      targetStat.ino === opened.ino &&
+      targetStat.nlink === 1n
+    );
+  } catch {
+    return false;
+  }
+}
+
+function finalizeLinkedArchive(
+  descriptor: number,
+  source: string,
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): void {
+  if (!linkedArchiveMatches(descriptor, source, target)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
+  try {
+    unlinkGuardedPath(
+      source,
+      descriptor,
+      options.trustedRoot,
+      options.artifactClass,
+      "owner-only-mutation",
+    );
+  } catch (error) {
+    // A concurrent rotation already removed the archived name (and a writer may have recreated
+    // it). The identity check refused to delete that newer file; the archive is still final when
+    // it alone holds the archived inode.
+    if (!isTargetMutated(error) || !movedArchiveMatches(descriptor, target)) throw error;
+    return;
+  }
+  if (!movedArchiveMatches(descriptor, target)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
+}
+
+function isTargetMutated(error: unknown): boolean {
+  return error instanceof SafeArtifactFileError && error.kind === "target-mutated";
+}
+
+/** Archives one private regular file without replacing an existing destination. */
+export function archiveSafeArtifactFile(
+  source: string,
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): SafeArtifactArchiveResult {
+  const descriptor = archiveDescriptor(source, target, options);
+  if (descriptor === undefined) return "source-missing";
+  try {
+    const linked = runGuardedDirectoryMutation(
+      "link",
+      source,
+      descriptor,
+      options.trustedRoot,
+      options.artifactClass,
+      target,
+      "owner-only-mutation",
+    );
+    if (linked === "success") {
+      finalizeLinkedArchive(descriptor, source, target, options);
+      return "hard-link-winner";
+    }
+    if (linked === "target-exists") {
+      if (linkedArchiveMatches(descriptor, source, target)) {
+        finalizeLinkedArchive(descriptor, source, target, options);
+      }
+      return "archive-exists";
+    }
+    if (linked !== "unsupported") {
+      throw safeFileError(options.artifactClass, mutationFailureKind(linked));
+    }
+    return renameIntoClaimedArchive(descriptor, source, target, options);
+  } finally {
+    closeArtifactDescriptor(descriptor, options.artifactClass);
+  }
+}
+
+// rename(2) replaces an existing destination and Node has no RENAME_NOREPLACE, so a concurrent
+// rotation could destroy the winner's archive. The name is claimed exclusively first; only the
+// claim winner renames, and the only file it can replace is its own empty claim.
+function renameIntoClaimedArchive(
+  descriptor: number,
+  source: string,
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): SafeArtifactArchiveResult {
+  const claim = claimArchiveName(target, options);
+  if (claim === undefined) return "archive-exists";
+  const renamed = runGuardedDirectoryMutation(
+    "rename",
+    source,
+    descriptor,
+    options.trustedRoot,
+    options.artifactClass,
+    target,
+    "owner-only-mutation",
+  );
+  if (renamed !== "success") {
+    releaseArchiveClaim(target, claim, options);
+    throw safeFileError(options.artifactClass, mutationFailureKind(renamed));
+  }
+  if (!movedArchiveMatches(descriptor, target)) {
+    throw safeFileError(options.artifactClass, "publish-failed");
+  }
+  return "rename-fallback";
+}
+
+// The claim is not held open across the rename, because Windows cannot replace a name that is
+// still open on file systems without POSIX delete semantics. It is re-opened here and held, so its
+// inode number cannot be recycled for a replacement before the guarded unlink checks it.
+function releaseArchiveClaim(
+  target: string,
+  claim: BigIntStats,
+  options: SafeArtifactDirectoryEntryOptions,
+): void {
+  if (!pathHasIdentity(target, claim)) return;
+  const held = openSafeArtifactFile(target, { ...options, mode: "read" });
+  try {
+    const opened = fstatSync(held, { bigint: true });
+    if (opened.dev === claim.dev && opened.ino === claim.ino) {
+      unlinkGuardedPath(
+        target,
+        held,
+        options.trustedRoot,
+        options.artifactClass,
+        "owner-only-mutation",
+      );
+    }
+  } finally {
+    closeDescriptorIgnoringErrors(held);
+  }
+}
+
+function claimArchiveName(
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): BigIntStats | undefined {
+  let claim: number;
+  try {
+    claim = openSafeArtifactFile(target, {
+      artifactClass: options.artifactClass,
+      mode: "exclusive-create",
+      trustedRoot: options.trustedRoot,
+    });
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError && error.kind === "target-exists") return undefined;
+    throw error;
+  }
+  try {
+    return fstatSync(claim, { bigint: true });
+  } finally {
+    closeArtifactDescriptor(claim, options.artifactClass);
+  }
+}
+
+function pathHasIdentity(path: string, identity: BigIntStats): boolean {
+  try {
+    const current = lstatSync(path, { bigint: true });
+    return current.dev === identity.dev && current.ino === identity.ino;
+  } catch {
+    return false;
+  }
+}
+
+/** Removes only an opened, owner-private, single-link regular file in an attested directory. */
+export function removeSafeArtifactFile(
+  path: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): void {
+  const descriptor = openSafeArtifactFile(path, {
+    ...options,
+    mode: "read",
+  });
+  try {
+    verifySafeArtifactFileDescriptor(descriptor, path, options);
+    unlinkGuardedPath(
+      path,
+      descriptor,
+      options.trustedRoot,
+      options.artifactClass,
+      "owner-only-mutation",
+    );
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    throw error;
+  }
+  closeArtifactDescriptor(descriptor, options.artifactClass);
+}
+
+function lstatDirectory(path: string, artifactClass: SafeArtifactClass): BigIntStats {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !directoryAuthorityIsSafe(stat)) {
+      throw safeFileError(artifactClass, "unsafe-ancestor");
+    }
+    return stat;
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+}
+
+function directoryAuthorityIsSafe(stat: BigIntStats): boolean {
+  if (process.platform === "win32") return true;
+  const effectiveUser = process.geteuid?.();
+  if (effectiveUser === undefined) return false;
+  const ownerIsTrusted = stat.uid === 0n || stat.uid === BigInt(effectiveUser);
+  const writableByOthers = (stat.mode & 0o022n) !== 0n;
+  const rootStickyDirectory = stat.uid === 0n && (stat.mode & 0o1000n) !== 0n;
+  return ownerIsTrusted && (!writableByOthers || rootStickyDirectory);
+}
+
+function directoryAuthorityIsOwnerOnly(stat: BigIntStats): boolean {
+  if (process.platform === "win32") return true;
+  const effectiveUser = process.geteuid?.();
+  return (
+    effectiveUser !== undefined &&
+    stat.uid === BigInt(effectiveUser) &&
+    (stat.mode & 0o777n) === BigInt(DIR_MODE)
+  );
+}
+
+function isOwnerOnlyMutationDirectory(
+  path: string,
+  trustedRoot: string,
+  targetPath: string,
+): boolean {
+  const key = filesystemComparisonPath(path);
+  return (
+    key === filesystemComparisonPath(trustedRoot) ||
+    key === filesystemComparisonPath(dirname(resolve(targetPath)))
+  );
+}
+
+function directoryChain(path: string): readonly string[] {
+  const absolute = resolve(path);
+  const filesystemRoot = parse(absolute).root;
+  const fromRoot = relative(filesystemRoot, absolute);
+  const directories = [filesystemRoot];
+  let current = filesystemRoot;
+  for (const component of fromRoot === "" ? [] : fromRoot.split(sep)) {
+    current = join(current, component);
+    directories.push(current);
+  }
+  return directories;
+}
+
+function resolvedRealPath(path: string, artifactClass: SafeArtifactClass): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+}
+
+function sameFilesystemPath(left: string, right: string): boolean {
+  return filesystemComparisonPath(left) === filesystemComparisonPath(right);
+}
+
+function compareResolvedPaths(left: string, right: string): number {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  if (resolvedLeft < resolvedRight) return -1;
+  if (resolvedLeft > resolvedRight) return 1;
+  return 0;
+}
+
+function containedDirectories(
+  trustedRoot: string,
+  targetPath: string,
+  artifactClass: SafeArtifactClass,
+): readonly string[] {
+  const root = resolve(trustedRoot);
+  const parent = dirname(resolve(targetPath));
+  const fromRoot = relative(root, parent);
+  if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+  const canonicalRoot = resolvedRealPath(root, artifactClass);
+  if (process.platform === "win32" && !sameFilesystemPath(root, canonicalRoot)) {
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+  const canonicalParent = resolve(canonicalRoot, fromRoot);
+  if (!sameFilesystemPath(resolvedRealPath(parent, artifactClass), canonicalParent)) {
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+  const directories = [...directoryChain(canonicalParent), root];
+  let current = root;
+  for (const component of fromRoot === "" ? [] : fromRoot.split(sep)) {
+    current = join(current, component);
+    directories.push(current);
+  }
+  const unique = new Map(directories.map((path) => [filesystemComparisonPath(path), path]));
+  return [...unique.values()];
+}
+
+function openDirectoryGuard(path: string, artifactClass: SafeArtifactClass): DirectoryGuard {
+  const before = lstatDirectory(path, artifactClass);
+  if (process.platform === "win32") {
+    const after = lstatDirectory(path, artifactClass);
+    if (after.dev !== before.dev || after.ino !== before.ino) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+    return { path, dev: after.dev, ino: after.ino, descriptor: undefined };
+  }
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const directory = typeof constants.O_DIRECTORY === "number" ? constants.O_DIRECTORY : 0;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | noFollow | directory);
+    return validateDirectoryGuard(path, before.dev, before.ino, descriptor, artifactClass);
+  } catch (error) {
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+}
+
+function validateDirectoryGuard(
+  path: string,
+  dev: bigint,
+  ino: bigint,
+  descriptor: number,
+  artifactClass: SafeArtifactClass,
+): DirectoryGuard {
+  let opened: BigIntStats;
+  try {
+    opened = fstatSync(descriptor, { bigint: true });
+  } catch {
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+  const pathname = lstatDirectory(path, artifactClass);
+  if (
+    !opened.isDirectory() ||
+    opened.dev !== dev ||
+    opened.ino !== ino ||
+    pathname.dev !== dev ||
+    pathname.ino !== ino
+  ) {
+    throw safeFileError(artifactClass, "target-mutated");
+  }
+  return { path, dev, ino, descriptor };
+}
+
+function closeDescriptorIgnoringErrors(descriptor: number): void {
+  try {
+    closeSync(descriptor);
+  } catch {
+    // Preserve the already-closed primary failure.
+  }
+}
+
+function captureDirectoryGuards(
+  trustedRoot: string,
+  targetPath: string,
+  artifactClass: SafeArtifactClass,
+  authority: DirectoryGuardAuthority = "standard",
+): readonly DirectoryGuard[] {
+  const guards: DirectoryGuard[] = [];
+  try {
+    for (const path of containedDirectories(trustedRoot, targetPath, artifactClass)) {
+      if (
+        authority === "owner-only-mutation" &&
+        isOwnerOnlyMutationDirectory(path, trustedRoot, targetPath) &&
+        !directoryAuthorityIsOwnerOnly(lstatDirectory(path, artifactClass))
+      ) {
+        throw safeFileError(artifactClass, "unsafe-ancestor");
+      }
+      guards.push(openDirectoryGuard(path, artifactClass));
+    }
+    return guards;
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    throw error;
+  }
+}
+
+function directoryGuardStillOwnerOnly(guard: DirectoryGuard): boolean {
+  try {
+    const stat = lstatSync(guard.path, { bigint: true });
+    return stat.isDirectory() && !stat.isSymbolicLink() && directoryAuthorityIsOwnerOnly(stat);
+  } catch {
+    return false;
+  }
+}
+
+function directoryGuardsStillAuthorized(
+  guards: readonly DirectoryGuard[],
+  trustedRoot: string,
+  targetPath: string,
+  authority: DirectoryGuardAuthority,
+): boolean {
+  if (!guards.every(directoryGuardStillMatches)) return false;
+  if (authority === "standard") return true;
+  return guards
+    .filter((guard) => isOwnerOnlyMutationDirectory(guard.path, trustedRoot, targetPath))
+    .every(directoryGuardStillOwnerOnly);
+}
+
+function directoryGuardStillMatches(guard: DirectoryGuard): boolean {
+  try {
+    const pathname = lstatSync(guard.path, { bigint: true });
+    if (!pathname.isDirectory() || pathname.isSymbolicLink()) return false;
+    if (pathname.dev !== guard.dev || pathname.ino !== guard.ino) return false;
+    if (guard.descriptor === undefined) return process.platform === "win32";
+    const opened = fstatSync(guard.descriptor, { bigint: true });
+    return opened.isDirectory() && opened.dev === guard.dev && opened.ino === guard.ino;
+  } catch {
+    return false;
+  }
+}
+
+function closeDirectoryGuardsIgnoringErrors(guards: readonly DirectoryGuard[]): void {
+  for (const guard of guards) {
+    if (guard.descriptor === undefined) continue;
+    closeDescriptorIgnoringErrors(guard.descriptor);
+  }
+}
+
+function closeDirectoryGuards(
+  guards: readonly DirectoryGuard[],
+  artifactClass: SafeArtifactClass,
+): void {
+  let failed = false;
+  for (const guard of guards) {
+    if (guard.descriptor === undefined) continue;
+    try {
+      closeSync(guard.descriptor);
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) throw safeFileError(artifactClass, "close-failed");
+}
+
+function refuseSymlinkFallback(path: string, artifactClass: SafeArtifactClass): void {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw safeFileError(artifactClass, "unsafe-target");
+    }
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return;
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "open-failed");
+  }
+}
+
+function openFlags(mode: SafeArtifactOpenMode): number {
+  if (mode === "read") return constants.O_RDONLY;
+  if (mode === "read-write-existing") return constants.O_RDWR;
+  const create = constants.O_WRONLY | constants.O_CREAT;
+  return mode === "exclusive-create" ? create | constants.O_EXCL : create | constants.O_APPEND;
+}
+
+function permissionIsPrivate(mode: number | bigint): boolean {
+  if (process.platform === "win32") return true;
+  return typeof mode === "bigint" ? (mode & 0o077n) === 0n : (mode & 0o077) === 0;
+}
+
+function descriptorOwnerIsTrusted(stat: BigIntStats): boolean {
+  if (process.platform === "win32") return true;
+  const effectiveUser = process.geteuid?.();
+  return effectiveUser !== undefined && stat.uid === BigInt(effectiveUser);
+}
+
+function descriptorIsSafeArtifact(stat: BigIntStats): boolean {
+  return stat.isFile() && stat.nlink === 1n && descriptorOwnerIsTrusted(stat);
+}
+
+function descriptorSafetyFailureKind(stat: BigIntStats): SafeArtifactFileFailureKind {
+  return stat.isFile() && stat.nlink === 1n ? "permission-unsafe" : "unsafe-target";
+}
+
+function verifyDescriptorIdentity(
+  descriptor: number,
+  path: string,
+  artifactClass: SafeArtifactClass,
+): BigIntStats {
+  let opened: BigIntStats;
+  try {
+    opened = fstatSync(descriptor, { bigint: true });
+  } catch {
+    throw safeFileError(artifactClass, "open-failed");
+  }
+  if (!descriptorIsSafeArtifact(opened)) {
+    throw safeFileError(artifactClass, descriptorSafetyFailureKind(opened));
+  }
+  let pathname: BigIntStats;
+  try {
+    pathname = lstatSync(path, { bigint: true });
+  } catch {
+    throw safeFileError(artifactClass, "target-mutated");
+  }
+  if (
+    pathname.isSymbolicLink() ||
+    !pathname.isFile() ||
+    pathname.nlink !== 1n ||
+    pathname.dev !== opened.dev ||
+    pathname.ino !== opened.ino
+  ) {
+    throw safeFileError(artifactClass, "target-mutated");
+  }
+  return opened;
+}
+
+/** Verifies the opened descriptor and final pathname still name one private regular inode. */
+export function verifySafeArtifactFileDescriptor(
+  descriptor: number,
+  path: string,
+  options: Pick<OpenSafeArtifactFileOptions, "artifactClass" | "trustedRoot">,
+): void {
+  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
+  try {
+    const opened = verifyDescriptorIdentity(descriptor, path, options.artifactClass);
+    if (!permissionIsPrivate(opened.mode)) {
+      throw safeFileError(options.artifactClass, "permission-unsafe");
+    }
+    if (!guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(options.artifactClass, "target-mutated");
+    }
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, "open-failed");
+  }
+  closeDirectoryGuards(guards, options.artifactClass);
+}
+
+function tightenDescriptor(descriptor: number, artifactClass: SafeArtifactClass): void {
+  if (process.platform === "win32") return;
+  try {
+    fchmodSync(descriptor, FILE_MODE);
+  } catch {
+    throw safeFileError(artifactClass, "permission-failed");
+  }
+}
+
+function mapOpenError(error: unknown): SafeArtifactFileFailureKind {
+  const code = errorCode(error);
+  if (code === "EEXIST") return "target-exists";
+  if (code === "ELOOP" || code === "EISDIR" || code === "ENXIO") return "unsafe-target";
+  return "open-failed";
+}
+
+function noFollowFlag(): number {
+  if (process.platform === "win32") return 0;
+  return typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+}
+
+function openArtifactDescriptor(path: string, options: OpenSafeArtifactFileOptions): number {
+  const noFollow = noFollowFlag();
+  const nonBlocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+  if (noFollow === 0) refuseSymlinkFallback(path, options.artifactClass);
+  try {
+    return openSync(path, openFlags(options.mode) | noFollow | nonBlocking, FILE_MODE);
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, mapOpenError(error));
+  }
+}
+
+function validateOpenedArtifact(
+  descriptor: number,
+  path: string,
+  options: OpenSafeArtifactFileOptions,
+  guards: readonly DirectoryGuard[],
+): void {
+  verifyDescriptorIdentity(descriptor, path, options.artifactClass);
+  if (!guards.every(directoryGuardStillMatches)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
+  if (options.mode !== "read") tightenDescriptor(descriptor, options.artifactClass);
+  const opened = verifyDescriptorIdentity(descriptor, path, options.artifactClass);
+  if (!permissionIsPrivate(opened.mode)) {
+    throw safeFileError(options.artifactClass, "permission-unsafe");
+  }
+  if (!guards.every(directoryGuardStillMatches)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
+}
+
+/**
+ * Opens without following the final symlink and verifies the descriptor before any caller write.
+ * POSIX containment relies on the verified owner-private ancestor chain because Node has no
+ * descriptor-relative open API. A same-UID ancestor mutation can create an empty file before the
+ * post-open guard rejects it, so the closed assurance is `private-root-guarded`, not absolute
+ * containment; no descriptor is returned and no content or chmod reaches the redirected file.
+ * Windows also lacks stable no-follow directory descriptors and Node cannot inspect NTFS DACLs.
+ * Its permission assurance is therefore `platform-inherited`, never `verified-private`.
+ */
+export function openSafeArtifactFile(path: string, options: OpenSafeArtifactFileOptions): number {
+  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openArtifactDescriptor(path, options);
+    validateOpenedArtifact(descriptor, path, options, guards);
+    closeDirectoryGuards(guards, options.artifactClass);
+    return descriptor;
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (descriptor !== undefined) closeArtifactDescriptor(descriptor, options.artifactClass);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, "open-failed");
+  }
+}
+
+export interface SafeArtifactPublicationEntry {
+  readonly path: string;
+  readonly contents: string | Uint8Array;
+  readonly artifactClass: SafeArtifactClass;
+}
+
+export interface SafeArtifactPublicationOptions {
+  readonly commitPath: string;
+  readonly publicationSlot?: string;
+  readonly trustedRoot: string;
+}
+
+export interface SafeArtifactPublicationResult {
+  readonly status: "published" | "recovered";
+  readonly permissionAssurance: SafeArtifactPermissionAssurance;
+  readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
+}
+
+export interface SafeArtifactRecoveryOptions {
+  readonly publicationSlot: string;
+  readonly trustedRoot: string;
+}
+
+export type SafeArtifactReceiptOptions = SafeArtifactRecoveryOptions;
+
+export type SafeArtifactRecoveryResult =
+  | { readonly status: "none" }
+  | {
+      readonly status: "recovered";
+      readonly commitPath: string;
+      readonly artifactCount: number;
+      readonly commitByteCount: number;
+      readonly commitSha256: string;
+      readonly permissionAssurance: SafeArtifactPermissionAssurance;
+      readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
+    }
+  | {
+      readonly status: "rolled-back";
+      readonly permissionAssurance: SafeArtifactPermissionAssurance;
+      readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
+    };
+
+export interface ReplaceSafeArtifactFileOptions {
+  readonly artifactClass: SafeArtifactClass;
+  readonly trustedRoot: string;
+}
+
+interface PreparedPublicationEntry {
+  readonly path: string;
+  readonly stagePath: string;
+  readonly bytes: Buffer;
+  readonly artifactClass: SafeArtifactClass;
+  readonly trustedRoot: string;
+}
+
+interface PublicationIntentEntry {
+  readonly name: string;
+  readonly artifactClass: SafeArtifactClass;
+  readonly byteCount: number;
+  readonly sha256: string;
+}
+
+interface PublicationIntent {
+  readonly schemaVersion: 1;
+  readonly ownerPid: number;
+  readonly ownerToken: string;
+  readonly ownerExpiresAt: number;
+  readonly commitIndex: number;
+  readonly entries: readonly PublicationIntentEntry[];
+}
+
+type PublicationReceiptState = "active" | "complete" | "consumed";
+
+const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
+const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
+// The owner file and in-process token identify one synchronous publish call, not a process. A peer
+// fails closed while that call is live. Once a still-live foreign PID outlives this bounded lease,
+// recovery becomes explicitly unsupported rather than risking takeover of an active operation.
+const PUBLICATION_OWNER_LEASE_MS = 10 * 60 * 1000;
+const activePublicationOwnerTokens = new Set<string>();
+const MAX_PUBLICATION_ENTRIES = 16;
+export const MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES = 256 * 1024 * 1024;
+export const MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES = 512 * 1024 * 1024;
+const MAX_PUBLICATION_INTENT_BYTES = 64 * 1024;
+
+function validatePublicationSlot(slot: string, artifactClass: SafeArtifactClass): void {
+  if (!PUBLICATION_SLOT_PATTERN.test(slot)) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
+}
+
+function intentPath(trustedRoot: string, slot: string, state: PublicationReceiptState): string {
+  return join(resolve(trustedRoot), `.keiko-publish-${slot}.${state}`);
+}
+
+function ownerPath(trustedRoot: string, slot: string): string {
+  return join(resolve(trustedRoot), `.keiko-publish-${slot}.owner`);
+}
+
+function publicationId(
+  entries: readonly SafeArtifactPublicationEntry[],
+  commitPath: string,
+): string {
+  const hash = createHash("sha256");
+  const ordered = [...entries].sort((left, right) => compareResolvedPaths(left.path, right.path));
+  for (const entry of ordered) {
+    const bytes =
+      typeof entry.contents === "string"
+        ? Buffer.from(entry.contents, "utf8")
+        : Buffer.from(entry.contents);
+    hash
+      .update(entry.artifactClass)
+      .update("\0")
+      .update(resolve(entry.path))
+      .update("\0")
+      .update(String(bytes.length))
+      .update("\0")
+      .update(bytes)
+      .update("\0");
+  }
+  hash.update(resolve(commitPath)).update("\0");
+  return hash.digest("hex").slice(0, 24);
+}
+
+/** Returns a body-free stable slot identifier for one publication namespace and destination. */
+export function safeArtifactPublicationSlot(namespace: string, destinationKey: string): string {
+  return createHash("sha256")
+    .update(namespace)
+    .update("\0")
+    .update(resolve(destinationKey))
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function preparePublicationEntries(
+  entries: readonly SafeArtifactPublicationEntry[],
+  commitPath: string,
+  trustedRoot: string,
+  fixedSlot?: string,
+): readonly PreparedPublicationEntry[] {
+  const parent = dirname(resolve(commitPath));
+  const id = fixedSlot ?? publicationId(entries, commitPath);
+  const ordered = [...entries].sort((left, right) => compareResolvedPaths(left.path, right.path));
+  return ordered.map((entry, index) => ({
+    path: resolve(entry.path),
+    stagePath: join(parent, `.keiko-publish-${id}-${String(index)}.stage`),
+    bytes:
+      typeof entry.contents === "string"
+        ? Buffer.from(entry.contents, "utf8")
+        : Buffer.from(entry.contents),
+    artifactClass: entry.artifactClass,
+    trustedRoot: resolve(trustedRoot),
+  }));
+}
+
+function publicationDigest(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function publicationIntent(
+  entries: readonly PreparedPublicationEntry[],
+  commitPath: string,
+): PublicationIntent {
+  const resolvedCommit = resolve(commitPath);
+  const commitIndex = entries.findIndex((entry) => entry.path === resolvedCommit);
+  return {
+    schemaVersion: 1,
+    ownerPid: process.pid,
+    ownerToken: randomBytes(12).toString("hex"),
+    ownerExpiresAt: Date.now() + PUBLICATION_OWNER_LEASE_MS,
+    commitIndex,
+    entries: entries.map((entry) => ({
+      name: basename(entry.path),
+      artifactClass: entry.artifactClass,
+      byteCount: entry.bytes.length,
+      sha256: publicationDigest(entry.bytes),
+    })),
+  };
+}
+
+function intentBytes(intent: PublicationIntent): Buffer {
+  return Buffer.from(`${JSON.stringify(intent)}\n`, "utf8");
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function publicationNameComparison(value: string): string {
+  return process.platform === "darwin" || process.platform === "win32"
+    ? value.normalize("NFC").toLocaleLowerCase("en-US")
+    : value;
+}
+
+function isIntentName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "." &&
+    value !== ".." &&
+    basename(value) === value &&
+    !publicationNameComparison(value).startsWith(".keiko-publish-")
+  );
+}
+
+function isIntentByteCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES
+  );
+}
+
+function publicationContentsByteCount(contents: unknown): number | undefined {
+  if (typeof contents === "string") return Buffer.byteLength(contents);
+  return contents instanceof Uint8Array ? contents.byteLength : undefined;
+}
+
+function validateIntentPublicationEntries(
+  entries: readonly SafeArtifactPublicationEntry[],
+  artifactClass: SafeArtifactClass,
+): void {
+  let totalBytes = 0;
+  for (const entry of entries) {
+    const byteCount = publicationContentsByteCount(entry.contents);
+    if (!isIntentName(basename(resolve(entry.path))) || !isIntentByteCount(byteCount)) {
+      throw safeFileError(artifactClass, "invalid-publication");
+    }
+    totalBytes += byteCount;
+  }
+  if (totalBytes > MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
+}
+
+function isIntentEntry(value: unknown): value is PublicationIntentEntry {
+  if (!isRecord(value)) return false;
+  return (
+    isIntentName(value.name) &&
+    isSafeArtifactClass(value.artifactClass) &&
+    isIntentByteCount(value.byteCount) &&
+    typeof value.sha256 === "string" &&
+    PUBLICATION_DIGEST_PATTERN.test(value.sha256)
+  );
+}
+
+function isCommitIndex(value: unknown, entryCount: number): value is number {
+  return (
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value < entryCount
+  );
+}
+
+function hasValidIntentOwner(value: Readonly<Record<string, unknown>>): value is Readonly<
+  Record<string, unknown>
+> & {
+  ownerPid: number;
+  ownerToken: string;
+  ownerExpiresAt: number;
+} {
+  return (
+    typeof value.ownerPid === "number" &&
+    Number.isSafeInteger(value.ownerPid) &&
+    value.ownerPid > 0 &&
+    typeof value.ownerToken === "string" &&
+    PUBLICATION_OWNER_TOKEN_PATTERN.test(value.ownerToken) &&
+    typeof value.ownerExpiresAt === "number" &&
+    Number.isSafeInteger(value.ownerExpiresAt) &&
+    value.ownerExpiresAt > 0
+  );
+}
+
+function parsedIntentEntries(value: unknown): readonly PublicationIntentEntry[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PUBLICATION_ENTRIES) {
+    return undefined;
+  }
+  if (!value.every(isIntentEntry)) return undefined;
+  const comparisonNames = value.map((entry) => filesystemComparisonPath(join("/", entry.name)));
+  const totalBytes = value.reduce((total, entry) => total + entry.byteCount, 0);
+  if (
+    new Set(comparisonNames).size !== comparisonNames.length ||
+    totalBytes > MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function parsedPublicationIntent(value: unknown): PublicationIntent | undefined {
+  if (!isRecord(value) || value.schemaVersion !== 1) return undefined;
+  const entries = parsedIntentEntries(value.entries);
+  if (entries === undefined || !isCommitIndex(value.commitIndex, entries.length)) return undefined;
+  if (!hasValidIntentOwner(value)) return undefined;
+  return {
+    schemaVersion: 1,
+    ownerPid: value.ownerPid,
+    ownerToken: value.ownerToken,
+    ownerExpiresAt: value.ownerExpiresAt,
+    commitIndex: value.commitIndex,
+    entries,
+  };
+}
+
+function filesystemComparisonPath(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "darwin" || process.platform === "win32"
+    ? resolved.normalize("NFC").toLocaleLowerCase("en-US")
+    : resolved;
+}
+
+function validatePublication(
+  entries: readonly SafeArtifactPublicationEntry[],
+  options: SafeArtifactPublicationOptions,
+): void {
+  const fallbackClass = entries[0]?.artifactClass ?? "manifest";
+  const resolvedCommit = resolve(options.commitPath);
+  const paths = entries.map((entry) => resolve(entry.path));
+  const comparisonPaths = paths.map(filesystemComparisonPath);
+  const parents = new Set(paths.map(dirname));
+  if (
+    entries.length === 0 ||
+    !paths.includes(resolvedCommit) ||
+    new Set(comparisonPaths).size !== paths.length ||
+    parents.size !== 1
+  ) {
+    throw safeFileError(fallbackClass, "invalid-publication");
+  }
+  if (entries.length > MAX_PUBLICATION_ENTRIES) {
+    throw safeFileError(fallbackClass, "invalid-publication");
+  }
+  validatePublicationSlotOption(entries, options, resolvedCommit, fallbackClass);
+  for (const path of paths) containedDirectories(options.trustedRoot, path, fallbackClass);
+}
+
+function validatePublicationSlotOption(
+  entries: readonly SafeArtifactPublicationEntry[],
+  options: SafeArtifactPublicationOptions,
+  resolvedCommit: string,
+  artifactClass: SafeArtifactClass,
+): void {
+  if (options.publicationSlot === undefined) return;
+  validatePublicationSlot(options.publicationSlot, artifactClass);
+  validateIntentPublicationEntries(entries, artifactClass);
+  if (!sameFilesystemPath(dirname(resolvedCommit), resolve(options.trustedRoot))) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
+}
+
+function writeAll(descriptor: number, bytes: Buffer, artifactClass: SafeArtifactClass): void {
+  let offset = 0;
+  try {
+    while (offset < bytes.length) {
+      const written = writeSync(descriptor, bytes, offset, bytes.length - offset);
+      if (written <= 0) throw safeFileError(artifactClass, "write-failed");
+      offset += written;
+    }
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "write-failed");
+  }
+}
+
+function syncArtifactDescriptor(descriptor: number, artifactClass: SafeArtifactClass): void {
+  try {
+    fsyncSync(descriptor);
+  } catch {
+    throw safeFileError(artifactClass, "durability-failed");
+  }
+}
+
+function createStage(entry: PreparedPublicationEntry): void {
+  const descriptor = openSafeArtifactFile(entry.stagePath, {
+    artifactClass: entry.artifactClass,
+    mode: "exclusive-create",
+    trustedRoot: entry.trustedRoot,
+  });
+  try {
+    writeAll(descriptor, entry.bytes, entry.artifactClass);
+    syncArtifactDescriptor(descriptor, entry.artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    throw error;
+  }
+  closeArtifactDescriptor(descriptor, entry.artifactClass);
+}
+
+function syncDirectory(
+  path: string,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+): SafeArtifactDurabilityAssurance {
+  const guards = captureDirectoryGuards(
+    trustedRoot,
+    join(path, ".keiko-directory-sync"),
+    artifactClass,
+  );
+  try {
+    const parent = guards.at(-1);
+    if (parent === undefined || !guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+    if (parent.descriptor !== undefined) fsyncSync(parent.descriptor);
+    if (!guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "durability-failed");
+  }
+  const assurance =
+    guards.at(-1)?.descriptor === undefined ? "directory-sync-unavailable" : "verified";
+  closeDirectoryGuards(guards, artifactClass);
+  return assurance;
+}
+
+function createPublicationIntent(
+  path: string,
+  bytes: Buffer,
+  artifactClass: SafeArtifactClass,
+  trustedRoot: string,
+): SafeArtifactDurabilityAssurance {
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "exclusive-create",
+    trustedRoot,
+  });
+  try {
+    writeAll(descriptor, bytes, artifactClass);
+    syncArtifactDescriptor(descriptor, artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    throw error;
+  }
+  closeArtifactDescriptor(descriptor, artifactClass);
+  return syncDirectory(dirname(path), trustedRoot, artifactClass);
+}
+
+function parsePublicationIntentBytes(buffer: Buffer, count: number): PublicationIntent {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(buffer.subarray(0, count).toString("utf8")) as unknown;
+  } catch {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  const intent = parsedPublicationIntent(parsed);
+  if (intent === undefined) throw safeFileError("manifest", "recovery-conflict");
+  return intent;
+}
+
+function readPublicationIntent(path: string, trustedRoot: string): PublicationIntent {
+  const artifactClass = "manifest";
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "read",
+    trustedRoot,
+  });
+  try {
+    const stat = fstatSync(descriptor, { bigint: true });
+    if (stat.size <= 0n || stat.size > BigInt(MAX_PUBLICATION_INTENT_BYTES)) {
+      throw safeFileError(artifactClass, "recovery-conflict");
+    }
+    const buffer = Buffer.alloc(Number(stat.size) + 1);
+    const count = readIntoBuffer(descriptor, buffer, artifactClass);
+    verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
+    if (count !== Number(stat.size)) throw safeFileError(artifactClass, "recovery-conflict");
+    return parsePublicationIntentBytes(buffer, count);
+  } finally {
+    closeArtifactDescriptor(descriptor, artifactClass);
+  }
+}
+
+function removePublicationIntent(
+  path: string,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+  restoreBytes?: Buffer,
+): SafeArtifactDurabilityAssurance {
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "read",
+    trustedRoot,
+  });
+  try {
+    verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
+    unlinkGuardedPath(path, descriptor, trustedRoot, artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "publish-failed");
+  }
+  closeArtifactDescriptor(descriptor, artifactClass);
+  try {
+    return syncDirectory(dirname(path), trustedRoot, artifactClass);
+  } catch (error) {
+    if (restoreBytes !== undefined && !pathExists(path, artifactClass)) {
+      createPublicationIntent(path, restoreBytes, artifactClass, trustedRoot);
+    }
+    throw error;
+  }
+}
+
+function readExactPrivateFile(
+  path: string,
+  expected: Buffer,
+  artifactClass: SafeArtifactClass,
+  trustedRoot: string,
+): boolean {
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "read",
+    trustedRoot,
+  });
+  try {
+    const buffer = Buffer.alloc(expected.length + 1);
+    const read = readIntoBuffer(descriptor, buffer, artifactClass);
+    verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
+    return read === expected.length && buffer.subarray(0, read).equals(expected);
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "read-failed");
+  } finally {
+    closeArtifactDescriptor(descriptor, artifactClass);
+  }
+}
+
+function readIntoBuffer(
+  descriptor: number,
+  buffer: Buffer,
+  artifactClass: SafeArtifactClass,
+): number {
+  let offset = 0;
+  try {
+    while (offset < buffer.length) {
+      const read = readSync(descriptor, buffer, offset, buffer.length - offset, offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    return offset;
+  } catch {
+    throw safeFileError(artifactClass, "read-failed");
+  }
+}
+
+function recoveryStatIsSafe(stat: BigIntStats): boolean {
+  return (
+    stat.isFile() &&
+    !stat.isSymbolicLink() &&
+    (stat.nlink === 1n || stat.nlink === 2n) &&
+    permissionIsPrivate(stat.mode)
+  );
+}
+
+function recoveryPathStat(path: string, artifactClass: SafeArtifactClass): BigIntStats {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (!recoveryStatIsSafe(stat)) throw safeFileError(artifactClass, "recovery-conflict");
+    return stat;
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "recovery-conflict");
+  }
+}
+
+function openRecoveryDescriptor(path: string, artifactClass: SafeArtifactClass): number {
+  const noFollow = noFollowFlag();
+  const nonBlocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+  if (noFollow === 0) refuseSymlinkFallback(path, artifactClass);
+  try {
+    return openSync(path, constants.O_RDWR | noFollow | nonBlocking);
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "read-failed");
+  }
+}
+
+function sameRecoveryIdentity(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.nlink === right.nlink;
+}
+
+function recoveryReadMatches(
+  bytes: Buffer,
+  count: number,
+  expected: PublicationIntentEntry,
+  before: BigIntStats,
+  after: BigIntStats,
+  guards: readonly DirectoryGuard[],
+): boolean {
+  return (
+    count === expected.byteCount &&
+    publicationDigest(bytes.subarray(0, count)) === expected.sha256 &&
+    sameRecoveryIdentity(before, after) &&
+    guards.every(directoryGuardStillMatches)
+  );
+}
+
+function readRecoveryBytes(
+  path: string,
+  expected: PublicationIntentEntry,
+  trustedRoot: string,
+): Buffer {
+  const guards = captureDirectoryGuards(trustedRoot, path, expected.artifactClass);
+  const before = recoveryPathStat(path, expected.artifactClass);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openRecoveryDescriptor(path, expected.artifactClass);
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!recoveryStatIsSafe(opened) || !sameRecoveryIdentity(before, opened)) {
+      throw safeFileError(expected.artifactClass, "recovery-conflict");
+    }
+    const bytes = Buffer.alloc(expected.byteCount + 1);
+    const count = readIntoBuffer(descriptor, bytes, expected.artifactClass);
+    const after = recoveryPathStat(path, expected.artifactClass);
+    const finalOpened = fstatSync(descriptor, { bigint: true });
+    if (
+      !recoveryReadMatches(bytes, count, expected, opened, finalOpened, guards) ||
+      !sameRecoveryIdentity(finalOpened, after)
+    ) {
+      throw safeFileError(expected.artifactClass, "recovery-conflict");
+    }
+    closeArtifactDescriptor(descriptor, expected.artifactClass);
+    descriptor = undefined;
+    closeDirectoryGuards(guards, expected.artifactClass);
+    return bytes.subarray(0, count);
+  } catch (error) {
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(expected.artifactClass, "read-failed");
+  }
+}
+
+function linkedRecoveryStats(entry: PreparedPublicationEntry): {
+  readonly stage: BigIntStats;
+  readonly target: BigIntStats;
+} {
+  try {
+    const stage = lstatSync(entry.stagePath, { bigint: true });
+    const target = lstatSync(entry.path, { bigint: true });
+    if (!linkedStatsAreSafe(stage, target)) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    return { stage, target };
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  }
+}
+
+function linkedStatsAreSafe(stage: BigIntStats, target: BigIntStats): boolean {
+  const checks = [
+    stage.isFile(),
+    target.isFile(),
+    !stage.isSymbolicLink(),
+    !target.isSymbolicLink(),
+    stage.nlink === 2n,
+    target.nlink === 2n,
+    stage.dev === target.dev,
+    stage.ino === target.ino,
+    permissionIsPrivate(stage.mode),
+    permissionIsPrivate(target.mode),
+  ];
+  return checks.every(Boolean);
+}
+
+function openLinkedStage(entry: PreparedPublicationEntry): number {
+  const noFollow = noFollowFlag();
+  const nonBlocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+  if (noFollow === 0) refuseSymlinkFallback(entry.stagePath, entry.artifactClass);
+  try {
+    return openSync(entry.stagePath, constants.O_RDWR | noFollow | nonBlocking);
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "read-failed");
+  }
+}
+
+function linkedDescriptorMatches(descriptor: number, expected: BigIntStats): boolean {
+  const opened = fstatSync(descriptor, { bigint: true });
+  return [
+    opened.isFile(),
+    opened.dev === expected.dev,
+    opened.ino === expected.ino,
+    opened.nlink === 2n,
+  ].every(Boolean);
+}
+
+function readMatchesPublication(descriptor: number, entry: PreparedPublicationEntry): boolean {
+  const buffer = Buffer.alloc(entry.bytes.length + 1);
+  const read = readIntoBuffer(descriptor, buffer, entry.artifactClass);
+  return read === entry.bytes.length && buffer.subarray(0, read).equals(entry.bytes);
+}
+
+function linkedRecoveryContentsMatch(entry: PreparedPublicationEntry): boolean {
+  const expected = linkedRecoveryStats(entry).stage;
+  const guards = captureDirectoryGuards(entry.trustedRoot, entry.stagePath, entry.artifactClass);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openLinkedStage(entry);
+    if (
+      !linkedDescriptorMatches(descriptor, expected) ||
+      !guards.every(directoryGuardStillMatches)
+    ) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    const matches = readMatchesPublication(descriptor, entry);
+    syncArtifactDescriptor(descriptor, entry.artifactClass);
+    closeArtifactDescriptor(descriptor, entry.artifactClass);
+    closeDirectoryGuards(guards, entry.artifactClass);
+    return matches;
+  } catch (error) {
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "read-failed");
+  }
+}
+
+function samePathNode(left: string, right: string): boolean {
+  try {
+    const leftStat = lstatSync(left, { bigint: true });
+    const rightStat = lstatSync(right, { bigint: true });
+    return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+  } catch {
+    return false;
+  }
+}
+
+function recoverLinkedStage(entry: PreparedPublicationEntry): boolean {
+  if (
+    !pathExists(entry.stagePath, entry.artifactClass) ||
+    !pathExists(entry.path, entry.artifactClass)
+  ) {
+    return false;
+  }
+  if (!samePathNode(entry.stagePath, entry.path) || !linkedRecoveryContentsMatch(entry)) {
+    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  }
+  return true;
+}
+
+function syncRecoveredStage(entry: PreparedPublicationEntry): void {
+  const descriptor = openSafeArtifactFile(entry.stagePath, {
+    artifactClass: entry.artifactClass,
+    mode: "read-write-existing",
+    trustedRoot: entry.trustedRoot,
+  });
+  try {
+    syncArtifactDescriptor(descriptor, entry.artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    throw error;
+  }
+  closeArtifactDescriptor(descriptor, entry.artifactClass);
+}
+
+function removeVerifiedStage(entry: PreparedPublicationEntry): void {
+  const descriptor = openSafeArtifactFile(entry.stagePath, {
+    artifactClass: entry.artifactClass,
+    mode: "read",
+    trustedRoot: entry.trustedRoot,
+  });
+  try {
+    verifySafeArtifactFileDescriptor(descriptor, entry.stagePath, {
+      artifactClass: entry.artifactClass,
+      trustedRoot: entry.trustedRoot,
+    });
+    unlinkGuardedPath(entry.stagePath, descriptor, entry.trustedRoot, entry.artifactClass);
+    syncDirectory(dirname(entry.stagePath), entry.trustedRoot, entry.artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "publish-failed");
+  }
+  closeArtifactDescriptor(descriptor, entry.artifactClass);
+}
+
+function ensurePreparedStage(entry: PreparedPublicationEntry, recovering: boolean): void {
+  if (recoverLinkedStage(entry)) return;
+  const stageExists = pathExists(entry.stagePath, entry.artifactClass);
+  const targetExists = pathExists(entry.path, entry.artifactClass);
+  if (targetExists) {
+    if (
+      !recovering ||
+      !readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)
+    ) {
+      throw safeFileError(entry.artifactClass, recovering ? "recovery-conflict" : "target-exists");
+    }
+    return;
+  }
+  if (!stageExists) {
+    createStage(entry);
+    return;
+  }
+  if (!readExactPrivateFile(entry.stagePath, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+    if (!recovering) throw safeFileError(entry.artifactClass, "recovery-conflict");
+    removeVerifiedStage(entry);
+    createStage(entry);
+    return;
+  }
+  syncRecoveredStage(entry);
+}
+
+function orderedForCommit(
+  entries: readonly PreparedPublicationEntry[],
+  commitPath: string,
+): readonly PreparedPublicationEntry[] {
+  const resolvedCommit = resolve(commitPath);
+  const commit = entries.find((entry) => entry.path === resolvedCommit);
+  if (commit === undefined) return entries;
+  return [...entries.filter((entry) => entry !== commit), commit];
+}
+
+function acceptRecoveredTarget(entry: PreparedPublicationEntry, recovering: boolean): void {
+  if (!recovering) throw safeFileError(entry.artifactClass, "target-exists");
+  if (
+    pathExists(entry.stagePath, entry.artifactClass) &&
+    samePathNode(entry.stagePath, entry.path) &&
+    linkedRecoveryContentsMatch(entry)
+  ) {
+    return;
+  }
+  if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  }
+}
+
+// Links `source` to `target` while holding `source` open, so the helper publishes only that inode.
+function linkHeldEntry(
+  source: string,
+  target: string,
+  entry: PreparedPublicationEntry,
+): GuardedDirectoryMutationResult {
+  const held = openSafeArtifactFile(source, {
+    artifactClass: entry.artifactClass,
+    mode: "read",
+    trustedRoot: entry.trustedRoot,
+  });
+  try {
+    return runGuardedDirectoryMutation(
+      "link",
+      source,
+      held,
+      entry.trustedRoot,
+      entry.artifactClass,
+      target,
+    );
+  } finally {
+    closeDescriptorIgnoringErrors(held);
+  }
+}
+
+function linkPreparedEntry(entry: PreparedPublicationEntry, recovering: boolean): boolean {
+  const result = linkHeldEntry(entry.stagePath, entry.path, entry);
+  if (result === "success") return true;
+  if (result === "target-exists") {
+    acceptRecoveredTarget(entry, recovering);
+    return false;
+  }
+  throw safeFileError(entry.artifactClass, mutationFailureKind(result));
+}
+
+function publishPreparedEntry(entry: PreparedPublicationEntry, recovering: boolean): void {
+  if (recovering && pathExists(entry.path, entry.artifactClass)) {
+    acceptRecoveredTarget(entry, true);
+    return;
+  }
+  if (!linkPreparedEntry(entry, recovering)) return;
+  try {
+    if (!samePathNode(entry.stagePath, entry.path) || !linkedRecoveryContentsMatch(entry)) {
+      throw safeFileError(entry.artifactClass, "target-mutated");
+    }
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "publish-failed");
+  }
+}
+
+function unlinkLinkedStage(entry: PreparedPublicationEntry): void {
+  const held = openLinkedStage(entry);
+  try {
+    unlinkGuardedPath(entry.stagePath, held, entry.trustedRoot, entry.artifactClass);
+  } finally {
+    closeDescriptorIgnoringErrors(held);
+  }
+}
+
+function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
+  if (!pathExists(entry.stagePath, entry.artifactClass)) {
+    if (readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot))
+      return;
+    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  }
+  if (!samePathNode(entry.stagePath, entry.path) || !linkedRecoveryContentsMatch(entry)) {
+    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  }
+  try {
+    unlinkLinkedStage(entry);
+  } catch {
+    restoreRecoveryMarker(entry, dirname(entry.stagePath));
+    throw safeFileError(entry.artifactClass, "publish-failed");
+  }
+  try {
+    if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+  } catch (error) {
+    restoreRecoveryMarker(entry, dirname(entry.stagePath));
+    throw error;
+  }
+}
+
+function restoreRecoveryMarker(entry: PreparedPublicationEntry, parent: string): void {
+  if (pathExists(entry.stagePath, entry.artifactClass)) return;
+  const result = linkHeldEntry(entry.path, entry.stagePath, entry);
+  if (result !== "success" && result !== "target-exists") {
+    throw safeFileError(entry.artifactClass, "durability-failed");
+  }
+  syncDirectory(parent, entry.trustedRoot, entry.artifactClass);
+}
+
+function combineDurabilityAssurance(
+  ...assurances: readonly SafeArtifactDurabilityAssurance[]
+): SafeArtifactDurabilityAssurance {
+  return assurances.includes("directory-sync-unavailable")
+    ? "directory-sync-unavailable"
+    : "verified";
+}
+
+function publicationLocatorEntry(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): PreparedPublicationEntry {
+  return {
+    path: intentPath(trustedRoot, slot, to),
+    stagePath: intentPath(trustedRoot, slot, from),
+    bytes: intentBytes(intent),
+    artifactClass: "manifest",
+    trustedRoot,
+  };
+}
+
+function readLinkedPublicationIntent(
+  fromPath: string,
+  toPath: string,
+  trustedRoot: string,
+): PublicationIntent {
+  const entry: PreparedPublicationEntry = {
+    path: toPath,
+    stagePath: fromPath,
+    bytes: Buffer.alloc(0),
+    artifactClass: "manifest",
+    trustedRoot,
+  };
+  const guards = [
+    ...captureDirectoryGuards(trustedRoot, fromPath, "manifest"),
+    ...captureDirectoryGuards(trustedRoot, toPath, "manifest"),
+  ];
+  let descriptor: number | undefined;
+  try {
+    const before = linkedRecoveryStats(entry).stage;
+    if (before.size <= 0n || before.size > BigInt(MAX_PUBLICATION_INTENT_BYTES)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    descriptor = openLinkedStage(entry);
+    if (!linkedDescriptorMatches(descriptor, before)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    const buffer = Buffer.alloc(Number(before.size) + 1);
+    const count = readIntoBuffer(descriptor, buffer, "manifest");
+    const after = linkedRecoveryStats(entry).stage;
+    if (count !== Number(before.size) || !sameRecoveryIdentity(before, after)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    if (!linkedDescriptorMatches(descriptor, after) || !guards.every(directoryGuardStillMatches)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    return parsePublicationIntentBytes(buffer, count);
+  } finally {
+    if (descriptor !== undefined) closeArtifactDescriptor(descriptor, "manifest");
+    closeDirectoryGuards(guards, "manifest");
+  }
+}
+
+function transitionPublicationReceipt(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): SafeArtifactDurabilityAssurance {
+  const entry = publicationLocatorEntry(intent, trustedRoot, slot, from, to);
+  publishPreparedEntry(entry, true);
+  const linked = syncDirectory(dirname(entry.path), trustedRoot, "manifest");
+  cleanupPublishedStage(entry);
+  const cleaned = syncDirectory(dirname(entry.path), trustedRoot, "manifest");
+  return combineDurabilityAssurance(linked, cleaned);
+}
+
+function cleanupPublishedStages(
+  entries: readonly PreparedPublicationEntry[],
+  parent: string,
+): SafeArtifactDurabilityAssurance {
+  const commit = entries.at(-1);
+  if (commit === undefined) return "verified";
+  for (const entry of entries.slice(0, -1)) cleanupPublishedStage(entry);
+  const beforeCommitCleanup = syncDirectory(parent, commit.trustedRoot, commit.artifactClass);
+  cleanupPublishedStage(commit);
+  try {
+    const afterCommitCleanup = syncDirectory(parent, commit.trustedRoot, commit.artifactClass);
+    return combineDurabilityAssurance(beforeCommitCleanup, afterCommitCleanup);
+  } catch (error) {
+    restoreRecoveryMarker(commit, parent);
+    throw error;
+  }
+}
+
+function publicationHasPath(
+  entries: readonly PreparedPublicationEntry[],
+  field: "path" | "stagePath",
+): boolean {
+  return entries.some((entry) => pathExists(entry[field], entry.artifactClass));
+}
+
+function publicationArtifactClass(entries: readonly PreparedPublicationEntry[]): SafeArtifactClass {
+  return entries[0]?.artifactClass ?? "manifest";
+}
+
+function completePreparedPublication(
+  prepared: readonly PreparedPublicationEntry[],
+  options: SafeArtifactPublicationOptions,
+  recovering: boolean,
+): SafeArtifactPublicationResult {
+  for (const entry of prepared) ensurePreparedStage(entry, recovering);
+  const parent = dirname(resolve(options.commitPath));
+  const preparedAssurance = syncDirectory(
+    parent,
+    options.trustedRoot,
+    publicationArtifactClass(prepared),
+  );
+  const ordered = orderedForCommit(prepared, options.commitPath);
+  for (const entry of ordered) publishPreparedEntry(entry, recovering);
+  const publishedAssurance = syncDirectory(
+    parent,
+    options.trustedRoot,
+    publicationArtifactClass(prepared),
+  );
+  const cleanupAssurance = cleanupPublishedStages(ordered, parent);
+  return {
+    status: recovering ? "recovered" : "published",
+    permissionAssurance: safeArtifactPermissionAssurance(),
+    durabilityAssurance: combineDurabilityAssurance(
+      preparedAssurance,
+      publishedAssurance,
+      cleanupAssurance,
+    ),
+  };
+}
+
+function removeIntentPublicationStages(
+  prepared: readonly PreparedPublicationEntry[],
+): SafeArtifactDurabilityAssurance {
+  const assurances: SafeArtifactDurabilityAssurance[] = [];
+  for (const entry of prepared) {
+    if (!pathExists(entry.stagePath, entry.artifactClass)) continue;
+    if (
+      !readExactPrivateFile(entry.stagePath, entry.bytes, entry.artifactClass, entry.trustedRoot)
+    ) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    removeVerifiedStage(entry);
+    assurances.push("verified");
+  }
+  return combineDurabilityAssurance(...assurances);
+}
+
+function rollbackIntentPublication(
+  prepared: readonly PreparedPublicationEntry[],
+  intent: PublicationIntent,
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
+): SafeArtifactDurabilityAssurance {
+  if (publicationHasPath(prepared, "path")) {
+    throw safeFileError(publicationArtifactClass(prepared), "recovery-conflict");
+  }
+  const stages = removeIntentPublicationStages(prepared);
+  const marker = transitionPublicationReceipt(
+    intent,
+    options.trustedRoot,
+    options.publicationSlot,
+    "active",
+    "consumed",
+  );
+  return combineDurabilityAssurance(stages, marker);
+}
+
+interface BegunIntentPublication {
+  readonly prepared: readonly PreparedPublicationEntry[];
+  readonly intent: PublicationIntent;
+  readonly initialAssurance: SafeArtifactDurabilityAssurance;
+}
+
+function releasePublicationOwner(
+  intent: PublicationIntent,
+  options: SafeArtifactRecoveryOptions,
+): SafeArtifactDurabilityAssurance {
+  activePublicationOwnerTokens.delete(intent.ownerToken);
+  const path = ownerPath(options.trustedRoot, options.publicationSlot);
+  if (!pathExists(path, "manifest")) return "verified";
+  if (!readExactPrivateFile(path, intentBytes(intent), "manifest", options.trustedRoot)) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  return removePublicationIntent(path, options.trustedRoot, "manifest");
+}
+
+function releasePublicationOwnerAfterFailure(
+  intent: PublicationIntent,
+  options: SafeArtifactRecoveryOptions,
+  ownerCreated: boolean,
+): void {
+  activePublicationOwnerTokens.delete(intent.ownerToken);
+  if (!ownerCreated) return;
+  try {
+    releasePublicationOwner(intent, options);
+  } catch {
+    // Preserve the primary failure. The durable owner marker remains available for recovery.
+  }
+}
+
+function createOwnedActiveReceipt(
+  intent: PublicationIntent,
+  activePath: string,
+  consumedPath: string,
+  hasConsumed: boolean,
+  artifactClass: SafeArtifactClass,
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
+): SafeArtifactDurabilityAssurance {
+  const publicationOwnerPath = ownerPath(options.trustedRoot, options.publicationSlot);
+  if (pathExists(publicationOwnerPath, "manifest")) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  let ownerCreated = false;
+  activePublicationOwnerTokens.add(intent.ownerToken);
+  try {
+    ownerCreated = true;
+    const ownerAssurance = createPublicationIntent(
+      publicationOwnerPath,
+      intentBytes(intent),
+      "manifest",
+      options.trustedRoot,
+    );
+    const activeAssurance = createPublicationIntent(
+      activePath,
+      intentBytes(intent),
+      artifactClass,
+      options.trustedRoot,
+    );
+    const priorAssurance = hasConsumed
+      ? removePublicationIntent(consumedPath, options.trustedRoot, "manifest")
+      : "verified";
+    return combineDurabilityAssurance(ownerAssurance, activeAssurance, priorAssurance);
+  } catch (error) {
+    releasePublicationOwnerAfterFailure(intent, options, ownerCreated);
+    throw error;
+  }
+}
+
+function beginIntentPublication(
+  entries: readonly SafeArtifactPublicationEntry[],
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
+): BegunIntentPublication {
+  const prepared = preparePublicationEntries(
+    entries,
+    options.commitPath,
+    options.trustedRoot,
+    options.publicationSlot,
+  );
+  const activePath = intentPath(options.trustedRoot, options.publicationSlot, "active");
+  const completePath = intentPath(options.trustedRoot, options.publicationSlot, "complete");
+  const consumedPath = intentPath(options.trustedRoot, options.publicationSlot, "consumed");
+  if (
+    pathExists(activePath, publicationArtifactClass(prepared)) ||
+    pathExists(completePath, publicationArtifactClass(prepared)) ||
+    publicationHasPath(prepared, "stagePath")
+  ) {
+    throw safeFileError(publicationArtifactClass(prepared), "recovery-conflict");
+  }
+  if (publicationHasPath(prepared, "path")) {
+    throw safeFileError(publicationArtifactClass(prepared), "target-exists");
+  }
+  const hasConsumed = pathExists(consumedPath, "manifest");
+  if (hasConsumed) readPublicationIntent(consumedPath, options.trustedRoot);
+  const intent = publicationIntent(prepared, options.commitPath);
+  const initialAssurance = createOwnedActiveReceipt(
+    intent,
+    activePath,
+    consumedPath,
+    hasConsumed,
+    publicationArtifactClass(prepared),
+    options,
+  );
+  return { prepared, intent, initialAssurance };
+}
+
+function publishIntentFileSet(
+  entries: readonly SafeArtifactPublicationEntry[],
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
+): SafeArtifactPublicationResult {
+  const begun = beginIntentPublication(entries, options);
+  try {
+    let result: SafeArtifactPublicationResult;
+    try {
+      result = completePreparedPublication(begun.prepared, options, false);
+    } catch (error) {
+      if (error instanceof SafeArtifactFileError && error.kind === "publish-unsupported") {
+        rollbackIntentPublication(begun.prepared, begun.intent, options);
+      }
+      throw error;
+    }
+    const receiptAssurance = transitionPublicationReceipt(
+      begun.intent,
+      options.trustedRoot,
+      options.publicationSlot,
+      "active",
+      "complete",
+    );
+    const publication = {
+      ...result,
+      durabilityAssurance: combineDurabilityAssurance(
+        begun.initialAssurance,
+        result.durabilityAssurance,
+        receiptAssurance,
+      ),
+    };
+    releasePublicationOwner(begun.intent, options);
+    return publication;
+  } catch (error) {
+    releasePublicationOwnerAfterFailure(begun.intent, options, true);
+    throw error;
+  }
+}
+
+function preparedRecoveryEntries(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+): readonly PreparedPublicationEntry[] {
+  const root = resolve(trustedRoot);
+  const targetPresence = intent.entries.map((entry) =>
+    pathExists(join(root, entry.name), entry.artifactClass),
+  );
+  const stagePresence = intent.entries.map((entry, index) =>
+    pathExists(join(root, `.keiko-publish-${slot}-${String(index)}.stage`), entry.artifactClass),
+  );
+  const allTargetsPresent = targetPresence.every(Boolean);
+  if (targetPresence.some(Boolean) && !allTargetsPresent) {
+    for (let index = 0; index < intent.entries.length; index += 1) {
+      if (!targetPresence[index] && !stagePresence[index]) {
+        throw safeFileError(
+          intent.entries[index]?.artifactClass ?? "manifest",
+          "recovery-conflict",
+        );
+      }
+    }
+  }
+  return intent.entries.map((entry, index) => {
+    const path = join(root, entry.name);
+    const stagePath = join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
+    const hasTarget = targetPresence[index] === true;
+    const hasStage = stagePresence[index] === true;
+    if (!hasTarget && !hasStage) throw safeFileError(entry.artifactClass, "recovery-conflict");
+    if (hasTarget && hasStage && !samePathNode(path, stagePath)) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    const bytes = readRecoveryBytes(hasStage ? stagePath : path, entry, root);
+    if (hasTarget && hasStage) readRecoveryBytes(path, entry, root);
+    return { path, stagePath, bytes, artifactClass: entry.artifactClass, trustedRoot: root };
+  });
+}
+
+function rollbackIncompleteIntent(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+): SafeArtifactDurabilityAssurance {
+  const root = resolve(trustedRoot);
+  const assurances: SafeArtifactDurabilityAssurance[] = [];
+  for (let index = 0; index < intent.entries.length; index += 1) {
+    const entry = intent.entries[index];
+    if (entry === undefined) continue;
+    const stagePath = join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
+    if (!pathExists(stagePath, entry.artifactClass)) continue;
+    removeVerifiedStage({
+      path: join(root, entry.name),
+      stagePath,
+      bytes: Buffer.alloc(0),
+      artifactClass: entry.artifactClass,
+      trustedRoot: root,
+    });
+    assurances.push("verified");
+  }
+  const marker = transitionPublicationReceipt(intent, root, slot, "active", "consumed");
+  return combineDurabilityAssurance(...assurances, marker);
+}
+
+function countIntentPaths(
+  intent: PublicationIntent,
+  root: string,
+  slot: string,
+  kind: "stage" | "target",
+): number {
+  return intent.entries.filter((entry, index) => {
+    const path =
+      kind === "target"
+        ? join(root, entry.name)
+        : join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
+    return pathExists(path, entry.artifactClass);
+  }).length;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errorCode(error) !== "ESRCH";
+  }
+}
+
+function publicationOwnerFailureKind(
+  intent: PublicationIntent,
+): SafeArtifactFileFailureKind | undefined {
+  if (intent.ownerPid === process.pid) {
+    return activePublicationOwnerTokens.has(intent.ownerToken) ? "recovery-conflict" : undefined;
+  }
+  if (!processIsAlive(intent.ownerPid)) return undefined;
+  return intent.ownerExpiresAt > Date.now() ? "recovery-conflict" : "publish-unsupported";
+}
+
+function recoverPublicationOwner(
+  root: string,
+  slot: string,
+  receiptIntent: PublicationIntent | undefined,
+): SafeArtifactDurabilityAssurance {
+  const path = ownerPath(root, slot);
+  if (!pathExists(path, "manifest")) return "verified";
+  const intent = readPublicationIntent(path, root);
+  if (receiptIntent !== undefined && !intentBytes(intent).equals(intentBytes(receiptIntent))) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  const failureKind = publicationOwnerFailureKind(intent);
+  if (failureKind !== undefined) throw safeFileError("manifest", failureKind);
+  return releasePublicationOwner(intent, { publicationSlot: slot, trustedRoot: root });
+}
+
+function finishLinkedPublicationReceipt(
+  root: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): { readonly intent: PublicationIntent; readonly assurance: SafeArtifactDurabilityAssurance } {
+  const fromPath = intentPath(root, slot, from);
+  const toPath = intentPath(root, slot, to);
+  if (!samePathNode(fromPath, toPath)) throw safeFileError("manifest", "recovery-conflict");
+  const intent = readLinkedPublicationIntent(fromPath, toPath, root);
+  const assurance = transitionPublicationReceipt(intent, root, slot, from, to);
+  return { intent, assurance };
+}
+
+function retireConsumedReceipt(root: string, slot: string): SafeArtifactDurabilityAssurance {
+  const consumedPath = intentPath(root, slot, "consumed");
+  readPublicationIntent(consumedPath, root);
+  return removePublicationIntent(consumedPath, root, "manifest");
+}
+
+function completeIntentRecovery(
+  intent: PublicationIntent,
+  options: SafeArtifactRecoveryOptions,
+  root: string,
+  state: "active" | "complete",
+  priorAssurance: SafeArtifactDurabilityAssurance = "verified",
+): SafeArtifactRecoveryResult {
+  const prepared = preparedRecoveryEntries(intent, root, options.publicationSlot);
+  const commit = prepared[intent.commitIndex];
+  if (commit === undefined) throw safeFileError("manifest", "recovery-conflict");
+  const result = completePreparedPublication(
+    prepared,
+    {
+      commitPath: commit.path,
+      publicationSlot: options.publicationSlot,
+      trustedRoot: root,
+    },
+    true,
+  );
+  const receiptAssurance =
+    state === "active"
+      ? transitionPublicationReceipt(intent, root, options.publicationSlot, "active", "complete")
+      : "verified";
+  return {
+    status: "recovered",
+    commitPath: commit.path,
+    artifactCount: prepared.length,
+    commitByteCount: intent.entries[intent.commitIndex]?.byteCount ?? 0,
+    commitSha256: intent.entries[intent.commitIndex]?.sha256 ?? publicationDigest(commit.bytes),
+    permissionAssurance: result.permissionAssurance,
+    durabilityAssurance: combineDurabilityAssurance(
+      priorAssurance,
+      result.durabilityAssurance,
+      receiptAssurance,
+    ),
+  };
+}
+
+type RecoveredReceiptState =
+  | { readonly status: "active"; readonly priorAssurance: SafeArtifactDurabilityAssurance }
+  | { readonly status: "complete"; readonly priorAssurance: SafeArtifactDurabilityAssurance }
+  | { readonly status: "none" }
+  | { readonly status: "rolled-back" };
+
+function transitionalReceiptState(
+  root: string,
+  slot: string,
+  active: boolean,
+  complete: boolean,
+  consumed: boolean,
+): RecoveredReceiptState | undefined {
+  if (Number(active) + Number(complete) + Number(consumed) === 3) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  if (complete && consumed) {
+    finishLinkedPublicationReceipt(root, slot, "complete", "consumed");
+    return { status: "none" };
+  }
+  if (active && complete) {
+    const finished = finishLinkedPublicationReceipt(root, slot, "active", "complete");
+    return { status: "complete", priorAssurance: finished.assurance };
+  }
+  if (
+    active &&
+    consumed &&
+    samePathNode(intentPath(root, slot, "active"), intentPath(root, slot, "consumed"))
+  ) {
+    finishLinkedPublicationReceipt(root, slot, "active", "consumed");
+    return { status: "rolled-back" };
+  }
+  return undefined;
+}
+
+function recoveredReceiptState(root: string, slot: string): RecoveredReceiptState {
+  const active = pathExists(intentPath(root, slot, "active"), "manifest");
+  const complete = pathExists(intentPath(root, slot, "complete"), "manifest");
+  const consumed = pathExists(intentPath(root, slot, "consumed"), "manifest");
+  const transitional = transitionalReceiptState(root, slot, active, complete, consumed);
+  if (transitional !== undefined) return transitional;
+  if (active) return { status: "active", priorAssurance: "verified" };
+  if (complete) return { status: "complete", priorAssurance: "verified" };
+  if (consumed) readPublicationIntent(intentPath(root, slot, "consumed"), root);
+  return { status: "none" };
+}
+
+function validateLinkedReceiptPair(
+  root: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): PublicationIntent {
+  const fromPath = intentPath(root, slot, from);
+  const toPath = intentPath(root, slot, to);
+  if (!samePathNode(fromPath, toPath)) throw safeFileError("manifest", "recovery-conflict");
+  return readLinkedPublicationIntent(fromPath, toPath, root);
+}
+
+function validateActiveConsumedPair(root: string, slot: string): PublicationIntent {
+  const activePath = intentPath(root, slot, "active");
+  const consumedPath = intentPath(root, slot, "consumed");
+  if (samePathNode(activePath, consumedPath)) {
+    return readLinkedPublicationIntent(activePath, consumedPath, root);
+  }
+  const intent = readPublicationIntent(activePath, root);
+  readPublicationIntent(consumedPath, root);
+  return intent;
+}
+
+function validateStableReceiptStates(
+  root: string,
+  slot: string,
+  active: boolean,
+  complete: boolean,
+  consumed: boolean,
+): PublicationIntent | undefined {
+  if (active) return readPublicationIntent(intentPath(root, slot, "active"), root);
+  if (complete) return readPublicationIntent(intentPath(root, slot, "complete"), root);
+  if (consumed) readPublicationIntent(intentPath(root, slot, "consumed"), root);
+  return undefined;
+}
+
+function validateReceiptTopology(root: string, slot: string): PublicationIntent | undefined {
+  const active = pathExists(intentPath(root, slot, "active"), "manifest");
+  const complete = pathExists(intentPath(root, slot, "complete"), "manifest");
+  const consumed = pathExists(intentPath(root, slot, "consumed"), "manifest");
+  if (Number(active) + Number(complete) + Number(consumed) === 3) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  if (active && complete) {
+    return validateLinkedReceiptPair(root, slot, "active", "complete");
+  }
+  if (complete && consumed) {
+    return validateLinkedReceiptPair(root, slot, "complete", "consumed");
+  }
+  if (active && consumed) {
+    return validateActiveConsumedPair(root, slot);
+  }
+  return validateStableReceiptStates(root, slot, active, complete, consumed);
+}
+
+/** Recovers or safely rolls back the bounded transaction named by a durable publication slot. */
+export function recoverSafeArtifactFileSet(
+  options: SafeArtifactRecoveryOptions,
+): SafeArtifactRecoveryResult {
+  validatePublicationSlot(options.publicationSlot, "manifest");
+  const root = resolve(options.trustedRoot);
+  const receiptIntent = validateReceiptTopology(root, options.publicationSlot);
+  const ownerAssurance = recoverPublicationOwner(root, options.publicationSlot, receiptIntent);
+  const state = recoveredReceiptState(root, options.publicationSlot);
+  if (state.status === "none") return { status: "none" };
+  if (state.status === "rolled-back") {
+    return {
+      status: "rolled-back",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: ownerAssurance,
+    };
+  }
+  const markerPath = intentPath(root, options.publicationSlot, state.status);
+  const intent = readPublicationIntent(markerPath, root);
+  if (state.status === "complete") {
+    return completeIntentRecovery(
+      intent,
+      options,
+      root,
+      "complete",
+      combineDurabilityAssurance(ownerAssurance, state.priorAssurance),
+    );
+  }
+  const consumedAssurance = pathExists(
+    intentPath(root, options.publicationSlot, "consumed"),
+    "manifest",
+  )
+    ? retireConsumedReceipt(root, options.publicationSlot)
+    : state.priorAssurance;
+  const priorAssurance = combineDurabilityAssurance(ownerAssurance, consumedAssurance);
+  const targetCount = countIntentPaths(intent, root, options.publicationSlot, "target");
+  if (targetCount === 0) {
+    const durabilityAssurance = combineDurabilityAssurance(
+      priorAssurance,
+      rollbackIncompleteIntent(intent, root, options.publicationSlot),
+    );
+    return {
+      status: "rolled-back",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance,
+    };
+  }
+  return completeIntentRecovery(intent, options, root, "active", priorAssurance);
+}
+
+/** Marks a completed fixed-slot publication as observed without removing its durable locator. */
+export function acknowledgeSafeArtifactFileSet(
+  options: SafeArtifactReceiptOptions,
+): SafeArtifactDurabilityAssurance {
+  validatePublicationSlot(options.publicationSlot, "manifest");
+  const root = resolve(options.trustedRoot);
+  const activePath = intentPath(root, options.publicationSlot, "active");
+  const completePath = intentPath(root, options.publicationSlot, "complete");
+  const consumedPath = intentPath(root, options.publicationSlot, "consumed");
+  if (pathExists(activePath, "manifest")) throw safeFileError("manifest", "recovery-conflict");
+  if (pathExists(consumedPath, "manifest")) {
+    if (pathExists(completePath, "manifest")) {
+      return finishLinkedPublicationReceipt(root, options.publicationSlot, "complete", "consumed")
+        .assurance;
+    }
+    readPublicationIntent(consumedPath, root);
+    return "verified";
+  }
+  const intent = readPublicationIntent(completePath, root);
+  preparedRecoveryEntries(intent, root, options.publicationSlot);
+  return transitionPublicationReceipt(
+    intent,
+    root,
+    options.publicationSlot,
+    "complete",
+    "consumed",
+  );
+}
+
+/**
+ * Publishes related files without replacement; the designated commit artifact appears last.
+ * Filesystems without same-directory hard links fail closed as `publish-unsupported`.
+ * Fixed-slot publication retains a bounded active/complete/consumed receipt: complete receipts
+ * authorize exact recovery until the consumer acknowledges them, and a consumed receipt is
+ * retired only after its next active successor is durable. Targets alone never authorize replay.
+ */
+export function publishSafeArtifactFileSet(
+  entries: readonly SafeArtifactPublicationEntry[],
+  options: SafeArtifactPublicationOptions,
+): SafeArtifactPublicationResult {
+  validatePublication(entries, options);
+  if (options.publicationSlot !== undefined) {
+    return publishIntentFileSet(entries, {
+      ...options,
+      publicationSlot: options.publicationSlot,
+    });
+  }
+  const prepared = preparePublicationEntries(entries, options.commitPath, options.trustedRoot);
+  const recovering = publicationHasPath(prepared, "stagePath");
+  if (!recovering && publicationHasPath(prepared, "path")) {
+    throw safeFileError(publicationArtifactClass(prepared), "target-exists");
+  }
+  return completePreparedPublication(prepared, options, recovering);
+}
+
+/**
+ * Fails closed until Node exposes a portable descriptor-relative atomic replacement primitive.
+ * Absolute-path rename cannot exclude a final ancestor substitution, even with verified guards.
+ */
+export function replaceSafeArtifactFile(
+  _path: string,
+  _contents: string | Uint8Array,
+  options: ReplaceSafeArtifactFileOptions,
+): void {
+  throw safeFileError(options.artifactClass, "publish-unsupported");
 }

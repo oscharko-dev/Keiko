@@ -1,5 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { CodingWorkbenchRuntimeAdapterKind } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeAdapterKind,
+  ModelReasoningEffort,
+} from "@oscharko-dev/keiko-contracts";
+import { MODEL_REASONING_EFFORTS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 
 export type RuntimeCapabilityAudience = "model-gateway" | "tool-facade";
 
@@ -8,6 +12,8 @@ export interface RuntimeCapabilityBinding {
   readonly workspaceRootDigest: string;
   readonly envelopeDigest: string;
   readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
+  readonly modelProfileId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
   readonly audience: RuntimeCapabilityAudience;
   readonly expiresAtMs: number;
 }
@@ -22,7 +28,9 @@ export type RuntimeCapabilityIssue =
   | { readonly ok: false; readonly reason: "revoked" | "invalid" };
 
 export type RuntimeCapabilityResolution =
-  | { readonly ok: true; readonly binding: RuntimeCapabilityBinding }
+  // `issuedAtMs` is when the run was admitted: a sidecar call judges the model's tool-calling proof
+  // as of that instant, so a proof that ages out mid-run does not strand the run (F73).
+  | { readonly ok: true; readonly binding: RuntimeCapabilityBinding; readonly issuedAtMs: number }
   | { readonly ok: false; readonly reason: "invalid" | "expired" | "revoked" };
 
 export interface RuntimeCapabilityStore {
@@ -41,11 +49,14 @@ export interface RuntimeCapabilityStoreOptions {
 interface StoredCapability {
   readonly capabilityHash: string;
   readonly binding: RuntimeCapabilityBinding;
+  readonly issuedAtMs: number;
 }
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,256}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const CAPABILITY_AUDIENCES: ReadonlySet<string> = new Set(["model-gateway", "tool-facade"]);
+// Runtime capabilities cross a trust boundary; derive validation from the canonical wire values.
+const REASONING_EFFORTS: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 const DEFAULT_MAX_RECORDS = 64;
 
 /**
@@ -80,7 +91,7 @@ class InMemoryRuntimeCapabilityStore implements RuntimeCapabilityStore {
     if (!CAPABILITY_PATTERN.test(capability)) return { ok: false, reason: "invalid" };
     const hash = capabilityHash(capability);
     if (this.records.has(hash)) return { ok: false, reason: "invalid" };
-    this.records.set(hash, { capabilityHash: hash, binding });
+    this.records.set(hash, { capabilityHash: hash, binding, issuedAtMs: this.nowMs() });
     return { ok: true, capability };
   }
 
@@ -99,7 +110,7 @@ class InMemoryRuntimeCapabilityStore implements RuntimeCapabilityStore {
       this.records.delete(hash);
       return { ok: false, reason: "expired" };
     }
-    return { ok: true, binding: record.binding };
+    return { ok: true, binding: record.binding, issuedAtMs: record.issuedAtMs };
   }
 
   public resolve(input: RuntimeCapabilityResolutionInput): RuntimeCapabilityResolution {
@@ -152,10 +163,18 @@ function validBinding(binding: RuntimeCapabilityBinding): boolean {
     DIGEST_PATTERN.test(binding.workspaceRootDigest) &&
     DIGEST_PATTERN.test(binding.envelopeDigest) &&
     ["model-gateway-sidecar", "codex-cli-adapter"].includes(binding.adapterKind) &&
+    validModelBinding(binding) &&
     CAPABILITY_AUDIENCES.has(binding.audience) &&
     Number.isSafeInteger(binding.expiresAtMs) &&
     binding.expiresAtMs > 0
   );
+}
+
+function validModelBinding(binding: RuntimeCapabilityBinding): boolean {
+  const profileValid = binding.modelProfileId === undefined || binding.modelProfileId.length > 0;
+  const effortValid =
+    binding.reasoningEffort === undefined || REASONING_EFFORTS.has(binding.reasoningEffort);
+  return profileValid && effortValid;
 }
 
 function bindingsEqual(
@@ -167,6 +186,8 @@ function bindingsEqual(
     expected.workspaceRootDigest === actual.workspaceRootDigest &&
     expected.envelopeDigest === actual.envelopeDigest &&
     expected.adapterKind === actual.adapterKind &&
+    expected.modelProfileId === actual.modelProfileId &&
+    expected.reasoningEffort === actual.reasoningEffort &&
     expected.audience === actual.audience &&
     expected.expiresAtMs === actual.expiresAtMs
   );

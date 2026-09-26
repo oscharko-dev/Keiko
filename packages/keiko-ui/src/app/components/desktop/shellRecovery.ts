@@ -6,13 +6,13 @@
 // applied to every writable layer — the offending record can sit in the user layer or in the
 // workspace layer of the launched root, and clearing only one leaves the desktop exactly as broken.
 
-import {
-  EDITOR_M7_SCHEMA_VERSION,
-  type EditorM11SettingScope,
-  type EditorM11SettingsSnapshot,
+import type {
+  EditorM11SettingScope,
+  EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
 const RESET_SCOPES: readonly EditorM11SettingScope[] = ["user", "workspace"];
 
@@ -55,6 +55,7 @@ async function clearOverridesInScope(
   } catch (error) {
     reportClientDiagnostic(
       `shell-recovery: ${scope} layer reset failed (${clientErrorSummary(error)})`,
+      { correlationId: correlationIdOf(error) },
     );
     return null;
   }

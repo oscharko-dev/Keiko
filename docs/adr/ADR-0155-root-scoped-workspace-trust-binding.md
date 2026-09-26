@@ -62,6 +62,12 @@ with no path input. Every trust projection and effect compares that persisted va
 inspection. `NULL`, unsupported birth identity, ambiguity, and mismatch all project restricted and
 deny durable authority.
 
+KEIKO-0198 makes `workspaceTrustRootBindingsMatch` in `keiko-contracts` the single predicate for
+these root-identity dimensions. The contracts binding check uses its public fields, while the store
+supplies its server-private object-identity provenance too. Missing membership, changed digest,
+changed provenance, and re-registration therefore share one fail-closed verdict instead of
+maintaining independent formulas.
+
 The V17 migration backfills only live roots whose public V1 identity still matches and whose private
 object digest is unique. It leaves every other private binding `NULL` and revokes all pre-V17 trust
 rows once, because those grants predate the new authority fact.

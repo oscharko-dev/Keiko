@@ -41,6 +41,8 @@ export interface GitBranchSwitchExecRequest {
 
 export interface GitStageExecRequest {
   readonly pathspecs: readonly string[];
+  readonly verified?: GitVerifiedCommitPrecondition;
+  readonly worktreeDigest?: string;
 }
 
 export interface GitUnstageExecRequest {
@@ -50,6 +52,15 @@ export interface GitUnstageExecRequest {
 export interface GitCommitExecRequest {
   readonly message: string;
   readonly allowEmpty: boolean;
+  readonly verified?: GitVerifiedCommitPrecondition;
+}
+
+export interface GitVerifiedCommitPrecondition {
+  readonly headSha: string;
+  readonly stagedTreeDigest: string;
+  readonly branchName: string;
+  readonly baseRef: string;
+  readonly baseSha: string;
 }
 
 export interface GitAbortExecRequest {
@@ -89,6 +100,12 @@ export const GIT_MUTATION_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze
   "add",
   "restore",
   "commit",
+  "write-tree",
+  "commit-tree",
+  "update-ref",
+  "hash-object",
+  "update-index",
+  "check-attr",
   "reset",
   "stash",
   "merge",
@@ -116,7 +133,6 @@ export const GIT_MUTATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
     ]),
     denyFlags: Object.freeze([
       "-C",
-      "-c",
       "--config-env",
       "--git-dir",
       "--work-tree",
@@ -231,7 +247,7 @@ export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPla
 }
 
 export function buildCommitArgv(req: GitCommitExecRequest): GitMutationArgvPlan {
-  const argv: string[] = ["commit"];
+  const argv: string[] = ["commit", "--gpg-sign"];
   if (req.allowEmpty) {
     argv.push("--allow-empty");
   }

@@ -23,8 +23,19 @@ export { runRepairCli, type RepairCliDeps } from "./repair.js";
 export { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 export { runUpdateCli, type UpdateCliDeps, type UpdateCliPreflight } from "./update.js";
 export { runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
+export { runTaskWorkspaceCli, type TaskWorkspaceCliDeps } from "./task-workspace.js";
 export { runUiCli, parseUiArgs, waitForShutdown, type UiCliDeps } from "./ui.js";
 export { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
 export { runPortableCli, type PortableSetupDeps } from "./portable.js";
+export {
+  applyAuthoritativeInstallLayout,
+  installLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidence,
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+  type AuthoritativeInstallLayout,
+  type InstallLayoutOverrideEvidence,
+  type InstallLayoutOverrideKind,
+} from "./install-layout.js";
 // gateway-config.ts is a helper module (resolveConfigPathFromArgs) used internally by
 // models.ts; it does not expose a CLI command, so nothing is re-exported here.

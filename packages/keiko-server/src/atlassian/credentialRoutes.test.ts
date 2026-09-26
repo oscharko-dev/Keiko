@@ -14,20 +14,34 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AtlassianCredentialCustodyError,
   createAtlassianCredentialCustody,
+  type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyResult,
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import { mockRequest, mockResponse } from "../_support.js";
+import type { RouteContext } from "../routes.js";
 import { atlassianCredentialMetadataPath } from "./credentialMetadataStore.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
-import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
+import {
+  handleCreateAtlassianConnectorCredential,
+  type AtlassianConnectorCredentialDeps,
+} from "./credentialRoutes.js";
 
 const SYNTHETIC_TOKEN = ["ATATT", "route", "test", "9876543210", "zyxwvutsrq", "KLMNOPQRST"].join(
   "",
@@ -132,6 +146,17 @@ function createBody(overrides: Record<string, unknown> = {}): string {
     apiToken: SYNTHETIC_TOKEN,
     ...overrides,
   });
+}
+
+function inMemoryCreateContext(): RouteContext {
+  const path = "/api/atlassian-connectors/credentials";
+  return {
+    req: mockRequest({ method: "POST", url: path, headers: csrfHeaders(), body: createBody() }),
+    res: mockResponse().res,
+    params: {},
+    url: new URL(`http://${UI_HOST}${path}`),
+    correlationId: "credential-route-test",
+  };
 }
 
 async function createCredential(): Promise<AtlassianCredentialMetadata> {
@@ -275,6 +300,125 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expect(noJson.status).toBe(415);
   });
 
+  // KEIKO-0826: the domain layer caps stored credentials at
+  // ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES and throws credential-limit-exceeded once the cap is
+  // reached. The BFF must surface that as 429 (Too Many Requests) with a typed error code, not
+  // rethrow into the opaque-500 top-level catch — a 500 would misdiagnose a benign capacity
+  // ceiling as a server fault. Uses a stub custody instead of filling 64 real vault entries.
+  it("answers 429 CREDENTIAL_LIMIT_EXCEEDED when custody has hit the storage cap", async () => {
+    const stubCustody: AtlassianCredentialCustody = {
+      create: (): never => {
+        throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+      },
+      getMetadata: (): undefined => undefined,
+      list: (): readonly AtlassianCredentialMetadata[] => [],
+      delete: (): boolean => false,
+    };
+    const stubHttpPort: AtlassianHttpPort = (): Promise<AtlassianHttpResult> =>
+      Promise.resolve({ kind: "response", status: 200 });
+    // The body-carrying port returns AtlassianHttpBodyResult, which extends the response shape
+    // with bodyText/bodyBytes/truncated — the create() flow never reaches this stub (custody
+    // rejects at the cap first), so the values are inert placeholders that keep the type honest.
+    const stubHttpBodyPort: AtlassianHttpBodyPort = (): Promise<AtlassianHttpBodyResult> =>
+      Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText: "",
+        bodyBytes: 0,
+        truncated: false,
+      });
+    // KEIKO-0826 follow-up: assert the typed 4xx also emits a body-free activity-log line so a
+    // support bundle can reconstruct why the request was rejected. Codex flagged that the
+    // original KEIKO-0826 fix mapped the code but did NOT log — the analyzer saw an opaque 429
+    // indistinguishable from any other client-visible failure.
+    const activityEvents: ServerLogEvent[] = [];
+    const activityLog: ServerLogSink = {
+      write: (event) => activityEvents.push(event),
+    };
+    await rebuild({
+      custody: stubCustody,
+      httpPortFactory: (): AtlassianHttpPort => stubHttpPort,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => stubHttpBodyPort,
+      activityLog,
+    });
+    const res = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: createBody(),
+    });
+    expect(res.status).toBe(429);
+    const text = await res.text();
+    expectNoSecretBytes(text);
+    const body = JSON.parse(text) as { error: { code: string } };
+    expect(body.error.code).toBe("CREDENTIAL_LIMIT_EXCEEDED");
+    // Activity log emits a closed envelope kind plus governed reason and status; body-free.
+    const rejection = activityEvents.find((e) => e.op === "atlassian.credential.rejected");
+    expect(rejection).toBeDefined();
+    expect(rejection?.category).toBe("security");
+    expect(rejection?.errorKind).toBe("rate-limited");
+    expect(rejection?.status).toBe(429);
+    expect(rejection?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "credential-limit-exceeded",
+    });
+    // Nothing about the request body — mirror the response-body no-secret check on the sink.
+    expectNoSecretBytes(JSON.stringify(activityEvents));
+  });
+
+  // Registry-linked executable proof (#3532): the SAME body-free rejection event above, read back
+  // through the real formatter/registry path rather than only asserted field-by-field, so the
+  // `atlassian.credential.rejected.reason` proof id resolves against a production-computed event —
+  // never a hand-built one (this task's rule 1).
+  it("persists atlassian.credential.rejected as a registered Activity Log proof line", async () => {
+    const stubCustody: AtlassianCredentialCustody = {
+      create: (): never => {
+        throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+      },
+      getMetadata: (): undefined => undefined,
+      list: (): readonly AtlassianCredentialMetadata[] => [],
+      delete: (): boolean => false,
+    };
+    const stubHttpPort: AtlassianHttpPort = (): Promise<AtlassianHttpResult> =>
+      Promise.resolve({ kind: "response", status: 200 });
+    const stubHttpBodyPort: AtlassianHttpBodyPort = (): Promise<AtlassianHttpBodyResult> =>
+      Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText: "",
+        bodyBytes: 0,
+        truncated: false,
+      });
+    const activityEvents: ServerLogEvent[] = [];
+    const activityLog: ServerLogSink = {
+      write: (event) => activityEvents.push(event),
+    };
+    await rebuild({
+      custody: stubCustody,
+      httpPortFactory: (): AtlassianHttpPort => stubHttpPort,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => stubHttpBodyPort,
+      activityLog,
+    });
+
+    const res = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: createBody(),
+    });
+    expect(res.status).toBe(429);
+
+    const rejection = activityEvents.find((e) => e.op === "atlassian.credential.rejected");
+    if (rejection === undefined) throw new Error("expected a rejection event");
+    const line = formatActivityLogProofLine(rejection);
+    const persisted = expectActivityLogProof("atlassian.credential.rejected.reason", line);
+    expect(persisted).toMatchObject({
+      category: "security",
+      errorKind: "rate-limited",
+      status: 429,
+      reason: "credential-limit-exceeded",
+    });
+  });
+
   it("answers 503 when custody is not configured", async () => {
     await rebuild(undefined);
     const res = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
@@ -285,6 +429,58 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expect(res.status).toBe(503);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("ATLASSIAN_CONNECTORS_UNAVAILABLE");
+  });
+});
+
+describe("Atlassian credential route in-memory failure handling", () => {
+  it("preserves the typed 429 when activity logging fails", async (): Promise<void> => {
+    const custody: AtlassianCredentialCustody = {
+      create: (): never => {
+        throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+      },
+      getMetadata: (): undefined => undefined,
+      list: (): readonly AtlassianCredentialMetadata[] => [],
+      delete: (): boolean => false,
+    };
+    const diagnosticRecords: ServerDiagnosticRecord[] = [];
+    const connectorDeps: AtlassianConnectorCredentialDeps = {
+      custody,
+      httpPortFactory: (): AtlassianHttpPort => () =>
+        Promise.resolve({ kind: "response", status: 200 }),
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.resolve({
+          kind: "response",
+          status: 200,
+          bodyText: "",
+          bodyBytes: 0,
+          truncated: false,
+        }),
+      activityLog: {
+        write: (): never => {
+          throw new Error("activity sink unavailable");
+        },
+      },
+      diagnostics: {
+        record: (record): void => {
+          diagnosticRecords.push(record);
+        },
+      },
+    };
+    const result = await handleCreateAtlassianConnectorCredential(
+      inMemoryCreateContext(),
+      baseDeps(connectorDeps),
+    );
+    expect(result).toMatchObject({
+      status: 429,
+      body: { error: { code: "CREDENTIAL_LIMIT_EXCEEDED" } },
+    });
+    expect(diagnosticRecords).toMatchObject([
+      {
+        operation: "atlassian.credential.rejected",
+        message: "atlassian-credential-rejection-activity-log-failed",
+      },
+    ]);
+    expectNoSecretBytes(JSON.stringify({ result, diagnosticRecords }));
   });
 });
 

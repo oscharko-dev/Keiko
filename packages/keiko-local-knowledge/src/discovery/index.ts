@@ -4,6 +4,8 @@
 
 export {
   DEFAULT_DISCOVERY_OPTIONS,
+  MAX_DISCOVERY_DEPTH_CEILING,
+  MAX_DISCOVERY_FILES_CEILING,
   documentIdFor,
   type DiscoveredFile,
   type DiscoveryError,

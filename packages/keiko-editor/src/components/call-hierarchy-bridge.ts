@@ -80,7 +80,7 @@ export interface RegisterKeikoCallHierarchyActionArgs {
   readonly editor: MonacoCallHierarchyEditor;
   readonly resolve: EditorCallHierarchyResolver;
   readonly isCurrentDocument: (documentUri: string) => boolean;
-  readonly documentLanguage: EditorLanguageId;
+  readonly documentLanguage: () => EditorLanguageId;
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly labels: CallHierarchyActionLabels;
@@ -99,7 +99,7 @@ function requestFor(
 ): EditorCallHierarchyRequest {
   return {
     request: { requestId: args.newRequestId(), streamId: args.streamId, sequence },
-    document: { uri, language: args.documentLanguage, version: sequence },
+    document: { uri, language: args.documentLanguage(), version: sequence },
     position: { line: position.lineNumber - 1, column: position.column - 1 },
   };
 }

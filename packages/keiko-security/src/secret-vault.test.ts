@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,20 +13,40 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SecretboxError } from "./errors/secretbox.js";
+import {
+  bindSecurityLogCorrelation,
+  type SecurityLogEvent,
+  type SecurityLogSink,
+} from "./log-port.js";
 import {
   NO_LOCAL_VAULT_KEYCHAIN,
   SecretVaultStoreError,
+  createKeychainCommandRunner,
   createKeychainVaultKeyAccess,
   createLocalSecretVault,
   createShardedLocalSecretVault,
   readLocalVaultReferences,
   resolveLocalVaultKey,
 } from "./secret-vault.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // A stable 32-byte key used for vault-CRUD tests — same pattern as figmaTokenStore.test.ts.
 const KEY = Buffer.alloc(32, 7);
+const VAULT_FRAME_PATTERN = /^packages\/keiko-security\/(?:dist|src)\/.+\.(?:js|ts):\d+:\d+$/u;
+
+function isVaultFrameArray(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((frame: unknown) => typeof frame === "string" && VAULT_FRAME_PATTERN.test(frame))
+  );
+}
 
 // On macOS /var/folders is a symlink to /private/var/folders. The vault's symlink guard
 // (assertNoSymlinkedPathSegments) rejects paths through symlinks, so we resolve the real path of
@@ -185,6 +206,209 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
   });
 });
 
+describe("resolveLocalVaultKey — default keychainAccess when the option is omitted", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("builds the default macOS keychain access itself and falls through to keyfile off darwin", () => {
+    // No `keychainAccess` in these options at all — computeLocalVaultKey must construct the default
+    // (createKeychainVaultKeyAccess-backed) access itself. Off darwin that default returns undefined
+    // WITHOUT spawning `security`, so this stays hermetic while still exercising the real default
+    // construction path rather than an injected stand-in.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const resolved = resolveLocalVaultKey({
+      env: {},
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+    });
+    expect(resolved.source).toBe("keyfile");
+  });
+});
+
+// gap g18: the key-source fact (which tier answered) was previously invisible even on the
+// ordinary, no-fallback path. `security.vault.key-resolved` closes that — it fires every time a
+// tier resolves, independent of whether anything went wrong.
+describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () => {
+  function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+    const events: SecurityLogEvent[] = [];
+    return { sink: { write: (event): void => void events.push(event) }, events };
+  }
+
+  it("emits source=env, with only the documented fields, on the env tier", () => {
+    const { sink, events } = recordingSink();
+    resolveLocalVaultKey({
+      env: { KEIKO_TEST_VAULT_KEY: Buffer.alloc(32, 5).toString("base64") },
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      sink,
+    });
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({
+      level: "info",
+      category: "security",
+      op: "security.vault.key-resolved",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { source: "env" },
+    });
+    expect(Object.keys(event ?? {}).sort()).toEqual([
+      "category",
+      "correlationId",
+      "extra",
+      "level",
+      "op",
+    ]);
+    const persisted = expectActivityLogProof(
+      "security.vault.key-resolved.source",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ source: "env" });
+  });
+
+  it("emits source=keychain when the keychain tier answers", () => {
+    const { sink, events } = recordingSink();
+    resolveLocalVaultKey({
+      env: {},
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: () => Buffer.alloc(32, 9),
+      sink,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolved",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { source: "keychain", completeness: "complete", loss: "none" },
+    });
+  });
+
+  it("emits source=keyfile when env and keychain are both absent", () => {
+    const { sink, events } = recordingSink();
+    resolveLocalVaultKey({
+      env: {},
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      sink,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolved",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { source: "keyfile", completeness: "complete", loss: "none" },
+    });
+  });
+
+  it("emits structured body-free evidence before rethrowing a key-resolution failure", () => {
+    const { sink, events } = recordingSink();
+    expect(() =>
+      resolveLocalVaultKey({
+        env: { KEIKO_TEST_VAULT_KEY: Buffer.alloc(16, 3).toString("base64") },
+        vaultDir: dir,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+        sink,
+      }),
+    ).toThrow("32 bytes");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      category: "security",
+      op: "security.vault.key-resolution-failed",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      errorKind: "unavailable",
+      extra: {
+        failureKind: "Error",
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    expect(isVaultFrameArray(events[0]?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("32 bytes");
+    expect(JSON.stringify(events)).not.toContain(Buffer.alloc(16, 3).toString("base64"));
+    const persisted = expectActivityLogProof(
+      "security.vault.key-resolution-failed.evidence",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "Error" });
+  });
+
+  it("classifies a symlinked key path as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-key-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-key-sub");
+    symlinkSync(realSub, linkSub);
+    const { sink, events } = recordingSink();
+
+    expect(() =>
+      resolveLocalVaultKey({
+        env: {},
+        vaultDir: linkSub,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+        sink,
+      }),
+    ).toThrow("symlinked path");
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolution-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
+  });
+
+  it("lets the real correlation-binding sink replace the sanctioned fallback", () => {
+    const { sink, events } = recordingSink();
+    const bound = bindSecurityLogCorrelation(sink, "vault-request-001");
+    resolveLocalVaultKey({
+      env: { KEIKO_TEST_VAULT_KEY: Buffer.alloc(32, 5).toString("base64") },
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      sink: bound,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.correlationId).toBe("vault-request-001");
+  });
+
+  it("stays exactly as silent as before when no sink is wired", () => {
+    expect(() =>
+      resolveLocalVaultKey({
+        env: {},
+        vaultDir: dir,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      }),
+    ).not.toThrow();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // createLocalSecretVault — CRUD behaviour
 // ---------------------------------------------------------------------------
@@ -287,6 +511,137 @@ describe("createLocalSecretVault — replaceAll", () => {
   });
 });
 
+describe("createLocalSecretVault — setMany", () => {
+  it("merges new refs in one call and leaves untouched refs in place", () => {
+    const vault = vaultAt(join(dir, "vault.enc.json"));
+    vault.set("cred:keep", "keep-secret");
+
+    vault.setMany(
+      new Map([
+        ["cred:a", "secret-A"],
+        ["cred:b", "secret-B"],
+      ]),
+    );
+
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+    expect(vault.get("cred:a")).toBe("secret-A");
+    expect(vault.get("cred:b")).toBe("secret-B");
+  });
+
+  it("replaces overlapping refs and does not wipe the store on an empty map", () => {
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+    vault.set("cred:a", "first");
+    vault.set("cred:keep", "keep-secret");
+
+    vault.setMany(new Map([["cred:a", "second"]]));
+    expect(vault.get("cred:a")).toBe("second");
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+
+    vault.setMany(new Map());
+    expect(existsSync(storePath)).toBe(true);
+    expect(vault.get("cred:a")).toBe("second");
+  });
+
+  it("emits one entries-merged event with the sealed count, never a reference or secret", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    vault.setMany(
+      new Map([
+        ["cred:a", "SUPERSECRET"],
+        ["cred:b", "ALSOSECRET"],
+      ]),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "security",
+      op: "security.vault.entries-merged",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { count: 2 },
+    });
+    expect(typeof events[0]?.durationMs).toBe("number");
+    expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
+    expect(JSON.stringify(events)).not.toContain("ALSOSECRET");
+    expect(JSON.stringify(events)).not.toContain("cred:a");
+    expect(JSON.stringify(events)).not.toContain("cred:b");
+    expect(events.filter((event) => event.op === "security.vault.entries-merged")).toHaveLength(1);
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-merged.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 2 });
+  });
+
+  it("stores __proto__ as a real key without polluting Object.prototype", () => {
+    const storePath = join(dir, "proto.enc.json");
+    const vault = vaultAt(storePath);
+    vault.setMany(new Map([["__proto__", "proto-secret"]]));
+    vault.set("sibling", "keep-secret");
+    expect(vault.get("__proto__")).toBe("proto-secret");
+    expect(vault.has("__proto__")).toBe(true);
+    vault.delete("__proto__");
+    expect(vault.get("__proto__")).toBeUndefined();
+    expect(vault.get("sibling")).toBe("keep-secret");
+    expect(Object.prototype).not.toHaveProperty("proto-secret");
+  });
+
+  it("emits entries-merge-failed and rethrows when the commit rename fails", () => {
+    const storePath = join(dir, "merge-fail.enc.json");
+    mkdirSync(storePath);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath,
+      sink: { write: (event): void => void events.push(event) },
+    });
+    expect(() => {
+      vault.setMany(new Map([["cred:a", "SUPERSECRET"]]));
+    }).toThrow();
+    expect(events.filter((event) => event.op === "security.vault.entries-merge-failed")).toEqual([
+      expect.objectContaining({
+        level: "error",
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        errorKind: "write-failed",
+      }),
+    ]);
+    expect(events[0]?.extra?.count).toBe(1);
+    expect(typeof events[0]?.extra?.failureKind).toBe("string");
+    expect(events[0]?.extra?.frames).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^packages\/keiko-security\/src\/.+\.ts:\d+:\d+$/u),
+      ]),
+    );
+    expect(events[0]?.extra?.causeChain).toEqual(["EISDIR"]);
+    expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
+    expect(JSON.stringify(events)).not.toContain("cred:a");
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-merge-failed.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 1 });
+  });
+
+  it("does not emit entries-merged for a single set()", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    vault.set("cred:a", "SUPERSECRET");
+
+    expect(events).toEqual([]);
+    expect(vault.get("cred:a")).toBe("SUPERSECRET");
+  });
+});
+
 describe("createLocalSecretVault — delete", () => {
   it("deletes one ref, the other remains intact", () => {
     const storePath = join(dir, "vault.enc.json");
@@ -318,6 +673,92 @@ describe("createLocalSecretVault — delete", () => {
     vault.delete("cred:never-existed");
 
     expect(vault.get("cred:a")).toBe("secret-A");
+  });
+
+  it("deleteMany drops several refs in one commit and keeps siblings", () => {
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+    vault.set("cred:keep", "keep-secret");
+    vault.deleteMany(["cred:a", "cred:b"]);
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+    expect(vault.list()).toEqual(["cred:keep"]);
+  });
+
+  it("deleteMany emits one entries-deleted line with the requested count", () => {
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(dir, "vault-delete-many-log.enc.json"),
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+    vault.set("cred:keep", "keep-secret");
+    events.length = 0;
+    vault.deleteMany(["cred:a", "cred:b"]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "security",
+      op: "security.vault.entries-deleted",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { count: 2, completeness: "complete", loss: "none" },
+    });
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-deleted.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 2 });
+  });
+
+  it("emits structured body-free evidence when deleteMany cannot read the store", () => {
+    const storePath = join(dir, "vault-delete-fail.enc.json");
+    mkdirSync(storePath);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath,
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.deleteMany(["cred:a"]);
+    }).toThrow();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      op: "security.vault.entries-delete-failed",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      errorKind: "write-failed",
+      extra: {
+        count: 1,
+        failureKind: "SECRET_VAULT_STORE_INVALID_JSON",
+        causeChain: ["EISDIR"],
+      },
+    });
+    expect(isVaultFrameArray(events[0]?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain(storePath);
+    expect(JSON.stringify(events)).not.toContain("cred:a");
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-delete-failed.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 1, failureKind: "SECRET_VAULT_STORE_INVALID_JSON" });
+  });
+
+  it("deleteMany of an empty list does not read an unreadable store", () => {
+    const storePath = join(dir, "vault-unreadable.enc.json");
+    mkdirSync(storePath);
+    const vault = vaultAt(storePath);
+    expect(() => {
+      vault.deleteMany([]);
+    }).not.toThrow();
   });
 });
 
@@ -448,6 +889,55 @@ describe("createLocalSecretVault — symlink guard", () => {
     }).toThrow("symlinked path");
   });
 
+  it("classifies a blocked setMany through a symlink as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-merge-log-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-merge-log-sub");
+    symlinkSync(realSub, linkSub);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.setMany(new Map([["cred:a", "value"]]));
+    }).toThrow("symlinked path");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.entries-merge-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
+  });
+
+  it("classifies a blocked deleteMany through a symlink as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-delete-log-sub");
+    mkdirSync(realSub);
+    vaultAt(join(realSub, "vault.enc.json")).set("cred:a", "value");
+    const linkSub = join(dir, "link-delete-log-sub");
+    symlinkSync(realSub, linkSub);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.deleteMany(["cred:a"]);
+    }).toThrow("symlinked path");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.entries-delete-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
+  });
+
   it("throws on read paths through a symlinked directory segment", (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const realSub = join(dir, "real-read-sub");
@@ -498,6 +988,56 @@ describe("createLocalSecretVault — symlink guard", () => {
   });
 });
 
+describe("createLocalSecretVault — non-symlink lstat failure propagates unmodified", () => {
+  it("propagates a non-ENOENT lstat failure raised while walking ancestor path segments", () => {
+    // A path segment that is itself a plain FILE (not a directory) makes lstat on anything beneath
+    // it fail with ENOTDIR rather than ENOENT — the "keychain refused, not merely absent" analogue
+    // for the symlink-guard walk: only ENOENT is swallowed as "not a symlink", every other lstat
+    // failure must propagate as-is rather than being reinterpreted as the deliberate guard error.
+    const blockedFile = join(dir, "blocked-file");
+    writeFileSync(blockedFile, "not a directory");
+    const storePath = join(blockedFile, "sub", "vault.enc.json");
+    const vault = vaultAt(storePath);
+
+    let caught: unknown;
+    try {
+      vault.set("cred:a", "value");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as NodeJS.ErrnoException).code).toBe("ENOTDIR");
+    // Not the deliberate symlink-guard error: this is the raw fs failure propagating unmodified.
+    expect(String(caught)).not.toContain("symlinked path");
+  });
+});
+
+describe("createLocalSecretVault — fsyncDirectory skips the directory fsync on win32", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("still completes a write when the platform is win32 (POSIX directory fsync is meaningless there)", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+
+    expect(() => {
+      vault.set("cred:a", "value");
+    }).not.toThrow();
+    expect(vault.get("cred:a")).toBe("value");
+  });
+});
+
+// NOTE: the analogous "leaves no temp file behind when the commit rename fails" proof for the
+// SHARDED layout (below, near writeShard) blocks the target with a real pre-existing directory
+// because sharded set() never reads its target before writing. The single-file layout's set()
+// always reads the CURRENT store content first (readStore), so the same trick makes readStore
+// itself fail first (EISDIR) — never reaching writeStore's rename at all. That version of this
+// proof lives in secret-vault.fs-fault-injection.test.ts, using a scoped renameSync mock instead.
+
 describe("createLocalSecretVault — additional isStoreFile branches", () => {
   it("a store file containing JSON null fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
@@ -524,6 +1064,35 @@ describe("createLocalSecretVault — additional isStoreFile branches", () => {
   });
 });
 
+// `security` signals "the item could not be found" with exit status 44, and only that status may
+// lead to a write. A bare Error stands for every OTHER failure — a timeout, a locked keychain, a
+// policy refusal — where a write would meet the same wall and cost a second bounded wait.
+function itemNotFound(): Error & { status: number } {
+  return Object.assign(new Error("not found"), { status: 44 });
+}
+
+describe("createKeychainCommandRunner", () => {
+  it("gives up on a keychain that never answers instead of waiting for it", () => {
+    // Stands in for `security` blocked on a macOS unlock dialog. Against an unbounded spawn this
+    // waits the full 30s and the test fails on the suite timeout.
+    const fakeDir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
+    try {
+      const hangs = join(fakeDir, "security");
+      writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+      chmodSync(hangs, 0o700);
+      const run = createKeychainCommandRunner(hangs, 250);
+
+      const started = process.hrtime.bigint();
+      expect(() => run(["find-generic-password"])).toThrow();
+      // The 20x margin between the 250ms bound and this 5s ceiling keeps the assertion insensitive
+      // to runner scheduling while still failing against the previous unbounded spawn.
+      expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
+    } finally {
+      rmSync(fakeDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
 describe("createKeychainVaultKeyAccess", () => {
   const originalPlatform = process.platform;
 
@@ -546,6 +1115,19 @@ describe("createKeychainVaultKeyAccess", () => {
     expect(called).toBe(false);
   });
 
+  it("does not attempt a write when the read failed for any reason other than a missing item", () => {
+    // A blocked or refused read must not be followed by a store attempt: that is a SECOND bounded
+    // wait on a path a caller may be blocking on, which is the cost the classification removes.
+    setPlatform("darwin");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      throw new Error("keychain did not answer");
+    };
+    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password"]);
+  });
+
   it("reads an existing 32-byte key from the keychain (read hit)", () => {
     setPlatform("darwin");
     const stored = Buffer.alloc(32, 5).toString("base64");
@@ -563,7 +1145,7 @@ describe("createKeychainVaultKeyAccess", () => {
     const commands: string[][] = [];
     const runner = (args: readonly string[]): string => {
       commands.push([...args]);
-      if (args[0] === "find-generic-password") throw new Error("not found");
+      if (args[0] === "find-generic-password") throw itemNotFound();
       return "";
     };
     const key = createKeychainVaultKeyAccess("svc", runner)();
@@ -582,6 +1164,103 @@ describe("createKeychainVaultKeyAccess", () => {
       throw new Error("security unavailable");
     };
     expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+  });
+
+  it("regenerates the key when the stored keychain value cannot be decoded (corrupt/garbage bytes)", () => {
+    setPlatform("darwin");
+    // Base64 of 16 bytes decodes cleanly but to the wrong length, so decodeKeyOrThrow rejects it —
+    // distinct from "keychain has none" (item-not-found): here the read SUCCEEDS with a value this
+    // vault cannot use, and the undecodable-value path must replace it exactly as generate-on-miss does.
+    const undecodable = Buffer.alloc(16, 2).toString("base64");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "find-generic-password") return `${undecodable}\n`;
+      return "";
+    };
+    const key = createKeychainVaultKeyAccess("svc", runner)();
+    expect(key?.length).toBe(32);
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
+  });
+
+  it("returns undefined when the item-not-found path's own key generation fails (add error)", () => {
+    setPlatform("darwin");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "find-generic-password") throw itemNotFound();
+      throw new Error("add-generic-password failed");
+    };
+    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
+  });
+
+  // The keychain key-tier path spawns `security` through its own injectable `KeychainCommandRunner`
+  // rather than calling `readMacosKeychainSecret`, so it needs its own proof that a read failure
+  // (other than "no such item") reports `security.keychain.fallback` — the same shape
+  // `readMacosKeychainSecret` reports for its own read tier (macos-keychain.test.ts).
+  describe("security.keychain.fallback sink wiring", () => {
+    function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+      const events: SecurityLogEvent[] = [];
+      return { sink: { write: (event): void => void events.push(event) }, events };
+    }
+
+    it("emits one security.keychain.fallback event when the read refuses for a reason other than 'not found'", () => {
+      setPlatform("darwin");
+      const { sink, events } = recordingSink();
+      const runner = (): string => {
+        throw Object.assign(new Error("keychain refused"), { status: 45 });
+      };
+
+      expect(createKeychainVaultKeyAccess("svc", runner, sink)()).toBeUndefined();
+
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      expect(event).toMatchObject({
+        level: "warn",
+        category: "security",
+        op: "security.keychain.fallback",
+        errorKind: "unavailable",
+        extra: { reasonKind: "Error", boundedExitKind: "exit-status" },
+      });
+      expect(typeof event?.durationMs).toBe("number");
+      // Never the service name this call was made with.
+      expect(JSON.stringify(event)).not.toContain("svc");
+    });
+
+    it("does not emit for the ordinary first-run case (item not found)", () => {
+      setPlatform("darwin");
+      const { sink, events } = recordingSink();
+      const runner = (args: readonly string[]): string => {
+        if (args[0] === "find-generic-password") throw itemNotFound();
+        return "";
+      };
+
+      const key = createKeychainVaultKeyAccess("svc", runner, sink)();
+
+      expect(key?.length).toBe(32);
+      expect(events).toHaveLength(0);
+    });
+
+    it("does not emit when the read succeeds", () => {
+      setPlatform("darwin");
+      const { sink, events } = recordingSink();
+      const stored = Buffer.alloc(32, 5).toString("base64");
+      const runner = (): string => `${stored}\n`;
+
+      createKeychainVaultKeyAccess("svc", runner, sink)();
+
+      expect(events).toHaveLength(0);
+    });
+
+    it("stays exactly as silent as before when no sink is wired", () => {
+      setPlatform("darwin");
+      const runner = (): string => {
+        throw Object.assign(new Error("keychain refused"), { status: 45 });
+      };
+
+      expect(() => createKeychainVaultKeyAccess("svc", runner)()).not.toThrow();
+    });
   });
 });
 
@@ -627,6 +1306,106 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     expect([...vault.list()].sort()).toEqual(["cred:kept"]);
     expect(vault.get("cred:kept")).toBe("kept-value");
   });
+
+  it("setMany merges without dropping siblings", () => {
+    const vault = shardedVaultAt(join(dir, "sharded-merge"));
+    vault.set("cred:keep", "keep-secret");
+    vault.setMany(
+      new Map([
+        ["cred:a", "secret-A"],
+        ["cred:keep", "keep-updated"],
+      ]),
+    );
+    expect(vault.get("cred:keep")).toBe("keep-updated");
+    expect(vault.get("cred:a")).toBe("secret-A");
+    expect([...vault.list()].sort()).toEqual(["cred:a", "cred:keep"]);
+  });
+
+  it("deleteMany drops several shards and keeps siblings", () => {
+    const vault = shardedVaultAt(join(dir, "sharded-delete-many"));
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+    vault.set("cred:keep", "keep-secret");
+    vault.deleteMany(["cred:a", "cred:b", "cred:missing"]);
+    expect(vault.get("cred:keep")).toBe("keep-secret");
+    expect(vault.list()).toEqual(["cred:keep"]);
+  });
+
+  it("preflights every shard path before writing so a later invalid ref leaves earlier refs absent", () => {
+    const vault = shardedVaultAt(join(dir, "sharded-preflight"));
+    expect(() => {
+      vault.setMany(
+        new Map([
+          ["cred:ok", "ok-secret"],
+          ["x".repeat(97), "never-stored"],
+        ]),
+      );
+    }).toThrow(/cannot be stored as a sharded entry/u);
+    expect(vault.get("cred:ok")).toBeUndefined();
+    expect(vault.list()).toEqual([]);
+  });
+
+  it("rolls back earlier shard writes when a later write in the same setMany fails", () => {
+    const storeDir = join(dir, "sharded-atomic-setmany");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "original-a");
+    mkdirSync(join(storeDir, `entry-${Buffer.from("cred:b", "utf8").toString("hex")}.sealed`));
+    expect(() => {
+      vault.setMany(
+        new Map([
+          ["cred:a", "updated-a"],
+          ["cred:b", "never-stored"],
+        ]),
+      );
+    }).toThrow();
+    expect(vault.get("cred:a")).toBe("original-a");
+    expect(vault.get("cred:b")).toBeUndefined();
+  });
+
+  it("treats a non-ENOENT snapshot of an existing shard as a hard failure, not as absent", () => {
+    const storeDir = join(dir, "sharded-snapshot-eisdir");
+    const vault = shardedVaultAt(storeDir);
+    vault.set("cred:a", "original-a");
+    const [name] = readdirSync(storeDir);
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+    expect(() => {
+      vault.setMany(
+        new Map([
+          ["cred:a", "updated-a"],
+          ["cred:b", "never-stored"],
+        ]),
+      );
+    }).toThrow();
+    expect(vault.get("cred:b")).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps an unreadable existing shard when a later setMany write fails",
+    () => {
+      const storeDir = join(dir, "sharded-snapshot-eacces");
+      const vault = shardedVaultAt(storeDir);
+      vault.set("cred:a", "original-a");
+      const pathA = join(storeDir, `entry-${Buffer.from("cred:a", "utf8").toString("hex")}.sealed`);
+      const original = readFileSync(pathA);
+      mkdirSync(join(storeDir, `entry-${Buffer.from("cred:b", "utf8").toString("hex")}.sealed`));
+      chmodSync(pathA, 0o000);
+      try {
+        expect(() => {
+          vault.setMany(
+            new Map([
+              ["cred:a", "updated-a"],
+              ["cred:b", "never-stored"],
+            ]),
+          );
+        }).toThrow();
+      } finally {
+        chmodSync(pathA, 0o600);
+      }
+      expect(readFileSync(pathA)).toEqual(original);
+      expect(vault.get("cred:a")).toBe("original-a");
+    },
+  );
 
   it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {
     const storeDir = join(dir, "sharded");
@@ -714,6 +1493,120 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
 
     expect(vault.get("cred:a")).toBeUndefined();
     expect(vault.has("cred:a")).toBe(false);
+  });
+
+  function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+    const events: SecurityLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("emits one security.vault.shard-unreadable event, with only the documented fields, for an EISDIR shard", () => {
+    const storeDir = join(dir, "sharded");
+    const { sink, events } = recordingSink();
+    const vault = createShardedLocalSecretVault({ key: KEY, storeDir, sink });
+    vault.set("cred:a", "secret-A");
+    const [name] = readdirSync(storeDir);
+    // Same fixture as the unwired test above: a directory where the entry file belongs makes
+    // readFileSync raise EISDIR without depending on process privilege (unlike EACCES, which a
+    // root-run test worker would never actually be refused).
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+
+    expect(vault.get("cred:a")).toBeUndefined();
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({
+      level: "warn",
+      category: "security",
+      op: "security.vault.shard-unreadable",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      errorKind: "read-failed",
+      extra: {
+        count: 1,
+        failureKind: "EISDIR",
+      },
+    });
+    expect(isVaultFrameArray(event?.extra?.frames)).toBe(true);
+    expect(Object.keys(event ?? {}).sort()).toEqual([
+      "category",
+      "correlationId",
+      "errorKind",
+      "extra",
+      "level",
+      "op",
+    ]);
+    // Never the reference, never the shard's filename/path.
+    expect(JSON.stringify(event)).not.toContain("cred:a");
+    expect(JSON.stringify(event)).not.toContain(storeDir);
+    const persisted = expectActivityLogProof(
+      "security.vault.shard-unreadable.count",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 1, failureKind: "EISDIR" });
+  });
+
+  // EACCES specifically, as distinct proof from the EISDIR case above — skipped only when the
+  // worker itself runs as root (uid 0), where a permission bit never actually refuses a read.
+  it.skipIf(process.getuid?.() === 0)(
+    "emits security.vault.shard-unreadable for an EACCES shard, and never breaks the read when the sink throws",
+    () => {
+      const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+      const storeDir = join(dir, "sharded");
+      const dead: SecurityLogSink = {
+        write: (): never => {
+          throw new Error("sink transport is down");
+        },
+      };
+      const vault = createShardedLocalSecretVault({ key: KEY, storeDir, sink: dead });
+      vault.set("cred:a", "secret-A");
+      const [name] = readdirSync(storeDir);
+      const shardPath = join(storeDir, name ?? "missing");
+      chmodSync(shardPath, 0o000);
+
+      let read: string | undefined;
+      try {
+        expect(() => {
+          read = vault.get("cred:a");
+        }).not.toThrow();
+      } finally {
+        chmodSync(shardPath, 0o600);
+        vi.restoreAllMocks();
+      }
+      expect(read).toBeUndefined();
+      // Degrade-once: the dead sink's own write threw, so the report fell through to the one
+      // channel left — exactly once, never silently and never per-line.
+      expect(warn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not emit for an entry that simply was never set", () => {
+    const storeDir = join(dir, "sharded");
+    const { sink, events } = recordingSink();
+    const vault = createShardedLocalSecretVault({ key: KEY, storeDir, sink });
+
+    expect(vault.get("cred:never-set")).toBeUndefined();
+    expect(events).toHaveLength(0);
+  });
+
+  it("stays exactly as silent as before when no sink is wired", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = createShardedLocalSecretVault({ key: KEY, storeDir });
+    vault.set("cred:a", "secret-A");
+    const [name] = readdirSync(storeDir);
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+
+    expect(() => {
+      vault.get("cred:a");
+    }).not.toThrow();
   });
 
   it("never lists a filename it would refuse to read or delete under that reference", () => {

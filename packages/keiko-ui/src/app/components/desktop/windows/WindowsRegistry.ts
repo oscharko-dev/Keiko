@@ -4,7 +4,11 @@ import type {
   QualityIntelligenceImageSource,
   WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
-import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
+import type {
+  OpenEditorFileRequest,
+  OpenEditorFileResult,
+  WorkspaceLinkedGitChangeComparison,
+} from "../hooks/useWorkspace.types";
 import type { IconName } from "../Icons";
 import type { I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
@@ -13,6 +17,7 @@ import type { AppWindow, WindowCfgValue } from "./types";
 export type WindowType =
   | "chat"
   | "chatHistory"
+  | "codingHistory"
   | "memoria"
   | "files"
   | "editor"
@@ -32,7 +37,6 @@ export type WindowType =
   | "review"
   | "agents"
   | "integ"
-  | "keiko"
   | "settings"
   | "workspaceTrust"
   // Issue #1696 — governed package-update window. Opened only from Settings/startup notification,
@@ -99,6 +103,7 @@ interface ChatWindowCfg extends WindowCfgRecord {
   readonly chatId?: string;
   readonly title?: string;
   readonly modelId?: string;
+  readonly projectPathPrivacy?: "omit";
   readonly selectionHandoffId?: string;
   readonly newChatRequestId?: string;
 }
@@ -148,7 +153,11 @@ export type WindowCfgByType = {
     readonly state?: string;
     readonly taskRef?: string;
   };
-  readonly governedGit: ProjectRootWindowCfg;
+  readonly governedGit: ProjectRootWindowCfg & {
+    readonly rootBinding?: "coding-repository";
+    readonly gitChangeBaseRef?: string;
+    readonly gitChangeHeadRef?: string;
+  };
   readonly governedPullRequest: ProjectRootWindowCfg & { readonly headBranchName?: string };
   readonly governedMerge: ProjectRootWindowCfg & { readonly headBranchName?: string };
   readonly qiRun: WindowCfgRecord & { readonly runId?: string };
@@ -208,6 +217,7 @@ export interface LocalizedConfigField {
 
 export interface WindowRenderContext {
   readonly windowId: string;
+  readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
   readonly compact?: boolean;
@@ -228,6 +238,8 @@ export interface WindowRenderContext {
     readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
+  /** Git-change comparisons connected to this chat window through the workspace connector. */
+  readonly linkedGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
   /**
    * The available folder/repository selected for the whole Workbench. This is the shared base
    * context below an optional managed task-workspace binding; it never grants task execution
@@ -250,6 +262,7 @@ export interface WindowRenderContext {
    */
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
+  readonly currentWindowStack?: (() => readonly string[]) | undefined;
   readonly restoreWindow?: ((id: string) => void) | undefined;
   readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
@@ -259,6 +272,8 @@ export type WindowRender<T extends WindowType = WindowType> = (
   cfg: WindowCfgByType[T],
   ctx: WindowRenderContext,
 ) => ReactNode;
+
+type WindowStatus = "placeholder";
 
 export interface WindowTypeDef {
   readonly titleKey: MessageKey;
@@ -273,6 +288,12 @@ export interface WindowTypeDef {
   readonly singleton?: boolean;
   readonly config?: readonly ConfigField[];
   readonly ctaKey?: MessageKey;
+  /**
+   * KEIKO-0349: non-functional placeholder surface. Shell chrome (New Window palette, dock,
+   * window title) may surface this to disclose to the user that the surface is a preview instead
+   * of a working feature. Absence means "functional".
+   */
+  readonly status?: WindowStatus;
   readonly render: WindowRender;
 }
 
@@ -294,6 +315,7 @@ interface PartialDef {
   readonly singleton?: boolean;
   readonly config?: readonly ConfigField[];
   readonly ctaKey?: MessageKey;
+  readonly status?: WindowStatus;
 }
 
 // Render is deferred at module load — the real render functions are injected
@@ -307,7 +329,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 480,
     h: 480,
     min: { w: 300, h: 260 },
-    singleton: true,
     config: [
       {
         key: "title",
@@ -318,6 +339,17 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
         placeholderKey: "window.placeholder.chatTitle",
       },
     ],
+  },
+  codingHistory: {
+    titleKey: "window.type.codingHistory.title",
+    icon: "codingHistory",
+    descKey: "window.type.codingHistory.desc",
+    w: 400,
+    h: 580,
+    min: { w: 300, h: 320 },
+    tiny: { w: 260, h: 220 },
+    tool: true,
+    singleton: true,
   },
   chatHistory: {
     titleKey: "window.type.chatHistory.title",
@@ -463,7 +495,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   },
   coding: {
     titleKey: "window.type.coding.title",
-    icon: "code",
+    icon: "codingWorkbench",
     accent: true,
     descKey: "window.type.coding.desc",
     w: 860,
@@ -550,24 +582,9 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     titleKey: "window.type.integ.title",
     icon: "plugins",
     descKey: "window.type.integ.desc",
-    w: 320,
-    h: 300,
-    config: [
-      {
-        key: "provider",
-        labelKey: "window.field.provider",
-        type: "select",
-        options: ["GitHub", "Linear", "Slack", "Sentry"],
-        def: "GitHub",
-      },
-    ],
-  },
-  keiko: {
-    titleKey: "window.type.keiko.title",
-    icon: "spark",
-    descKey: "window.type.keiko.desc",
-    w: 344,
-    h: 520,
+    w: 720,
+    h: 600,
+    min: { w: 420, h: 360 },
     tool: true,
     singleton: true,
   },
@@ -627,6 +644,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 470,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   automations: {
     titleKey: "window.type.automations.title",
@@ -636,6 +654,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 300,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   mobile: {
     // Audit C412 — title case like every other two-word title ("Figma Snapshot").
@@ -646,6 +665,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 380,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   inspector: {
     titleKey: "window.type.inspector.title",
@@ -675,6 +695,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 360,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   resources: {
     titleKey: "window.type.resources.title",
@@ -684,6 +705,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 320,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   // Epic #189 Slice 3 / Epic #1815 — compact Knowledge Pod picker window. The user selects
   // a ready capsule or capsule-set; the selection is stored in cfg for relationship binding.
@@ -853,10 +875,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     icon: "git",
     accent: true,
     descKey: "window.type.governedGit.desc",
-    w: 520,
-    h: 640,
-    min: { w: 360, h: 420 },
-    tiny: { w: 300, h: 240 },
+    w: 960,
+    h: 680,
+    min: { w: 720, h: 460 },
+    tiny: { w: 360, h: 260 },
     tool: true,
     singleton: true,
     config: [{ key: "projectPath", labelKey: "window.field.projectPath", type: "text" }],
@@ -924,7 +946,10 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     if (fn !== undefined) return fn(cfg, ctx);
     return null;
   };
-  const base: Omit<WindowTypeDef, "accent" | "tool" | "singleton" | "config" | "ctaKey"> = {
+  const base: Omit<
+    WindowTypeDef,
+    "accent" | "tool" | "singleton" | "config" | "ctaKey" | "status"
+  > = {
     titleKey: partial.titleKey,
     icon: partial.icon,
     descKey: partial.descKey,
@@ -940,12 +965,14 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     singleton?: boolean;
     config?: readonly ConfigField[];
     ctaKey?: MessageKey;
+    status?: WindowStatus;
   } = {};
   if (partial.accent === true) extra.accent = true;
   if (partial.tool === true) extra.tool = true;
   if (partial.singleton === true) extra.singleton = true;
   if (partial.config !== undefined) extra.config = partial.config;
   if (partial.ctaKey !== undefined) extra.ctaKey = partial.ctaKey;
+  if (partial.status !== undefined) extra.status = partial.status;
   return { ...base, ...extra };
 }
 
@@ -1005,9 +1032,11 @@ export function localizedWindowConfigFields(
 export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
   "chatHistory",
+  "codingHistory",
   "memoria",
   "connector",
   "localKnowledge",
+  "integ",
   "problems",
   "figma",
   "figmaJson",

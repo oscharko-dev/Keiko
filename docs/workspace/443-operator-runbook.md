@@ -217,9 +217,32 @@ POST /api/task-workspaces/:id/repair
 # Worktree now exists, instance is active and healthy
 ```
 
-##### Reattach the branch (HEAD moved, gitdir corrupted)
+##### Accept a moved HEAD (a commit made outside Keiko)
 
-**When:** `driftMarker ∈ { head-moved, gitdir-broken }` (the .git pointer or branch state is stale).
+**When:** `driftMarker: head-moved` — the worktree's HEAD is not the commit Keiko last verified,
+because someone committed in that worktree from a terminal. A commit Keiko itself made through the
+governed Git-delivery surface records its own head and never raises this marker.
+
+**Operator action:**
+
+- Inspect the worktree first: this accepts whatever commit is currently checked out as the verified
+  head. Nothing in the repository or on disk changes; only the recorded baseline does.
+- Call `POST /api/task-workspaces/:id/repair` with `strategy: "accept-moved-head"` and
+  `operatorApproved: true`.
+- Refused as `REPAIR_NOT_APPLICABLE` when the tree still holds uncommitted work, when the repository
+  reports no readable HEAD for the worktree, or when the live facts show any other finding — commit
+  or stash the work, or resolve the other finding first.
+
+**Example:**
+
+```
+POST /api/task-workspaces/:id/repair { strategy: "accept-moved-head", operatorApproved: true }
+→ { outcome: "repaired", driftMarkers: [], health: "healthy" }
+```
+
+##### Reattach the branch (gitdir corrupted)
+
+**When:** `driftMarker: gitdir-broken` (the .git pointer or branch state is stale).
 
 **Operator action:**
 
@@ -337,6 +360,29 @@ POST /api/task-workspaces/active { workspaceId: "ws-789" }
 - Fix the underlying issue (restore database, fix file permissions, free disk space).
 - Do not retry the request until the fault is resolved.
 
+**Evidence to collect before escalating:**
+
+- `auditCorrelationId` / `correlationId` for the failing request (returned by
+  `GET /api/task-workspaces/:id` and threaded through `provisioning.ts`, `repair.ts`, and
+  `cleanup.ts`).
+- The affected `workspaceId`.
+- The `error.code` (`PROVISIONING_FAILED`, `REPAIR_FAILED`, or `CLEANUP_FAILED`) and the
+  server-side `failureClass: "terminal"`.
+- The redacted server-log excerpt for the correlation id (body-free per the activity-log
+  contract — do not attach raw workspace paths or user content).
+- The wall-clock timestamp of the failing request.
+
+**Escalate to:** the workspace subsystem owner via the repository's standard support / ticket
+channel (do not name a specific team, on-call rotation, or SLO here — those live in the
+operator organization's own incident-response registry, not in this runbook). Include the
+evidence bundle above so the owner can reconstruct the operation from the activity log
+without needing access to the affected machine.
+
+**Do not** manually delete the worktree directory, hand-edit the SQLite store, or force a
+cleanup while a terminal fault is unresolved: any of these actions destroys the evidence the
+owner needs and can cross the SC1 / SC4 safety-gate lines that the terminal fault itself has
+not yet been proven to leave intact.
+
 ---
 
 ### Troubleshooting table
@@ -414,7 +460,7 @@ Lifecycle evidence is **content-free** and stored for audit/compliance purposes.
 - **eventType** — what mutation occurred (e.g., `provisioned`, `activated`, `cleanup-requested`).
 - **outcome** — the result (e.g., `completed`, `refused`, `failed-retryable`, `failed-terminal`).
 - **refusalReasons** — why cleanup/repair was refused (e.g., `["worktree-dirty", "lock-live"]`).
-- **recoveryStrategy** — the repair strategy applied (e.g., `recreate-worktree`, `release-stale-lock`).
+- **recoveryStrategy** — the repair strategy applied (e.g., `recreate-worktree`, `release-stale-lock`, `accept-moved-head`).
 
 ### Fields operators should NOT rely on:
 

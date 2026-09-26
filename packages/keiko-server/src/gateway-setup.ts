@@ -1,8 +1,10 @@
+import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 // First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
 // and optionally a Figma PAT; the loopback BFF builds the local provider config, performs a real
 // chat-completions smoke call, stores the resulting config on disk with private permissions, and
 // updates the in-memory runtime config without exposing credentials back to the browser.
 
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import {
@@ -11,30 +13,70 @@ import {
   DEFAULT_API_KEY_HEADER_NAME,
   ERROR_CODES,
   Gateway,
+  GATEWAY_CONFIG_SCHEMA_VERSION,
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   findConfiguredCapability,
+  GatewayError,
+  MODEL_REASONING_EFFORTS,
   isLikelyEmbeddingModelId,
   isVoiceCapability,
+  isCompleteRealtimeVoiceCapability,
   listConfiguredCapabilities,
+  loadConfigFromFile,
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
+  requestOpenAIEmbedding,
   selectRealtimeVoiceModel,
   selectSpeechOutputModel,
   selectSpeechToTextModel,
   toSafeObject,
   validateBaseUrl,
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
+  toolCallingConfigurationFingerprint,
   VOICE_PROVIDER_LOCALITIES,
+  // KEIKO-0572: shared circuitBreaker defaults; hoisted into this import block instead of the
+  // separate `import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from ...` line Sonar S3863 flagged.
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
 } from "@oscharko-dev/keiko-model-gateway";
-import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  boundedUnsupportedReason,
+  isChatCompatibleDeclaredMode,
+  modelKindForDeclaredMode,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+  validateGatewaySetupAuditRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway-setup-audit";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type {
+  GatewayModelUnsupportedReason,
+  GatewaySetupAuditRecord,
+  GatewaySetupOutcomeKind,
+  GatewaySetupTargetClass,
+  GatewayUnsupportedDiscoveredModel,
+  ToolCallingVerification,
+} from "@oscharko-dev/keiko-contracts";
+import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  classifyOutboundHost,
+  gatewayFetch,
+  readJsonCapped,
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   EnvSource,
   GatewayConfig,
   ModelCapability,
+  ModelReasoningEffort,
   ModelProviderConfig,
+  OpenAIEmbeddingOutcome,
   ParseGatewayConfigOptions,
   VoicePersonaVoice,
   VoiceProviderLocality,
@@ -46,13 +88,20 @@ import type {
   GatewayDiscoveredModels,
   GatewayModelDiscoveryOutput,
   GatewaySetupTestResult,
+  GatewaySetupToolCallingObservation,
   RuntimeGatewayConfig,
   UiHandlerDeps,
   VerifiedModelCapabilityFields,
 } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   classifyFigmaTransportError,
   FigmaConnectorError,
@@ -64,6 +113,15 @@ import {
   tryParseJudgeVerdict,
 } from "./qualityIntelligence/judgePort.js";
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
+import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
+import { probeGatewayToolCalling, transientGatewayStatus } from "./gateway-tool-calling-probe.js";
+
+const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
+
+function isModelReasoningEffort(value: string): value is ModelReasoningEffort {
+  return MODEL_REASONING_EFFORT_SET.has(value);
+}
+import { createProviderSecretResolver } from "./credentialVault.js";
 
 const MAX_BODY_BYTES = 64_000;
 // Issue #144: exported so discovery-normalization tests can pin the slice cap
@@ -71,12 +129,87 @@ const MAX_BODY_BYTES = 64_000;
 export const MAX_DISCOVERED_MODELS = 100;
 const MAX_DEPLOYMENT_NAMES = 100;
 const MAX_MODEL_ID_LENGTH = 160;
-const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
+const MISTRAL_TOOL_CALLING_LIMITATION =
+  "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
+// #3591: the field customer's LiteLLM/vLLM gateway can take well over 15s to answer at peak load;
+// raised so first-run discovery does not mistake a slow but healthy candidate for a broken one.
+// A candidate the smoke probe never gets an answer from is now KEPT unverified instead of dropped
+// (see `admitChatSmokeCandidates`) — this floor bounds how long that patience costs per candidate.
+// `Gateway.chat()`'s own attempt/retry floors run far longer end to end (several minutes), so this
+// value only actually bounds a probe through the per-candidate `cancellationSignal`
+// `defaultGatewaySetupTester` composes from it (PR #3602 review). Exported so tests can pin the
+// exact value instead of restating it (Issue #144 precedent — see `MAX_DISCOVERED_MODELS`).
+export const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 120_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+// The whole discovery smoke ROUND's own patience budget — distinct from the per-candidate ceiling
+// above. Past this deadline no further candidate probe is even started: the remaining candidates
+// are retained unverified without being called, so a large discovery batch of temporarily-transient
+// candidates (rate-limited, briefly unreachable) can never block first-run setup for an unbounded
+// time. The setup POST has no UI deadline and the server awaits the handler end to end, so this
+// round bound is what actually protects first-run setup (PR #3602 review).
+export const CHAT_SMOKE_ROUND_DEADLINE_MS = 600_000;
+
+const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-calling.verification",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.logToolCallingVerification",
+  fields: {
+    verificationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verified", "unsupported", "unverified"],
+    },
+    configurationFingerprint: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["gateway-tool-calling-capability"],
+  proofIds: ["gateway.tool-calling.verification.line"],
+  releaseImpact: "patch",
+});
+const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.voice.setup.resolved",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.logVoiceSetupResolution",
+  fields: {
+    speechInputModels: { type: "integer", dataClass: "count", required: true },
+    usableSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
+    incompleteSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
+    usableRealtimeModels: { type: "integer", dataClass: "count", required: true },
+    incompleteRealtimeModels: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["gateway-voice-configuration"],
+  proofIds: ["gateway.voice.setup.resolved.line"],
+  releaseImpact: "minor",
+});
 const FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS = 15_000;
 const FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES = 64_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
-const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
+// The chat vocabulary lives in the contract table (modelKindForDeclaredMode); this predicate
+// only adapts it to the local "no declaration" case.
+function declaresChatCompatibleMode(mode: string | undefined): boolean {
+  return mode !== undefined && isChatCompatibleDeclaredMode(mode);
+}
 const IMAGE_INPUT_ID_PATTERNS: readonly RegExp[] = [
   /(?:^|[-_/. ])(?:vision|multimodal|multi-modal|llava|pixtral|omni|gpt-4o)(?:$|[-_/. ])/i,
   /(?:^|[-_/. ])vl(?:$|[-_/. ])/i,
@@ -85,6 +218,7 @@ const IMAGE_INPUT_ID_PATTERNS: readonly RegExp[] = [
 const ALLOW_LINK_LOCAL_GATEWAY_ENV = "KEIKO_ALLOW_LINK_LOCAL_GATEWAY";
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
+type GatewayEmbeddingProbe = NonNullable<UiHandlerDeps["gatewayEmbeddingProbe"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
 type FigmaCredentialTester = NonNullable<UiHandlerDeps["figmaCredentialTester"]>;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
@@ -294,25 +428,99 @@ function isAzureFoundryBaseUrl(baseUrl: string): boolean {
 }
 
 interface ProviderRawOptions {
+  /** True on preserve-mode rebuilds — stored-capability carry-overs are preserve semantics. */
+  readonly preserveExisting?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
+  /** Generic endpoint protocol, persisted VERBATIM — see setupEndpointProtocol (#3042). */
+  readonly endpointStyle?: string | undefined;
+  readonly apiVersion?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
   readonly responseFormatModelIds?: readonly string[] | undefined;
   readonly embeddingModelIds?: readonly string[] | undefined;
   readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>> | undefined;
   readonly current?: GatewayConfig | undefined;
+  /** The durable stored view — the protocol of record for capability identity (see #3046). */
+  readonly stored?: GatewayConfig | undefined;
   readonly workflowEligibleModelIds?: readonly string[] | undefined;
+}
+
+// Capability reuse at the SAME endpoint is deliberate and pinned: it is how a readiness-verified
+// observation (recordVerifiedCapability → replaceModelCapability) survives a routine re-save,
+// which submits no preserveExisting flag. The mode gate belongs on the ENDPOINT-MOVE carry-over
+// below, where this URL match misses and nothing verified the stored value at the new endpoint.
+// The protocol the adapter actually speaks: an absent endpoint style IS the OpenAI-compatible
+// shape, so the two spellings must compare equal wherever a protocol CHANGE is the question.
+function effectiveEndpointStyle(style: string | undefined): string {
+  return style ?? "openai-compatible";
+}
+
+function storedProviderForModel(
+  stored: GatewayConfig | undefined,
+  modelId: string,
+): ModelProviderConfig | undefined {
+  return stored?.providers.find((candidate) => candidate.modelId === modelId);
+}
+
+// What the adapter will send AFTER the save: the statement if there is one, else what the file
+// declares, else what the environment already resolves the provider to. Falling through to the
+// resolved provider is what keeps a plain rotation — which states nothing — comparing equal.
+function effectiveSubmittedProtocol(
+  protocol: {
+    readonly submitted: {
+      readonly endpointStyle?: string | undefined;
+      readonly apiVersion?: string | undefined;
+    };
+    readonly durable: ModelProviderConfig | undefined;
+  },
+  provider: ModelProviderConfig,
+): { readonly endpointStyle: string | undefined; readonly apiVersion: string | undefined } {
+  return {
+    endpointStyle:
+      protocol.submitted.endpointStyle ?? protocol.durable?.endpointStyle ?? provider.endpointStyle,
+    apiVersion:
+      protocol.submitted.apiVersion ?? protocol.durable?.apiVersion ?? provider.apiVersion,
+  };
 }
 
 function existingCapabilityForSetup(
   current: GatewayConfig | undefined,
   modelId: string,
   baseUrl: string,
+  protocol: {
+    readonly submitted: {
+      readonly endpointStyle?: string | undefined;
+      readonly apiVersion?: string | undefined;
+    };
+    readonly durable: ModelProviderConfig | undefined;
+  },
 ): ModelCapability | undefined {
   const provider = current?.providers.find((candidate) => candidate.modelId === modelId);
   if (provider === undefined || !sameBaseUrlIdentity(provider.baseUrl, baseUrl)) return undefined;
+  // Both sides are the EFFECTIVE protocol — what the adapter will actually send. The durable
+  // view alone was not enough: with the file silent and KEIKO_DEFAULT_* resolving `current` to
+  // Azure, an explicit switch to openai-compatible compared undefined against openai-compatible
+  // and read as unchanged, keeping observations made over the deployment path (review finding on
+  // #3046). Completing the submitted side with the same defaults keeps a plain rotation — which
+  // states nothing — comparing equal.
+  const submitted = effectiveSubmittedProtocol(protocol, provider);
+  // The protocol is part of the endpoint's identity: the deployment path and the api version
+  // change the request route, so streaming, tool calling and image observations made over the
+  // old one prove nothing about the new one. The setup probe performs buffered chat only and
+  // reverifies none of them, so a reused capability would advertise unverified behavior (review
+  // finding on #3046). Unchanged protocol, unchanged identity — a rotation still keeps them.
+  // An absent style and an explicit "openai-compatible" are the SAME protocol — the adapter sends
+  // the identical request shape — so a same-URL import that merely spells the default out must
+  // not discard verified observations (review finding on #3046).
+  if (
+    effectiveEndpointStyle(provider.endpointStyle) !==
+      effectiveEndpointStyle(submitted.endpointStyle) ||
+    provider.apiVersion !== submitted.apiVersion
+  ) {
+    return undefined;
+  }
   return current?.capabilities?.find((candidate) => candidate.id === modelId);
 }
 
@@ -322,15 +530,36 @@ function codingUseCases(capability: ModelCapability): readonly string[] {
     : [...capability.preferredUseCases, "Coding"];
 }
 
+function storedStreamingRestriction(
+  current: GatewayConfig | undefined,
+  modelId: string,
+): Partial<ModelCapability> {
+  const stored = current?.capabilities?.find((candidate) => candidate.id === modelId);
+  return stored?.kind === "chat" && !stored.streaming ? { streaming: false } : {};
+}
+
+function discoveredReasoningFields(
+  discovered: GatewayDiscoveredModelMetadata | undefined,
+): Partial<Pick<ModelCapability, "reasoningEfforts">> {
+  return discovered?.reasoningEfforts === undefined
+    ? {}
+    : { reasoningEfforts: discovered.reasoningEfforts };
+}
+
 function discoveredCapabilityFields(
   discovered: GatewayDiscoveredModelMetadata | undefined,
 ): Partial<ModelCapability> {
+  // Discovery metadata is a provider declaration, not evidence that this deployment accepted
+  // Keiko's forced tool call. Keep it out of toolCalling: only the live probe can enable tools.
   return {
     ...(discovered?.contextWindow === undefined ? {} : { contextWindow: discovered.contextWindow }),
     ...(discovered?.maxOutputTokens === undefined
       ? {}
       : { maxOutputTokens: discovered.maxOutputTokens }),
-    ...(discovered?.toolCalling === undefined ? {} : { toolCalling: discovered.toolCalling }),
+    ...discoveredReasoningFields(discovered),
+    ...(discovered?.chatModeDeclared === undefined
+      ? {}
+      : { chatModeDeclared: discovered.chatModeDeclared }),
   };
 }
 
@@ -355,26 +584,6 @@ function workflowCapabilityFields(
   };
 }
 
-const MISTRAL_TOOL_CALLING_LIMITATION =
-  "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
-
-function applyMistralSetupDefaults(
-  modelId: string,
-  capability: ModelCapability,
-  toolCallingKnown: boolean,
-): ModelCapability {
-  if (!modelId.toLowerCase().includes("mistral")) return capability;
-  const knownLimitations = capability.knownLimitations.filter(
-    (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
-  );
-  if (toolCallingKnown) return { ...capability, knownLimitations };
-  return {
-    ...capability,
-    toolCalling: false,
-    knownLimitations: [...knownLimitations, MISTRAL_TOOL_CALLING_LIMITATION],
-  };
-}
-
 function createDefaultSetupCapability(
   modelId: string,
   baseUrl: string,
@@ -385,11 +594,31 @@ function createDefaultSetupCapability(
     embeddingModelIds?.includes(modelId) === true
       ? createDefaultEmbeddingCapability(modelId)
       : createDefaultChatCapability(modelId);
-  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl);
+  const rawExisting = existingCapabilityForSetup(options.current, modelId, baseUrl, {
+    submitted: options,
+    // The protocol of record is the DURABLE one, which is what the rebuild persists. Comparing
+    // against the env-RESOLVED view made a plain rotation look like a protocol change whenever
+    // KEIKO_DEFAULT_* supplied a tuple the file never declared, discarding verified observations
+    // for nothing (review finding on #3046).
+    durable: storedProviderForModel(options.stored, modelId),
+  });
+  // When the resolved kind CHANGES (e.g. a stored embedding is being switched back to chat by an
+  // explicit deployment list — review finding on #3037), observations made under the old kind are
+  // stale by construction and carrying them over would produce a hybrid capability whose numeric
+  // fields (contextWindow, maxOutputTokens) belong to the wrong kind — a chat capability with an
+  // embedding's contextWindow: 0 fails config-parse under KEIKO-0520. Treat existing as absent
+  // when its kind no longer matches so the flow restarts from baseCapability's defaults.
+  const existing = rawExisting?.kind === baseCapability.kind ? rawExisting : undefined;
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,
-    ...existing,
+    // The endpoint-move restriction is PRESERVE semantics: a fresh replacement deliberately
+    // treats stored capabilities as absent, like every stored list on this route (review
+    // finding on #3042).
+    ...(existing ??
+      (options.preserveExisting === true
+        ? storedStreamingRestriction(options.current, modelId)
+        : {})),
     ...discoveredCapabilityFields(discovered),
     id: modelId,
     kind: baseCapability.kind,
@@ -400,11 +629,18 @@ function createDefaultSetupCapability(
       options.workflowEligibleModelIds,
     ),
   };
-  return applyMistralSetupDefaults(
-    modelId,
-    capability,
-    existing !== undefined || discovered?.toolCalling !== undefined,
-  );
+  return capability;
+}
+
+// The generic endpoint protocol persists VERBATIM — absent fields stay absent so the runtime
+// default layering is unchanged (#3042).
+function genericEndpointProtocolRaw(
+  options: ProviderRawOptions,
+): Pick<Record<string, unknown>, string> {
+  return {
+    ...(options.endpointStyle === undefined ? {} : { endpointStyle: options.endpointStyle }),
+    ...(options.apiVersion === undefined ? {} : { apiVersion: options.apiVersion }),
+  };
 }
 
 function providerRaw(
@@ -425,11 +661,15 @@ function providerRaw(
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...genericEndpointProtocolRaw(options),
     capability: {
       ...defaultCapability,
-      ...(options.imageInputModelIds?.includes(modelId) === true
-        ? { supportsImageInput: true }
-        : {}),
+      // The provided list is authoritative, not additive: a model absent from it loses a stored
+      // supportsImageInput flag, which is what lets an update ever REMOVE image capability
+      // (review finding on #3031 — previously true could never be cleared).
+      ...(options.imageInputModelIds === undefined
+        ? {}
+        : { supportsImageInput: options.imageInputModelIds.includes(modelId) }),
       ...(supportsResponseFormat ? { structuredOutput: true, supportsResponseFormat: true } : {}),
     },
     timeoutMs: options.timeoutMs ?? 30_000,
@@ -443,6 +683,8 @@ interface SetupVoiceCapabilities {
   readonly speechOutput: boolean;
   readonly realtime: boolean;
   readonly supportsSemanticTurnDetection?: boolean | undefined;
+  /** Submitted tri-state: true sets, false clears, undefined follows the stored template. */
+  readonly supportsSpeechSynthesisInstructions?: boolean | undefined;
   readonly realtimeTranscriptionModel?: string | undefined;
 }
 
@@ -451,6 +693,18 @@ function semanticTurnDetectionCapability(
 ): Pick<ModelCapability, "supportsSemanticTurnDetection"> {
   return capabilities.realtime && capabilities.supportsSemanticTurnDetection === true
     ? { supportsSemanticTurnDetection: true }
+    : {};
+}
+
+// Speech-synthesis instruction support is a behavior-bearing canonical flag bound to speech
+// output (the config parser requires supportsSpeechOutput) — it travels through the setup
+// contract exactly like semantic turn detection, or an uploaded declaration would be silently
+// lost on the rebuild (review finding on #3037).
+function speechSynthesisInstructionsCapability(
+  capabilities: SetupVoiceCapabilities,
+): Pick<ModelCapability, "supportsSpeechSynthesisInstructions"> {
+  return capabilities.speechOutput && capabilities.supportsSpeechSynthesisInstructions === true
+    ? { supportsSpeechSynthesisInstructions: true }
     : {};
 }
 
@@ -479,6 +733,7 @@ function createDefaultVoiceCapabilityForSetup(
     ...(capabilities.speechOutput ? { supportsSpeechOutput: true } : {}),
     ...(capabilities.realtime ? { supportsRealtimeVoice: true } : {}),
     ...semanticTurnDetectionCapability(capabilities),
+    ...speechSynthesisInstructionsCapability(capabilities),
     ...(capabilities.realtime && capabilities.realtimeTranscriptionModel !== undefined
       ? { realtimeTranscriptionModel: capabilities.realtimeTranscriptionModel }
       : {}),
@@ -503,6 +758,10 @@ interface VoiceProviderRawOptions {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): pass a per-provider
+  // circuitBreaker override through voice reserialization so applyVoiceProviders /
+  // validateVoiceProviderConnection can round-trip it without dropping.
+  readonly circuitBreaker?: ModelProviderConfig["circuitBreaker"];
 }
 
 function voiceProviderEndpointRaw(options: VoiceProviderRawOptions): Record<string, unknown> {
@@ -540,6 +799,9 @@ function voiceProviderRaw(
     ...voiceProviderEndpointRaw(options),
     capability: configuredOrDefaultVoiceCapability(modelId, options),
     ...(options.voiceProfiles === undefined ? {} : { voiceProfiles: options.voiceProfiles }),
+    // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): re-serialize the
+    // per-provider circuit-breaker override so a voice/setup save preserves it.
+    ...(options.circuitBreaker === undefined ? {} : { circuitBreaker: options.circuitBreaker }),
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 1,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
@@ -600,10 +862,25 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
     "supports_function_calling",
     "supportsFunctionCalling",
   ]);
+  const reasoningEfforts = [
+    ...new Set(
+      stringListFieldFromRecords(records, [
+        "supported_reasoning_efforts",
+        "reasoning_efforts",
+      ]).filter(isModelReasoningEffort),
+    ),
+  ];
+  // An affirmative chat-compatible `mode` declaration ranks the model ahead of mode-less
+  // entries as the conversation default (keiko-contracts conversationDefaultRank). Only ever
+  // true — declared NON-chat modes never reach the chat list, and "no mode" is no signal.
+  const mode = modelModeFromDiscoveryItem(item);
+  const chatModeDeclared = declaresChatCompatibleMode(mode);
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(toolCalling === undefined ? {} : { toolCalling }),
+    ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
+    ...(chatModeDeclared ? { chatModeDeclared } : {}),
   };
 }
 
@@ -681,7 +958,7 @@ function buildRawConfig(
 ): Record<string, unknown> {
   return {
     providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
-    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
   };
 }
 
@@ -689,6 +966,82 @@ function currentImageInputModelIds(config: GatewayConfig | undefined): readonly 
   return (
     config?.capabilities
       ?.filter((capability) => capability.kind === "chat" && capability.supportsImageInput)
+      .map((capability) => capability.id) ?? []
+  );
+}
+
+function currentEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => capability.kind === "embedding")
+      .map((capability) => capability.id) ?? []
+  );
+}
+
+function currentOcrModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => capability.kind === "ocr-vision")
+      .map((capability) => capability.id) ?? []
+  );
+}
+
+/**
+ * Stored embedding providers with their OWN connection: the rebuild writes every derived
+ * embedding onto the setup-wide connection, which would silently migrate a different endpoint
+ * OR overwrite a distinct same-endpoint credential with the gateway token (review findings on
+ * #3031). Dedicated means the FULL stored connection identity differs from the stored primary
+ * provider's — embeddings sharing the gateway connection keep following rotations and endpoint
+ * moves through the normal rebuild.
+ */
+// The stored MAIN gateway provider: the first provider that is not a voice deployment. Array
+// order is not a contract — a valid stored file may list a dedicated voice provider first, and
+// treating position zero as the primary would break the connection-identity comparison: an
+// embedding that shared the CHAT gateway would classify as dedicated and be restored with its
+// obsolete credential after a rotation (review finding on #3037).
+function storedPrimaryGatewayProvider(
+  config: GatewayConfig | undefined,
+): ModelProviderConfig | undefined {
+  const kindOf = (provider: ModelProviderConfig): string | undefined =>
+    config?.capabilities?.find((capability) => capability.id === provider.modelId)?.kind;
+  // The primary is the MAIN CHAT connection (an absent capability entry defaults to chat) — the
+  // first non-voice provider is not enough, because a dedicated embedding or OCR provider may
+  // be listed first and its connection would misclassify every chat-sharing provider as
+  // dedicated (review finding on #3037). Voice-only stores have no chat primary and no
+  // restoration comparisons to make.
+  const chat = config?.providers.find((provider) => {
+    const kind = kindOf(provider);
+    return kind === undefined || kind === "chat";
+  });
+  return chat ?? config?.providers.find((provider) => kindOf(provider) !== "voice");
+}
+
+function currentDedicatedEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {
+  const primary = storedPrimaryGatewayProvider(config);
+  if (config === undefined || primary === undefined) return [];
+  const embeddingIds = new Set(currentEmbeddingModelIds(config));
+  const primaryHeader = primary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  return config.providers
+    .filter((provider) => {
+      if (!embeddingIds.has(provider.modelId)) return false;
+      const sharesConnection =
+        sameBaseUrlIdentity(provider.baseUrl, primary.baseUrl) &&
+        provider.apiKey === primary.apiKey &&
+        (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) === primaryHeader &&
+        // A provider that deliberately spoke a DIFFERENT protocol over the same connection is
+        // dedicated for this purpose: rebuilding it with the setup-wide protocol would put an
+        // unprobed request shape on it (review finding on #3046, the embedding twin of the
+        // restored-provider rule).
+        spokeStoredGatewayProtocol(provider, primary);
+      return !sharesConnection;
+    })
+    .map((provider) => provider.modelId);
+}
+
+function currentVoiceModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => isVoiceCapability(capability))
       .map((capability) => capability.id) ?? []
   );
 }
@@ -706,36 +1059,50 @@ function stripDerivedVoicePersonas(capability: ModelCapability): ModelCapability
 // the preserve-existing save path round-trips a parsed config back to raw for persistence, and the
 // Issue #1557 voice-persona round-trip (voiceProfiles preserved, derived supportedVoicePersonas
 // stripped and re-derived on reload — ADR-0094 D2) is pinned directly against this function.
+function rawProviderFromCurrent(
+  provider: ModelProviderConfig,
+  capability: ModelCapability | undefined,
+  timeoutMs: number | undefined,
+): Record<string, unknown> {
+  return {
+    modelId: provider.modelId,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
+    ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+    ...(provider.outputTokenParameter === undefined
+      ? {}
+      : { outputTokenParameter: provider.outputTokenParameter }),
+    ...(provider.realtimeAuthMode === undefined
+      ? {}
+      : { realtimeAuthMode: provider.realtimeAuthMode }),
+    timeoutMs: timeoutMs ?? provider.timeoutMs,
+    maxRetries: provider.maxRetries,
+    retryBaseDelayMs: provider.retryBaseDelayMs,
+    // Persist the credential-tier persona → voice-id mapping so personas survive a save; the
+    // derived content-free `supportedVoicePersonas` is stripped and re-derived on reload.
+    ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+    // KEIKO-0167 (PR-review follow-up): persist the per-provider circuit-breaker override so
+    // a credential rotation or an otherwise unrelated setup save does not silently drop it.
+    ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
+    ...(capability === undefined ? {} : { capability: stripDerivedVoicePersonas(capability) }),
+  };
+}
+
 export function rawConfigFromCurrent(
   config: GatewayConfig,
   figmaAccessToken: string | undefined,
   timeoutMs?: number,
 ): Record<string, unknown> {
   return {
-    providers: config.providers.map((provider) => {
-      const capability = config.capabilities?.find((item) => item.id === provider.modelId);
-      return {
-        modelId: provider.modelId,
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-        ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
-        ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
-        ...(provider.outputTokenParameter === undefined
-          ? {}
-          : { outputTokenParameter: provider.outputTokenParameter }),
-        ...(provider.realtimeAuthMode === undefined
-          ? {}
-          : { realtimeAuthMode: provider.realtimeAuthMode }),
-        timeoutMs: timeoutMs ?? provider.timeoutMs,
-        maxRetries: provider.maxRetries,
-        retryBaseDelayMs: provider.retryBaseDelayMs,
-        // Persist the credential-tier persona → voice-id mapping so personas survive a save; the
-        // derived content-free `supportedVoicePersonas` is stripped and re-derived on reload.
-        ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
-        ...(capability === undefined ? {} : { capability: stripDerivedVoicePersonas(capability) }),
-      };
-    }),
+    providers: config.providers.map((provider) =>
+      rawProviderFromCurrent(
+        provider,
+        config.capabilities?.find((item) => item.id === provider.modelId),
+        timeoutMs,
+      ),
+    ),
     circuitBreaker: config.circuitBreaker,
     ...(config.capabilities === undefined
       ? {}
@@ -776,6 +1143,9 @@ function setupVoiceProviderFromCurrent(
       capabilities: voiceCapabilities(capability),
       rawCapability: capability,
       ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+      // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): carry the persisted
+      // per-provider circuit-breaker override through the setup round-trip.
+      ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
     },
   ];
 }
@@ -787,6 +1157,9 @@ function voiceCapabilities(capability: ModelCapability): SetupVoiceCapabilities 
     realtime: modelSupportsRealtimeVoice(capability),
     ...(capability.supportsSemanticTurnDetection === true
       ? { supportsSemanticTurnDetection: true }
+      : {}),
+    ...(capability.supportsSpeechSynthesisInstructions === true
+      ? { supportsSpeechSynthesisInstructions: true }
       : {}),
     ...(capability.realtimeTranscriptionModel === undefined
       ? {}
@@ -834,6 +1207,9 @@ function applyVoiceProviders(
           ...(provider.voiceProfiles === undefined
             ? {}
             : { voiceProfiles: provider.voiceProfiles }),
+          ...(provider.circuitBreaker === undefined
+            ? {}
+            : { circuitBreaker: provider.circuitBreaker }),
         }),
       ),
     ],
@@ -862,7 +1238,7 @@ function modelsEndpoint(baseUrl: string): string {
 
 function modelInfoEndpointCandidates(baseUrl: string): readonly string[] {
   const normalized = normalizeBaseUrl(baseUrl);
-  return [`${normalized}/model/info`];
+  return [`${normalized}/model/info`, `${normalized}/model_group/info`];
 }
 
 function apiKeyHeaders(apiKey: string, apiKeyHeaderName: string): Record<string, string> {
@@ -884,7 +1260,14 @@ function isUsableModelId(id: string): boolean {
 }
 
 function modelIdFromKnownFields(item: Record<string, unknown>): string | undefined {
-  for (const field of ["id", "model_name", "model", "deployment_name", "deploymentName"]) {
+  for (const field of [
+    "id",
+    "model_name",
+    "model_group",
+    "model",
+    "deployment_name",
+    "deploymentName",
+  ]) {
     const value = item[field];
     if (typeof value === "string") {
       const id = value.trim();
@@ -916,10 +1299,6 @@ function modelModeFromDiscoveryItem(item: Record<string, unknown>): string | und
   return undefined;
 }
 
-function isExplicitlyEmbeddingModel(item: Record<string, unknown>): boolean {
-  return modelModeFromDiscoveryItem(item) === "embedding";
-}
-
 // Issue #144: exported as part of the discovery-normalization seam so a
 // sibling test file can drive it with synthetic payloads. Behaviour unchanged
 // — only the visibility is widened.
@@ -929,18 +1308,57 @@ export function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean
     return true;
   }
   const mode = modelModeFromDiscoveryItem(item);
-  return mode !== undefined && !CHAT_COMPATIBLE_MODES.has(mode);
+  return mode !== undefined && !declaresChatCompatibleMode(mode);
 }
 
-type DiscoveryModelKind = "chat" | "embedding";
+// "unsupported" is a DISCOVERY outcome, never a configured capability: the model is recognised
+// and reported to the operator, but it gets no provider entry and no slot in any selection list.
+type DiscoveryModelKind = "chat" | "embedding" | "voice" | "unsupported";
+type DiscoveryVoiceRole = "speech-input" | "speech-output" | "realtime";
 
 interface ClassifiedDiscoveryModel {
   readonly id: string;
   readonly kind: DiscoveryModelKind;
+  readonly voiceRole?: DiscoveryVoiceRole;
   readonly supportsImageInput: boolean;
   readonly metadata: GatewayDiscoveredModelMetadata;
+  /** Why the model is unsupported. Always present on an "unsupported" entry, absent otherwise. */
+  readonly reason?: GatewayModelUnsupportedReason;
 }
 
+/** Narrowed view of an entry the classifier marked unsupported: the reason is guaranteed. */
+interface UnsupportedDiscoveryModel extends ClassifiedDiscoveryModel {
+  readonly kind: "unsupported";
+  readonly reason: GatewayModelUnsupportedReason;
+}
+
+function isUnsupportedEntry(entry: ClassifiedDiscoveryModel): entry is UnsupportedDiscoveryModel {
+  return entry.kind === "unsupported" && entry.reason !== undefined;
+}
+
+// Classification WITHOUT a declaration: the id heuristic is all a `/models`-only gateway gives us.
+function classifyUndeclaredDiscoveryItem(
+  item: Record<string, unknown>,
+  id: string,
+  metadata: GatewayDiscoveredModelMetadata,
+): ClassifiedDiscoveryModel {
+  if (isLikelyEmbeddingModelId(id)) {
+    return { id, kind: "embedding", supportsImageInput: false, metadata };
+  }
+  return {
+    id,
+    kind: "chat",
+    supportsImageInput: supportsImageInputFromDiscoveryItem(item, id),
+    metadata,
+  };
+}
+
+// A DECLARED mode is authoritative; the id heuristic is only the no-declaration fallback.
+// Field incident (LiteLLM customer, 2026-08): the old order let a name beat the declaration, so a
+// `mode: "rerank"` endpoint named "bge-reranker-v2-m3" was stored as this gateway's embedding
+// model, bound to every new Knowledge Pod, and indexing wrote zero vectors. Keiko is
+// model-agnostic — the customer hosts whatever models they like, so only the gateway's own
+// statement about a model can decide its role.
 function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefined {
   if (!isRecord(item)) {
     return undefined;
@@ -950,22 +1368,52 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
     return undefined;
   }
   const metadata = metadataFromDiscoveryItem(item);
-  if (isExplicitlyEmbeddingModel(item)) {
-    return { id, kind: "embedding", supportsImageInput: false, metadata };
+  const declaredMode = modelModeFromDiscoveryItem(item);
+  if (declaredMode !== undefined) {
+    const voiceRole = voiceRoleForDeclaredMode(declaredMode);
+    if (voiceRole !== undefined) {
+      return { id, kind: "voice", voiceRole, supportsImageInput: false, metadata };
+    }
+    const role = modelKindForDeclaredMode(declaredMode);
+    if (role === "unsupported") {
+      // The reason is drawn from a CLOSED vocabulary. A declared mode is gateway-controlled text of
+      // unbounded shape; echoing it verbatim would put foreign strings into the diagnostic channel
+      // and the setup response, which the redaction rules forbid.
+      const reason = boundedUnsupportedReason(declaredMode);
+      return { id, kind: "unsupported", supportsImageInput: false, metadata, reason };
+    }
+    if (role === "embedding") {
+      return { id, kind: "embedding", supportsImageInput: false, metadata };
+    }
+    return {
+      id,
+      kind: "chat",
+      supportsImageInput: supportsImageInputFromDiscoveryItem(item, id),
+      metadata,
+    };
   }
+  // No declaration. `capabilities.chat_completion === false` states what the model is NOT, which
+  // is not a role: an embedding model legitimately carries it. So the id heuristic still decides,
+  // exactly as before — it just cannot fall through to "chat".
   if (isExplicitlyNonChatModel(item)) {
     return isLikelyEmbeddingModelId(id)
       ? { id, kind: "embedding", supportsImageInput: false, metadata }
-      : undefined;
+      : {
+          id,
+          kind: "unsupported",
+          supportsImageInput: false,
+          metadata,
+          reason: "not-chat-capable",
+        };
   }
-  return isLikelyEmbeddingModelId(id)
-    ? { id, kind: "embedding", supportsImageInput: false, metadata }
-    : {
-        id,
-        kind: "chat",
-        supportsImageInput: supportsImageInputFromDiscoveryItem(item, id),
-        metadata,
-      };
+  return classifyUndeclaredDiscoveryItem(item, id, metadata);
+}
+
+function voiceRoleForDeclaredMode(mode: string): DiscoveryVoiceRole | undefined {
+  if (mode === "audio_transcription") return "speech-input";
+  if (mode === "audio_speech") return "speech-output";
+  if (mode === "realtime") return "realtime";
+  return undefined;
 }
 
 // Issue #144: exported as part of the discovery-normalization seam. Gateway setup now returns
@@ -974,7 +1422,12 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
 // Returns undefined for unknown/non-record/unsupported/malformed input so
 // callers can drop the entry silently and keep healthy peers.
 export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
-  return classifyDiscoveryItem(item)?.id;
+  const classified = classifyDiscoveryItem(item);
+  return classified === undefined ||
+    classified.kind === "unsupported" ||
+    classified.kind === "voice"
+    ? undefined
+    : classified.id;
 }
 
 // Issue #144: exported as part of the discovery-normalization seam. Throws on schema-level
@@ -984,30 +1437,102 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
-  const entries: ClassifiedDiscoveryModel[] = [];
-  const seen = new Set<string>();
+  // First occurrence wins, with ONE exception: a usable entry replaces an unsupported one for the
+  // same id. A LiteLLM `model_name` is a routing alias that can front several deployments, and an
+  // unusable one listed first must not shadow the usable duplicate behind it.
+  const byId = new Map<string, ClassifiedDiscoveryModel>();
   for (const item of payload.data) {
     const classified = classifyDiscoveryItem(item);
-    if (classified !== undefined && !seen.has(classified.id)) {
-      seen.add(classified.id);
-      entries.push(classified);
+    if (classified === undefined) continue;
+    const existing = byId.get(classified.id);
+    if (
+      existing === undefined ||
+      (existing.kind === "unsupported" && classified.kind !== "unsupported")
+    ) {
+      byId.set(classified.id, classified);
     }
   }
-  const limited = entries.slice(0, MAX_DISCOVERED_MODELS);
-  if (limited.length === 0) {
-    throw new Error("model discovery returned no model ids");
-  }
+  const entries: ClassifiedDiscoveryModel[] = [...byId.values()];
+  // LiteLLM declares audio roles in /model/info. Preserve the existing chat/embedding discovery
+  // contract while routing these declarations to Voice setup; a Whisper alias is never a chat model.
+  const voiceEntries = entries.filter((entry) => entry.kind === "voice");
+  // KEIKO-0325: raise a truncation flag alongside the limited slice so callers can
+  // surface "N of M models discovered; add the rest by deployment name" instead of the
+  // pre-fix silent drop. Kept optional-and-off-by-default so a fitting-within-cap
+  // discovery does not carry a redundant `truncated: false` on the wire.
+  // Recognised-but-unusable models are reported, never configured: they get no provider entry and
+  // no slot in any selection list, but the operator learns they exist and why they were skipped.
+  // They are partitioned BEFORE the cap — a gateway listing 60 audio endpoints ahead of its chat
+  // aliases must not push the chat models past MAX_DISCOVERED_MODELS.
+  const unsupported = entries.filter(isUnsupportedEntry);
+  const usableEntries = entries.filter(
+    (entry) => entry.kind === "chat" || entry.kind === "embedding",
+  );
+  const wasTruncated =
+    usableEntries.length > MAX_DISCOVERED_MODELS || voiceEntries.length > MAX_DISCOVERED_MODELS;
+  const usable = usableEntries.slice(0, MAX_DISCOVERED_MODELS);
+  const boundedVoice = voiceEntries.slice(0, MAX_DISCOVERED_MODELS);
+  assertDiscoveryYieldedUsableModels([...usable, ...boundedVoice], unsupported);
+  return discoveredModelLists(usable, boundedVoice, unsupported, wasTruncated);
+}
+
+function discoveredModelLists(
+  usable: readonly ClassifiedDiscoveryModel[],
+  boundedVoice: readonly ClassifiedDiscoveryModel[],
+  unsupported: readonly UnsupportedDiscoveryModel[],
+  wasTruncated: boolean,
+): GatewayDiscoveredModels {
   return {
-    modelIds: limited.map((entry) => entry.id),
-    chatModelIds: limited.filter((entry) => entry.kind === "chat").map((entry) => entry.id),
-    embeddingModelIds: limited
+    modelIds: usable.map((entry) => entry.id),
+    chatModelIds: usable.filter((entry) => entry.kind === "chat").map((entry) => entry.id),
+    embeddingModelIds: usable
       .filter((entry) => entry.kind === "embedding")
       .map((entry) => entry.id),
-    imageInputModelIds: limited
+    voiceSpeechInputModelIds: boundedVoice
+      .filter((entry) => entry.voiceRole === "speech-input")
+      .map((entry) => entry.id),
+    voiceSpeechOutputModelIds: boundedVoice
+      .filter((entry) => entry.voiceRole === "speech-output")
+      .map((entry) => entry.id),
+    voiceRealtimeModelIds: boundedVoice
+      .filter((entry) => entry.voiceRole === "realtime")
+      .map((entry) => entry.id),
+    imageInputModelIds: usable
       .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
       .map((entry) => entry.id),
-    modelMetadata: Object.fromEntries(limited.map((entry) => [entry.id, entry.metadata])),
+    modelMetadata: Object.fromEntries(usable.map((entry) => [entry.id, entry.metadata])),
+    ...(unsupported.length > 0
+      ? {
+          unsupportedModels: unsupported.map((entry) => ({
+            id: entry.id,
+            reason: entry.reason,
+          })),
+        }
+      : {}),
+    ...(wasTruncated ? { truncated: true } : {}),
   };
+}
+
+function assertDiscoveryYieldedUsableModels(
+  usable: readonly ClassifiedDiscoveryModel[],
+  unsupported: readonly UnsupportedDiscoveryModel[],
+): void {
+  if (usable.length > 0) return;
+  const terminal =
+    unsupported.length > 0
+      ? discoveryTerminal(
+          "model discovery found only models this gateway declared as unsupported modes",
+          "DISCOVERY_ALL_ENTRIES_UNSUPPORTED",
+        )
+      : discoveryTerminal("model discovery returned no model ids", "DISCOVERY_EMPTY");
+  throw terminal;
+}
+
+// Tags a discovery terminal so the caller can tell "this gateway has no /model/info" (fall back to
+// /models) from "the endpoint answered and the answer is unusable" (surface it). Mirrors the
+// existing httpStatus tagging on fetch failures.
+function discoveryTerminal(message: string, code: string): Error {
+  return Object.assign(new Error(message), { discoveryCode: code });
 }
 
 export function parseModelList(payload: unknown): readonly string[] {
@@ -1040,13 +1565,35 @@ async function fetchDiscoveryJson(
     ...(egress !== undefined ? { egress } : {}),
   });
   if (!response.ok) {
-    throw new Error(`model discovery returned HTTP ${String(response.status)}`);
+    // The classifier (`setupCandidateError` via `setupHttpStatus`) reads the status as an error
+    // property; carrying it only inside the message left a 401/403 discovery — a wrong or
+    // model-restricted proxy key — as the generic body-free 502 (LiteLLM production audit).
+    throw Object.assign(new Error(`model discovery returned HTTP ${String(response.status)}`), {
+      httpStatus: response.status,
+    });
   }
   try {
     return await readJsonCapped(response);
   } catch {
     throw new Error("model discovery response was not readable JSON");
   }
+}
+
+// `/model/info` is a LiteLLM management route. Plenty of healthy deployments refuse it — an
+// ingress that exposes only /v1/*, a virtual key without management scope, a rate-limited proxy —
+// and they have always set up fine by degrading to the mode-free /models list. Losing mode
+// enrichment is not a silent failure: a genuinely bad credential still fails the chat smoke test
+// loudly. So EVERY transport or HTTP outcome falls back, exactly as before.
+//
+// Exactly one outcome must NOT fall back: the endpoint answered, Keiko understood every entry, and
+// every one declared a mode with no lane. Falling back there would re-read the same models from
+// /models WITHOUT their declarations and hand them to the id heuristic — resurrecting the very
+// misclassification this change exists to prevent.
+function modelInfoAnswerIsUnusable(cause: unknown): boolean {
+  return (
+    (cause as { discoveryCode?: unknown } | null)?.discoveryCode ===
+    "DISCOVERY_ALL_ENTRIES_UNSUPPORTED"
+  );
 }
 
 async function discoverLiteLlmModelInfo(
@@ -1060,9 +1607,8 @@ async function discoverLiteLlmModelInfo(
       return parseModelDiscovery(
         await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress),
       );
-    } catch {
-      // /model/info is a LiteLLM-specific enrichment endpoint. If it is absent or blocked,
-      // continue with OpenAI-compatible /models discovery so customer gateways are not broken.
+    } catch (cause) {
+      if (modelInfoAnswerIsUnusable(cause) && cause instanceof Error) throw cause;
     }
   }
   return undefined;
@@ -1124,9 +1670,12 @@ function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
   return names;
 }
 
-function parseImageInputModelIds(value: unknown): readonly string[] | RouteResult {
+function parseImageInputModelIds(value: unknown): readonly string[] | undefined | RouteResult {
+  // Absent and explicitly empty are different statements: absent inherits the stored set in
+  // update mode, an explicit empty list clears it — exactly like the workflow-eligible field
+  // (review finding on #3031).
   if (value === undefined) {
-    return [];
+    return undefined;
   }
   const values = deploymentNameValues(value);
   if (values === undefined) {
@@ -1146,6 +1695,39 @@ function parseImageInputModelIds(value: unknown): readonly string[] | RouteResul
     return {
       status: 400,
       body: errorBody("BAD_REQUEST", "imageInputModelIds contains an invalid model id."),
+    };
+  }
+  return names;
+}
+
+/**
+ * Embedding ids the CLIENT asserts (e.g. imported from a configuration file whose capability
+ * records carry the kind). Authoritative over the name heuristic for fresh setups, where no
+ * stored kind exists yet — without it a non-heuristic embedding id would be chat-probed and
+ * dropped or persisted as chat (review finding on #3037). Absent means "derive as before".
+ */
+function parseEmbeddingModelIds(value: unknown): readonly string[] | undefined | RouteResult {
+  if (value === undefined) {
+    return undefined;
+  }
+  const values = deploymentNameValues(value);
+  if (values === undefined) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "embeddingModelIds must be a string or an array of strings."),
+    };
+  }
+  const names = normalizeDeploymentNames(values);
+  if (names.length > MAX_DEPLOYMENT_NAMES) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "embeddingModelIds exceeds the model setup limit."),
+    };
+  }
+  if (names.some((name) => !isUsableModelId(name))) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "embeddingModelIds contains an invalid model id."),
     };
   }
   return names;
@@ -1189,12 +1771,20 @@ function validateSetupConnection(
   apiKey: string,
   apiKeyHeaderName: string,
   env: EnvSource,
+  protocol: {
+    readonly endpointStyle?: string | undefined;
+    readonly apiVersion?: string | undefined;
+  } = {},
 ): RouteResult | undefined {
   const linkLocalError = validateLinkLocalGatewayBaseUrl(baseUrl, env);
   if (linkLocalError !== undefined) return linkLocalError;
   try {
     parseGatewayConfig(
-      buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+      buildRawConfig(baseUrl, apiKey, ["setup-validation"], {
+        apiKeyHeaderName,
+        ...(protocol.endpointStyle === undefined ? {} : { endpointStyle: protocol.endpointStyle }),
+        ...(protocol.apiVersion === undefined ? {} : { apiVersion: protocol.apiVersion }),
+      }),
       env,
       linkLocalGatewayOverrideOptions(env),
     );
@@ -1207,10 +1797,70 @@ function validateSetupConnection(
   }
 }
 
+/**
+ * Classification evidence captured from a swallowed per-model probe failure — exactly the
+ * code/status pair `setupCandidateError` reads, never probe messages or response bodies
+ * (LiteLLM production audit: an all-probes auth failure must classify as a credential failure
+ * instead of the generic body-free 502).
+ */
+interface ProbeFailureEvidence {
+  readonly code: string | undefined;
+  readonly httpStatus: number | undefined;
+}
+
+const PROBE_FAILURE_UNCLASSIFIED = 0;
+
+function probeCodeSeverity(code: string | undefined): number {
+  if (code === ERROR_CODES.AUTHENTICATION) return 4;
+  if (code === ERROR_CODES.RATE_LIMIT) return 3;
+  // A candidate's own smoke deadline surfaces as CANCELLED when it fires while the gateway sleeps
+  // before a retry: the same "never answered" fact as a TIMEOUT, ranked the same (PR #3602 review).
+  if (
+    code !== undefined &&
+    (SETUP_NETWORK_ERROR_CODES.has(code) || code === ERROR_CODES.CANCELLED)
+  ) {
+    return 2;
+  }
+  if (code === ERROR_CODES.UNKNOWN_MODEL) return 1;
+  return PROBE_FAILURE_UNCLASSIFIED;
+}
+
+function probeStatusSeverity(status: number | undefined): number {
+  if (status === 401 || status === 403) return 4;
+  if (status === 429) return 3;
+  if (status === 404) return 1;
+  return PROBE_FAILURE_UNCLASSIFIED;
+}
+
+// Mirrors `setupCandidateError`'s precedence: a recognized code classifies first, the HTTP
+// status classifies only when the code does not.
+function probeFailureSeverity(evidence: ProbeFailureEvidence): number {
+  const codeSeverity = probeCodeSeverity(evidence.code);
+  return codeSeverity === PROBE_FAILURE_UNCLASSIFIED
+    ? probeStatusSeverity(evidence.httpStatus)
+    : codeSeverity;
+}
+
+function mostSevereProbeFailure(
+  failures: readonly ProbeFailureEvidence[],
+): ProbeFailureEvidence | undefined {
+  let worst: ProbeFailureEvidence | undefined;
+  let worstSeverity = PROBE_FAILURE_UNCLASSIFIED;
+  for (const failure of failures) {
+    const severity = probeFailureSeverity(failure);
+    if (severity > worstSeverity) {
+      worst = failure;
+      worstSeverity = severity;
+    }
+  }
+  return worst;
+}
+
 async function passingCandidates(
   candidates: readonly string[],
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
+  failures?: ProbeFailureEvidence[],
 ): Promise<readonly string[]> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
   let next = 0;
@@ -1225,15 +1875,31 @@ async function passingCandidates(
       try {
         await probe(modelId);
         tested[index] = modelId;
-      } catch {
+      } catch (error) {
         // Probe rejection is the documented signal that this candidate is not
-        // chat-callable. We drop it silently so healthy peers still surface.
+        // chat-callable. We drop it silently so healthy peers still surface — capturing only
+        // the classification code/status as evidence for the all-rejected aggregate.
+        failures?.push({ code: setupErrorCode(error), httpStatus: setupHttpStatus(error) });
       }
     }
   }
   const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return tested.filter((modelId): modelId is string => modelId !== undefined);
+}
+
+// The aggregate keeps the exact historic message; additionally it carries the most severe
+// classified code/status observed across the per-model probe failures so `setupCandidateError`
+// maps an all-probes auth or rate-limit failure onto its existing guidance instead of the
+// generic body-free 502 (LiteLLM production audit).
+function allProbesFailedError(failures: readonly ProbeFailureEvidence[]): Error {
+  const error = new Error("no discovered model accepted the chat-completions smoke test");
+  const worst = mostSevereProbeFailure(failures);
+  if (worst === undefined) return error;
+  return Object.assign(error, {
+    ...(worst.code === undefined ? {} : { code: worst.code }),
+    ...(worst.httpStatus === undefined ? {} : { httpStatus: worst.httpStatus }),
+  });
 }
 
 // Issue #144: pure smoke-test loop extracted from `defaultGatewaySetupTester`
@@ -1250,46 +1916,476 @@ export async function smokeTestCandidates(
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
 ): Promise<readonly string[]> {
-  const accepted = await passingCandidates(candidates, probe, concurrency);
+  const failures: ProbeFailureEvidence[] = [];
+  const accepted = await passingCandidates(candidates, probe, concurrency, failures);
   if (accepted.length === 0) {
-    throw new Error("no discovered model accepted the chat-completions smoke test");
+    throw allProbesFailedError(failures);
   }
   return accepted;
 }
 
-async function defaultGatewaySetupTester(
+interface ChatSmokeAdmission {
+  /** Answered the smoke probe successfully. */
+  readonly tested: readonly string[];
+  /** The probe never got an answer (timeout, abort, transport/proxy/TLS failure), the gateway
+   *  answered with a transient failure (rate limit or an overloaded-gateway status — 408/429/5xx
+   *  except 501, `transientGatewayStatus`), or the round's own patience budget ran out before this
+   *  candidate's probe was even started (`CHAT_SMOKE_ROUND_DEADLINE_MS`) — KEPT, unverified: a
+   *  slow or momentarily overloaded gateway is not a broken one (#3591). */
+  readonly unverifiedKept: readonly string[];
+  /** The gateway ANSWERED and rejected the candidate (4xx/5xx, or a malformed/unusable answer) —
+   *  real evidence the candidate does not work, so it is dropped. */
+  readonly droppedRejected: readonly string[];
+  /** Classification evidence for EVERY failed candidate (both buckets above), for
+   *  `allProbesFailedError` — used only when NOTHING was tested (see `defaultGatewaySetupTester`). */
+  readonly allFailures: readonly ProbeFailureEvidence[];
+  /** The candidates in `unverifiedKept` the round deadline skipped without probing them. */
+  readonly skippedByDeadline: readonly string[];
+}
+
+// A per-candidate smoke failure that must be KEPT unverified rather than dropped (PR #3602
+// review): a rate limit, any existing `SETUP_NETWORK_ERROR_CODES` network-failure code (this
+// candidate's own `AbortSignal.timeout` deadline below can legitimately surface as either
+// `TimeoutError` or `CancelledError` — `Gateway.chat()`'s retry loop notices an already-fired
+// caller signal at the top of its backoff sleep and reports cancellation even though the deadline,
+// not a real cancel, is what fired it — both codes are already covered by that set), or a transient
+// HTTP status an intermediating proxy (e.g. the field customer's LiteLLM) answers with under load.
+// Reuses `transientGatewayStatus` — the SAME "gateway is overloaded, not broken" policy the
+// tool-calling probe already classifies by — instead of a second private status list. Anything else
+// is real evidence the candidate does not work and stays dropped.
+function isUnverifiedSmokeFailure(evidence: ProbeFailureEvidence): boolean {
+  const { code, httpStatus } = evidence;
+  if (code === ERROR_CODES.RATE_LIMIT || code === ERROR_CODES.CANCELLED) return true;
+  if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return true;
+  return httpStatus !== undefined && transientGatewayStatus(httpStatus);
+}
+
+// The mutable accumulators `admitChatSmokeCandidates`'s workers share, bundled so the per-failure
+// classification below can be its own function (repository per-function line ceiling, AGENTS.md §6)
+// without a long parameter list.
+interface ChatSmokeAccumulators {
+  readonly unverifiedKept: string[];
+  readonly droppedRejected: string[];
+  readonly allFailures: ProbeFailureEvidence[];
+  // The subset of `unverifiedKept` the round's deadline skipped before their probe ever started;
+  // recorded so the admission diagnostic can tell them from candidates that were tried.
+  readonly skippedByDeadline: string[];
+}
+
+// One failed candidate's classification: on record in `allFailures` regardless of bucket (the same
+// body-free pattern `setupToolCallingObservations` already uses for its own per-model probe
+// failures), then sorted into kept-unverified or dropped-rejected by `isUnverifiedSmokeFailure`.
+function recordChatSmokeFailure(
+  modelId: string,
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  accumulators: ChatSmokeAccumulators,
+): void {
+  reportSetupVerificationFailure(deps, error, correlationId, "gateway.setup.chat-smoke-probe");
+  const evidence: ProbeFailureEvidence = {
+    code: setupErrorCode(error),
+    httpStatus: setupHttpStatus(error),
+  };
+  accumulators.allFailures.push(evidence);
+  if (isUnverifiedSmokeFailure(evidence)) {
+    accumulators.unverifiedKept.push(modelId);
+  } else {
+    accumulators.droppedRejected.push(modelId);
+  }
+}
+
+// Companion to `passingCandidates` for the discovery smoke test specifically (#3591): tells a
+// candidate the smoke probe timed out or was rate-limited/overloaded on (`isUnverifiedSmokeFailure`)
+// apart from one the gateway actually rejected. Mirrors `admitEmbeddingCandidates`'s
+// retained/dropped shape, but on a different axis: THAT function splits by whether the model's ROLE
+// was asserted; this one splits by whether the PROBE was ever answered.
+//
+// `now` bounds the ROUND, not one candidate: past `CHAT_SMOKE_ROUND_DEADLINE_MS` from the first
+// call, no further candidate probe is even started — the remaining candidates are retained
+// unverified untouched, so a large discovery batch can never block first-run setup for an unbounded
+// time. Defaults to `Date.now` and is a parameter only so tests can control it deterministically.
+//
+// Every failure is ALSO recorded into `allFailures`, independent of its bucket: when NOTHING is
+// tested, `defaultGatewaySetupTester` still throws exactly as `smokeTestCandidates` always did —
+// `verifyAndSaveGatewaySetup`'s multi-base-URL fallback (`attemptSetupCandidates`) and the
+// whole-gateway `temporaryChatAdmission` deferral both depend on that throw to try the next
+// candidate base URL or defer the whole probe round; this function only widens what happens on a
+// PARTIAL failure, never removes the total-failure signal those two callers already rely on.
+// Exported for direct unit testing (Issue #144 precedent — see `smokeTestCandidates`): the
+// classification (`isUnverifiedSmokeFailure`) and round-deadline logic below are pure decision
+// rules over an injected `probe`/`now`, and exercising them through the full HTTP-mocked
+// `handleGatewaySetup` route would need either a real multi-minute wait or an intrusive global
+// `AbortSignal.timeout`/clock stub for every scenario (PR #3602 review).
+export async function admitChatSmokeCandidates(
+  candidates: readonly string[],
+  probe: (modelId: string) => Promise<void>,
+  concurrency: number,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  now: () => number = Date.now,
+): Promise<ChatSmokeAdmission> {
+  const tested = new Array<string | undefined>(candidates.length).fill(undefined);
+  const accumulators: ChatSmokeAccumulators = {
+    unverifiedKept: [],
+    droppedRejected: [],
+    allFailures: [],
+    skippedByDeadline: [],
+  };
+  const roundDeadlineAt = now() + CHAT_SMOKE_ROUND_DEADLINE_MS;
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < candidates.length) {
+      const index = next;
+      next += 1;
+      const modelId = candidates[index];
+      if (modelId === undefined) continue;
+      if (now() >= roundDeadlineAt) {
+        accumulators.unverifiedKept.push(modelId);
+        accumulators.skippedByDeadline.push(modelId);
+        continue;
+      }
+      try {
+        await probe(modelId);
+        tested[index] = modelId;
+      } catch (error) {
+        recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
+      }
+    }
+  }
+  const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return {
+    tested: tested.filter((modelId): modelId is string => modelId !== undefined),
+    ...accumulators,
+  };
+}
+
+// The response-format and tool-calling verification rounds, run only over VERIFIED candidates
+// (`chatSmoke.tested`) — extracted so `defaultGatewaySetupTester` stays under the repository's
+// per-function line ceiling (AGENTS.md §6).
+async function verifyTestedChatCandidates(
+  gateway: Gateway,
   config: GatewayConfig,
-  candidateModelIds: readonly string[],
-): Promise<GatewaySetupTestResult> {
-  const gateway = new Gateway(config);
-  const testedModelIds = await smokeTestCandidates(
-    candidateModelIds,
-    async (modelId) => {
-      await gateway.chat({
-        modelId,
-        messages: [
-          { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
-          { role: "user", content: "Reply with exactly: OK" },
-        ],
-      });
-    },
-    SETUP_SMOKE_CONCURRENCY,
-  );
+  testedModelIds: readonly string[],
+  correlationId: string | undefined,
+  deps: UiHandlerDeps,
+): Promise<Pick<GatewaySetupTestResult, "responseFormatModelIds" | "toolCallingObservations">> {
   const responseFormatModelIds = await passingCandidates(
     testedModelIds,
     async (modelId) => {
-      const response = await gateway.chat(buildQiJudgePreflightRequest(modelId));
+      const response = await gateway.chat({
+        ...buildQiJudgePreflightRequest(modelId),
+        logContext: { correlationId },
+      });
       if (tryParseJudgeVerdict(response.content) === null) {
         throw new Error("response format unsupported");
       }
     },
     SETUP_SMOKE_CONCURRENCY,
   );
-  return { testedModelIds, responseFormatModelIds };
+  // Both probe rounds independently use the endpoint-wide concurrency budget. Keep them
+  // sequential so setup never doubles the operator-approved in-flight request ceiling.
+  const toolCallingObservations = await setupToolCallingObservations(
+    config,
+    testedModelIds,
+    correlationId,
+    deps,
+  );
+  return { responseFormatModelIds, toolCallingObservations };
 }
 
-function gatewaySetupTester(deps: UiHandlerDeps): GatewaySetupTester {
-  return deps.gatewaySetupTester ?? defaultGatewaySetupTester;
+// The deadline that actually bounds ONE candidate's smoke call (PR #3602 review): `Gateway.chat()`
+// floors every attempt at the interactive silence floor (several minutes) and retries once, so the
+// candidate's configured `timeoutMs` alone no longer bounds anything — this caller-owned
+// `AbortSignal.timeout` does. Reads the SAME `timeoutMs` `probeConfigForModels` gave this exact
+// candidate's provider entry (`DISCOVERED_MODEL_SMOKE_TIMEOUT_MS` for discovery,
+// `DEPLOYMENT_SMOKE_TIMEOUT_MS` for a manually entered deployment) rather than a hardcoded literal,
+// so both smoke paths stay bounded at the timeout each already advertises; the discovery constant
+// is only the defensive fallback for a candidate somehow missing its own provider entry.
+function candidateSmokeCancellationSignal(config: GatewayConfig, modelId: string): AbortSignal {
+  return AbortSignal.timeout(candidateSmokeDeadlineMs(config, modelId));
+}
+
+// Never below the discovery smoke floor: a manually entered deployment keeps its shorter configured
+// timeout for later calls, but a setup probe that gave up at 30 s on a gateway that answers in 45 s
+// would leave a working model unverified (PR #3602 review). Exported for direct unit testing.
+export function candidateSmokeDeadlineMs(config: GatewayConfig, modelId: string): number {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  return Math.max(provider?.timeoutMs ?? 0, DISCOVERED_MODEL_SMOKE_TIMEOUT_MS);
+}
+
+// Extracted so `defaultGatewaySetupTester` stays under the repository's per-function line ceiling
+// (AGENTS.md §6) — the probe itself is the one line that matters: a fixed "reply OK" chat call,
+// bounded by this candidate's own smoke deadline.
+function chatSmokeProbe(
+  gateway: Gateway,
+  config: GatewayConfig,
+  correlationId: string | undefined,
+): (modelId: string) => Promise<void> {
+  return async (modelId) => {
+    await gateway.chat({
+      modelId,
+      messages: [
+        { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+        { role: "user", content: "Reply with exactly: OK" },
+      ],
+      logContext: { correlationId },
+      cancellationSignal: candidateSmokeCancellationSignal(config, modelId),
+    });
+  };
+}
+
+async function defaultGatewaySetupTester(
+  config: GatewayConfig,
+  candidateModelIds: readonly string[],
+  correlationId: string | undefined,
+  deps: UiHandlerDeps,
+): Promise<GatewaySetupTestResult> {
+  // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
+  // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
+  // every model). Without the sink the smoke loop's retries and rejections are invisible.
+  const gateway = new Gateway(config, {
+    log: processServerLogSink(),
+    spendBudget: gatewaySpendBudgetForEnv(deps.env),
+  });
+  const chatSmoke = await admitChatSmokeCandidates(
+    candidateModelIds,
+    chatSmokeProbe(gateway, config, correlationId),
+    SETUP_SMOKE_CONCURRENCY,
+    deps,
+    correlationId,
+  );
+  // Nothing was verified: the historic "no discovered model accepted the chat-completions smoke
+  // test" case, thrown exactly as `smokeTestCandidates` always did — even when some candidates were
+  // merely kept unverified rather than dropped, because `verifyAndSaveGatewaySetup`'s multi-base-URL
+  // fallback and the whole-gateway `temporaryChatAdmission` deferral both need this throw to try the
+  // next base URL / defer the round; only reached with zero survivors does the caller ever see it.
+  // Once at least ONE candidate is genuinely tested, the base URL is known-reachable and a peer
+  // candidate that merely timed out is kept unverified instead of dropped (#3591) — see below.
+  if (chatSmoke.tested.length === 0) {
+    throw allProbesFailedError(chatSmoke.allFailures);
+  }
+  const testedModelIds = chatSmoke.tested;
+  const { responseFormatModelIds, toolCallingObservations } = await verifyTestedChatCandidates(
+    gateway,
+    config,
+    testedModelIds,
+    correlationId,
+    deps,
+  );
+  return {
+    testedModelIds,
+    responseFormatModelIds,
+    toolCallingObservations: [
+      ...(toolCallingObservations ?? []),
+      ...unverifiedKeptToolCallingObservations(config, chatSmoke.unverifiedKept, correlationId),
+    ],
+    ...(chatSmoke.unverifiedKept.length > 0
+      ? { unverifiedModelIds: chatSmoke.unverifiedKept }
+      : {}),
+    ...(chatSmoke.skippedByDeadline.length > 0
+      ? { skippedModelIds: chatSmoke.skippedByDeadline }
+      : {}),
+    ...(chatSmoke.droppedRejected.length > 0 ? { droppedModelIds: chatSmoke.droppedRejected } : {}),
+  };
+}
+
+// A candidate the smoke probe never got an answer from is kept but was never actually chat-probed,
+// so its tool-calling status is "unverified" by definition — the SAME record and the SAME closed
+// vocabulary `temporaryChatAdmission` already uses when the whole gateway defers, just per-candidate
+// instead of gateway-wide (#3591).
+function unverifiedKeptToolCallingObservations(
+  config: GatewayConfig,
+  unverifiedKept: readonly string[],
+  correlationId: string | undefined,
+): readonly GatewaySetupToolCallingObservation[] {
+  const checkedAt = new Date().toISOString();
+  return unverifiedKept.map((modelId) => {
+    logToolCallingVerification(
+      config,
+      modelId,
+      "unverified",
+      correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+    return { modelId, status: "unverified", checkedAt };
+  });
+}
+
+async function setupToolCallingObservations(
+  config: GatewayConfig,
+  testedModelIds: readonly string[],
+  correlationId: string | undefined,
+  deps: UiHandlerDeps,
+): Promise<readonly GatewaySetupToolCallingObservation[]> {
+  const checkedAt = new Date().toISOString();
+  const observations = new Array<GatewaySetupToolCallingObservation>(testedModelIds.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < testedModelIds.length) {
+      const index = next;
+      next += 1;
+      const modelId = testedModelIds[index];
+      if (modelId === undefined) continue;
+      const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+      // A model without a provider stays unverified; that conclusion takes the same log line below
+      // as every probe result instead of being recorded silently.
+      const probeStatus =
+        provider === undefined
+          ? "unverified"
+          : await probeGatewayToolCalling(
+              config,
+              provider,
+              undefined,
+              (error) => {
+                reportSetupVerificationFailure(
+                  deps,
+                  error,
+                  correlationId,
+                  "gateway.setup.tool-calling-probe",
+                );
+              },
+              {
+                env: deps.env,
+                capability: findConfiguredCapability(config, modelId),
+                correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+              },
+            );
+      // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
+      // nothing about the model either way and must never be stored or logged as a verdict: the
+      // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
+      // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
+      const status = probeStatus === "transient" ? "unverified" : probeStatus;
+      observations[index] = {
+        modelId,
+        status,
+        checkedAt,
+      };
+      logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
+    }
+  }
+  const workerCount = Math.max(1, Math.min(SETUP_SMOKE_CONCURRENCY, testedModelIds.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return observations;
+}
+
+// Field incident (LiteLLM customer, 2026-08): chat models were smoke-tested, embedding models were
+// persisted on the strength of a classification alone. A model the gateway DECLARES as an embedding
+// engine but which cannot answer /embeddings was bound to every new Knowledge Pod, and indexing
+// wrote zero vectors with no earlier signal. One real request per candidate closes that gap; the
+// four-input space fingerprint stays where it belongs (the pod's first indexing preflight), because
+// on CPU-served hardware four inputs per model would make setup crawl.
+const EMBEDDING_PROBE_INPUT = "Keiko embedding setup probe";
+
+// One embedding request against the model, using the SAME endpoint protocol the provider will
+// persist with — an Azure deployment path must not be probed at the OpenAI-compatible URL, or the
+// probe measures a 404 that production would never see.
+async function embedOnceForProbe(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  modelId: string,
+  env: EnvSource,
+  correlationId: string,
+): Promise<OpenAIEmbeddingOutcome> {
+  const reservation = reserveGatewaySpendForAttempt(
+    env,
+    findConfiguredCapability(config, modelId),
+    {
+      modelId,
+      messages: [{ role: "user", content: "Gateway embedding setup probe." }],
+      maxOutputTokens: 0,
+    },
+    correlationId,
+  );
+  try {
+    return await requestOpenAIEmbedding({
+      endpoint: provider.baseUrl,
+      apiKey: provider.apiKey,
+      ...(provider.apiKeyHeaderName !== undefined
+        ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+        : {}),
+      ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+      ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
+      ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
+      modelId,
+      input: EMBEDDING_PROBE_INPUT,
+      timeoutMs: provider.timeoutMs,
+      // The probe exists because an embedding model used to be persisted on a classification alone.
+      // The sink is what turns a rejected probe into a line naming the status and the error kind,
+      // rather than a model that silently fails to make the candidate list.
+      log: processServerLogSink(),
+    });
+  } finally {
+    reservation?.settle(undefined);
+  }
+}
+
+// Transient kinds get exactly ONE retry, matching the chat lane's `maxRetries: 1`: a single
+// rate-limit or cold-start blip must not permanently exclude a working embedding model, and
+// requestOpenAIEmbedding is a bare transport that does no retrying of its own.
+const RETRYABLE_PROBE_KINDS: ReadonlySet<string> = new Set([
+  "rate-limited",
+  "timeout",
+  "transport",
+]);
+// An immediate retry against a gateway that just answered 429 answers 429 again, so it would burn a
+// request and change nothing. One short pause, matching the chat lane's backoff base.
+const EMBEDDING_PROBE_RETRY_DELAY_MS = 500;
+
+export async function defaultGatewayEmbeddingProbe(
+  config: GatewayConfig,
+  candidateModelIds: readonly string[],
+  env: EnvSource,
+  correlationId: string,
+): Promise<readonly string[]> {
+  return passingCandidates(
+    candidateModelIds,
+    async (modelId) => {
+      const provider = config.providers.find((entry) => entry.modelId === modelId);
+      if (provider === undefined) throw new Error("embedding candidate has no provider entry");
+      let outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
+      if (!outcome.ok && RETRYABLE_PROBE_KINDS.has(outcome.kind)) {
+        await new Promise((resolve) => setTimeout(resolve, EMBEDDING_PROBE_RETRY_DELAY_MS));
+        outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
+      }
+      // The per-model verdict is what the operator acts on, and it travels in
+      // droppedEmbeddingModelIds / unverifiedEmbeddingModelIds. passingCandidates drops the
+      // rejection, which is the intended contract here: a failed candidate is not admitted.
+      if (!outcome.ok || outcome.value.vector.length === 0) {
+        throw new Error("embedding probe returned no usable vector");
+      }
+    },
+    SETUP_SMOKE_CONCURRENCY,
+  );
+}
+
+function gatewayEmbeddingProbe(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): GatewayEmbeddingProbe {
+  const override = deps.gatewayEmbeddingProbe;
+  if (override !== undefined) return override;
+  return (config, candidateModelIds) =>
+    defaultGatewayEmbeddingProbe(
+      config,
+      candidateModelIds,
+      deps.env,
+      correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+}
+
+// The seam type (UiHandlerDeps["gatewaySetupTester"]) is a fixed 2-arg shape shared by every
+// test override, so the request-scoped correlation id is closed over here rather than added as a
+// 3rd seam parameter — the override contract stays untouched while the real tester still stamps
+// GatewayCallRequest.logContext (ADR-0173 D5).
+function gatewaySetupTester(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): GatewaySetupTester {
+  const override = deps.gatewaySetupTester;
+  if (override !== undefined) return override;
+  return (config, candidateModelIds) =>
+    defaultGatewaySetupTester(config, candidateModelIds, correlationId, deps);
 }
 
 const FIGMA_ME_ENDPOINT = "https://api.figma.com/v1/me";
@@ -1339,26 +2435,74 @@ async function defaultFigmaCredentialTester(
 // keiko.config.json (Issue #1320). `deps.evidenceDir` is the resolved evidence root used by the
 // encrypted Figma PAT vault; it is resolved defensively so persistence never depends on the optional
 // field being pre-populated.
+//
+// PR-review follow-up (Codex thread 3772192295): stamp `schemaVersion:
+// GATEWAY_CONFIG_SCHEMA_VERSION` on every write so the pre-KEIKO-0520 legacy-migration guard
+// (config.ts:migrateLegacyChatContextWindows) can distinguish a legacy pre-migration file
+// from a modern hand-edited/corrupted one. A modern file that carries schemaVersion >= 2
+// with contextWindow: 0 now fails strict parsing instead of being silently rewritten to a
+// 4096-token default.
 function persistGatewayConfig(
   raw: Record<string, unknown>,
   storagePath: string,
   deps: UiHandlerDeps,
+  correlationId: string | undefined = UNKNOWN_CORRELATION_ID,
 ): void {
-  persistSealedGatewayConfig(raw, {
-    env: deps.env,
-    storagePath,
-    evidenceDir: resolveEvidenceDir(deps.evidenceDir, deps.env),
-  });
+  persistSealedGatewayConfig(
+    { ...raw, schemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION },
+    {
+      env: deps.env,
+      storagePath,
+      evidenceDir: resolveEvidenceDir(deps.evidenceDir, deps.env),
+      securityLogSink: bindSecurityLogCorrelation(processServerLogSink(), correlationId),
+    },
+  );
 }
 
 interface SetupRequest {
   readonly correlationId: string | undefined;
+  readonly preserveExisting: boolean;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /** Generic endpoint protocol — see {@link SetupGatewayCredentials} (#3042). */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  /** True when the request stated the list explicitly — discovery must not re-add models then. */
+  readonly imageInputModelIdsProvided: boolean;
+  /**
+   * Model ids whose stored capability kind is `embedding` — authoritative over the name
+   * heuristic when a preserve-mode rebuild re-verifies inherited or resubmitted deployments
+   * (review finding on #3031: a misclassified stored embedding fails the chat probe and
+   * silently vanishes). Empty outside preserve mode.
+   */
+  readonly storedEmbeddingModelIds: readonly string[];
+  /** Client-asserted embedding ids (validated against the deployment set) — same authority. */
+  readonly submittedEmbeddingModelIds: readonly string[];
+  /**
+   * The DURABLE stored view for restore classification — the persisted file with per-model env
+   * overrides masked (see {@link durableStoredGatewayConfig}); undefined on a fresh setup.
+   */
+  readonly stored: GatewayConfig | undefined;
+  /**
+   * Model ids whose stored capability kind is `ocr-vision` — the rebuild neither chat-probes
+   * nor re-derives them; the stored providers are restored verbatim, exactly like voice
+   * (review finding on #3031: the same silent-loss class as embeddings, fixed for every stored
+   * non-chat kind). Empty outside preserve mode.
+   */
+  readonly storedOcrModelIds: readonly string[];
+  /**
+   * Stored embedding ids whose FULL connection identity differs from the stored primary
+   * provider's — rebuilt embeddings land on the setup-wide connection, so these are restored
+   * verbatim instead (review findings on #3031). Empty outside inherited-deployment preserve
+   * mode.
+   */
+  readonly storedDedicatedEmbeddingModelIds: readonly string[];
+  /** Stored voice ids excluded from the chat probe — restored by applyVoiceProviders. */
+  readonly storedVoiceModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[];
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
@@ -1369,7 +2513,10 @@ interface SetupRequest {
 
 interface SetupModelLists {
   readonly deploymentNames: readonly string[];
-  readonly imageInputModelIds: readonly string[];
+  /** `undefined` = the field was absent; an explicit empty list clears the image-capable set. */
+  readonly imageInputModelIds: readonly string[] | undefined;
+  /** Client-asserted embedding kinds — see parseEmbeddingModelIds. */
+  readonly embeddingModelIds: readonly string[] | undefined;
   readonly workflowEligibleModelIds: readonly string[];
 }
 
@@ -1377,12 +2524,25 @@ interface SetupGatewayCredentials {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /**
+   * The generic endpoint PROTOCOL of the setup-wide connection (#3042): submitted values win
+   * (an uploaded LiteLLM config declares openai-compatible explicitly and a server-side
+   * KEIKO_DEFAULT_ENDPOINT_STYLE must not override the file's statement after save); absent
+   * values inherit from the stored primary only while the connection stays on the same
+   * endpoint, so a persisted style survives a credential rotation but never travels to a moved
+   * endpoint it was not declared for. The style/apiVersion pairing is enforced by the canonical
+   * parser on the validation and candidate configs downstream.
+   */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
 }
 
 interface SetupVoiceProvider {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;
+  /** Setup-only provenance: rebase this connection onto the verified primary URL candidate. */
+  readonly followsSetupGateway?: boolean | undefined;
   readonly apiKeyHeaderName: string;
   readonly timeoutMs: number | undefined;
   readonly maxRetries: number;
@@ -1394,6 +2554,11 @@ interface SetupVoiceProvider {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): carry a per-provider
+  // circuitBreaker override through the setup round-trip. Without this field
+  // setupVoiceProviderFromCurrent / applyVoiceProviders / voiceProviderRaw silently drop
+  // the persisted override on any unrelated voice/setup save.
+  readonly circuitBreaker?: ModelProviderConfig["circuitBreaker"];
 }
 
 function normalizeSetupApiKeyHeaderName(value: unknown): SetupParseResult<string> {
@@ -1421,11 +2586,15 @@ function readSetupModelLists(raw: Record<string, unknown>): SetupModelLists | Ro
   if (isRouteResult(imageInputModelIds)) {
     return imageInputModelIds;
   }
+  const embeddingModelIds = parseEmbeddingModelIds(raw.embeddingModelIds);
+  if (isRouteResult(embeddingModelIds)) {
+    return embeddingModelIds;
+  }
   const workflowEligibleModelIds = parseWorkflowEligibleModelIds(raw.workflowEligibleModelIds);
   if (isRouteResult(workflowEligibleModelIds)) {
     return workflowEligibleModelIds;
   }
-  return { deploymentNames, imageInputModelIds, workflowEligibleModelIds };
+  return { deploymentNames, imageInputModelIds, embeddingModelIds, workflowEligibleModelIds };
 }
 
 function optionalSetupSecret(value: unknown, path: string): SetupParseResult<string | undefined> {
@@ -1518,6 +2687,9 @@ const VOICE_PROVIDER_STRING_FIELDS = [
   "voiceSpeechOutputModelId",
   "voiceOutputVoiceId",
   "voiceProviderLocality",
+  "voiceEndpointStyle",
+  "voiceApiVersion",
+  "voiceRealtimeAuthMode",
 ] as const;
 
 const VOICE_CONNECTION_MUTATION_FIELDS = [
@@ -1525,13 +2697,85 @@ const VOICE_CONNECTION_MUTATION_FIELDS = [
   "voiceApiKey",
   "voiceApiKeyHeaderName",
   "voiceProviderLocality",
+  // The endpoint PROTOCOL is part of the connection: submitted without a base URL or explicit
+  // role targets it would spread onto every role template, writing e.g. an Azure deployment
+  // protocol onto an OpenAI-compatible realtime endpoint (review finding on #3037).
+  "voiceEndpointStyle",
+  "voiceApiVersion",
+  "voiceRealtimeAuthMode",
 ] as const;
+
+// The endpoint-protocol wire values come from the contract seam — one compiler-checked source
+// shared with the model gateway's parser and the UI upload parser (#3037 follow-up). One list
+// for BOTH sections on purpose: an endpoint protocol is a property of the connection, not of
+// voice. The former voice-prefixed name made a reviewer read the generic check added in #3046
+// as a voice-only whitelist, so the shared names carry no section here.
+const ENDPOINT_STYLE_VALUES = PROVIDER_ENDPOINT_STYLES;
+const VOICE_REALTIME_AUTH_MODES = REALTIME_AUTH_MODES;
+
+function parseEndpointEnum<T extends string>(
+  value: unknown,
+  field: string,
+  allowed: readonly T[],
+): SetupParseResult<T | undefined> {
+  if (value === undefined) {
+    return acceptedSetupValue(undefined);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return acceptedSetupValue(undefined);
+    if (allowed.includes(trimmed as T)) return acceptedSetupValue(trimmed as T);
+  }
+  return rejectedSetupValue({
+    status: 400,
+    body: errorBody("BAD_REQUEST", `${field} is not supported.`),
+  });
+}
+
+// The submitted endpoint protocol wins over any inherited template: a caller that states how the
+// endpoint speaks (e.g. an uploaded config with an Azure deployment-path voice endpoint) must not
+// have that declaration silently replaced by a stored provider's shape — and a fresh setup has no
+// template at all, so without these fields an Azure voice endpoint would be persisted as
+// OpenAI-compatible and every audio call would take the wrong URL shape. The style/apiVersion
+// pairing rule is enforced downstream by the parseGatewayConfig validation in
+// validateVoiceProviderConnection, which fails the whole setup closed.
+function submittedVoiceEndpointOptions(
+  raw: Record<string, unknown>,
+): SetupParseResult<VoiceProviderEndpointOptions | undefined> {
+  const endpointStyle = parseEndpointEnum(
+    raw.voiceEndpointStyle,
+    "voiceEndpointStyle",
+    ENDPOINT_STYLE_VALUES,
+  );
+  if (!endpointStyle.ok) return endpointStyle;
+  const realtimeAuthMode = parseEndpointEnum(
+    raw.voiceRealtimeAuthMode,
+    "voiceRealtimeAuthMode",
+    VOICE_REALTIME_AUTH_MODES,
+  );
+  if (!realtimeAuthMode.ok) return realtimeAuthMode;
+  const apiVersion = optionalSetupSecret(raw.voiceApiVersion, "voiceApiVersion");
+  if (!apiVersion.ok) return apiVersion;
+  if (
+    endpointStyle.value === undefined &&
+    apiVersion.value === undefined &&
+    realtimeAuthMode.value === undefined
+  ) {
+    return acceptedSetupValue(undefined);
+  }
+  return acceptedSetupValue({
+    ...(endpointStyle.value === undefined ? {} : { endpointStyle: endpointStyle.value }),
+    ...(apiVersion.value === undefined ? {} : { apiVersion: apiVersion.value }),
+    ...(realtimeAuthMode.value === undefined ? {} : { realtimeAuthMode: realtimeAuthMode.value }),
+  });
+}
 
 function hasVoiceProviderInput(raw: Record<string, unknown>): boolean {
   return (
     VOICE_PROVIDER_STRING_FIELDS.some((key) => hasNonBlankStringField(raw, key)) ||
     raw.voiceTimeoutMs !== undefined ||
-    raw.voiceSupportsSemanticTurnDetection !== undefined
+    raw.voiceSupportsSemanticTurnDetection !== undefined ||
+    raw.voiceSupportsSpeechSynthesisInstructions !== undefined
   );
 }
 
@@ -1586,10 +2830,6 @@ function shouldPreserveExisting(
   current: GatewayConfig | undefined,
 ): boolean {
   return raw.preserveExisting === true && current !== undefined;
-}
-
-function firstProvider(current: GatewayConfig | undefined): ModelProviderConfig | undefined {
-  return current?.providers[0];
 }
 
 function currentSpeechInputProvider(
@@ -1665,13 +2905,62 @@ function setupVoiceApiKeyHeaderSource(
   return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
 }
 
+/**
+ * A changed endpoint never inherits the stored secret: in update mode a submitted base URL that
+ * differs from the stored one, with no fresh token beside it, would send the STORED token to the
+ * NEW endpoint during verification — so a supplied configuration file (or a typo'd URL) could
+ * exfiltrate it (review finding on #3031). Server-side so no client path can bypass it.
+ */
+function inheritedTokenForChangedEndpoint(
+  raw: Record<string, unknown>,
+  submittedKeys: { readonly baseUrl: string; readonly apiKey: string },
+  storedBaseUrl: string | undefined,
+  preserveExisting: boolean,
+): boolean {
+  const submittedBaseUrl = trimmedSubmittedString(raw, submittedKeys.baseUrl);
+  return (
+    preserveExisting &&
+    submittedBaseUrl !== undefined &&
+    storedBaseUrl !== undefined &&
+    !sameBaseUrlIdentity(submittedBaseUrl, storedBaseUrl) &&
+    trimmedSubmittedString(raw, submittedKeys.apiKey) === undefined
+  );
+}
+
+function changedEndpointRequiresTokenError(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody(
+      "GATEWAY_URL_CHANGE_REQUIRES_TOKEN",
+      "A changed gateway URL requires a fresh API token.",
+    ),
+  };
+}
+
 function readSetupGatewayCredentials(
   raw: Record<string, unknown>,
   env: EnvSource,
   current: GatewayConfig | undefined,
+  stored: GatewayConfig | undefined,
   preserveExisting: boolean,
 ): SetupGatewayCredentials | RouteResult {
-  const provider = firstProvider(current);
+  // The MAIN gateway connection, not position zero: array order is not a contract, and a valid
+  // stored file may list a dedicated voice provider first. Reading the connection — URL, token,
+  // header and endpoint protocol — off that provider inherited the voice endpoint's values for
+  // the generic gateway; for the protocol it dropped a stored Azure declaration on an otherwise
+  // unchanged rotation (review finding on #3046). Same selection the sharing classification
+  // already uses (#3037).
+  const provider = storedPrimaryGatewayProvider(current);
+  if (
+    inheritedTokenForChangedEndpoint(
+      raw,
+      { baseUrl: "baseUrl", apiKey: "apiKey" },
+      provider?.baseUrl,
+      preserveExisting,
+    )
+  ) {
+    return changedEndpointRequiresTokenError();
+  }
   const baseUrl = submittedOrInheritedString(raw, "baseUrl", provider?.baseUrl, preserveExisting);
   const apiKey = submittedOrInheritedString(raw, "apiKey", provider?.apiKey, preserveExisting);
   if (baseUrl.length === 0 || apiKey.length === 0) {
@@ -1683,11 +2972,137 @@ function readSetupGatewayCredentials(
     return apiKeyHeaderResult.routeError;
   }
   const apiKeyHeaderName = apiKeyHeaderResult.value;
-  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
+  const protocol = durableSetupEndpointProtocol(
+    raw,
+    { stored, current },
+    baseUrl,
+    preserveExisting,
+  );
+  if ("status" in protocol) {
+    return protocol;
+  }
+  // The probe carries the protocol the setup will actually persist. Validating a protocol-free
+  // provider let the environment fill the gap: on a server that sets only
+  // KEIKO_DEFAULT_ENDPOINT_STYLE, every probe became an Azure provider with no api version and
+  // the canonical pairing rejected EVERY setup request, whatever the operator submitted
+  // (found while pinning the env-completed tuple, review findings on #3046).
+  const invalidConnection = validateSetupConnection(
+    baseUrl,
+    apiKey,
+    apiKeyHeaderName,
+    env,
+    protocol,
+  );
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
-  return { baseUrl, apiKey, apiKeyHeaderName };
+  return { baseUrl, apiKey, apiKeyHeaderName, ...protocol };
+}
+
+// Inheritance reads the DURABLE file, not the env-resolved view: a protocol that only exists
+// because KEIKO_DEFAULT_* or a KEIKO_MODEL_* override is set was never declared in the file, and
+// a rotation that inherited it would seal the transient value in — removing the override
+// afterwards would no longer restore the file's own behavior (review finding on #3046, the same
+// disk-vs-runtime rule the sharing classification draws). The connection fields stay on the
+// runtime view: they are what the smoke test actually verifies.
+function durableSetupEndpointProtocol(
+  raw: Record<string, unknown>,
+  views: {
+    readonly stored: GatewayConfig | undefined;
+    readonly current: GatewayConfig | undefined;
+  },
+  baseUrl: string,
+  preserveExisting: boolean,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  const durable = views.stored ?? views.current;
+  return setupEndpointProtocol(
+    raw,
+    storedPrimaryGatewayProvider(durable),
+    baseUrl,
+    preserveExisting,
+  );
+}
+
+// See SetupGatewayCredentials: submitted protocol wins, absent inherits from the stored primary
+// only on the SAME endpoint (a persisted style survives rotations, never travels to a moved
+// endpoint), and everything else stays undefined so the runtime default layering is unchanged.
+function setupEndpointProtocol(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig | undefined,
+  baseUrl: string,
+  preserveExisting: boolean,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  const endpointStyle = parseEndpointEnum(
+    raw.endpointStyle,
+    "endpointStyle",
+    ENDPOINT_STYLE_VALUES,
+  );
+  if (!endpointStyle.ok) return endpointStyle.routeError;
+  const apiVersion = optionalSetupSecret(raw.apiVersion, "apiVersion");
+  if (!apiVersion.ok) return apiVersion.routeError;
+  // The submitted protocol is ATOMIC: stating a style replaces the whole protocol, so an
+  // inherited api version can never pair with it — switching an Azure provider to
+  // openai-compatible on the same URL would otherwise build a mixed protocol the canonical
+  // parser refuses, failing the save instead of performing it (review finding on #3046).
+  if (endpointStyle.value !== undefined) {
+    return pairedEndpointProtocol(endpointStyle.value, apiVersion.value);
+  }
+  const inheritable =
+    preserveExisting && provider !== undefined && sameBaseUrlIdentity(baseUrl, provider.baseUrl);
+  return pairedEndpointProtocol(
+    inheritable ? provider.endpointStyle : undefined,
+    apiVersion.value ?? (inheritable ? provider.apiVersion : undefined),
+  );
+}
+
+// The canonical pairing, checked on the EFFECTIVE protocol rather than on the submitted fields:
+// an api version belongs to the Azure deployment path alone. Without this the config parser threw
+// during verification and the operator got an opaque 502 "credentials could not be verified" for
+// what is a request problem — a submitted version with no style at all, or a submitted version
+// over an inherited openai-compatible style (review finding on #3046). Bumping the version of an
+// endpoint whose stored style IS the deployment path stays legal: that is the same pair.
+// The canonical api-version shape, mirroring the model gateway's own parser (ADR-0019 keeps the
+// two packages apart, so the rule is mirrored and pinned on both sides rather than imported).
+const SETUP_API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
+
+function pairedEndpointProtocol(
+  endpointStyle: string | undefined,
+  apiVersion: string | undefined,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  if (apiVersion !== undefined && endpointStyle !== "azure-openai-deployment") {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT",
+        'apiVersion requires endpointStyle to be "azure-openai-deployment".',
+      ),
+    };
+  }
+  // The canonical SHAPE, checked here for the same reason as the pairing: a malformed version
+  // threw inside the candidate loop and surfaced as an opaque 502 for what is a malformed
+  // request (review finding on #3046).
+  if (apiVersion !== undefined && !SETUP_API_VERSION_RE.test(apiVersion)) {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_API_VERSION_INVALID",
+        "apiVersion must be YYYY-MM-DD or YYYY-MM-DD-preview.",
+      ),
+    };
+  }
+  // The other direction of the same canonical rule: the deployment path cannot be requested
+  // without the version that builds its URL. Left unnamed it threw inside the candidate loop and
+  // surfaced as the same misleading 502 (review finding on #3046).
+  if (endpointStyle === "azure-openai-deployment" && apiVersion === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION",
+        'endpointStyle "azure-openai-deployment" requires an apiVersion.',
+      ),
+    };
+  }
+  return { endpointStyle, apiVersion };
 }
 
 function validateVoiceProviderConnection(
@@ -1714,9 +3129,12 @@ function validateVoiceProviderConnection(
             ...(provider.voiceProfiles === undefined
               ? {}
               : { voiceProfiles: provider.voiceProfiles }),
+            ...(provider.circuitBreaker === undefined
+              ? {}
+              : { circuitBreaker: provider.circuitBreaker }),
           }),
         ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
       },
       env,
       linkLocalGatewayOverrideOptions(env),
@@ -1750,7 +3168,11 @@ function setupVoiceConnection(
   raw: Record<string, unknown>,
   existing: ModelProviderConfig | undefined,
   preserveExisting: boolean,
+  gateway: SetupGatewayCredentials,
 ): { readonly baseUrl: string; readonly apiKey: string } | RouteResult {
+  if (sharesPrimaryGatewayForVoice(raw, existing)) {
+    return { baseUrl: gateway.baseUrl, apiKey: gateway.apiKey };
+  }
   const baseUrl = submittedOrInheritedString(
     raw,
     "voiceBaseUrl",
@@ -1770,23 +3192,38 @@ function setupVoiceConnection(
   return { baseUrl, apiKey };
 }
 
+function sharesPrimaryGatewayForVoice(
+  raw: Record<string, unknown>,
+  existing: ModelProviderConfig | undefined,
+): boolean {
+  return (
+    existing === undefined &&
+    !hasNonBlankStringField(raw, "voiceBaseUrl") &&
+    !hasNonBlankStringField(raw, "voiceApiKey")
+  );
+}
+
 function setupVoiceApiKeyHeaderName(
   raw: Record<string, unknown>,
   existing: ModelProviderConfig | undefined,
   preserveExisting: boolean,
+  sharedGatewayHeader: string | undefined,
 ): SetupParseResult<string> {
   return normalizeSetupApiKeyHeaderName(
-    setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting),
+    raw.voiceApiKeyHeaderName ??
+      sharedGatewayHeader ??
+      setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting),
   );
 }
 
 function setupVoiceProviderLocality(
   raw: Record<string, unknown>,
   existingCapability: ModelCapability | undefined,
+  defaultLocality: VoiceProviderLocality,
 ): SetupParseResult<VoiceProviderLocality> {
   return parseVoiceProviderLocality(
     raw.voiceProviderLocality,
-    existingCapability?.voiceProviderLocality ?? "azure-foundry",
+    existingCapability?.voiceProviderLocality ?? defaultLocality,
   );
 }
 
@@ -1901,6 +3338,44 @@ function endpointMigrationError(message: string, correlationId: string | undefin
   return { status: 400, body: errorBody("BAD_REQUEST", message, correlationId) };
 }
 
+// A stored protocol may not be inherited across a base-URL change (it was declared for the old
+// host), and dropping it silently degrades an Azure deployment-path endpoint to the
+// OpenAI-compatible URL shape — a save that succeeds and breaks every audio call. The migration
+// must RESTATE the protocol, exactly as it restates the credential, the locality and the roles
+// (review finding on #3042). The realtime auth mode is stored protocol too and is NOT implied by
+// the style: a provider can declare ephemeral-session with no style at all, and losing it sends
+// Digital Voice down the plain API-key path instead of ephemeral-token negotiation (review
+// finding on #3048).
+function unrestatedMigrationProtocolError(
+  raw: Record<string, unknown>,
+  migrations: readonly ExplicitVoiceRoleTarget[],
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const restatements = [
+    {
+      declared: (target: ExplicitVoiceRoleTarget): boolean =>
+        target.template?.endpointStyle !== undefined,
+      field: "voiceEndpointStyle",
+      message: "Replacing an audio endpoint requires an explicit endpoint style for the new host.",
+    },
+    {
+      // Only when a REALTIME role is actually moving: a stored provider that combines Realtime
+      // with speech output declares the mode, but moving the speech-output role alone leaves
+      // Realtime where it is, and demanding a restatement there refuses a move the mode has
+      // nothing to do with (review finding on #3048).
+      declared: (target: ExplicitVoiceRoleTarget): boolean =>
+        target.role === "realtime" && target.template?.realtimeAuthMode !== undefined,
+      field: "voiceRealtimeAuthMode",
+      message:
+        "Replacing an audio endpoint requires an explicit realtime auth mode for the new host.",
+    },
+  ];
+  const missing = restatements.find(
+    (rule) => migrations.some(rule.declared) && !hasNonBlankStringField(raw, rule.field),
+  );
+  return missing === undefined ? undefined : endpointMigrationError(missing.message, correlationId);
+}
+
 function explicitEndpointMigrationError(
   raw: Record<string, unknown>,
   migrations: readonly ExplicitVoiceRoleTarget[],
@@ -1918,6 +3393,8 @@ function explicitEndpointMigrationError(
       correlationId,
     );
   }
+  const unrestatedProtocol = unrestatedMigrationProtocolError(raw, migrations, correlationId);
+  if (unrestatedProtocol !== undefined) return unrestatedProtocol;
   const replacements = explicitVoiceRoleReplacements(raw);
   if (migrations.some((target) => leavesImplicitRoleOnMigratedProvider(target, replacements))) {
     return endpointMigrationError(
@@ -1937,8 +3414,12 @@ function explicitEndpointMigrationError(
   return undefined;
 }
 
+// Every connection mutation except a plain base-URL move (which validateVoiceEndpointUpdate
+// owns): credentials, header, locality, AND the endpoint protocol — an unscoped protocol change
+// across heterogeneous connections must refuse exactly like an unscoped credential rotation
+// (review finding on #3037).
 function hasNonEndpointVoiceConnectionMutation(raw: Record<string, unknown>): boolean {
-  return ["voiceApiKey", "voiceApiKeyHeaderName", "voiceProviderLocality"].some((key) =>
+  return VOICE_CONNECTION_MUTATION_FIELDS.filter((key) => key !== "voiceBaseUrl").some((key) =>
     hasNonBlankStringField(raw, key),
   );
 }
@@ -2144,6 +3625,17 @@ function validateExplicitVoiceRoles(
       ),
     };
   }
+  // Same canonical relationship for the speech-output tier (review finding on #3037).
+  if (raw.voiceSupportsSpeechSynthesisInstructions === true && roleIds.speechOutput === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "Speech-synthesis instructions require a Speech output deployment.",
+        correlationId,
+      ),
+    };
+  }
   return undefined;
 }
 
@@ -2267,6 +3759,7 @@ function voiceProviderConnection(
   raw: Record<string, unknown>,
   defaults: SetupVoiceProviderDefaults,
   template: SetupVoiceProvider | undefined,
+  submittedEndpoint: VoiceProviderEndpointOptions | undefined,
 ): SetupVoiceProviderDefaults {
   const baseUrl = submittedOrTemplateString(
     raw,
@@ -2277,6 +3770,7 @@ function voiceProviderConnection(
   return {
     baseUrl,
     apiKey: submittedOrTemplateString(raw, "voiceApiKey", template?.apiKey, defaults.apiKey),
+    ...sharedGatewayProvenance(defaults.followsSetupGateway === true),
     apiKeyHeaderName: submittedOrTemplateValue(
       raw.voiceApiKeyHeaderName,
       template?.apiKeyHeaderName,
@@ -2289,24 +3783,66 @@ function voiceProviderConnection(
     ),
     maxRetries: template?.maxRetries ?? defaults.maxRetries,
     retryBaseDelayMs: template?.retryBaseDelayMs ?? defaults.retryBaseDelayMs,
-    ...voiceConnectionEndpointOptions(baseUrl, template, defaults),
+    ...voiceConnectionEndpointOptions(baseUrl, template, defaults, submittedEndpoint),
     providerLocality: submittedOrTemplateValue(
       raw.voiceProviderLocality,
       template?.providerLocality,
       defaults.providerLocality,
     ),
+    // PR-review follow-up (Codex thread 3771542619): carry the per-provider circuitBreaker
+    // through the rebuild too. Without this the fresh SetupVoiceProviderDefaults loses the
+    // override, providerForVoiceRoles spreads a reduced object, and applyVoiceProviders
+    // serializes no override — silently switching the provider back to the top-level
+    // breaker policy on any unrelated voice/setup save.
+    ...voiceConnectionCircuitBreakerFragment(template, defaults),
   };
+}
+
+function sharedGatewayProvenance(
+  followsSetupGateway: boolean,
+): Pick<SetupVoiceProvider, "followsSetupGateway"> | Record<string, never> {
+  return followsSetupGateway ? { followsSetupGateway: true } : {};
+}
+
+function voiceConnectionCircuitBreakerFragment(
+  template: SetupVoiceProvider | undefined,
+  defaults: SetupVoiceProviderDefaults,
+): Pick<SetupVoiceProvider, "circuitBreaker"> | Record<string, never> {
+  const inherited = template?.circuitBreaker ?? defaults.circuitBreaker;
+  return inherited === undefined ? {} : { circuitBreaker: inherited };
 }
 
 function voiceConnectionEndpointOptions(
   baseUrl: string,
   template: SetupVoiceProvider | undefined,
   defaults: SetupVoiceProviderDefaults,
+  submitted: VoiceProviderEndpointOptions | undefined,
 ): VoiceProviderEndpointOptions {
-  if (template !== undefined && !sameBaseUrlIdentity(baseUrl, template.baseUrl)) {
-    return {};
-  }
-  return voiceProviderTemplateEndpoint(template, defaults);
+  const inherited =
+    template !== undefined && !sameBaseUrlIdentity(baseUrl, template.baseUrl)
+      ? {}
+      : voiceProviderTemplateEndpoint(template, defaults);
+  // A submitted style that LEAVES the deployment path replaces the whole protocol: a spread merge
+  // let a stored Azure api version survive a switch to openai-compatible, and the canonical
+  // parser refuses that pair. Restating the SAME Azure style keeps the inherited version — it is
+  // still the version that pair needs, and discarding it rejected the restatement for the
+  // opposite reason (review findings on #3048).
+  const base =
+    submitted?.endpointStyle === undefined || submitted.endpointStyle === "azure-openai-deployment"
+      ? inherited
+      : withoutInheritedApiVersion(inherited);
+  return { ...base, ...submitted };
+}
+
+function withoutInheritedApiVersion(
+  options: VoiceProviderEndpointOptions,
+): VoiceProviderEndpointOptions {
+  return {
+    ...(options.endpointStyle === undefined ? {} : { endpointStyle: options.endpointStyle }),
+    ...(options.realtimeAuthMode === undefined
+      ? {}
+      : { realtimeAuthMode: options.realtimeAuthMode }),
+  };
 }
 
 function submittedOrTemplateString(
@@ -2367,7 +3903,9 @@ function configuredVoiceCapabilityFlags(
   return {
     ...(capabilities.speechInput ? { supportsSpeechInput: true } : {}),
     ...(capabilities.speechOutput ? { supportsSpeechOutput: true } : {}),
-    ...(capabilities.speechOutput && template.supportsSpeechSynthesisInstructions === true
+    ...(capabilities.speechOutput &&
+    (capabilities.supportsSpeechSynthesisInstructions ??
+      template.supportsSpeechSynthesisInstructions) === true
       ? { supportsSpeechSynthesisInstructions: true }
       : {}),
     ...(capabilities.realtime ? { supportsRealtimeVoice: true } : {}),
@@ -2426,10 +3964,11 @@ function providerForVoiceRoles(
   defaults: SetupVoiceProviderDefaults,
   raw: Record<string, unknown>,
   existingProviders: readonly SetupVoiceProvider[],
+  submittedEndpoint: VoiceProviderEndpointOptions | undefined,
 ): SetupVoiceProvider {
   const existing = existingProviders.find((provider) => provider.modelId === modelId);
   const template = voiceProviderTemplate(modelId, capabilities, existingProviders);
-  const connection = voiceProviderConnection(raw, defaults, template);
+  const connection = voiceProviderConnection(raw, defaults, template, submittedEndpoint);
   const capabilityTemplate =
     template !== undefined && sameBaseUrlIdentity(connection.baseUrl, template.baseUrl)
       ? template
@@ -2453,7 +3992,7 @@ function providersForVoiceRoles(
   roleIds: VoiceRoleModelIds,
   defaults: SetupVoiceProviderDefaults,
   raw: Record<string, unknown>,
-  supportsSemanticTurnDetection: boolean,
+  options: VoiceSetupOptions,
   existingProviders: readonly SetupVoiceProvider[],
 ): readonly SetupVoiceProvider[] {
   return [...voiceCapabilitiesByModel(roleIds)].map(([modelId, capabilities]) =>
@@ -2461,13 +4000,19 @@ function providersForVoiceRoles(
       modelId,
       {
         ...capabilities,
-        ...(capabilities.realtime && supportsSemanticTurnDetection
+        ...(capabilities.realtime && options.supportsSemanticTurnDetection
           ? { supportsSemanticTurnDetection: true }
+          : {}),
+        // The submitted tri-state travels to the speech-output deployment: true sets, false
+        // clears, undefined lets the stored template decide (review finding on #3037).
+        ...(capabilities.speechOutput && options.supportsSpeechSynthesisInstructions !== undefined
+          ? { supportsSpeechSynthesisInstructions: options.supportsSpeechSynthesisInstructions }
           : {}),
       },
       defaults,
       raw,
       existingProviders,
+      options.submittedEndpoint,
     ),
   );
 }
@@ -2563,19 +4108,30 @@ function mergedGeneratedVoiceCapabilities(
   const transcriptionSource = generated.capabilities.realtime
     ? generated.capabilities
     : existing.capabilities;
+  const speechOutput = mergeVoiceRole(
+    generated.capabilities.speechOutput,
+    existing.capabilities.speechOutput,
+    replacements.speechOutput,
+  );
+  // The submitted synthesis tri-state must survive the merge: generated carries it only when the
+  // request stated it (true sets, false clears — false must keep overriding the stored template
+  // downstream), otherwise the existing provider's stored value rides along (review finding on
+  // #3041).
+  const supportsSpeechSynthesisInstructions =
+    generated.capabilities.supportsSpeechSynthesisInstructions ??
+    existing.capabilities.supportsSpeechSynthesisInstructions;
   return {
     speechInput: mergeVoiceRole(
       generated.capabilities.speechInput,
       existing.capabilities.speechInput,
       replacements.speechInput,
     ),
-    speechOutput: mergeVoiceRole(
-      generated.capabilities.speechOutput,
-      existing.capabilities.speechOutput,
-      replacements.speechOutput,
-    ),
+    speechOutput,
     realtime,
     supportsSemanticTurnDetection: realtime && supportsSemanticTurnDetection ? true : undefined,
+    ...(speechOutput && supportsSpeechSynthesisInstructions !== undefined
+      ? { supportsSpeechSynthesisInstructions }
+      : {}),
     realtimeTranscriptionModel: realtime
       ? transcriptionSource.realtimeTranscriptionModel
       : undefined,
@@ -2699,16 +4255,58 @@ function setupVoiceProviderDefaults(
   timeoutMs: number | undefined,
   providerLocality: VoiceProviderLocality,
   existing: ModelProviderConfig | undefined,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
 ): SetupVoiceProviderDefaults {
   return {
     ...connection,
+    ...sharedGatewayProvenance(sharedGateway),
     apiKeyHeaderName,
     timeoutMs: timeoutMs ?? existing?.timeoutMs,
     maxRetries: existing?.maxRetries ?? 1,
     retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
-    ...voiceProviderTemplateEndpoint(existing, {}),
+    ...inheritedVoiceEndpoint(connection.baseUrl, existing, gateway, sharedGateway),
     providerLocality,
+    ...inheritedCircuitBreakerFragment(existing),
   };
+}
+
+function inheritedVoiceEndpoint(
+  baseUrl: string,
+  existing: ModelProviderConfig | undefined,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
+): VoiceProviderEndpointOptions {
+  // The inherited provider's endpoint protocol (style, api version, realtime auth mode) is bound
+  // to ITS base URL: it may seed the connection defaults only under the same URL-identity rule
+  // the per-role template branch enforces. Without the guard, a preserve-mode move to a new host
+  // (e.g. Azure -> LiteLLM) stamped the OLD provider's Azure protocol onto every role that had no
+  // per-role template (LiteLLM production audit). Submitted endpoint fields still override these
+  // defaults downstream (#3037).
+  if (existing !== undefined && sameBaseUrlIdentity(baseUrl, existing.baseUrl)) {
+    return voiceProviderTemplateEndpoint(existing, {});
+  }
+  return sharedGateway ? sharedGatewayVoiceEndpoint(gateway) : {};
+}
+
+function sharedGatewayVoiceEndpoint(
+  gateway: SetupGatewayCredentials,
+): VoiceProviderEndpointOptions {
+  const endpointStyle = PROVIDER_ENDPOINT_STYLES.find((style) => style === gateway.endpointStyle);
+  return {
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(gateway.apiVersion === undefined ? {} : { apiVersion: gateway.apiVersion }),
+  };
+}
+
+// KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): inherit the per-provider
+// circuit-breaker override from the stored voice provider so a regenerated
+// SetupVoiceProvider on unrelated setup input keeps it. Extracted so the caller stays
+// under the repo-wide cyclomatic-complexity ceiling.
+function inheritedCircuitBreakerFragment(
+  existing: ModelProviderConfig | undefined,
+): Pick<SetupVoiceProvider, "circuitBreaker"> | Record<string, never> {
+  return existing?.circuitBreaker === undefined ? {} : { circuitBreaker: existing.circuitBreaker };
 }
 
 function validatedVoiceProviders(
@@ -2718,29 +4316,97 @@ function validatedVoiceProviders(
   return validateVoiceProviders(providers, env) ?? providers;
 }
 
+interface VoiceSetupOptions {
+  readonly apiKeyHeaderName: string;
+  readonly timeoutMs: number | undefined;
+  readonly providerLocality: VoiceProviderLocality;
+  readonly supportsSemanticTurnDetection: boolean;
+  readonly supportsSpeechSynthesisInstructions: boolean | undefined;
+  readonly submittedEndpoint: VoiceProviderEndpointOptions | undefined;
+}
+
+function defaultVoiceProviderLocality(
+  submittedEndpoint: SetupParseResult<VoiceProviderEndpointOptions | undefined>,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
+): VoiceProviderLocality {
+  const declaredStyle = submittedEndpoint.ok ? submittedEndpoint.value?.endpointStyle : undefined;
+  return declaredStyle === "azure-openai-deployment" ||
+    (sharedGateway && gateway.endpointStyle === "azure-openai-deployment")
+    ? "azure-foundry"
+    : "gateway-managed";
+}
+
+function parsedVoiceSetupOptions(
+  raw: Record<string, unknown>,
+  existing: ModelProviderConfig | undefined,
+  existingCapability: ModelCapability | undefined,
+  current: GatewayConfig | undefined,
+  preserveExisting: boolean,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
+): VoiceSetupOptions | RouteResult {
+  const apiKeyHeaderName = setupVoiceApiKeyHeaderName(
+    raw,
+    existing,
+    preserveExisting,
+    sharedGateway ? gateway.apiKeyHeaderName : undefined,
+  );
+  const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
+  const submittedEndpoint = submittedVoiceEndpointOptions(raw);
+  const providerLocality = setupVoiceProviderLocality(
+    raw,
+    existingCapability,
+    defaultVoiceProviderLocality(submittedEndpoint, gateway, sharedGateway),
+  );
+  const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
+  const speechSynthesisInstructions = optionalSetupBoolean(
+    raw.voiceSupportsSpeechSynthesisInstructions,
+    "voiceSupportsSpeechSynthesisInstructions",
+  );
+  if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
+  if (!timeoutMs.ok) return timeoutMs.routeError;
+  if (!providerLocality.ok) return providerLocality.routeError;
+  if (!supportsSemanticTurnDetection.ok) return supportsSemanticTurnDetection.routeError;
+  if (!speechSynthesisInstructions.ok) return speechSynthesisInstructions.routeError;
+  if (!submittedEndpoint.ok) return submittedEndpoint.routeError;
+  return {
+    apiKeyHeaderName: apiKeyHeaderName.value,
+    timeoutMs: timeoutMs.value,
+    providerLocality: providerLocality.value,
+    supportsSemanticTurnDetection: supportsSemanticTurnDetection.value,
+    supportsSpeechSynthesisInstructions: speechSynthesisInstructions.value,
+    submittedEndpoint: submittedEndpoint.value,
+  };
+}
+
 function readSetupVoiceProviders(
   raw: Record<string, unknown>,
   env: EnvSource,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
   correlationId: string | undefined,
+  gateway: SetupGatewayCredentials,
 ): readonly SetupVoiceProvider[] | RouteResult {
   const inputFieldError = validateVoiceInputFields(raw, correlationId);
   if (inputFieldError !== undefined) return inputFieldError;
   if (!hasVoiceProviderInput(raw)) return [];
   const existingVoiceProviders = preserveExisting ? setupVoiceProvidersFromCurrent(current) : [];
   const existing = inheritedVoiceProvider(current, preserveExisting);
+  const sharedGateway = sharesPrimaryGatewayForVoice(raw, existing);
   const existingCapability = currentVoiceCapability(current, existing?.modelId);
   const roleIds = voiceRoleModelIds(raw, current, preserveExisting, correlationId);
-  const connection = setupVoiceConnection(raw, existing, preserveExisting);
-  const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
-  const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
-  const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
-  const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
-  if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
-  if (!timeoutMs.ok) return timeoutMs.routeError;
-  if (!providerLocality.ok) return providerLocality.routeError;
-  if (!supportsSemanticTurnDetection.ok) return supportsSemanticTurnDetection.routeError;
+  const connection = setupVoiceConnection(raw, existing, preserveExisting, gateway);
+  const options = parsedVoiceSetupOptions(
+    raw,
+    existing,
+    existingCapability,
+    current,
+    preserveExisting,
+    gateway,
+    sharedGateway,
+  );
+  if (isRouteResult(options)) return options;
   const routeError = firstRouteResult([
     validateVoiceEndpointUpdate(raw, current, preserveExisting, correlationId),
     validateVoiceConnectionUpdate(raw, current, preserveExisting, correlationId),
@@ -2750,29 +4416,69 @@ function readSetupVoiceProviders(
   if (routeError !== undefined) {
     return routeError;
   }
-  const defaults = setupVoiceProviderDefaults(
-    connection as { readonly baseUrl: string; readonly apiKey: string },
-    apiKeyHeaderName.value,
-    timeoutMs.value,
-    providerLocality.value,
+  return assembleVoiceProvidersForSetup({
+    connection: connection as { readonly baseUrl: string; readonly apiKey: string },
+    options,
     existing,
-  );
-  const generatedProviders = providersForVoiceRoles(
-    roleIds as VoiceRoleModelIds,
-    defaults,
+    gateway,
+    sharedGateway,
+    roleIds: roleIds as VoiceRoleModelIds,
     raw,
-    supportsSemanticTurnDetection.value,
     existingVoiceProviders,
+    env,
+  });
+}
+
+interface VoiceProviderAssembly {
+  readonly connection: { readonly baseUrl: string; readonly apiKey: string };
+  readonly options: VoiceSetupOptions;
+  readonly existing: ModelProviderConfig | undefined;
+  readonly gateway: SetupGatewayCredentials;
+  readonly sharedGateway: boolean;
+  readonly roleIds: VoiceRoleModelIds;
+  readonly raw: Record<string, unknown>;
+  readonly existingVoiceProviders: readonly SetupVoiceProvider[];
+  readonly env: EnvSource;
+}
+
+function assembleVoiceProvidersForSetup(
+  input: VoiceProviderAssembly,
+): readonly SetupVoiceProvider[] | RouteResult {
+  const defaults = setupVoiceProviderDefaults(
+    input.connection,
+    input.options.apiKeyHeaderName,
+    input.options.timeoutMs,
+    input.options.providerLocality,
+    input.existing,
+    input.gateway,
+    input.sharedGateway,
   );
-  const providers = mergeUntouchedVoiceProviders(generatedProviders, existingVoiceProviders, raw);
-  return validatedVoiceProviders(providers, env);
+  const generated = providersForVoiceRoles(
+    input.roleIds,
+    defaults,
+    input.raw,
+    input.options,
+    input.existingVoiceProviders,
+  );
+  const providers = mergeUntouchedVoiceProviders(
+    generated,
+    input.existingVoiceProviders,
+    input.raw,
+  );
+  return validatedVoiceProviders(providers, input.env);
+}
+
+interface ResolvedSetupModelLists {
+  readonly deploymentNames: readonly string[];
+  readonly imageInputModelIds: readonly string[];
+  readonly workflowEligibleModelIds: readonly string[];
 }
 
 function resolveSetupModelLists(
   modelLists: SetupModelLists,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
-): SetupModelLists {
+): ResolvedSetupModelLists {
   const existing = preserveExisting ? current : undefined;
   return {
     deploymentNames:
@@ -2780,9 +4486,8 @@ function resolveSetupModelLists(
         ? existing.providers.map((item) => item.modelId)
         : modelLists.deploymentNames,
     imageInputModelIds:
-      existing !== undefined && modelLists.imageInputModelIds.length === 0
-        ? currentImageInputModelIds(existing)
-        : modelLists.imageInputModelIds,
+      modelLists.imageInputModelIds ??
+      (existing === undefined ? [] : currentImageInputModelIds(existing)),
     workflowEligibleModelIds: modelLists.workflowEligibleModelIds,
   };
 }
@@ -2819,17 +4524,40 @@ function validateVoiceModelIdSeparation(
   };
 }
 
+/**
+ * An image list needs the VERIFIED rebuild only when it claims a NEW image capability — those
+ * ids must pass the vision probe. Clearing or shrinking to already-verified ids is a metadata
+ * edit and patches the stored flags in place, exactly like workflow eligibility: routing it
+ * through the rebuild let a transient smoke failure of an unrelated model delete that provider
+ * during a flags-only edit (review findings on #3031/#3037).
+ */
+function imageListRequiresVerification(
+  raw: Record<string, unknown>,
+  modelLists: SetupModelLists,
+  current: GatewayConfig | undefined,
+): boolean {
+  if (!hasListField(raw, "imageInputModelIds")) return false;
+  const alreadyImageCapable = new Set(currentImageInputModelIds(current));
+  return (modelLists.imageInputModelIds ?? []).some((id) => !alreadyImageCapable.has(id));
+}
+
 function setupRequiresGatewayVerification(
   raw: Record<string, unknown>,
   preserveExisting: boolean,
+  modelLists: SetupModelLists,
+  current: GatewayConfig | undefined,
 ): boolean {
   return (
     !preserveExisting ||
     hasNonBlankStringField(raw, "baseUrl") ||
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
+    // The endpoint PROTOCOL only reaches the providers through the rebuild; without this the
+    // settings-only path accepted a protocol change and dropped it (review finding on #3046).
+    hasNonBlankStringField(raw, "endpointStyle") ||
+    hasNonBlankStringField(raw, "apiVersion") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
-    hasNonEmptyListField(raw, "imageInputModelIds")
+    imageListRequiresVerification(raw, modelLists, current)
   );
 }
 
@@ -2844,12 +4572,46 @@ interface SetupRequestAssembly {
   readonly correlationId: string | undefined;
   readonly credentials: SetupGatewayCredentials;
   readonly current: GatewayConfig | undefined;
+  /** The durable stored view for restore classification — see {@link durableStoredGatewayConfig}. */
+  readonly stored: GatewayConfig | undefined;
   readonly figmaAccessToken: string | undefined;
   readonly modelLists: SetupModelLists;
   readonly preserveExisting: boolean;
   readonly raw: Record<string, unknown>;
   readonly timeoutMs: number | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
+}
+
+// Verbatim restoration applies only to INHERITED deployments: an explicitly submitted
+// deployment list is authoritative, and restoring an omitted provider would make it
+// impossible to remove through the setup (review findings on #3031). Stored voice deployments
+// never belong in the chat probe either: a succeeding probe would persist a DUPLICATE provider
+// next to the restored voice entry.
+function storedRestoreListsForSetup(
+  input: SetupRequestAssembly,
+): Pick<
+  SetupRequest,
+  | "storedEmbeddingModelIds"
+  | "storedOcrModelIds"
+  | "storedDedicatedEmbeddingModelIds"
+  | "storedVoiceModelIds"
+> {
+  const inheritedDeployments =
+    input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames");
+  return {
+    // Stored embedding kinds follow the same inherited-only rule as every other stored list: an
+    // explicitly submitted deployment list is authoritative, and unioning the stored kinds over
+    // it would make it impossible for a corrected upload to turn a mis-kinded embedding back
+    // into a chat deployment (review finding on #3037). All four lists read the DURABLE stored
+    // view: the dedicated-embedding list compares connection identities, which a transient
+    // per-model env override must not skew (review finding on #3037).
+    storedEmbeddingModelIds: inheritedDeployments ? currentEmbeddingModelIds(input.stored) : [],
+    storedOcrModelIds: inheritedDeployments ? currentOcrModelIds(input.stored) : [],
+    storedDedicatedEmbeddingModelIds: inheritedDeployments
+      ? currentDedicatedEmbeddingModelIds(input.stored)
+      : [],
+    storedVoiceModelIds: inheritedDeployments ? currentVoiceModelIds(input.stored) : [],
+  };
 }
 
 function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | RouteResult {
@@ -2863,15 +4625,25 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
   const resolved = resolveSetupModelLists(input.modelLists, input.current, input.preserveExisting);
   return {
     correlationId: input.correlationId,
+    preserveExisting: input.preserveExisting,
     ...input.credentials,
     timeoutMs: input.timeoutMs,
     deploymentNames: resolved.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
+    imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
+    submittedEmbeddingModelIds: input.modelLists.embeddingModelIds ?? [],
+    stored: input.stored,
+    ...storedRestoreListsForSetup(input),
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
     figmaAccessToken: input.figmaAccessToken ?? input.current?.figma?.accessToken,
-    verifyGateway: setupRequiresGatewayVerification(input.raw, input.preserveExisting),
+    verifyGateway: setupRequiresGatewayVerification(
+      input.raw,
+      input.preserveExisting,
+      input.modelLists,
+      input.current,
+    ),
     verifyFigmaCredential: input.figmaAccessToken !== undefined,
   };
 }
@@ -2880,13 +4652,14 @@ function readSetupRequest(
   raw: unknown,
   env: EnvSource,
   current: GatewayConfig | undefined,
+  stored: GatewayConfig | undefined,
   correlationId: string | undefined,
 ): SetupRequest | RouteResult {
   if (!isRecord(raw)) {
     return setupObjectBodyRequiredResult(correlationId);
   }
   const preserveExisting = shouldPreserveExisting(raw, current);
-  const credentials = readSetupGatewayCredentials(raw, env, current, preserveExisting);
+  const credentials = readSetupGatewayCredentials(raw, env, current, stored, preserveExisting);
   if (isRouteResult(credentials)) {
     return credentials;
   }
@@ -2908,13 +4681,13 @@ function readSetupRequest(
     current,
     preserveExisting,
     correlationId,
+    credentials,
   );
-  if (isRouteResult(voiceProviders)) {
-    return voiceProviders;
-  }
+  if (isRouteResult(voiceProviders)) return voiceProviders;
   return assembleSetupRequest({
     raw,
     current,
+    stored,
     correlationId,
     preserveExisting,
     credentials,
@@ -2923,6 +4696,10 @@ function readSetupRequest(
     voiceProviders,
     figmaAccessToken: figmaAccessToken.value,
   });
+}
+
+function bodyFreeAuditStoreFailure(): string {
+  return "Gateway setup audit could not be persisted.";
 }
 
 function bodyFreeVerificationFailure(): string {
@@ -2936,12 +4713,16 @@ function reportSetupVerificationFailure(
   deps: UiHandlerDeps,
   error: unknown,
   correlationId: string | undefined,
-  source: "gateway.setup.figma-verify" | "gateway.setup.provider-verify",
+  source:
+    | "gateway.setup.figma-verify"
+    | "gateway.setup.provider-verify"
+    | "gateway.setup.tool-calling-probe"
+    | "gateway.setup.chat-smoke-probe",
 ): void {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: correlationId ?? "unknown",
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
       operation: "POST /api/gateway/setup",
       source,
       error,
@@ -2955,15 +4736,44 @@ interface VerifiedSetup {
   readonly config: GatewayConfig;
   readonly testedModelIds: readonly string[];
   readonly skippedModelIds: readonly string[];
+  /** Recognised models the gateway declared as a mode Keiko has no lane for. */
+  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
+  /** Explicitly asserted embedding models kept despite a failed setup probe — still configured. */
+  readonly unverifiedEmbeddingModelIds?: readonly string[];
+  /** Inferred embedding models removed because they could not answer an embedding request. */
+  readonly droppedEmbeddingModelIds?: readonly string[];
+  /** Chat deployments retained after a transient verification failure; tool calling remains false. */
+  readonly unverifiedChatModelIds?: readonly string[];
+  /** Chat candidates the gateway answered and rejected — not configured (#3591). */
+  readonly droppedChatModelIds?: readonly string[];
 }
 
 interface SetupVerificationInput {
+  readonly embeddingProbe: GatewayEmbeddingProbe;
+  readonly preserveExisting: boolean;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /** Generic endpoint protocol — see {@link SetupGatewayCredentials} (#3042). */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  /** True when the request stated the list explicitly — discovery must not re-add models then. */
+  readonly imageInputModelIdsProvided: boolean;
+  /** Stored embedding ids that override the name heuristic — see {@link SetupRequest}. */
+  readonly storedEmbeddingModelIds: readonly string[];
+  /** Client-asserted embedding ids — see {@link SetupRequest}. */
+  readonly submittedEmbeddingModelIds: readonly string[];
+  /** The durable stored view for restore classification — see {@link SetupRequest}. */
+  readonly stored: GatewayConfig | undefined;
+  /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
+  readonly storedOcrModelIds: readonly string[];
+  /** Dedicated-connection embedding ids restored verbatim — see {@link SetupRequest}. */
+  readonly storedDedicatedEmbeddingModelIds: readonly string[];
+  /** Stored voice ids excluded from the chat probe — see {@link SetupRequest}. */
+  readonly storedVoiceModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
@@ -2972,14 +4782,31 @@ interface SetupVerificationInput {
   readonly egress: GatewayEgressConfig | undefined;
   readonly figmaAccessToken: string | undefined;
   readonly current: GatewayConfig | undefined;
+  /** Operator diagnostic sink; used to surface discovery truncation (KEIKO-0325). */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // The request's own correlation id (ADR-0173 D5 g12), threaded through so a discovery-truncation
+  // or unusable-models diagnostic for THIS setup attempt joins the same trace as the gateway.chat
+  // probe lines `verifySetupCandidate` triggers, instead of minting a disconnected id. Falls back
+  // to a fresh mint only when the request genuinely carried none.
+  readonly correlationId: string | undefined;
 }
 
 interface SetupCandidateModels {
   readonly modelIds: readonly string[];
   readonly chatModelIds: readonly string[];
   readonly embeddingModelIds: readonly string[];
+  readonly voiceSpeechInputModelIds?: readonly string[];
+  readonly voiceSpeechOutputModelIds?: readonly string[];
+  readonly voiceRealtimeModelIds?: readonly string[];
+  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
   readonly imageInputModelIds: readonly string[];
   readonly modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
+  // KEIKO-0325: true when the raw discovery payload contained more distinct model ids
+  // than the caller (MAX_DISCOVERED_MODELS) admits, so the downstream setup pipeline can
+  // surface the truncation instead of silently proceeding with the first 100 models.
+  // Absent for legacy string-array discovery outputs and for payloads that fit within
+  // the cap; consumers should treat missing as `false`.
+  readonly truncated?: boolean;
 }
 
 function isGatewaySetupTestResult(
@@ -2992,8 +4819,8 @@ function normalizeSetupTestResult(
   result: readonly string[] | GatewaySetupTestResult,
 ): GatewaySetupTestResult {
   return isGatewaySetupTestResult(result)
-    ? result
-    : { testedModelIds: result, responseFormatModelIds: [] };
+    ? { ...result, toolCallingObservations: result.toolCallingObservations ?? [] }
+    : { testedModelIds: result, responseFormatModelIds: [], toolCallingObservations: [] };
 }
 
 function assertImageInputModelsWereTested(
@@ -3028,6 +4855,8 @@ function testedImageInputModelIds(
 function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig {
   const validationRawConfig = buildRawConfig(input.baseUrl, input.apiKey, ["setup-validation"], {
     apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
     imageInputModelIds: input.imageInputModelIds,
     timeoutMs: input.timeoutMs,
   });
@@ -3070,8 +4899,18 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
       modelIds: result.modelIds,
       chatModelIds: result.chatModelIds,
       embeddingModelIds: result.embeddingModelIds,
+      voiceSpeechInputModelIds: result.voiceSpeechInputModelIds ?? [],
+      voiceSpeechOutputModelIds: result.voiceSpeechOutputModelIds ?? [],
+      voiceRealtimeModelIds: result.voiceRealtimeModelIds ?? [],
       imageInputModelIds: result.imageInputModelIds ?? [],
       modelMetadata: result.modelMetadata ?? {},
+      // KEIKO-0325: propagate the discovery-truncation flag from parseModelDiscovery
+      // so downstream setup can surface "N of M models discovered" instead of the
+      // pre-fix silent drop past MAX_DISCOVERED_MODELS.
+      ...(result.truncated === true ? { truncated: true } : {}),
+      ...(result.unsupportedModels !== undefined
+        ? { unsupportedModels: result.unsupportedModels }
+        : {}),
     };
   }
   return normalizeLegacyDiscoveryResult(result);
@@ -3079,12 +4918,23 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
 
 function candidateModelsFromDeploymentNames(
   deploymentNames: readonly string[],
+  storedEmbeddingModelIds: readonly string[],
+  restoredVerbatimModelIds: readonly string[],
 ): SetupCandidateModels {
-  const embeddingModelIds = embeddingModelIdsFromDeployments(deploymentNames);
+  // Stored kinds win over the name heuristic: a preserve-mode rebuild must not chat-probe a
+  // verified embedding or OCR deployment out of the config (review findings on #3031). Stored
+  // OCR and dedicated-endpoint embedding providers leave the candidate set entirely — they are
+  // restored verbatim afterwards.
+  const restoredSet = new Set(restoredVerbatimModelIds);
+  const candidateNames = deploymentNames.filter((modelId) => !restoredSet.has(modelId));
+  const storedEmbeddingSet = new Set(storedEmbeddingModelIds);
+  const embeddingModelIds = candidateNames.filter(
+    (modelId) => storedEmbeddingSet.has(modelId) || isLikelyEmbeddingModelId(modelId),
+  );
   const embeddingSet = new Set(embeddingModelIds);
   return {
-    modelIds: deploymentNames,
-    chatModelIds: deploymentNames.filter((modelId) => !embeddingSet.has(modelId)),
+    modelIds: candidateNames,
+    chatModelIds: candidateNames.filter((modelId) => !embeddingSet.has(modelId)),
     embeddingModelIds,
     imageInputModelIds: [],
     modelMetadata: {},
@@ -3096,7 +4946,17 @@ async function candidateModelIdsForSetup(
   validationConfig: GatewayConfig,
 ): Promise<SetupCandidateModels> {
   if (input.deploymentNames.length > 0) {
-    return candidateModelsFromDeploymentNames(input.deploymentNames);
+    return candidateModelsFromDeploymentNames(
+      input.deploymentNames,
+      [...input.storedEmbeddingModelIds, ...input.submittedEmbeddingModelIds],
+      [
+        ...input.storedOcrModelIds,
+        ...input.storedDedicatedEmbeddingModelIds,
+        // Voice ids leave the candidate set too, but applyVoiceProviders restores them — they
+        // must not join the verbatim-restore list below.
+        ...input.storedVoiceModelIds,
+      ],
+    );
   }
   return normalizeDiscoveryResult(
     await input.discovery(
@@ -3115,31 +4975,254 @@ function finalRawConfigForSetup(
   imageInputModelIds: readonly string[],
   responseFormatModelIds: readonly string[],
   modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>,
+  discoveredVoiceModels: SetupCandidateModels,
 ): Record<string, unknown> {
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
+    preserveExisting: input.preserveExisting,
     apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
     imageInputModelIds,
     responseFormatModelIds,
     embeddingModelIds,
     modelMetadata,
     current: input.current,
+    stored: input.stored,
     workflowEligibleModelIds: input.workflowEligibleModelIds,
     timeoutMs: input.timeoutMs,
   });
   const rawConfigWithOptionalBlocks = {
     ...rawConfig,
+    // Every top-level block the rebuild does not itself produce survives from the current
+    // configuration — a reranker or egress topology must not vanish because an unrelated
+    // capability was updated (review finding on #3031).
     ...(input.current?.grounding === undefined ? {} : { grounding: input.current.grounding }),
+    ...(input.current?.reranker === undefined ? {} : { reranker: input.current.reranker }),
+    ...(input.current?.egress === undefined ? {} : { egress: input.current.egress }),
     ...(input.figmaAccessToken === undefined
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
   };
-  return applyVoiceProviders(
-    rawConfigWithOptionalBlocks,
+  // Verbatim restoration reads the DURABLE stored view: restored values are what the FILE
+  // holds, so a transient per-model env override neither hides a sharing relationship nor gets
+  // baked into the rebuilt persisted config (review finding on #3037).
+  const voiceProviders = discoveredVoiceProvidersForSetup(input, discoveredVoiceModels);
+  return applyStoredDedicatedProviders(
+    applyVoiceProviders(rawConfigWithOptionalBlocks, voiceProviders),
+    input.stored,
+    [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
+    {
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+      apiKeyHeaderName: input.apiKeyHeaderName,
+      endpointStyle: input.endpointStyle,
+      apiVersion: input.apiVersion,
+    },
+  );
+}
+
+function discoveredVoiceProvidersForSetup(
+  input: SetupVerificationInput,
+  discovered: SetupCandidateModels,
+): readonly SetupVoiceProvider[] {
+  const configured =
     input.voiceProviders.length > 0
       ? input.voiceProviders
-      : setupVoiceProvidersFromCurrent(input.current),
+      : setupVoiceProvidersFromCurrent(input.stored);
+  const voiceProviders = configured.map((provider) => rebaseSharedVoiceProvider(provider, input));
+  const presentIds = new Set(configured.map((provider) => provider.modelId));
+  const roles: readonly (readonly [VoiceDeploymentRole, readonly string[]])[] = [
+    ["speechInput", discovered.voiceSpeechInputModelIds ?? []],
+    ["speechOutput", discovered.voiceSpeechOutputModelIds ?? []],
+    ["realtime", discovered.voiceRealtimeModelIds ?? []],
+  ];
+  for (const [role, modelIds] of roles) {
+    for (const modelId of modelIds) {
+      if (presentIds.has(modelId)) continue;
+      presentIds.add(modelId);
+      voiceProviders.push(discoveredVoiceProvider(input, modelId, role));
+    }
+  }
+  return voiceProviders;
+}
+
+function rebaseSharedVoiceProvider(
+  provider: SetupVoiceProvider,
+  gateway: SetupVerificationInput,
+): SetupVoiceProvider {
+  const storedPrimary = storedPrimaryGatewayProvider(gateway.stored);
+  if (!sharesStoredGatewayConnection(provider, storedPrimary)) return provider;
+  const followsProtocol = spokeStoredGatewayProtocol(provider, storedPrimary);
+  const endpointStyle = PROVIDER_ENDPOINT_STYLES.find((style) => style === gateway.endpointStyle);
+  return {
+    ...provider,
+    baseUrl: gateway.baseUrl,
+    apiKey: gateway.apiKey,
+    apiKeyHeaderName: gateway.apiKeyHeaderName,
+    endpointStyle: followsProtocol ? endpointStyle : provider.endpointStyle,
+    apiVersion: followsProtocol ? gateway.apiVersion : provider.apiVersion,
+  };
+}
+
+function discoveredVoiceProvider(
+  input: SetupVerificationInput,
+  modelId: string,
+  role: VoiceDeploymentRole,
+): SetupVoiceProvider {
+  const endpointStyle = PROVIDER_ENDPOINT_STYLES.find((style) => style === input.endpointStyle);
+  return {
+    modelId,
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    timeoutMs: input.timeoutMs,
+    maxRetries: 1,
+    retryBaseDelayMs: 500,
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(input.apiVersion === undefined ? {} : { apiVersion: input.apiVersion }),
+    // LiteLLM describes the role but not its upstream residency. A gateway-managed locality
+    // states that limitation honestly instead of guessing from the gateway URL.
+    providerLocality: "gateway-managed",
+    capabilities: voiceRoleCapability(role),
+  };
+}
+
+// The gateway connection a restored provider may follow: endpoint, credential, header AND the
+// protocol spoken over it.
+interface SetupGatewayConnection {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
+  // The raw submitted value: this record is fed to the config parser, which is what validates
+  // the protocol — the same path genericEndpointProtocolRaw already takes.
+  readonly endpointStyle?: string | undefined;
+  readonly apiVersion?: string | undefined;
+}
+
+// A provider that SHARED the stored gateway connection (same endpoint AND same credential)
+// follows a credential rotation — the old token dies with the rotation, and the token must keep
+// travelling in the header the rebuilt gateway providers now use, or the restored provider would
+// send the fresh credential through the obsolete header (review finding on #3037). A provider
+// with its own credential or endpoint keeps both: the freshly verified gateway connection details
+// must never travel to a connection they were not tested against (review findings on #3031, same
+// rule as the endpoint-change token guard).
+function sharesStoredGatewayConnection(
+  provider: Pick<ModelProviderConfig, "baseUrl" | "apiKey" | "apiKeyHeaderName">,
+  storedPrimary: ModelProviderConfig | undefined,
+): boolean {
+  return (
+    storedPrimary !== undefined &&
+    sameBaseUrlIdentity(provider.baseUrl, storedPrimary.baseUrl) &&
+    provider.apiKey === storedPrimary.apiKey &&
+    (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) ===
+      (storedPrimary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME)
   );
+}
+
+// Only a provider that SPOKE the gateway's protocol follows it to a new one. One that
+// deliberately used a different valid protocol over the same connection keeps its own: the new
+// request shape was never verified for it (review finding on #3046).
+function spokeStoredGatewayProtocol(
+  provider: Pick<ModelProviderConfig, "endpointStyle" | "apiVersion">,
+  storedPrimary: ModelProviderConfig | undefined,
+): boolean {
+  return (
+    storedPrimary !== undefined &&
+    provider.endpointStyle === storedPrimary.endpointStyle &&
+    provider.apiVersion === storedPrimary.apiVersion
+  );
+}
+
+// The endpoint PROTOCOL is part of the connection, not a private property of the provider: a
+// restored provider that follows the gateway's URL, token and header must speak the same way, or
+// one shared connection ends up carrying two protocols and the restored provider keeps requesting
+// the obsolete route (review finding on #3046).
+function restoredProviderProtocolRaw(
+  provider: ModelProviderConfig,
+  gateway: SetupGatewayConnection,
+  storedPrimary: ModelProviderConfig | undefined,
+  sharedGatewayConnection: boolean,
+): Record<string, unknown> {
+  const follows = sharedGatewayConnection && spokeStoredGatewayProtocol(provider, storedPrimary);
+  const endpointStyle = follows ? gateway.endpointStyle : provider.endpointStyle;
+  const apiVersion = follows ? gateway.apiVersion : provider.apiVersion;
+  return {
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(apiVersion === undefined ? {} : { apiVersion }),
+  };
+}
+
+function storedDedicatedProviderRaw(
+  provider: ModelProviderConfig,
+  capability: ModelCapability,
+  gateway: SetupGatewayConnection,
+  storedPrimary: ModelProviderConfig | undefined,
+): Record<string, unknown> {
+  // Sharing is judged against the STORED primary connection — a provider that rode the old
+  // gateway follows it wherever the setup moves it (URL, credential, AND header), because the
+  // old connection dies with the update; a provider with its own connection keeps every field
+  // (review findings on #3031/#3037 — the newly verified details never travel to a connection
+  // they were not tested against).
+  const sharedGatewayConnection = sharesStoredGatewayConnection(provider, storedPrimary);
+  const apiKeyHeaderName = sharedGatewayConnection
+    ? gateway.apiKeyHeaderName
+    : provider.apiKeyHeaderName;
+  return {
+    modelId: provider.modelId,
+    baseUrl: sharedGatewayConnection ? gateway.baseUrl : provider.baseUrl,
+    apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
+    ...(apiKeyHeaderName === undefined ? {} : { apiKeyHeaderName }),
+    ...restoredProviderProtocolRaw(provider, gateway, storedPrimary, sharedGatewayConnection),
+    ...(provider.outputTokenParameter === undefined
+      ? {}
+      : { outputTokenParameter: provider.outputTokenParameter }),
+    timeoutMs: provider.timeoutMs,
+    maxRetries: provider.maxRetries,
+    retryBaseDelayMs: provider.retryBaseDelayMs,
+    // KEIKO-0167 (PR-review follow-up): the per-provider circuit-breaker override must
+    // survive a dedicated-provider restore too, or an unrelated setup save (voice/ocr
+    // deployment change) silently drops it and the runtime falls back to top-level policy.
+    ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
+    capability,
+  };
+}
+
+/**
+ * A verified rebuild only re-derives chat and embedding providers onto the setup-wide
+ * connection; stored `ocr-vision` providers (no probe, no setup field) and embedding providers
+ * on a DIFFERENT endpoint would silently vanish or migrate. Exactly like voice, they are
+ * restored verbatim from the current configuration (review findings on #3031).
+ */
+function applyStoredDedicatedProviders(
+  rawConfig: Record<string, unknown>,
+  current: GatewayConfig | undefined,
+  restoredModelIds: readonly string[],
+  gateway: SetupGatewayConnection,
+): Record<string, unknown> {
+  if (restoredModelIds.length === 0 || current === undefined) return rawConfig;
+  const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
+  const presentIds = new Set(
+    providers.flatMap((provider) =>
+      isRecord(provider) && typeof provider.modelId === "string" ? [provider.modelId] : [],
+    ),
+  );
+  const restored = restoredModelIds.flatMap((modelId) => {
+    if (presentIds.has(modelId)) return [];
+    const provider = current.providers.find((item) => item.modelId === modelId);
+    const capability = current.capabilities?.find((item) => item.id === modelId);
+    if (provider === undefined || capability === undefined) return [];
+    return [
+      storedDedicatedProviderRaw(
+        provider,
+        capability,
+        gateway,
+        storedPrimaryGatewayProvider(current),
+      ),
+    ];
+  });
+  if (restored.length === 0) return rawConfig;
+  return { ...rawConfig, providers: [...providers, ...restored] };
 }
 
 function skippedModelIdsForSetup(
@@ -3155,81 +5238,624 @@ function finalRawConfigForTestedSetup(
   input: SetupVerificationInput,
   testResult: GatewaySetupTestResult,
   candidateModels: SetupCandidateModels,
+  configuredChatModelIds = testResult.testedModelIds,
 ): Record<string, unknown> {
   const imageInputModelIds = testedImageInputModelIds(
     input.imageInputModelIds,
-    candidateModels.imageInputModelIds,
-    testResult.testedModelIds,
+    // An explicitly provided list is authoritative: discovery and current-config candidates must
+    // not re-add models the request just removed (review finding on #3031).
+    input.imageInputModelIdsProvided ? [] : candidateModels.imageInputModelIds,
+    configuredChatModelIds,
   );
   return finalRawConfigForSetup(
     input,
-    testResult.testedModelIds,
+    configuredChatModelIds,
     candidateModels.embeddingModelIds,
     imageInputModelIds,
     testResult.responseFormatModelIds,
     candidateModels.modelMetadata,
+    candidateModels,
   );
+}
+
+interface ChatAdmission {
+  readonly testResult: GatewaySetupTestResult;
+  readonly configuredModelIds: readonly string[];
+  readonly unverifiedModelIds: readonly string[];
+  /** The unverified candidates the smoke round's deadline never tried (PR #3602 review). */
+  readonly skippedModelIds: readonly string[];
+  /** Candidates the gateway answered and rejected — not configured (#3591). */
+  readonly droppedModelIds: readonly string[];
+}
+
+function temporaryChatAdmission(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  candidateConfig: GatewayConfig,
+): ChatAdmission {
+  const checkedAt = new Date().toISOString();
+  // The persisted "unverified" proof is a tool-calling conclusion like any probe result, so it
+  // leaves the same activity-log line the probe path writes.
+  for (const modelId of candidateModels.chatModelIds) {
+    logToolCallingVerification(
+      candidateConfig,
+      modelId,
+      "unverified",
+      input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+  }
+  return {
+    testResult: {
+      testedModelIds: [],
+      responseFormatModelIds: [],
+      toolCallingObservations: candidateModels.chatModelIds.map((modelId) => ({
+        modelId,
+        status: "unverified",
+        checkedAt,
+      })),
+    },
+    configuredModelIds: candidateModels.chatModelIds,
+    unverifiedModelIds: candidateModels.chatModelIds,
+    skippedModelIds: [],
+    droppedModelIds: [],
+  };
+}
+
+function temporaryGatewaySetupFailure(error: unknown): boolean {
+  const code = setupErrorCode(error);
+  return (
+    code === ERROR_CODES.RATE_LIMIT || (code !== undefined && TEMPORARY_SETUP_ERROR_CODES.has(code))
+  );
+}
+
+function definitiveGatewaySetupFailure(error: unknown): boolean {
+  const status = setupHttpStatus(error);
+  return status === 401 || status === 403;
+}
+
+async function admitChatCandidates(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  candidateConfig: GatewayConfig,
+): Promise<ChatAdmission> {
+  const testResult = normalizeSetupTestResult(
+    await input.tester(candidateConfig, candidateModels.chatModelIds),
+  );
+  const unverifiedModelIds = testResult.unverifiedModelIds ?? [];
+  return {
+    testResult,
+    // A candidate kept unverified (timeout/transport) is still CONFIGURED, exactly like an
+    // asserted embedding model that failed its probe (#3591).
+    configuredModelIds: [...testResult.testedModelIds, ...unverifiedModelIds],
+    unverifiedModelIds,
+    skippedModelIds: testResult.skippedModelIds ?? [],
+    droppedModelIds: testResult.droppedModelIds ?? [],
+  };
+}
+
+function toolCallingObservationMap(
+  observations: readonly GatewaySetupToolCallingObservation[],
+): ReadonlyMap<string, GatewaySetupToolCallingObservation> {
+  return new Map(observations.map((observation) => [observation.modelId, observation]));
+}
+
+function withToolCallingProbeProvenance(
+  rawConfig: Record<string, unknown>,
+  config: GatewayConfig,
+  observations: readonly GatewaySetupToolCallingObservation[],
+): Record<string, unknown> {
+  if (observations.length === 0 || !Array.isArray(rawConfig.providers)) return rawConfig;
+  const byModelId = toolCallingObservationMap(observations);
+  const rawProviders: readonly unknown[] = rawConfig.providers;
+  const providers = rawProviders.map((rawProvider: unknown) => {
+    if (!isRecord(rawProvider) || typeof rawProvider.modelId !== "string") return rawProvider;
+    const observation = byModelId.get(rawProvider.modelId);
+    const provider = config.providers.find(
+      (candidate) => candidate.modelId === rawProvider.modelId,
+    );
+    if (observation === undefined || provider === undefined || !isRecord(rawProvider.capability)) {
+      return rawProvider;
+    }
+    const capability = rawProvider.capability;
+    if (capability.kind !== "chat") return rawProvider;
+    return {
+      ...rawProvider,
+      capability: {
+        ...capability,
+        toolCalling: observation.status === "verified",
+        toolCallingVerification: {
+          status: observation.status,
+          checkedAt: observation.checkedAt,
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+      },
+    };
+  });
+  return { ...rawConfig, providers };
+}
+
+interface ParsedSetupConfig {
+  readonly rawConfig: Record<string, unknown>;
+  readonly config: GatewayConfig;
+}
+
+function parsedSetupConfigWithToolCallingProvenance(
+  input: SetupVerificationInput,
+  rawConfig: Record<string, unknown>,
+  candidateConfig: GatewayConfig,
+  observations: readonly GatewaySetupToolCallingObservation[],
+): ParsedSetupConfig {
+  const rawConfigWithProvenance = withToolCallingProbeProvenance(
+    rawConfig,
+    candidateConfig,
+    observations,
+  );
+  return {
+    rawConfig: rawConfigWithProvenance,
+    config: parseGatewayConfig(
+      withInheritedEgress(rawConfigWithProvenance, input.egress),
+      input.env,
+      linkLocalGatewayOverrideOptions(input.env),
+    ),
+  };
+}
+
+// One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
+// content-filter — does not permanently exclude an otherwise-working model from the setup and
+// brand it to the user as incompatible. Still bounded so setup latency stays predictable. The
+// probe carries the submitted endpoint protocol so an Azure deployment path (or an explicit
+// openai-compatible declaration under an env default) is exercised exactly as it will persist.
+function candidateProbeOptions(
+  input: SetupVerificationInput,
+  smokeTimeoutMs: number,
+): ProviderRawOptions {
+  return {
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
+    timeoutMs: smokeTimeoutMs,
+    maxRetries: 1,
+    imageInputModelIds: input.imageInputModelIds,
+  };
+}
+
+// KEIKO-0325: discovery silently dropped everything past MAX_DISCOVERED_MODELS. The parser now
+// raises `truncated`; this is the consumer that makes it operator-visible. Body-free by
+// construction — a count and a code, never a model id or an endpoint.
+function reportDiscoveryTruncation(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  candidateModels: SetupCandidateModels,
+): void {
+  if (candidateModels.truncated !== true) return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.discovery",
+    errorClass: "GatewayDiscoveryTruncated",
+    message:
+      "Model discovery exceeded the discovery cap; setup continued with the retained models.",
+    code: "GATEWAY_DISCOVERY_TRUNCATED",
+    retainedModelCount: candidateModels.modelIds.length,
+  });
+}
+
+interface EmbeddingAdmission {
+  readonly admitted: readonly string[];
+  /** Failed the probe but stays configured, because its role was explicitly asserted. */
+  readonly retainedUnverified: readonly string[];
+  /** Failed the probe and is NOT configured — Keiko had only inferred the role. */
+  readonly droppedUnverified: readonly string[];
+}
+
+function probeConfigForModels(
+  input: SetupVerificationInput,
+  modelIds: readonly string[],
+  smokeTimeoutMs: number,
+): GatewayConfig {
+  return parseGatewayConfig(
+    withInheritedEgress(
+      buildRawConfig(
+        input.baseUrl,
+        input.apiKey,
+        modelIds,
+        candidateProbeOptions(input, smokeTimeoutMs),
+      ),
+      input.egress,
+    ),
+    input.env,
+    linkLocalGatewayOverrideOptions(input.env),
+  );
+}
+
+// The candidate config carries only the chat models, so the probe needs its own provider view over
+// the embedding candidates — same endpoint, credential, protocol and timeout.
+function embeddingProbeConfigFor(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  smokeTimeoutMs: number,
+  fallback: GatewayConfig,
+): GatewayConfig {
+  if (candidateModels.embeddingModelIds.length === 0) return fallback;
+  return probeConfigForModels(input, candidateModels.embeddingModelIds, smokeTimeoutMs);
+}
+
+// Probe-gated embedding admission. A NEW candidate must answer a real embedding request before it
+// is persisted as this gateway's embedding model. A STORED one that fails is RETAINED and reported
+// unverified: a transient endpoint outage during a re-save must never unpin the embedding model of
+// every working Knowledge Pod (that would be a worse failure than the one this closes).
+async function admitEmbeddingCandidates(
+  input: SetupVerificationInput,
+  probeConfig: GatewayConfig,
+  candidates: readonly string[],
+): Promise<EmbeddingAdmission> {
+  if (candidates.length === 0) {
+    return { admitted: candidates, retainedUnverified: [], droppedUnverified: [] };
+  }
+  // Probe-gating applies to every model whose ROLE Keiko inferred. Only an explicit ROLE assertion
+  // is exempt: a stored embedding capability, or an embedding id the client asserted. Deployment
+  // NAMES are deliberately NOT exempt — naming a deployment states its identity, not its role; the
+  // role there still comes from Keiko's own id heuristic, which is exactly what the probe corrects.
+  const asserted = new Set([...input.storedEmbeddingModelIds, ...input.submittedEmbeddingModelIds]);
+  const answered = new Set(await input.embeddingProbe(probeConfig, candidates));
+  const admitted = candidates.filter((id) => answered.has(id) || asserted.has(id));
+  // Split the failures: an asserted model stays configured and is flagged; an inferred one is gone.
+  const failed = candidates.filter((id) => !answered.has(id));
+  return {
+    admitted,
+    retainedUnverified: failed.filter((id) => asserted.has(id)),
+    droppedUnverified: failed.filter((id) => !asserted.has(id)),
+  };
+}
+
+// Body-free counterpart to reportDiscoveryTruncation: counts and reason codes only, never a model
+// id or an endpoint. Ids belong in the setup RESPONSE, which the operator sees; the diagnostic
+// channel stays free of gateway inventory.
+function reportUnusableDiscoveredModels(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  unsupported: readonly GatewayUnsupportedDiscoveredModel[],
+  admission: EmbeddingAdmission,
+): void {
+  const retained = admission.retainedUnverified.length;
+  const dropped = admission.droppedUnverified.length;
+  if (unsupported.length === 0 && retained === 0 && dropped === 0) return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.discovery",
+    errorClass: "GatewayDiscoveryUnusableModels",
+    message:
+      "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
+    code: "GATEWAY_DISCOVERY_UNUSABLE_MODELS",
+    unsupportedModelCount: unsupported.length,
+    unsupportedReasons: [...new Set(unsupported.map((entry) => entry.reason))].sort((a, b) =>
+      a.localeCompare(b),
+    ),
+    unverifiedEmbeddingModelCount: retained,
+    droppedEmbeddingModelCount: dropped,
+  });
+}
+
+// Chat counterpart of `reportUnusableDiscoveredModels`, emitted separately because the chat smoke
+// test itself decides whether setup fails closed (an all-rejected gateway throws before this point
+// is ever reached) — see `verifySetupCandidate`. Body-free: counts only, never a model id (#3591).
+function reportChatSmokeAdmission(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  chatAdmission: ChatAdmission,
+): void {
+  const unverified = chatAdmission.unverifiedModelIds.length;
+  const dropped = chatAdmission.droppedModelIds.length;
+  if (unverified === 0 && dropped === 0) return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.discovery",
+    errorClass: "GatewayDiscoveryUnusableModels",
+    message:
+      "Setup kept chat candidates the smoke test never got an answer from and dropped candidates the gateway answered and rejected.",
+    code: "GATEWAY_DISCOVERY_UNUSABLE_MODELS",
+    unverifiedChatModelCount: unverified,
+    droppedChatModelCount: dropped,
+    // How many of the unverified candidates the round's deadline never tried, and the deadline
+    // that applied, so a skipped model is not mistaken for one that timed out (PR #3602 review).
+    skippedChatModelCount: chatAdmission.skippedModelIds.length,
+    chatSmokeRoundDeadlineMs: CHAT_SMOKE_ROUND_DEADLINE_MS,
+  });
+}
+
+// KEIKO-0884 (#3333): every non-public egress target class (private, link-local, metadata)
+// requires an explicit env opt-in to be accepted by Gateway Setup; loopback is the only class
+// silently accepted with no configuration signal, no log line, and no opt-in trail — a deliberate
+// product choice (local sidecar providers, Ollama-style, #2387 research egress), not a defect. The
+// gap is purely observability: an operator investigating an unexpected Gateway Setup acceptance had
+// no record that a loopback target was the one silently let through. Body-free by construction, the
+// same pattern as `reportDiscoveryTruncation` above — a fixed code, never the raw baseUrl/host/port.
+function reportLoopbackTargetAccepted(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  baseUrl: string,
+): void {
+  if (gatewaySetupTargetClass(baseUrl) !== "loopback") return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.candidate",
+    errorClass: "GatewaySetupLoopbackTargetAccepted",
+    message: "Gateway Setup accepted a loopback candidate target.",
+    code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+  });
+}
+
+// Isolates the chat-smoke-test call from verifySetupCandidate: on a temporary gateway failure,
+// the caller must defer to a retry rather than fail the setup outright, replaying the exact
+// verified-setup construction it would have used had the smoke test itself succeeded.
+async function admitChatCandidatesOrDefer(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  admittedModels: SetupCandidateModels,
+  candidateConfig: ReturnType<typeof probeConfigForModels>,
+  embeddingAdmission: EmbeddingAdmission,
+): Promise<ChatAdmission> {
+  try {
+    return await admitChatCandidates(input, candidateModels, candidateConfig);
+  } catch (error) {
+    if (!temporaryGatewaySetupFailure(error)) throw error;
+    throw new DeferredTemporaryChatAdmission(error, () =>
+      verifiedSetupFromChatAdmission(
+        input,
+        candidateModels,
+        admittedModels,
+        candidateConfig,
+        embeddingAdmission,
+        temporaryChatAdmission(input, candidateModels, candidateConfig),
+      ),
+    );
+  }
 }
 
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate", input.egress);
+  reportLoopbackTargetAccepted(input.diagnostics, input.correlationId, input.baseUrl);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
+  reportDiscoveryTruncation(input.diagnostics, input.correlationId, candidateModels);
   const smokeTimeoutMs =
     input.deploymentNames.length > 0
       ? DEPLOYMENT_SMOKE_TIMEOUT_MS
       : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
-  const candidateRawConfig = buildRawConfig(
-    input.baseUrl,
-    input.apiKey,
-    candidateModels.chatModelIds,
-    {
-      apiKeyHeaderName: input.apiKeyHeaderName,
-      timeoutMs: smokeTimeoutMs,
-      // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
-      // content-filter — does not permanently exclude an otherwise-working model from the setup and
-      // brand it to the user as incompatible. Still bounded so setup latency stays predictable.
-      maxRetries: 1,
-      imageInputModelIds: input.imageInputModelIds,
-    },
+  const candidateConfig = probeConfigForModels(input, candidateModels.chatModelIds, smokeTimeoutMs);
+  const embeddingAdmission = await admitEmbeddingCandidates(
+    input,
+    embeddingProbeConfigFor(input, candidateModels, smokeTimeoutMs, candidateConfig),
+    candidateModels.embeddingModelIds,
   );
-  const candidateConfig = parseGatewayConfig(
-    withInheritedEgress(candidateRawConfig, input.egress),
-    input.env,
-    linkLocalGatewayOverrideOptions(input.env),
+  const admittedModels: SetupCandidateModels = {
+    ...candidateModels,
+    embeddingModelIds: embeddingAdmission.admitted,
+  };
+  // Emitted BEFORE the chat smoke test: the tester throws on an all-rejected gateway, and the
+  // record of what discovery refused is most valuable for exactly that failed attempt.
+  reportUnusableDiscoveredModels(
+    input.diagnostics,
+    input.correlationId,
+    candidateModels.unsupportedModels ?? [],
+    embeddingAdmission,
   );
-  const testResult = normalizeSetupTestResult(
-    await input.tester(candidateConfig, candidateModels.chatModelIds),
+  const chatAdmission = await admitChatCandidatesOrDefer(
+    input,
+    candidateModels,
+    admittedModels,
+    candidateConfig,
+    embeddingAdmission,
   );
-  assertImageInputModelsWereTested(input.imageInputModelIds, testResult.testedModelIds);
+  reportChatSmokeAdmission(input.diagnostics, input.correlationId, chatAdmission);
+  return verifiedSetupFromChatAdmission(
+    input,
+    candidateModels,
+    admittedModels,
+    candidateConfig,
+    embeddingAdmission,
+    chatAdmission,
+  );
+}
+
+function verifiedSetupFromChatAdmission(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  admittedModels: SetupCandidateModels,
+  candidateConfig: GatewayConfig,
+  embeddingAdmission: EmbeddingAdmission,
+  chatAdmission: ChatAdmission,
+): VerifiedSetup {
+  const { testResult } = chatAdmission;
+  assertImageInputModelsWereTested(input.imageInputModelIds, chatAdmission.configuredModelIds);
   const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
     testResult,
+    admittedModels,
+    chatAdmission.configuredModelIds,
+  );
+  const parsedConfig = parsedSetupConfigWithToolCallingProvenance(
+    input,
+    rawConfigWithOptionalBlocks,
+    candidateConfig,
+    testResult.toolCallingObservations ?? [],
+  );
+  return verifiedSetupResult(
+    parsedConfig.rawConfig,
+    parsedConfig.config,
+    testResult,
     candidateModels,
+    embeddingAdmission,
+    chatAdmission,
   );
-  const config = parseGatewayConfig(
-    withInheritedEgress(rawConfigWithOptionalBlocks, input.egress),
-    input.env,
-    linkLocalGatewayOverrideOptions(input.env),
-  );
+}
+
+function verifiedSetupResult(
+  rawConfig: Record<string, unknown>,
+  config: GatewayConfig,
+  testResult: GatewaySetupTestResult,
+  candidateModels: SetupCandidateModels,
+  embeddingAdmission: EmbeddingAdmission,
+  chatAdmission: ChatAdmission,
+): VerifiedSetup {
   return {
-    rawConfig: rawConfigWithOptionalBlocks,
+    rawConfig,
     config,
     testedModelIds: testResult.testedModelIds,
     skippedModelIds: skippedModelIdsForSetup(
       candidateModels.modelIds,
-      testResult.testedModelIds,
-      candidateModels.embeddingModelIds,
+      chatAdmission.configuredModelIds,
+      embeddingAdmission.admitted,
     ),
+    ...(candidateModels.unsupportedModels !== undefined
+      ? { unsupportedModels: candidateModels.unsupportedModels }
+      : {}),
+    ...(embeddingAdmission.retainedUnverified.length > 0
+      ? { unverifiedEmbeddingModelIds: embeddingAdmission.retainedUnverified }
+      : {}),
+    ...(embeddingAdmission.droppedUnverified.length > 0
+      ? { droppedEmbeddingModelIds: embeddingAdmission.droppedUnverified }
+      : {}),
+    ...(chatAdmission.unverifiedModelIds.length > 0
+      ? { unverifiedChatModelIds: chatAdmission.unverifiedModelIds }
+      : {}),
+    ...(chatAdmission.droppedModelIds.length > 0
+      ? { droppedChatModelIds: chatAdmission.droppedModelIds }
+      : {}),
   };
+}
+
+// KEIKO-0497 (#2901): configuring the gateway points the product at an outbound endpoint and can
+// enable the private-network override, and until now that act left no evidence — the route returned
+// 200 and wrote nothing an operator could audit afterwards. Both success paths now emit exactly one
+// content-free record.
+//
+// The base URL is deliberately NOT recorded, only its host classification: the evidence must answer
+// "did setup ever target a metadata or private-network address, and was the override on?" without
+// itself becoming a store of endpoints. `classifyOutboundHost` returns nothing for a name that is
+// not a literal IP, which is the ordinary public case, so an unclassified host records as `public`
+// rather than dropping the record — a successful setup must never be missing from the trail.
+export function gatewaySetupTargetClass(baseUrl: string): GatewaySetupTargetClass {
+  let hostname: string;
+  try {
+    hostname = new URL(baseUrl).hostname;
+  } catch {
+    // An unparseable base URL cannot reach a real host, but the setup still completed; record it
+    // under the safest classification rather than losing the event.
+    return "public";
+  }
+  // Strip a trailing FQDN dot: "localhost." resolves to loopback but classifyOutboundHost's
+  // literal-string equality otherwise misses it, and the same applies to a dotted IPv4 literal
+  // like "127.0.0.1." (Codex #3201). The trailing dot is a DNS root marker, not part of the
+  // resolvable host identity.
+  const normalized = hostname.endsWith(".") ? hostname.slice(0, -1) : hostname;
+  // Non-literal names ("internal.example", "example.com") still record as `public`: this
+  // classifier deliberately does NOT DNS-resolve the host — that would add a synchronous DNS
+  // round-trip to the success path and duplicate the check gatewayFetch already runs against
+  // the resolved address inside its egress policy. The record's `targetClass` documents the
+  // classification of the submitted URL as a literal address; a hostname-only entry records
+  // "was not a literal private/loopback/metadata address at submission time", not
+  // "attests to a public destination". Operators reading a name-based `public` should
+  // cross-reference the egress-policy diagnostics for the resolved-address vetting.
+  return classifyOutboundHost(normalized) ?? "public";
+}
+
+function recordGatewaySetupAudit(
+  deps: UiHandlerDeps,
+  request: SetupRequest,
+  config: GatewayConfig,
+  outcome: GatewaySetupOutcomeKind,
+): void {
+  const record: GatewaySetupAuditRecord = {
+    schemaVersion: GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+    outcome,
+    timestamp: new Date().toISOString(),
+    // The sanctioned fallback, not a fresh mint (AGENTS.md §8). `record.correlationId` is reused
+    // by both diagnostics below, so a minted UUID here would key the persisted audit evidence and
+    // its failure diagnostics to a different identity than the loopback/discovery diagnostics this
+    // same request emits under UNKNOWN_CORRELATION_ID — one request, two correlation identities,
+    // unjoinable in a support bundle. (The randomUUID below is an evidence-store KEY, not a
+    // correlation id, and is correct.)
+    correlationId: request.correlationId ?? UNKNOWN_CORRELATION_ID,
+    targetClass: gatewaySetupTargetClass(request.baseUrl),
+    // Any active outbound-egress override counts, not just the private-network one: a
+    // link-local/metadata override under KEIKO_ALLOW_LINK_LOCAL_GATEWAY is exactly the more
+    // sensitive case an operator needs to see (KEIKO-0497 review, Codex).
+    privateNetworkOverrideActive:
+      config.egress?.allowPrivateNetwork === true ||
+      config.egress?.allowLinkLocalAndMetadata === true,
+    providerCount: config.providers.length,
+  };
+  const validation = validateGatewaySetupAuditRecord(record);
+  if (!validation.ok) {
+    // Never a silent drop: a record this side built and cannot validate is a defect in this code,
+    // and swallowing it would leave the same evidence gap the record exists to close. The reason is
+    // a fixed validator string naming a field — it carries no value from the record. Issue #3245:
+    // `message` is now the closed-vocabulary condition label; `validation.reason` (still bounded —
+    // one of the validator's own fixed field-naming strings, never record content) moves to `code`,
+    // which already carries exactly this "stable machine-readable code" shape elsewhere in this
+    // file, so the generic `GATEWAY_SETUP_AUDIT_INVALID` marker (redundant with `errorClass`) is
+    // replaced by the more specific reason rather than lost.
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: record.correlationId,
+      timestamp: record.timestamp,
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.audit",
+      errorClass: "GatewaySetupAuditInvalid",
+      message: "gateway-setup-audit-validation-failed",
+      code: validation.reason,
+    });
+    return;
+  }
+  // KEIKO-0497 review (Codex): the setup response has already been decided by the time this
+  // runs — the gateway is persisted and activated. A failing evidenceStore.put must NOT escape
+  // to the outer catch, or verifyAndSaveGatewaySetup would treat a full/read-only evidence
+  // directory as a provider failure and hand the caller a 502 for a gateway that is already
+  // live. Absorbed and surfaced as its own diagnostic (never body-free-swallowed).
+  try {
+    deps.evidenceStore.put(`gateway-setup-${randomUUID()}`, JSON.stringify(record));
+  } catch (error) {
+    // Body-free by construction (KEIKO-0497 review, Codex P1): a failing evidence store can throw
+    // Errors whose message carries the absolute evidence path, injected store text, or PII —
+    // interpolating error.message into a diagnostic would leak all of that. serverDiagnosticFromError
+    // classifies the error content-free; the summary is a fixed allowlisted string, never derived
+    // from the error.
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: record.correlationId,
+        operation: "POST /api/gateway/setup",
+        source: "gateway-setup.audit",
+        error,
+        redact: bodyFreeAuditStoreFailure,
+      }),
+    );
+  }
+}
+
+interface SetupDiscoveryReport {
+  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
+  readonly unverifiedEmbeddingModelIds?: readonly string[];
+  readonly droppedEmbeddingModelIds?: readonly string[];
+  readonly unverifiedChatModelIds?: readonly string[];
+  readonly droppedChatModelIds?: readonly string[];
 }
 
 function setupSuccessResult(
   config: GatewayConfig,
   testedModelIds: readonly string[],
   skippedModelIds: readonly string[],
+  discoveryReport: SetupDiscoveryReport = {},
 ): RouteResult {
   const testedModelId = testedModelIds[0] ?? "unknown";
   return {
@@ -3239,6 +5865,23 @@ function setupSuccessResult(
       testedModelId,
       testedModelIds,
       skippedModelIds,
+      // The operator learns which models the gateway offered that Keiko will not use, and why —
+      // silence here is what made a misconfigured gateway undiagnosable in the field.
+      ...(discoveryReport.unsupportedModels !== undefined
+        ? { unsupportedModels: discoveryReport.unsupportedModels }
+        : {}),
+      ...(discoveryReport.unverifiedEmbeddingModelIds !== undefined
+        ? { unverifiedEmbeddingModelIds: discoveryReport.unverifiedEmbeddingModelIds }
+        : {}),
+      ...(discoveryReport.droppedEmbeddingModelIds !== undefined
+        ? { droppedEmbeddingModelIds: discoveryReport.droppedEmbeddingModelIds }
+        : {}),
+      ...(discoveryReport.unverifiedChatModelIds !== undefined
+        ? { unverifiedChatModelIds: discoveryReport.unverifiedChatModelIds }
+        : {}),
+      ...(discoveryReport.droppedChatModelIds !== undefined
+        ? { droppedChatModelIds: discoveryReport.droppedChatModelIds }
+        : {}),
       providerCount: config.providers.length,
       models: listConfiguredCapabilities(config),
       config: toSafeObject(config),
@@ -3286,6 +5929,22 @@ const SETUP_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
   ERROR_CODES.PROXY_EGRESS_FAILED,
   ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
   ERROR_CODES.TLS_CA_FAILURE,
+]);
+
+// Temporary admission activates an otherwise unverified configuration, so its classifier is
+// intentionally narrower than the operator-facing "network failure" guidance above. DNS,
+// access-control, refused-connection, proxy-policy, and TLS failures are actionable configuration
+// faults and must fail closed rather than be silently persisted as an active gateway.
+const TEMPORARY_SETUP_ERROR_CODES: ReadonlySet<string> = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+  ERROR_CODES.TIMEOUT,
+  // The per-candidate smoke deadline firing during the gateway's retry backoff (PR #3602 review):
+  // a whole round that ends this way is deferred exactly like one that timed out.
+  ERROR_CODES.CANCELLED,
 ]);
 
 function safeErrorProperty(error: unknown, property: string): unknown {
@@ -3441,38 +6100,276 @@ function gatewayUnavailableResult(): RouteResult {
   };
 }
 
+function finalizeVerifiedCandidate(
+  verified: VerifiedSetup,
+  current: GatewayConfig | undefined,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  request: SetupRequest,
+): RouteResult {
+  persistGatewayConfig(
+    withDiskGatewayEgress(
+      verified.rawConfig,
+      gatewayConfig.storagePath,
+      deps,
+      current === undefined,
+      request.correlationId,
+    ),
+    gatewayConfig.storagePath,
+    deps,
+    request.correlationId,
+  );
+  gatewayConfig.set(verified.config, true);
+  logVoiceSetupResolution(verified.config, request.correlationId);
+  recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
+  return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds, {
+    ...(verified.unsupportedModels !== undefined
+      ? { unsupportedModels: verified.unsupportedModels }
+      : {}),
+    ...(verified.unverifiedEmbeddingModelIds !== undefined
+      ? { unverifiedEmbeddingModelIds: verified.unverifiedEmbeddingModelIds }
+      : {}),
+    ...(verified.droppedEmbeddingModelIds !== undefined
+      ? { droppedEmbeddingModelIds: verified.droppedEmbeddingModelIds }
+      : {}),
+    ...(verified.unverifiedChatModelIds !== undefined
+      ? { unverifiedChatModelIds: verified.unverifiedChatModelIds }
+      : {}),
+    ...(verified.droppedChatModelIds !== undefined
+      ? { droppedChatModelIds: verified.droppedChatModelIds }
+      : {}),
+  });
+}
+
+/** The three injectable gateway seams, travelling together so the candidate loop stays readable. */
+interface SetupSeams {
+  readonly tester: GatewaySetupTester;
+  readonly discovery: GatewayModelDiscovery;
+  readonly embeddingProbe: GatewayEmbeddingProbe;
+}
+
 async function trySetupCandidate(
   baseUrl: string,
   request: SetupRequest,
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
-  tester: GatewaySetupTester,
-  discovery: GatewayModelDiscovery,
+  seams: SetupSeams,
   current: GatewayConfig | undefined,
 ): Promise<RouteResult> {
   const verified = await verifySetupCandidate({
+    embeddingProbe: seams.embeddingProbe,
+    preserveExisting: request.preserveExisting,
     baseUrl,
     apiKey: request.apiKey,
     apiKeyHeaderName: request.apiKeyHeaderName,
+    endpointStyle: request.endpointStyle,
+    apiVersion: request.apiVersion,
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
+    imageInputModelIdsProvided: request.imageInputModelIdsProvided,
+    storedEmbeddingModelIds: request.storedEmbeddingModelIds,
+    submittedEmbeddingModelIds: request.submittedEmbeddingModelIds,
+    storedOcrModelIds: request.storedOcrModelIds,
+    storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
+    storedVoiceModelIds: request.storedVoiceModelIds,
+    stored: request.stored,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,
-    voiceProviders: request.voiceProviders,
-    tester,
-    discovery,
+    voiceProviders: request.voiceProviders.map((provider) =>
+      provider.followsSetupGateway === true ? { ...provider, baseUrl } : provider,
+    ),
+    tester: seams.tester,
+    discovery: seams.discovery,
     env: deps.env,
     egress: egressForCandidateValidation(deps),
     figmaAccessToken: request.figmaAccessToken,
     current,
+    diagnostics: deps.diagnostics,
+    correlationId: request.correlationId,
   });
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
-  persistGatewayConfig(verified.rawConfig, gatewayConfig.storagePath, deps);
-  gatewayConfig.set(verified.config, true);
-  return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
+  return finalizeVerifiedCandidate(verified, current, deps, gatewayConfig, request);
+}
+
+// The runtime aggregate in `current.egress` can carry ENVIRONMENT-derived egress (proxy, CA
+// bundle, private-network opt-in). On a preserve-mode rebuild only what the stored file itself
+// declares may reach disk — persisting the aggregate would keep an env opt-in active from disk
+// after the environment is cleared (review finding on #3037; the settings-only path draws the
+// same distinction through withPersistedGatewayEgress). The same rule applies on a FRESH setup:
+// its storage path may be the operator's bootstrap config file, so its file-declared egress must
+// survive the first verified save while environment-derived egress remains transient. The runtime
+// config handed to gatewayConfig.set keeps the full aggregate either way — behavior in the running
+// process is unchanged.
+function withDiskGatewayEgress(
+  raw: Record<string, unknown>,
+  storagePath: string,
+  deps: UiHandlerDeps,
+  ignoreInvalidStoredConfig = false,
+  correlationId?: string,
+): Record<string, unknown> {
+  const withoutEgress = { ...raw };
+  delete withoutEgress.egress;
+  try {
+    return withPersistedGatewayEgress(withoutEgress, storagePath, deps);
+  } catch (error) {
+    if (ignoreInvalidStoredConfig && error instanceof ConfigInvalidError) {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+          operation: "POST /api/gateway/setup",
+          source: "gateway-setup.egress",
+          error,
+          summary:
+            "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
+          redact: () =>
+            "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
+        }),
+      );
+      return withoutEgress;
+    }
+    throw error;
+  }
+}
+
+// Per-model CONNECTION-IDENTITY overrides (base URL, api key, credential header) are the
+// TRANSIENT operator state that can hide a durable file-level sharing relationship — exactly the
+// three fields sharesStoredGatewayConnection compares. Only they are masked. Per-model PROTOCOL
+// overrides (API version, endpoint style, ...) stay: they cannot skew connection identity, and a
+// stored Azure provider whose apiVersion arrives only via env NEEDS them to parse at all —
+// masking the whole namespace made the durable parse fail and silently fall back to the
+// misclassified runtime view (review finding on #3040). Global fallbacks stay too: they apply to
+// every provider uniformly and cannot make one stored connection diverge from another's.
+const PER_MODEL_CONNECTION_OVERRIDE_RE =
+  /^KEIKO_MODEL_.+_(?:BASE_URL|API_KEY|API_KEY_HEADER_NAME)$/u;
+
+function withoutPerModelEnvOverrides(env: EnvSource): EnvSource {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => !PER_MODEL_CONNECTION_OVERRIDE_RE.test(name)),
+  );
+}
+
+// The DURABLE connection identities for preserve-mode classification: the persisted file at
+// storagePath, vault references resolved, per-model env overrides masked. The runtime
+// GatewayConfig folds those overrides in, so a transient KEIKO_MODEL_<ID>_BASE_URL or _API_KEY
+// on one shared provider made the durable file-level sharing relationship invisible — a
+// credential rotation then restored the other provider as "dedicated" with its already-dead
+// token (review finding on #3037; the same disk-vs-runtime distinction withDiskGatewayEgress
+// draws for egress). Falls back to the runtime view when nothing is stored yet or the stored
+// file cannot be parsed — exactly the pre-existing behavior for those states.
+function durableStoredGatewayConfig(
+  current: GatewayConfig | undefined,
+  storagePath: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): GatewayConfig | undefined {
+  if (current === undefined || !existsSync(storagePath)) return current;
+  try {
+    const parsed = loadConfigFromFile(storagePath, withoutPerModelEnvOverrides(deps.env), {
+      ...linkLocalGatewayOverrideOptions(deps.env),
+      secretResolver: createProviderSecretResolver({
+        configPath: storagePath,
+        env: deps.env,
+        securityLogSink: bindSecurityLogCorrelation(
+          processServerLogSink(),
+          correlationId ?? UNKNOWN_CORRELATION_ID,
+        ),
+      }),
+    });
+    // Inside the success path on purpose: on a fall-back the returned config is the RUNTIME one,
+    // and rewriting it from a file the parser just rejected would apply records from an invalid
+    // configuration to a valid view (review finding on #3046).
+    return withFileDeclaredProtocol(parsed, storagePath);
+  } catch (error) {
+    if (error instanceof GatewayError) return current;
+    throw error;
+  }
+}
+
+// What the FILE itself declares as each provider's protocol. `durableStoredGatewayConfig` parses
+// with the environment applied — deliberately, because a stored Azure provider whose api version
+// arrives only through KEIKO_MODEL_<ID>_API_VERSION needs it to parse at all (#3040) — so the
+// parsed protocol can be an env value the file never contained. Inheriting THAT on a rotation
+// would seal a transient default into the sealed config, and removing the variable afterwards
+// would no longer restore the file's own behavior (review finding on #3046). Correcting after
+// the parse keeps the #3040 fix intact: nothing is masked, only the values the file does not
+// declare are dropped from the durable view.
+function withFileDeclaredProtocol(
+  config: GatewayConfig | undefined,
+  storagePath: string,
+): GatewayConfig | undefined {
+  if (config === undefined || !existsSync(storagePath)) return config;
+  const declared = fileDeclaredProviderRecords(storagePath);
+  if (declared === undefined) return config;
+  return {
+    ...config,
+    providers: config.providers.map((provider) => {
+      const raw = declared.get(provider.modelId);
+      if (raw === undefined) return provider;
+      // The FILE's own value wins over the resolved one: a KEIKO_MODEL_<ID>_API_VERSION that
+      // overrides a DECLARED version would otherwise be sealed in by a rotation just as an
+      // undeclared one would (review finding on #3046). An unrecognised declared style is left
+      // as parsed — the parser is the authority on what a style may be.
+      return { ...provider, ...fileDeclaredProtocol(raw, provider) };
+    }),
+  };
+}
+
+// The protocol the FILE declares, kept COHERENT. Each half falls back to the resolved value when
+// the other half is declared and the canonical pairing needs it: a file that declares the Azure
+// deployment path and takes its required version from KEIKO_MODEL_<ID>_API_VERSION is only valid
+// with that version, and a file that declares the version while the style arrives through
+// KEIKO_DEFAULT_ENDPOINT_STYLE is only valid with that style. Dropping the env half of either
+// pair left the durable view incoherent, and inheritance then rejected a routine credential
+// rotation with 400 (review findings on #3046 — the same coherence argument that stopped #3040
+// from masking that namespace at parse time).
+function fileDeclaredProtocol(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig,
+): Pick<ModelProviderConfig, "endpointStyle" | "apiVersion"> {
+  const style = declaredEndpointStyle(raw.endpointStyle, provider.endpointStyle);
+  const version = typeof raw.apiVersion === "string" ? raw.apiVersion : undefined;
+  if (style === "azure-openai-deployment" && version === undefined) {
+    return { endpointStyle: style, apiVersion: provider.apiVersion };
+  }
+  if (version !== undefined && style === undefined) {
+    return { endpointStyle: provider.endpointStyle, apiVersion: version };
+  }
+  return { endpointStyle: style, apiVersion: version };
+}
+
+// An unrecognised declared style is left as parsed — the parser is the authority on what a style
+// may be.
+function declaredEndpointStyle(
+  raw: unknown,
+  resolved: ModelProviderConfig["endpointStyle"],
+): ModelProviderConfig["endpointStyle"] {
+  if (typeof raw !== "string") return undefined;
+  const declared = PROVIDER_ENDPOINT_STYLES.find((style) => style === raw);
+  return declared ?? resolved;
+}
+
+function fileDeclaredProviderRecords(
+  storagePath: string,
+): ReadonlyMap<string, Record<string, unknown>> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(storagePath, "utf8"));
+    if (!isRecord(parsed) || !Array.isArray(parsed.providers)) return undefined;
+    return new Map(
+      parsed.providers.flatMap((entry) =>
+        isRecord(entry) && typeof entry.modelId === "string"
+          ? ([[entry.modelId, entry]] as const)
+          : [],
+      ),
+    );
+  } catch {
+    // An unreadable or malformed file leaves the durable view exactly as parsed — the same
+    // fall-back durableStoredGatewayConfig makes for that state.
+    return undefined;
+  }
 }
 
 function validateWorkflowEligibleModelIds(
@@ -3525,6 +6422,37 @@ function setupCandidateError(error: unknown): string {
   return bodyFreeVerificationFailure();
 }
 
+function withWorkflowEligibilityPatch(request: SetupRequest, config: GatewayConfig): GatewayConfig {
+  if (!request.workflowEligibleModelIdsConfigured) return config;
+  return {
+    ...config,
+    capabilities: listConfiguredCapabilities(config).map((capability) => ({
+      ...capability,
+      ...workflowCapabilityFields(
+        capability.id,
+        capability,
+        capability,
+        request.workflowEligibleModelIds,
+      ),
+    })),
+  };
+}
+
+// Image flags patch in place for clears and shrinks — only NEW image claims take the verified
+// rebuild (review findings on #3031/#3037). Same shape as the workflow-eligibility patch.
+function withImageFlagPatch(request: SetupRequest, config: GatewayConfig): GatewayConfig {
+  if (!request.imageInputModelIdsProvided) return config;
+  return {
+    ...config,
+    capabilities: listConfiguredCapabilities(config).map((capability) => ({
+      ...capability,
+      ...(capability.kind === "chat"
+        ? { supportsImageInput: request.imageInputModelIds.includes(capability.id) }
+        : {}),
+    })),
+  };
+}
+
 function saveExistingConfigUpdate(
   request: SetupRequest,
   current: GatewayConfig,
@@ -3533,20 +6461,10 @@ function saveExistingConfigUpdate(
 ): RouteResult {
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, current);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
-  const updatedCurrent = request.workflowEligibleModelIdsConfigured
-    ? {
-        ...current,
-        capabilities: listConfiguredCapabilities(current).map((capability) => ({
-          ...capability,
-          ...workflowCapabilityFields(
-            capability.id,
-            capability,
-            capability,
-            request.workflowEligibleModelIds,
-          ),
-        })),
-      }
-    : current;
+  const updatedCurrent = withImageFlagPatch(
+    request,
+    withWorkflowEligibilityPatch(request, current),
+  );
   const rawConfig = applyVoiceProviders(
     rawConfigFromCurrent(updatedCurrent, request.figmaAccessToken, request.timeoutMs),
     request.voiceProviders,
@@ -3557,8 +6475,10 @@ function saveExistingConfigUpdate(
     deps.env,
     linkLocalGatewayOverrideOptions(deps.env),
   );
-  persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps);
+  persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps, request.correlationId);
   gatewayConfig.set(config, true);
+  logVoiceSetupResolution(config, request.correlationId);
+  recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(
     config,
     config.providers.map((provider) => provider.modelId),
@@ -3582,11 +6502,17 @@ async function verifyAndSaveExistingConfigUpdate(
 function shouldRequireDeploymentNames(
   request: SetupRequest,
   baseUrlCandidates: readonly string[],
+  env: EnvSource,
 ): boolean {
-  return (
-    request.deploymentNames.length === 0 &&
-    baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl))
-  );
+  if (request.deploymentNames.length !== 0) return false;
+  // The deployment path IS the requirement: a classic Azure OpenAI host on that path cannot be
+  // discovered through generic /models, so without this it failed at discovery instead of naming
+  // the missing deployments (review finding on #3046). The EFFECTIVE style decides — a request
+  // that omits the field still lands on the deployment path when KEIKO_DEFAULT_ENDPOINT_STYLE
+  // says so, and discovery would fail exactly the same way.
+  const effectiveStyle = request.endpointStyle ?? env.KEIKO_DEFAULT_ENDPOINT_STYLE;
+  if (effectiveStyle === "azure-openai-deployment") return true;
+  return baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl));
 }
 
 async function verifyAndSaveGatewaySetup(
@@ -3595,28 +6521,108 @@ async function verifyAndSaveGatewaySetup(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): Promise<RouteResult> {
-  const tester = gatewaySetupTester(deps);
-  const discovery = deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery;
+  const seams: SetupSeams = {
+    tester: gatewaySetupTester(deps, request.correlationId),
+    embeddingProbe: gatewayEmbeddingProbe(deps, request.correlationId),
+    discovery: deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery,
+  };
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
   if (figmaFailure !== undefined) {
     return figmaFailure;
   }
   const baseUrlCandidates = candidateBaseUrls(request.baseUrl);
-  if (shouldRequireDeploymentNames(request, baseUrlCandidates)) {
+  if (shouldRequireDeploymentNames(request, baseUrlCandidates, deps.env)) {
     return deploymentNamesRequiredResult();
   }
-  const errors: string[] = [];
+  const attempted = await attemptSetupCandidates(
+    baseUrlCandidates,
+    request,
+    deps,
+    gatewayConfig,
+    seams,
+    current,
+  );
+  if (attempted.result !== undefined) return attempted.result;
+  return temporaryAdmissionOrFailure(attempted.failures, request, deps, gatewayConfig, current);
+}
+
+interface SetupCandidateFailure {
+  readonly baseUrl: string;
+  readonly error: unknown;
+  readonly resumeTemporaryAdmission?: (() => VerifiedSetup) | undefined;
+}
+
+class DeferredTemporaryChatAdmission extends Error {
+  public constructor(
+    readonly original: unknown,
+    readonly resume: () => VerifiedSetup,
+  ) {
+    super("Gateway setup chat admission was deferred after a temporary probe failure.");
+  }
+}
+
+function originalSetupVerificationError(error: unknown): unknown {
+  return error instanceof DeferredTemporaryChatAdmission ? error.original : error;
+}
+
+interface SetupCandidateAttempts {
+  readonly failures: SetupCandidateFailure[];
+  readonly result?: RouteResult | undefined;
+}
+
+async function attemptSetupCandidates(
+  baseUrlCandidates: readonly string[],
+  request: SetupRequest,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  seams: SetupSeams,
+  current: GatewayConfig | undefined,
+): Promise<SetupCandidateAttempts> {
+  const failures: SetupCandidateFailure[] = [];
   for (const baseUrl of baseUrlCandidates) {
     try {
-      return await trySetupCandidate(
-        baseUrl,
-        request,
+      const result = await trySetupCandidate(baseUrl, request, deps, gatewayConfig, seams, current);
+      return { failures, result };
+    } catch (error) {
+      reportSetupVerificationFailure(
         deps,
-        gatewayConfig,
-        tester,
-        discovery,
-        current,
+        originalSetupVerificationError(error),
+        request.correlationId,
+        "gateway.setup.provider-verify",
       );
+      failures.push({
+        baseUrl,
+        error: originalSetupVerificationError(error),
+        ...(error instanceof DeferredTemporaryChatAdmission
+          ? { resumeTemporaryAdmission: error.resume }
+          : {}),
+      });
+    }
+  }
+  return { failures };
+}
+
+function temporaryAdmissionOrFailure(
+  failures: SetupCandidateFailure[],
+  request: SetupRequest,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  current: GatewayConfig | undefined,
+): RouteResult {
+  const temporary = failures.find(
+    (failure) =>
+      temporaryGatewaySetupFailure(failure.error) && failure.resumeTemporaryAdmission !== undefined,
+  );
+  const resume = temporary?.resumeTemporaryAdmission;
+  if (
+    resume !== undefined &&
+    !failures.some((failure) => definitiveGatewaySetupFailure(failure.error))
+  ) {
+    try {
+      const verified = resume();
+      const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
+      if (workflowEligibilityError !== undefined) return workflowEligibilityError;
+      return finalizeVerifiedCandidate(verified, current, deps, gatewayConfig, request);
     } catch (error) {
       reportSetupVerificationFailure(
         deps,
@@ -3624,10 +6630,16 @@ async function verifyAndSaveGatewaySetup(
         request.correlationId,
         "gateway.setup.provider-verify",
       );
-      errors.push(`candidate ${String(errors.length + 1)}: ${setupCandidateError(error)}`);
+      failures.push({ baseUrl: temporary?.baseUrl ?? request.baseUrl, error });
     }
   }
-  return setupFailureResult(errors, request.correlationId);
+  return setupFailureResult(candidateFailureMessages(failures), request.correlationId);
+}
+
+function candidateFailureMessages(failures: readonly SetupCandidateFailure[]): readonly string[] {
+  return failures.map(
+    (failure, index) => `candidate ${String(index + 1)}: ${setupCandidateError(failure.error)}`,
+  );
 }
 
 export async function handleGatewaySetup(
@@ -3639,11 +6651,17 @@ export async function handleGatewaySetup(
   }
   const { gatewayConfig } = deps;
   const current = currentGatewayConfig(deps);
+  const stored = durableStoredGatewayConfig(
+    current,
+    gatewayConfig.storagePath,
+    deps,
+    ctx.correlationId,
+  );
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed, deps.env, current, ctx.correlationId);
+  const request = readSetupRequest(bodyResult.parsed, deps.env, current, stored, ctx.correlationId);
   if ("status" in request) {
     return request;
   }
@@ -3659,14 +6677,25 @@ const VERIFIED_CAPABILITY_FIELDS = new Set<keyof VerifiedModelCapabilityFields>(
   "structuredOutput",
   "supportsImageInput",
   "supportsDocumentInput",
+  "contextWindow",
 ]);
+
+// The readiness long-context probe never tests more than 128,000 tokens, so a larger submitted
+// value cannot match any recorded observation and is rejected before that comparison.
+const MAX_VERIFIED_CONTEXT_WINDOW = 128_000;
 
 interface CapabilityApplyRequest {
   readonly fields: VerifiedModelCapabilityFields;
 }
 
-function verifiedFieldValue(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+function verifiedFieldValue(field: string, value: unknown): boolean | number | undefined {
+  if (field !== "contextWindow") return typeof value === "boolean" ? value : undefined;
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_VERIFIED_CONTEXT_WINDOW
+    ? value
+    : undefined;
 }
 
 function parseCapabilityApplyRequest(value: unknown): CapabilityApplyRequest | RouteResult {
@@ -3691,7 +6720,7 @@ function parseCapabilityApplyRequest(value: unknown): CapabilityApplyRequest | R
         body: errorBody("BAD_REQUEST", "An unsupported capability field was supplied."),
       };
     }
-    const parsed = verifiedFieldValue(rawValue);
+    const parsed = verifiedFieldValue(field, rawValue);
     if (parsed === undefined) {
       return { status: 400, body: errorBody("BAD_REQUEST", "A capability value is invalid.") };
     }
@@ -3723,29 +6752,72 @@ function replaceModelCapability(
   config: GatewayConfig,
   modelId: string,
   fields: VerifiedModelCapabilityFields,
+  checkedAt = new Date().toISOString(),
+  toolCallingStatus?: ToolCallingVerification["status"],
 ): GatewayConfig | undefined {
   const current = findConfiguredCapability(config, modelId);
   if (current === undefined) return undefined;
   const capabilities = [...(config.capabilities ?? [])];
   const explicitIndex = capabilities.findIndex((capability) => capability.id === modelId);
-  const knownLimitations =
-    current.id.toLowerCase().includes("mistral") && fields.toolCalling === true
-      ? current.knownLimitations.filter(
-          (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
-        )
-      : current.knownLimitations;
-  // The json_schema readiness probe verifies the strict response_format request shape used by QI.
-  // Keep the public structured-output field and the provider request-capability flag in lockstep.
-  const responseFormatFields =
-    fields.structuredOutput === undefined
+  const responseFormatFields = responseFormatCapabilityFields(fields);
+  const toolCallingVerification = toolCallingVerificationFields(
+    config,
+    modelId,
+    fields,
+    checkedAt,
+    toolCallingStatus,
+  );
+  const replacement = {
+    ...current,
+    ...fields,
+    // The long-context probe proves a lower bound, so it may raise a stored window, never shrink it.
+    ...(fields.contextWindow === undefined
       ? {}
-      : { supportsResponseFormat: fields.structuredOutput };
-  const replacement = { ...current, ...fields, ...responseFormatFields, knownLimitations };
+      : { contextWindow: Math.max(current.contextWindow, fields.contextWindow) }),
+    ...(fields.toolCalling === true
+      ? {
+          knownLimitations: current.knownLimitations.filter(
+            (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
+          ),
+        }
+      : {}),
+    ...responseFormatFields,
+    ...toolCallingVerification,
+  };
   if (explicitIndex === -1) capabilities.push(replacement);
   else capabilities[explicitIndex] = replacement;
   return {
     ...config,
     capabilities,
+  };
+}
+
+function responseFormatCapabilityFields(
+  fields: VerifiedModelCapabilityFields,
+): Partial<ModelCapability> {
+  // The json_schema readiness probe verifies the strict response_format request shape used by QI.
+  // Keep the public structured-output field and the provider request-capability flag in lockstep.
+  return fields.structuredOutput === undefined
+    ? {}
+    : { supportsResponseFormat: fields.structuredOutput };
+}
+
+function toolCallingVerificationFields(
+  config: GatewayConfig,
+  modelId: string,
+  fields: VerifiedModelCapabilityFields,
+  checkedAt: string,
+  status: ToolCallingVerification["status"] | undefined,
+): Partial<ModelCapability> {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  if (fields.toolCalling === undefined || provider === undefined) return {};
+  return {
+    toolCallingVerification: {
+      status: status ?? (fields.toolCalling ? "verified" : "unsupported"),
+      checkedAt,
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    },
   };
 }
 
@@ -3816,17 +6888,235 @@ function persistVerifiedCapabilityUpdate(
   modelId: string,
   generation: number,
   updated: GatewayConfig,
+  consumeObservation = true,
+  correlationId: string | undefined = UNKNOWN_CORRELATION_ID,
 ): RouteResult {
   const raw = rawConfigForVerifiedCapabilityUpdate(updated, gatewayConfig.storagePath, deps);
-  persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
+  try {
+    persistGatewayConfig(raw, gatewayConfig.storagePath, deps, correlationId);
+  } catch (error) {
+    // A live negative tool verdict must take effect even if its durable evidence cannot be saved.
+    // Continuing to route tool calls on the old in-memory proof would widen authority exactly when
+    // the latest provider observation says it is no longer justified.
+    if (!consumeObservation) {
+      applyVerifiedCapabilityUpdate(gatewayConfig, modelId, generation, updated, false);
+    }
+    throw error;
+  }
+  return applyVerifiedCapabilityUpdate(
+    gatewayConfig,
+    modelId,
+    generation,
+    updated,
+    consumeObservation,
+  );
+}
+
+function applyVerifiedCapabilityUpdate(
+  gatewayConfig: RuntimeGatewayConfig,
+  modelId: string,
+  generation: number,
+  updated: GatewayConfig,
+  consumeObservation = true,
+): RouteResult {
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available
   // when durable storage fails, allowing the operator to retry the exact verified update.
-  if (!gatewayConfig.clearVerifiedCapability(modelId, generation)) {
+  // set() wipes EVERY model's verified-capability observation and bumps the generation —
+  // correct for a credential/endpoint change, but THIS set applies values derived from a live
+  // observation against unchanged connections. Config cannot carry conversationReady (it is
+  // probe-only evidence), so preserve that one readiness fact across the wipe. Never replay
+  // feature observations under a new generation: an unrelated apply must not re-stamp a model's
+  // old tool proof as if the model had just been probed.
+  const observations = updated.providers
+    .map((provider) => ({
+      modelId: provider.modelId,
+      observation: gatewayConfig.verifiedCapability(provider.modelId),
+    }))
+    .filter((entry) => entry.observation !== undefined)
+    .map((entry) => ({
+      ...entry,
+      fields:
+        !consumeObservation && entry.modelId === modelId
+          ? (entry.observation?.fields ?? {})
+          : preservedVerifiedCapabilityFields(entry.observation?.fields ?? {}),
+    }))
+    .filter((entry) => Object.keys(entry.fields).length > 0);
+  if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
   gatewayConfig.set(updated, true);
+  for (const entry of observations) {
+    gatewayConfig.recordVerifiedCapability(
+      entry.modelId,
+      entry.fields,
+      entry.observation?.checkedAt ?? new Date().toISOString(),
+    );
+  }
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
+}
+
+function preservedVerifiedCapabilityFields(
+  fields: VerifiedModelCapabilityFields,
+): VerifiedModelCapabilityFields {
+  return fields.conversationReady === true ? { conversationReady: true } : {};
+}
+
+function toolCallingStatusFromReadiness(
+  report: GatewayReadinessReport,
+): "verified" | "unsupported" | undefined {
+  const probe = report.probes.find((candidate) => candidate.name === "tool_calling");
+  if (probe?.status === "passed") return "verified";
+  if (probe?.status === "unsupported" && probe.capabilityObservation === false) {
+    return "unsupported";
+  }
+  // A skipped, failed, or otherwise inconclusive probe is not evidence that a previously
+  // verified deployment lost tool support. Keep the last proof until a real probe concludes.
+  return undefined;
+}
+
+/** Persists the current readiness run's tool-calling conclusion without a second UI confirmation. */
+export function reconcileGatewayToolCallingReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+  correlationId = UNKNOWN_CORRELATION_ID,
+): void {
+  const reconciliation = currentToolCallingReconciliation(deps, observedGeneration);
+  if (reconciliation === undefined) return;
+  if (!report.probes.some((probe) => probe.name === "tool_calling")) return;
+  const status = toolCallingStatusFromReadiness(report);
+  if (status === undefined) return;
+  const updated = replaceModelCapability(
+    reconciliation.current,
+    report.modelId,
+    { toolCalling: status === "verified" },
+    report.checkedAt,
+    status,
+  );
+  if (updated === undefined) return;
+  logToolCallingVerification(
+    reconciliation.current,
+    report.modelId,
+    status,
+    correlationId,
+    findConfiguredCapability(updated, report.modelId)?.toolCallingVerification
+      ?.configurationFingerprint,
+  );
+  persistVerifiedCapabilityUpdate(
+    reconciliation.gatewayConfig,
+    deps,
+    report.modelId,
+    reconciliation.gatewayConfig.generation(),
+    updated,
+    false,
+    correlationId,
+  );
+}
+
+/**
+ * Raises a stored context window to the token count the long-context probe just proved, without a
+ * UI confirmation — the standing the tool-calling conclusion already has. A proven count is a lower
+ * bound, so this only ever raises. Customer report on 1.1.0: a gateway that declares no token
+ * limits left the 4,096 setup placeholder in place and the Coding Workbench refused every model;
+ * what Keiko can determine itself must not be left for the operator to copy by hand.
+ */
+export function reconcileGatewayContextWindowReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+  correlationId = UNKNOWN_CORRELATION_ID,
+): void {
+  const verified = report.verifiedCapabilities.testedContextTokens;
+  if (verified === undefined || verified > MAX_VERIFIED_CONTEXT_WINDOW) return;
+  const reconciliation = currentToolCallingReconciliation(deps, observedGeneration);
+  if (reconciliation === undefined) return;
+  const stored = findConfiguredCapability(reconciliation.current, report.modelId);
+  if (stored?.kind !== "chat" || stored.contextWindow >= verified) return;
+  const updated = replaceModelCapability(
+    reconciliation.current,
+    report.modelId,
+    { contextWindow: verified },
+    report.checkedAt,
+  );
+  if (updated === undefined) return;
+  persistVerifiedCapabilityUpdate(
+    reconciliation.gatewayConfig,
+    deps,
+    report.modelId,
+    reconciliation.gatewayConfig.generation(),
+    updated,
+    false,
+    correlationId,
+  );
+}
+
+function currentToolCallingReconciliation(
+  deps: UiHandlerDeps,
+  observedGeneration: number | undefined,
+): { readonly gatewayConfig: RuntimeGatewayConfig; readonly current: GatewayConfig } | undefined {
+  const gatewayConfig = deps.gatewayConfig;
+  const current = gatewayConfig?.current();
+  if (gatewayConfig === undefined || current === undefined) return undefined;
+  return observedGeneration === undefined || gatewayConfig.generation() === observedGeneration
+    ? { gatewayConfig, current }
+    : undefined;
+}
+
+function logToolCallingVerification(
+  config: GatewayConfig,
+  modelId: string,
+  status: ToolCallingVerification["status"],
+  correlationId: string,
+  configurationFingerprint?: string,
+): void {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  const fingerprint =
+    configurationFingerprint ??
+    (provider === undefined ? undefined : toolCallingConfigurationFingerprint(provider));
+  processServerLogSink().write(
+    activityLogEvent(
+      GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        status: status === "unverified" ? 503 : 200,
+        ...(status === "unverified" ? { errorKind: "unavailable" as const } : {}),
+      },
+      {
+        verificationStatus: status,
+        ...(fingerprint === undefined ? {} : { configurationFingerprint: fingerprint }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logVoiceSetupResolution(config: GatewayConfig, correlationId: string | undefined): void {
+  const models = listConfiguredCapabilities(config).filter(isVoiceCapability);
+  const speechOutput = models.filter(modelSupportsSpeechOutput);
+  const realtime = models.filter(modelSupportsRealtimeVoice);
+  processServerLogSink().write(
+    activityLogEvent(
+      GATEWAY_VOICE_SETUP_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), status: 200 },
+      {
+        speechInputModels: models.filter(modelSupportsSpeechInput).length,
+        usableSpeechOutputModels: speechOutput.filter(
+          (model) => (model.supportedVoicePersonas?.length ?? 0) > 0,
+        ).length,
+        incompleteSpeechOutputModels: speechOutput.filter(
+          (model) => (model.supportedVoicePersonas?.length ?? 0) === 0,
+        ).length,
+        usableRealtimeModels: realtime.filter(isCompleteRealtimeVoiceCapability).length,
+        incompleteRealtimeModels: realtime.filter(
+          (model) => !isCompleteRealtimeVoiceCapability(model),
+        ).length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 /** Applies only generation-current live observations after an explicit, human-confirmed request. */
@@ -3859,5 +7149,13 @@ export async function handleApplyGatewayVerifiedCapabilities(
   if (!capabilityObservationMatches(gatewayConfig, modelId, request.fields, generation, current)) {
     return staleCapabilityObservationResult();
   }
-  return persistVerifiedCapabilityUpdate(gatewayConfig, deps, modelId, generation, updated);
+  return persistVerifiedCapabilityUpdate(
+    gatewayConfig,
+    deps,
+    modelId,
+    generation,
+    updated,
+    true,
+    ctx.correlationId,
+  );
 }

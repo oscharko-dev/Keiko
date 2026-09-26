@@ -12,9 +12,13 @@
 // plaintext config remains on disk and the next migration re-runs idempotently (the vault writes
 // overwrite), while `keiko repair` flags the lingering plaintext as an incomplete migration.
 
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { LocalVaultKeychainAccess } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
+import { contentFreeErrorClass } from "./observability/error-classification.js";
 import { savePrivateJson } from "./private-json.js";
 import {
   hasPlaintextGatewayCredentials,
@@ -32,6 +36,9 @@ export interface SealGatewayConfigContext {
   readonly evidenceDir: string;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
   readonly figmaKeychainAccess?: FigmaKeychainAccess | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts/gateway-setup.ts composition roots supply
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,6 +84,7 @@ export function persistSealedGatewayConfig(
     env: ctx.env,
     configPath: ctx.storagePath,
     ...(ctx.keychainAccess !== undefined ? { keychainAccess: ctx.keychainAccess } : {}),
+    securityLogSink: ctx.securityLogSink,
   });
   const withSealedProviders = { ...raw, providers: sealedProviders.providers };
   const withSealedCredentials =
@@ -90,6 +98,7 @@ export function persistSealedGatewayConfig(
       env: ctx.env,
       configPath: ctx.storagePath,
       ...(ctx.keychainAccess !== undefined ? { keychainAccess: ctx.keychainAccess } : {}),
+      securityLogSink: ctx.securityLogSink,
     },
     sealedProviders.activeSecretRefs,
   );
@@ -101,6 +110,13 @@ export interface MigrateCredentialsOptions {
   readonly evidenceDir: string;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
   readonly figmaKeychainAccess?: FigmaKeychainAccess | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  // Optional operator-diagnostic sink (ADR-0173); the deps.ts composition root supplies
+  // `options.diagnostics`. Falls back to `defaultServerDiagnosticSink` (via `emitServerDiagnostic`)
+  // when omitted, so production never goes silent even when a caller wires nothing in.
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export interface MigrateCredentialsOutcome {
@@ -131,12 +147,25 @@ export function migrateLocalConfigCredentials(
       ...(options.figmaKeychainAccess !== undefined
         ? { figmaKeychainAccess: options.figmaKeychainAccess }
         : {}),
+      securityLogSink: options.securityLogSink,
     });
     return { migrated: true };
-  } catch {
+  } catch (error) {
     // Migration is best-effort: a fault here leaves the plaintext config in place (the atomic write
     // never half-replaces it), the gateway still loads via the legacy plaintext path, and `keiko
     // repair` reports the lingering plaintext so the user can complete the migration deterministically.
+    // "Best-effort" must not mean "silent": without this, a plaintext credential configuration can
+    // remain in use indefinitely with no operator diagnostic at all. The record is redacted
+    // (content-free error class, no config content, no secret material) and correlation-keyed so an
+    // operator can find it in the server's activity log.
+    emitServerDiagnostic(options.diagnostics, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "credential.migration",
+      source: "credentialPersistence.migrateLocalConfigCredentials",
+      errorClass: contentFreeErrorClass(error),
+      message: "Local credential migration failed; plaintext config remains in place.",
+    });
     return { migrated: false };
   }
 }

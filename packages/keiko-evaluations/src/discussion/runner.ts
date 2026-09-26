@@ -4,6 +4,7 @@
 // pure recovery helpers, scores the seven discussion-quality dimensions, aggregates a scorecard, and
 // derives the offline Go/No-Go verdict. Pure: no IO, clock, randomness, or model dispatch.
 
+import type { DiscussionMode } from "@oscharko-dev/keiko-contracts";
 import {
   DISCUSSION_DIRECTIVE_TEMPLATES,
   applyDiscussionInterruption,
@@ -11,8 +12,7 @@ import {
   beginDiscussionTurn,
   discussionModePlan,
   voiceCanDriveDiscussion,
-  type DiscussionMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import { ALL_DISCUSSION_FIXTURES } from "./fixtures/index.js";
 import { aggregateDiscussionQuality, scoreDiscussionQuality } from "./scorer.js";
 import {
@@ -81,7 +81,11 @@ function summarize(
   dimensions: readonly DiscussionScorecardEntry[],
 ): DiscussionEvalSummary {
   const allClean = dimensions.every((d) => d.failCount === 0);
-  const coversNoVoiceProfile = fixtureResults.some((f) => f.category === "no-voice");
+  // KEIKO-0391: coversNoVoiceProfile must key off the actual voice-gating signal (mirror of
+  // coversVoiceProfile), not the fixture's topic category label. Category-scoped runs (via the public
+  // discussionFixturesForCategory helper) exposed a false NO-GO whenever the scoped set genuinely
+  // covered both profiles under a non-"no-voice" category.
+  const coversNoVoiceProfile = fixtureResults.some((f) => !f.observation.gatingAllowed);
   const coversVoiceProfile = fixtureResults.some((f) => f.observation.gatingAllowed);
   return {
     totalFixtures: fixtureResults.length,

@@ -12,10 +12,14 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
   DEFAULT_TOKEN_ESTIMATOR_ID,
+  __contextTokenCacheDiagnosticsForTests,
+  __resetContextTokenCacheForTests,
   countContextTokens,
   countContextTokensForSegments,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  safetyMarginTokensFor,
+  undeclaredOutputReserveTokens,
   estimateTokens,
   estimateTokensForSegments,
   maxUtf8BytesForTokenBudget,
@@ -383,6 +387,27 @@ describe("countContextTokens", () => {
     expect(countContextTokens(text, CALIBRATED_ACCOUNTING)).toBeGreaterThan(fallback);
   });
 
+  // KEIKO-0305: `??` does not substitute for 0, so `scaleMilli: 0` survived and the whole expression
+  // collapsed through Math.max(0, …) to zero — every text reported as free under the contract that
+  // calls itself "the single canonical token currency". A bad calibration must degrade to the
+  // conservative uncalibrated estimate, never to an under-count.
+  it.each([
+    ["zero scale", { scaleMilli: 0 }],
+    ["negative scale", { scaleMilli: -5 }],
+    ["fractional scale", { scaleMilli: 1.5 }],
+    ["large negative offset", { offsetTokens: -1_000_000 }],
+    ["negative offset", { offsetTokens: -1 }],
+    ["fractional offset", { offsetTokens: 0.5 }],
+  ])("falls back to the uncalibrated estimate on a %s", (_label, override) => {
+    const text = "some non-empty text";
+    const counted = countContextTokens(text, {
+      source: "calibrated",
+      counterId: "x",
+      ...override,
+    });
+    expect(counted).toBeGreaterThanOrEqual(estimateTokens(text));
+  });
+
   it("sums calibrated segment counts", () => {
     const segments = ["chat segment", "memory segment", "document segment"];
     const expected = segments.reduce(
@@ -492,6 +517,36 @@ describe("deriveContextProfileFromCapability", () => {
     ).toMatchObject({
       model: { id: "gpt-bank" },
     });
+  });
+
+  // #3591 (1.1.7): a 32k window whose gateway declares no output limit reserved 2,000 output
+  // tokens, which a reasoning model spends on reasoning before any content — every coding turn
+  // ended as an empty answer. The undeclared reserve is at least the default 8k, bounded to a
+  // quarter of the window.
+  it("reserves at least the default output budget when the gateway declares no output limit", () => {
+    const probed32k = deriveContextProfileFromCapability(chatCapability("hosted-32k", 32_000, 0));
+    expect(probed32k.reservedOutputTokens).toBe(DEFAULT_CONTEXT_PROFILE.reservedOutputTokens);
+    expect(probed32k.effectiveInputBudget).toBe(32_000 - 8_000 - 1_000);
+    const placeholder4k = deriveContextProfileFromCapability(chatCapability("hosted-4k", 4_096, 0));
+    expect(placeholder4k.reservedOutputTokens).toBe(1_024);
+    expect(placeholder4k.effectiveInputBudget).toBeGreaterThan(0);
+    const wide200k = deriveContextProfileFromCapability(chatCapability("hosted-200k", 200_000, 0));
+    expect(wide200k.reservedOutputTokens).toBe(12_500);
+    expect(undeclaredOutputReserveTokens(32_000)).toBe(8_000);
+    expect(undeclaredOutputReserveTokens(16)).toBe(4);
+  });
+
+  it("scales the safety margin with the window without eating into the output reserve", () => {
+    expect(safetyMarginTokensFor(128_000, 8_000)).toBe(DEFAULT_CONTEXT_PROFILE.safetyMarginTokens);
+    expect(safetyMarginTokensFor(32_000, 8_000)).toBe(1_000);
+    expect(safetyMarginTokensFor(4_096, 4_000)).toBe(96);
+  });
+
+  it("keeps a declared output limit as the reserve", () => {
+    expect(
+      deriveContextProfileFromCapability(chatCapability("declared-32k", 32_000, 2_048))
+        .reservedOutputTokens,
+    ).toBe(2_048);
   });
 
   it("falls back to the default profile geometry for placeholder runtime capabilities", () => {
@@ -906,5 +961,82 @@ describe("ContextPackDiagnostics.contextBudget? backward compatibility", () => {
     if (!result.ok) {
       expect(result.reasons.some((r) => r.includes("contextBudget"))).toBe(true);
     }
+  });
+});
+
+// ─── KEIKO-0880: runtime immutability of the frozen contract tables ────────────
+// `as const` / `readonly` are compile-time only and are erased at build time, so without
+// Object.freeze/deepFreeze a consumer holding one of these tables (or an unsafe cast) could rewrite
+// a lane/eviction/accounting/profile constant for the remaining lifetime of the process.
+describe("KEIKO-0880 frozen contract tables", () => {
+  it("freezes CONTEXT_LANE_IDS", () => {
+    expect(Object.isFrozen(CONTEXT_LANE_IDS)).toBe(true);
+    expect(() => {
+      (CONTEXT_LANE_IDS as string[])[0] = "bogus-lane";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes CONTEXT_EVICTION_POLICIES", () => {
+    expect(Object.isFrozen(CONTEXT_EVICTION_POLICIES)).toBe(true);
+    expect(() => {
+      (CONTEXT_EVICTION_POLICIES as string[])[0] = "bogus-policy";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes CONTEXT_TOKEN_ACCOUNTING_SOURCES", () => {
+    expect(Object.isFrozen(CONTEXT_TOKEN_ACCOUNTING_SOURCES)).toBe(true);
+    expect(() => {
+      (CONTEXT_TOKEN_ACCOUNTING_SOURCES as string[])[0] = "bogus-source";
+    }).toThrow(TypeError);
+  });
+
+  it("deep-freezes DEFAULT_CONTEXT_PROFILE including its nested tokenAccounting", () => {
+    expect(Object.isFrozen(DEFAULT_CONTEXT_PROFILE)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_CONTEXT_PROFILE.tokenAccounting)).toBe(true);
+    expect(() => {
+      (DEFAULT_CONTEXT_PROFILE as { maxInputTokens: number }).maxInputTokens = 1;
+    }).toThrow(TypeError);
+    expect(() => {
+      (DEFAULT_CONTEXT_PROFILE.tokenAccounting as { counterId: string }).counterId = "tampered";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes DEFAULT_CONTEXT_TOKEN_ACCOUNTING", () => {
+    expect(Object.isFrozen(DEFAULT_CONTEXT_TOKEN_ACCOUNTING)).toBe(true);
+    expect(() => {
+      (DEFAULT_CONTEXT_TOKEN_ACCOUNTING as { counterId: string }).counterId = "tampered";
+    }).toThrow(TypeError);
+  });
+});
+
+// ─── KEIKO-0797: token-estimate cache is bounded by bytes as well as entry count ─
+describe("KEIKO-0797 token-estimate cache byte cap", () => {
+  it("bounds retained cache bytes when many large distinct strings are estimated", () => {
+    __resetContextTokenCacheForTests();
+    expect(__contextTokenCacheDiagnosticsForTests()).toEqual({ entries: 0, bytesRetained: 0 });
+
+    // Mirrors the documented TOKEN_ESTIMATE_CACHE_MAX_BYTES cap in context-engineering.ts. Kept as
+    // an independent literal (not imported) so a change that only widens the production cap,
+    // without updating this expectation, is caught instead of silently passing.
+    const DOCUMENTED_CACHE_BYTE_CAP = 2_097_152;
+    const chunkBytes = 16 * 1024;
+    const distinctLargeStrings = 300; // 300 * 16 KiB ~= 4.7 MiB, over twice the documented cap.
+    for (let i = 0; i < distinctLargeStrings; i += 1) {
+      estimateTokens(`chunk-${String(i)}-${"x".repeat(chunkBytes)}`);
+    }
+
+    const diagnostics = __contextTokenCacheDiagnosticsForTests();
+    expect(diagnostics.bytesRetained).toBeLessThanOrEqual(DOCUMENTED_CACHE_BYTE_CAP);
+    // Sanity: the cap is actually being exercised (fewer than all 300 distinct entries survive),
+    // not vacuously true because nothing was cached.
+    expect(diagnostics.entries).toBeLessThan(distinctLargeStrings);
+  });
+
+  it("never retains an entry count above TOKEN_ESTIMATE_CACHE_MAX_ENTRIES either", () => {
+    __resetContextTokenCacheForTests();
+    for (let i = 0; i < 5_000; i += 1) {
+      estimateTokens(`small-distinct-${String(i)}`);
+    }
+    expect(__contextTokenCacheDiagnosticsForTests().entries).toBeLessThanOrEqual(4_096);
   });
 });

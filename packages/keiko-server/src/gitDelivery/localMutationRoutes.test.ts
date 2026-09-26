@@ -8,19 +8,21 @@
 //     exercise the governed outcomes (success, preflight-block, policy-block, approval-required) and
 //     prove evidence is recorded and the mutation never bypasses the kernel.
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryRepoPolicyPack,
-  type WorkspaceInstance,
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  GitDeliveryExecutionResult,
+  GitDeliveryRepoPolicyPack,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
@@ -28,19 +30,24 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext, RouteResult } from "../routes.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   createGitDeliveryLocalMutationRouteGroup,
   createHandleLocalMutation,
   type GitDeliveryLocalErrorBody,
 } from "./localMutationRoutes.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "../task-workspace/naming.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 
@@ -141,13 +148,40 @@ function capturingEvidenceStore(throwOnPut = false): CapturingStore {
   };
 }
 
+interface CapturingActivityLog {
+  readonly activityLog: ServerLogSink;
+  readonly events: () => readonly ServerLogEvent[];
+}
+
+function capturingActivityLog(): CapturingActivityLog {
+  const events: ServerLogEvent[] = [];
+  return {
+    activityLog: {
+      write: (event: ServerLogEvent): void => {
+        events.push(event);
+      },
+    },
+    events: () => events,
+  };
+}
+
 let server: Server;
 let port: number;
 let staticRoot: string;
 let store: UiStore;
 let projectId: string;
 
-function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
+const LOCAL_BRANCH_AUTHORITY: CodingWorkbenchAuthorityEnvelope["branch"] = {
+  headRef: "feature/x",
+  baseRef: "main",
+  allowDetachedHead: false,
+  allowedPrefixes: ["feature/"],
+};
+
+function deps(
+  overrides: Partial<UiHandlerDeps> = {},
+  branch: CodingWorkbenchAuthorityEnvelope["branch"] = LOCAL_BRANCH_AUTHORITY,
+): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -157,8 +191,39 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      branch,
+    ),
     ...overrides,
   };
+}
+
+// #3347 managed-worktree identity: resolveRegisteredOrManagedWorkspaceRoot now composes
+// resolveManagedWorkspaceRootAccess, which re-proves a REAL Git linked-worktree pointer
+// (gitdir-identity.ts) instead of trusting path shape alone -- a plain mkdir with a placeholder
+// gitdirIdentity no longer admits. Builds a genuine `git worktree add` linkage rooted at
+// `sourceRepo` at `worktreePath` and returns its real gitdir identity for the fixture instance.
+function buildManagedGitWorktree(
+  sourceRepo: string,
+  worktreePath: string,
+  taskBranch: string,
+): string {
+  execFileSync("git", ["init", "-q"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: sourceRepo });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
+  mkdirSync(dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {
+    cwd: sourceRepo,
+  });
+  const inspection = inspectManagedGitdirIdentity(worktreePath, sourceRepo);
+  if (inspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return inspection.identity;
 }
 
 function managedWorkspaceDeps(taskId = "task-443"): {
@@ -168,10 +233,15 @@ function managedWorkspaceDeps(taskId = "task-443"): {
 } {
   const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-local-managed-")));
   const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-local-repo-")));
+  // Ownership must be established BEFORE anything creates a directory under the managed root: a
+  // recursive mkdir of the worktree parent would materialize the root itself under the ambient
+  // umask, and the marker initialization would then see "already exists" and never apply.
+  assertManagedRootOwned(managedRoot);
   const repositoryId = deriveRepositoryId(repoRoot);
   const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
   const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
-  mkdirSync(managedWorktreePath, { recursive: true });
+  const taskBranch = deriveTaskBranchName({ taskId });
+  const gitdirIdentity = buildManagedGitWorktree(repoRoot, managedWorktreePath, taskBranch);
   const instance: WorkspaceInstance = {
     schemaVersion: "1",
     workspaceId,
@@ -179,9 +249,9 @@ function managedWorkspaceDeps(taskId = "task-443"): {
     repositoryId,
     repositoryRoot: repoRoot,
     baseBranch: "main",
-    taskBranch: deriveTaskBranchName({ taskId }),
+    taskBranch,
     managedWorktreePath,
-    gitdirIdentity: "gitdir-hash",
+    gitdirIdentity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,
@@ -217,7 +287,13 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryExecutionSeams {
@@ -398,7 +474,15 @@ describe("local mutation routes — governed execution (direct handler + seams)"
           projectId: managed.instance.managedWorktreePath,
           branchName: "feature/x",
         }),
-        deps(managed.override),
+        deps({
+          ...managed.override,
+          gitDeliveryAuthority: permittedGitDeliveryAuthority(
+            () => managed.instance.managedWorktreePath,
+            () => managed.instance.managedWorktreePath,
+            "autonomous-delivery",
+            LOCAL_BRANCH_AUTHORITY,
+          ),
+        }),
       );
       expect(res.status).toBe(200);
       expect((res.body as { status: string }).status).toBe("succeeded");
@@ -430,7 +514,10 @@ describe("local mutation routes — governed execution (direct handler + seams)"
     );
     const res = await handler(
       ctxFor(SWITCH, { schemaVersion: "1", projectId, branchName: "feature/missing" }),
-      deps({ evidenceStore: cap.evidenceStore }),
+      deps(
+        { evidenceStore: cap.evidenceStore },
+        { ...LOCAL_BRANCH_AUTHORITY, headRef: "feature/missing" },
+      ),
     );
     expect((res.body as { status: string; preflightFindingCodes?: string[] }).status).toBe(
       "blocked",
@@ -484,6 +571,99 @@ describe("local mutation routes — governed execution (direct handler + seams)"
     expect(res.status).toBe(200);
     expect((res.body as { status: string }).status).toBe("succeeded");
   });
+
+  // Final-audit F1/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied
+  // EVERY local mutation with "approval-required" in governed-assist mode and no production path
+  // ever redeemed it — a governed-assist stage/unstage/branch-create/branch-switch was permanently
+  // unreachable regardless of any approval the human granted, contradicting AGENTS.md's
+  // governed-assist contract ("asks before workspace edits", not permanent deny). FAILING BEFORE
+  // THE FIX: the handler below returned 403 GIT_DELIVERY_AUTHORITY_DENIED at
+  // `gitDeliveryAuthorityDenial`, before ever reaching the pack's own approval-gated decision.
+  it("stages a change once approved in governed-assist mode, and fails-before the fix without that wiring", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const command = { kind: "stage" as const, pathspecs: ["a.txt"], includeUntracked: false };
+    const approvalGatedPack: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "stage", decision: "approval-gated", requiredApprovers: [] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const issued = approvalStore.issue({
+      binding: { projectId, operation: "local-mutation", command },
+      approvedByUserId: "local-operator",
+      nowMs: 1_700_000_000_000,
+    });
+    const adapter = recordingAdapter();
+    const handler = createHandleLocalMutation(
+      {
+        pattern: STAGE,
+        allowedKeys: new Set(["schemaVersion", "projectId", "approval", "pathspecs"]),
+        parse: () => ({ ok: true, command }),
+      },
+      {
+        execution: seams({
+          adapterFactory: () => adapter.adapter,
+          policyPacks: { repoPack: approvalGatedPack },
+          approvalStore,
+        }),
+      },
+    );
+    const governedAssistDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+    const res = await handler(
+      ctxFor(STAGE, { schemaVersion: "1", projectId, approval: issued.approval }),
+      governedAssistDeps,
+    );
+    expect(res.status).toBe(200);
+    expect((res.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["stage"]);
+  });
+
+  // Unlike a delivery effect (commit/push/…), a local mutation has no downstream soft
+  // "approval-required" response of its own to fall back to — the coarse admission gate IS the
+  // approval-required enforcement point here, so refusing without a matching claim surfaces as its
+  // ordinary 403 GIT_DELIVERY_AUTHORITY_DENIED, never a silent allow and never "mode-denied".
+  it("refuses with approval-required (never mode-denied, never a silent allow) in governed-assist mode when no claim is offered", async () => {
+    const approvalGatedPack: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "stage", decision: "approval-gated", requiredApprovers: [] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const adapter = recordingAdapter();
+    const handler = createHandleLocalMutation(
+      {
+        pattern: STAGE,
+        allowedKeys: new Set(["schemaVersion", "projectId", "approval", "pathspecs"]),
+        parse: () => ({
+          ok: true,
+          command: { kind: "stage", pathspecs: ["a.txt"], includeUntracked: false },
+        }),
+      },
+      {
+        execution: seams({
+          adapterFactory: () => adapter.adapter,
+          policyPacks: { repoPack: approvalGatedPack },
+        }),
+      },
+    );
+    const governedAssistDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+    const res = await handler(ctxFor(STAGE, { schemaVersion: "1", projectId }), governedAssistDeps);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(adapter.calls()).toEqual([]);
+  });
 });
 
 describe("local mutation routes — real specs through the route group (direct handler + seams)", () => {
@@ -500,6 +680,77 @@ describe("local mutation routes — real specs through the route group (direct h
   const CREATE = "/api/git-delivery/local-branch/create";
   const UNSTAGE = "/api/git-delivery/staging/unstage";
 
+  // Product decision, 2026-09-15: clicking inside the Git widget is a local operator action on the
+  // selected repository. It must not inherit the currently active coding run's internal worktree
+  // authority, otherwise the Git window shows and mutates a task branch while the header names the
+  // repository branch. This marker is accepted only on the UI local-mutation routes; the agent
+  // facade has a separate pin rejecting it.
+  it("admits a user-initiated repository branch switch outside the active task-worktree authority", async () => {
+    const adapter = recordingAdapter();
+    const log = capturingActivityLog();
+    const res = await handlerFor(
+      SWITCH,
+      seams({ adapterFactory: () => adapter.adapter, activityLog: log.activityLog }),
+    )(
+      ctxFor(SWITCH, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "feature/x",
+        userInitiated: true,
+      }),
+      deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => "/worktrees/active-task",
+          () => "/worktrees/active-task",
+          "autonomous-delivery",
+          LOCAL_BRANCH_AUTHORITY,
+        ),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["switchBranch"]);
+    const admission = log.events().find((event) => event.op === "git.delivery.authority.admitted");
+    expect(admission?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      operation: "branch-switch",
+      phase: "admission",
+      source: "local-user",
+    });
+  });
+
+  it("keeps managed task worktrees bound to their accepted run even for user-initiated local mutations", async () => {
+    const managed = managedWorkspaceDeps();
+    const adapter = recordingAdapter();
+    try {
+      const res = await handlerFor(SWITCH, seams({ adapterFactory: () => adapter.adapter }))(
+        ctxFor(SWITCH, {
+          schemaVersion: "1",
+          projectId: managed.instance.managedWorktreePath,
+          branchName: "feature/x",
+          userInitiated: true,
+        }),
+        deps({
+          ...managed.override,
+          gitDeliveryAuthority: permittedGitDeliveryAuthority(
+            () => projectId,
+            () => projectId,
+            "autonomous-delivery",
+            LOCAL_BRANCH_AUTHORITY,
+          ),
+        }),
+      );
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+      expect(adapter.calls()).toEqual([]);
+    } finally {
+      managed.cleanup();
+    }
+  });
+
   it("creates a branch via the real branch-create spec", async () => {
     const adapter = recordingAdapter();
     const res = await handlerFor(CREATE, seams({ adapterFactory: () => adapter.adapter }))(
@@ -510,10 +761,28 @@ describe("local mutation routes — real specs through the route group (direct h
         baseBranchName: "main",
         startPointRefHash: "HEAD",
       }),
-      deps(),
+      deps({}, { ...LOCAL_BRANCH_AUTHORITY, headRef: "feature/new" }),
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
     expect(adapter.calls()).toEqual(["createBranch"]);
+  });
+
+  it("denies branch creation outside the accepted run head and allowed prefix", async () => {
+    const adapter = recordingAdapter();
+    const res = await handlerFor(CREATE, seams({ adapterFactory: () => adapter.adapter }))(
+      ctxFor(CREATE, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "release/v9",
+        baseBranchName: "main",
+        startPointRefHash: "HEAD",
+      }),
+      deps(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(adapter.calls()).toEqual([]);
   });
 
   it("stages and unstages via the real staging specs", async () => {

@@ -583,8 +583,8 @@ describe("extractDocument — path containment", () => {
         return baseFs.realPath(absolutePath);
       },
       stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
-      readFileBytes: (absolutePath: string, maxBytes: number) =>
-        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes) ??
+      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy, expected) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy, expected) ??
         Promise.reject(new Error("readFileBytes unavailable")),
     };
     const registry = createDefaultParserRegistry();
@@ -629,6 +629,54 @@ describe("extractDocument — path containment", () => {
     if (excluded.outcome.kind === "failed")
       expect(excluded.outcome.error.code).toBe("INVALID_SCOPE");
     expect(count("documents")).toBe(0);
+  });
+
+  it("rejects extraction when the scope root itself was retargeted to a denied locus before this read (#3347)", async () => {
+    // Verified exploit class: a lexical source initially admitted as safe (e.g. a symlinked
+    // scope root) is retargeted -- via the underlying symlink -- to a denied directory such
+    // as ~/.ssh before extractDocument re-resolves its own containment base. A plain
+    // realPath(root) only follows the symlink; it never asks whether the resolved target is
+    // itself a denied locus, so the retargeted root would otherwise be trusted as the new
+    // containment base and the file inside it read.
+    // "notes.txt" (not "id_rsa"/".env"/etc.) so the assertion below can only be explained by the
+    // ROOT admission -- a denied FILENAME would be rejected earlier, by isSelectedByScope's own
+    // isDenied() check, and would not exercise the root-swap fix at all.
+    const deniedRoot = "/home/test/.ssh";
+    const baseFs = memoryFs(deniedRoot, [
+      { relativePath: "notes.txt", content: "id_rsa contents" },
+    ]);
+    // The scope's lexical root -- and every path lexically beneath it, exactly like a real
+    // symlinked directory -- resolves through a symlink that was swapped, between admission and
+    // this read, to point at the denied directory. Every stat/byte-read call below must apply
+    // the SAME translation a real symlinked mount would (baseFs's own map is keyed under
+    // deniedRoot), or a still-lexical requestedAbsolutePath fails for an unrelated ENOENT
+    // instead of proving the fix actually stopped a real read.
+    const toRealPath = (absolutePath: string): string =>
+      absolutePath === ROOT
+        ? deniedRoot
+        : absolutePath.startsWith(`${ROOT}/`)
+          ? `${deniedRoot}/${absolutePath.slice(ROOT.length + 1)}`
+          : absolutePath;
+    const fs: ReturnType<typeof memoryFs> = {
+      ...baseFs,
+      realPath: toRealPath,
+      stat: (absolutePath: string) => baseFs.stat(toRealPath(absolutePath)),
+      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy, expected) =>
+        baseFs.readFileBytes?.(toRealPath(absolutePath), maxBytes, hardLinkPolicy, expected) ??
+        Promise.reject(new Error("readFileBytes unavailable")),
+    };
+    const registry = createDefaultParserRegistry();
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "notes.txt", sizeBytes: 15 } },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("PATH_ESCAPE");
+    expect(count("documents")).toBe(1);
+    expect(count("document_texts")).toBe(0);
   });
 
   it("rechecks denied real paths before reading direct extraction targets", async () => {
@@ -711,11 +759,16 @@ describe("extractDocument — path containment", () => {
 
   it("rejects direct extraction targets when byte reads are shorter than the selected size", async () => {
     const baseFs = memoryFs(ROOT, [{ relativePath: "docs/short.txt", content: "secret" }]);
-    const fs = {
+    const fs: ReturnType<typeof memoryFs> = {
       ...baseFs,
-      readFileBytes: async (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath: string,
+        maxBytes: number,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         if (baseFs.readFileBytes === undefined) throw new Error("readFileBytes unavailable");
-        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes);
+        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
       },
     };

@@ -1,8 +1,10 @@
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import {
   launcherFor,
   linuxLauncher,
   macosLauncher,
+  parseWindowsLauncherContent,
   windowsLauncher,
   validateExecPath,
   validatePort,
@@ -36,6 +38,24 @@ const ADVERSARIAL_EXEC_PATHS: readonly (readonly [string, string])[] = [
   ["/usr/local/bin/keiko\t-x", "tab"],
   ["/usr/local/bin/keiko\x00x", "NUL byte"],
 ];
+
+// Immutable historical command bytes from the launcher Keiko shipped before the trusted absolute
+// PowerShell resolver was introduced. This is deliberately not derived from today's generator: an
+// upgrade must keep recognizing this exact old artifact even if the current script later changes.
+const PREVIOUSLY_SHIPPED_POWERSHELL_LINE =
+  "@powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " +
+  "JABlAHgAZQA9AFsAUwB5AHMAdABlAG0ALgBUAGUAeAB0AC4ARQBuAGMAbwBkAGkAbgBnAF0AOgA6AFUAVABGADgALgBHAGUAdABTAHQAcgBpAG4AZwAoAFsAUwB5AHMAdABlAG0ALgBDAG8AbgB2AGUAcgB0AF0AOgA6AEYAcgBvAG0AQgBhAHMAZQA2ADQAUwB0AHIAaQBuAGcAKAAkAGUAbgB2ADoASwBFAEkASwBPAF8ARQBYAEUAXwBCADYANAApACkAOwAkAGEAcgBnAHUAbQBlAG4AdABzAD0AQAAoACcAcwB0AGEAcgB0ACcALAAnAC0ALQBvAHAAZQBuACcAKQA7AGkAZgAoACQAZQBuAHYAOgBLAEUASQBLAE8AXwBQAE8AUgBUACkAewAkAGEAcgBnAHUAbQBlAG4AdABzACsAPQBAACgAJwAtAC0AcABvAHIAdAAnACwAJABlAG4AdgA6AEsARQBJAEsATwBfAFAATwBSAFQAKQB9ADsAUwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJABlAHgAZQAgAC0AQQByAGcAdQBtAGUAbgB0AEwAaQBzAHQAIAAkAGEAcgBnAHUAbQBlAG4AdABzAA==";
+
+function previouslyShippedWindowsLauncher(exe: string, port?: number): string {
+  return [
+    "@setlocal DisableDelayedExpansion",
+    `@set "KEIKO_EXE_B64=${Buffer.from(exe, "utf8").toString("base64")}"`,
+    `@set "KEIKO_PORT=${port === undefined ? "" : String(port)}"`,
+    PREVIOUSLY_SHIPPED_POWERSHELL_LINE,
+    "@endlocal",
+    "",
+  ].join("\r\n");
+}
 
 describe("validateExecPath", () => {
   it("accepts plain POSIX paths", () => {
@@ -176,6 +196,8 @@ describe("macosLauncher", () => {
 });
 
 describe("windowsLauncher", () => {
+  const powerShellPath = String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
+  const parseOptions = { resolveTrustedWindowsPowerShell: (): string => powerShellPath };
   it("installs under %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs", () => {
     expect(windowsLauncher.installDirFor("C:\\Users\\me")).toBe(
       "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
@@ -194,13 +216,106 @@ describe("windowsLauncher", () => {
       '@start "" C:\\Tools\\keiko.exe start --open --port 5000\r\n',
     );
   });
-  it("refuses an unsafe exec path", () => {
+  it("encodes and round-trips Unicode and cmd metacharacters through ASCII-only content", () => {
+    const exe = "C:\\Users\\José\\Kéiko & 100% ! ^ (Programs)\\Keiko.exe";
+    const content = windowsLauncher.generateContent({
+      exe,
+      port: undefined,
+      windowsPowerShellPath: powerShellPath,
+    });
+
+    expect(content).toContain(
+      `@"${powerShellPath}" -NoLogo -NoProfile -NonInteractive -EncodedCommand `,
+    );
+    expect(content).not.toContain(exe);
+    expect(Array.from(content).every((character) => character.charCodeAt(0) <= 0x7f)).toBe(true);
+    expect(parseWindowsLauncherContent(content)).toBeUndefined();
+    expect(parseWindowsLauncherContent(content, parseOptions)).toBe(exe);
+  });
+  it("accepts the 4096-character Windows path boundary and rejects empty or longer paths", () => {
+    const boundary = `C:\\${"a".repeat(4093)}`;
+    expect(windowsLauncher.generateContent({ exe: boundary, port: undefined })).toContain("@start");
+    expect(() => windowsLauncher.generateContent({ exe: "", port: undefined })).toThrow(
+      "resolved executable path is empty",
+    );
+    expect(() => windowsLauncher.generateContent({ exe: `${boundary}a`, port: undefined })).toThrow(
+      "exceeds 4096",
+    );
+  });
+  it("rejects malformed encoded executable and port fields", () => {
+    const generated = windowsLauncher.generateContent({
+      exe: "C:\\Program Files\\Keiko\\keiko.exe",
+      port: 5000,
+      windowsPowerShellPath: powerShellPath,
+    });
+    expect(
+      parseWindowsLauncherContent(
+        generated.replace(/KEIKO_EXE_B64=[^"]+/u, "KEIKO_EXE_B64=%"),
+        parseOptions,
+      ),
+    ).toBeUndefined();
+    expect(
+      parseWindowsLauncherContent(
+        generated.replace("KEIKO_PORT=5000", "KEIKO_PORT=80"),
+        parseOptions,
+      ),
+    ).toBeUndefined();
+  });
+  it.each(['C:\\bad"path\\keiko.exe', "C:\\bad\npath\\keiko.exe"])(
+    "refuses a Windows exec path that cannot be quoted safely: %s",
+    (exe) => {
+      expect(() => windowsLauncher.generateContent({ exe, port: undefined })).toThrow(
+        LauncherError,
+      );
+    },
+  );
+  it("rejects modified encoded registration content", () => {
+    const generated = windowsLauncher.generateContent({
+      exe: "C:\\Program Files\\100% Keiko\\keiko.exe",
+      port: 5000,
+      windowsPowerShellPath: powerShellPath,
+    });
+    expect(parseWindowsLauncherContent(generated, parseOptions)).toBe(
+      "C:\\Program Files\\100% Keiko\\keiko.exe",
+    );
+    expect(
+      parseWindowsLauncherContent(`${generated.slice(0, -3)}A\r\n`, parseOptions),
+    ).toBeUndefined();
+  });
+
+  it("rejects a foreign absolute PowerShell path that differs from the trusted resolver", () => {
+    const exe = "C:\\Program Files\\Keiko\\keiko.exe";
+    const foreignPowerShell = String.raw`C:\attacker\System32\WindowsPowerShell\v1.0\powershell.exe`;
+    const content = windowsLauncher.generateContent({
+      exe,
+      port: undefined,
+      windowsPowerShellPath: foreignPowerShell,
+    });
+
+    expect(
+      parseWindowsLauncherContent(content, {
+        resolveTrustedWindowsPowerShell: () => powerShellPath,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("recognizes the exact previously shipped @powershell.exe encoded launcher", () => {
+    const exe = "C:\\Program Files\\Keiko\\keiko.exe";
+    const content = previouslyShippedWindowsLauncher(exe);
+
+    expect(parseWindowsLauncherContent(content)).toBe(exe);
+    expect(
+      parseWindowsLauncherContent(content.replace("@powershell.exe", "@foreign-powershell.exe")),
+    ).toBeUndefined();
+  });
+
+  it("fails closed instead of emitting a runtime SystemRoot expansion", () => {
     expect(() =>
       windowsLauncher.generateContent({
         exe: "C:\\Program Files\\Keiko\\keiko.exe",
         port: undefined,
       }),
-    ).toThrow(LauncherError);
+    ).toThrow("identity-validated absolute PowerShell path");
   });
 });
 

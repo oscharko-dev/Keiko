@@ -88,6 +88,7 @@ function makeReq(body: Record<string, unknown>): IncomingMessage {
 
 function ctx(req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: {},

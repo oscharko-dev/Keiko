@@ -12,15 +12,17 @@ import {
 } from "./chat-handlers.js";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  ContextProfile,
+  ConversationDocumentContextWire,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CONTEXT_PROFILE,
   countContextTokens,
   countContextTokensForSegments,
   deriveContextProfile,
   estimateTokensForSegments,
-  type ContextProfile,
-  type ConversationDocumentContextWire,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONVERSATION_SYSTEM_PROMPT,
   renderConversationDocumentContextBlock,

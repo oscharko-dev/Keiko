@@ -5,29 +5,21 @@
 // must accept that root only when it can be re-proven from the persisted WorkspaceInstance and the
 // Keiko-owned managed root. This does not grant arbitrary filesystem authority: the leaf id, persisted
 // path, derived managed path, realpath containment, and on-disk presence must all agree.
+//
+// This file owns only the WEAK, path-shape half of that proof (leaf-id derivation + containment +
+// existence). workspace-root-access.ts's resolveManagedWorkspaceRootAccess composes THIS lookup into
+// its STRONGER proof (ownership-marker check, lifecycle state, re-verified gitdir identity), and every
+// WorkspaceInfo-returning route surface now lives there too, so there is exactly one managed-root
+// prover instead of two authority stacks that could silently disagree (#3347 review).
 
 import { basename } from "node:path";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import type { UiHandlerDeps } from "../deps.js";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { isManagedTargetContained, managedTargetExists } from "./managed-root.js";
 import { deriveManagedWorktreePath } from "./naming.js";
 
-type ManagedRootDeps = Pick<
-  UiHandlerDeps,
-  "managedTaskWorkspaceRoot" | "store" | "workspaceProvisioning"
->;
-
-function workspaceInfo(root: string): WorkspaceInfo {
-  return {
-    root,
-    name: undefined,
-    version: undefined,
-    testFramework: "unknown",
-    sourceDirs: [],
-    testDirs: [],
-    languages: [],
-    ignoreLines: [],
-  };
+export interface ManagedTaskWorkspaceLookup {
+  readonly managedRoot: string | undefined;
+  readonly getInstance: (workspaceId: string) => WorkspaceInstance | undefined;
 }
 
 // Trims trailing path separators without a regex: `/[/\\]+$/` pairs an unbounded quantifier with
@@ -43,16 +35,18 @@ function pathLeaf(path: string): string {
   return basename(trimTrailingSeparators(path));
 }
 
-export function resolveManagedTaskWorkspaceRoot(
-  deps: Pick<ManagedRootDeps, "managedTaskWorkspaceRoot" | "workspaceProvisioning">,
+// The weak half of managed-root authorization: derives the workspace leaf id from the candidate
+// root, re-derives the expected managed path from the persisted instance, and checks lexical
+// agreement + realpath containment + on-disk presence. This alone never proves ownership, lifecycle
+// state, or Git identity — resolveManagedWorkspaceRootAccess (workspace-root-access.ts) composes it
+// with those stronger checks before granting any WorkspaceRootAccess capability.
+export function resolveManagedTaskWorkspaceInstanceFromLookup(
+  lookup: ManagedTaskWorkspaceLookup,
   root: string,
-): WorkspaceInfo | undefined {
-  const managedRoot = deps.managedTaskWorkspaceRoot;
-  const provisioning = deps.workspaceProvisioning;
-  if (managedRoot === undefined || provisioning === undefined || root.length === 0) {
-    return undefined;
-  }
-  const instance = provisioning.getInstance(pathLeaf(root));
+): WorkspaceInstance | undefined {
+  const managedRoot = lookup.managedRoot;
+  if (managedRoot === undefined || root.length === 0) return undefined;
+  const instance = lookup.getInstance(pathLeaf(root));
   if (instance === undefined) return undefined;
   const expected = deriveManagedWorktreePath({
     managedRoot,
@@ -62,15 +56,5 @@ export function resolveManagedTaskWorkspaceRoot(
   if (root !== expected || instance.managedWorktreePath !== expected) return undefined;
   if (!isManagedTargetContained(managedRoot, instance.managedWorktreePath)) return undefined;
   if (!managedTargetExists(instance.managedWorktreePath)) return undefined;
-  return workspaceInfo(instance.managedWorktreePath);
-}
-
-export function resolveRegisteredOrManagedWorkspaceRoot(
-  deps: ManagedRootDeps,
-  root: string,
-): WorkspaceInfo | undefined {
-  for (const project of deps.store.listProjects()) {
-    if (project.path === root) return workspaceInfo(project.path);
-  }
-  return resolveManagedTaskWorkspaceRoot(deps, root);
+  return instance;
 }

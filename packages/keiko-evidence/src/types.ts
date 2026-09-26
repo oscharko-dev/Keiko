@@ -31,8 +31,6 @@ export type {
   EvidenceConnectedContextUncertainty,
   EvidenceConnectedContextPlan,
   EvidenceConnectedContextAudit,
-  ContextAssemblyDiagnostics,
-  ContextCompactionRecord,
   EvidenceManifest,
   AuditRedactionConfig,
   RetentionPolicy,
@@ -41,4 +39,11 @@ export type {
   EvidenceDeps,
   EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
-export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "@oscharko-dev/keiko-contracts";
+export type {
+  ContextAssemblyDiagnostics,
+  ContextCompactionRecord,
+} from "@oscharko-dev/keiko-contracts";
+export {
+  EVIDENCE_SCHEMA_VERSION,
+  DEFAULT_RETENTION,
+} from "@oscharko-dev/keiko-contracts/runtime/evidence";

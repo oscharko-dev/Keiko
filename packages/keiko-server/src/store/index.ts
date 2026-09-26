@@ -11,6 +11,7 @@ export type {
   ChatTurnInspection,
   CreateChatOptions,
   GroundedAnswer,
+  GitHubIssueReaderAuthorizationRecord,
   MemoryAutonomyPolicyRecord,
   NewChatMessage,
   Project,
@@ -26,6 +27,8 @@ export type {
   WorkspaceManifestRootProject,
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
 } from "./types.js";
 export {
   UiStoreError,
@@ -52,9 +55,12 @@ export {
 export { runMigrations, SCHEMA_VERSION, UiStoreSchemaVersionError } from "./schema.js";
 export {
   buildUiStoreOverDatabase,
+  computeStoreFingerprint,
   createInMemoryUiStore,
   createNodeUiStore,
   isProjectAvailable,
   openNodeUiDatabase,
+  openNodeUiDatabaseReadOnly,
   UI_DB_BUSY_TIMEOUT_MS,
+  UI_STORE_FINGERPRINT_TABLES,
 } from "./db.js";

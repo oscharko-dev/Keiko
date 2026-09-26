@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import {
-  CODING_CONTEXT_SCHEMA_VERSION,
-  notRunTestGenerationFunnel,
-  type CodingContextCitation,
-  type CodingContextSourceKind,
-  type CodingContextWirePack,
-  type EditorTestGenerationWireResponse,
+import type {
+  CodingContextCitation,
+  CodingContextSourceKind,
+  CodingContextWirePack,
+  EditorTestGenerationWireResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import { notRunTestGenerationFunnel } from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
 import type { Redactor } from "../deps.js";
 import {
   recordTestGenerationEvidence,

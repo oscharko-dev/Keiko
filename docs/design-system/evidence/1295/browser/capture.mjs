@@ -5,11 +5,11 @@
 // Dark, High Contrast, reduced-motion and forced-colors. The static export MUST be rebuilt from the
 // migrated globals.css before running this (npm run build --workspace @oscharko-dev/keiko-ui).
 //
-//   node .keiko/1295-browser-evidence.mjs            # writes PNGs into the OUT_DIR below
+//   node docs/design-system/evidence/1295/browser/capture.mjs   # writes PNGs into the OUT_DIR below
 //
 import { chromium } from "playwright";
 import { createServer } from "node:http";
-import { readFile, stat, mkdir } from "node:fs/promises";
+import { readFile, stat, mkdir, realpath } from "node:fs/promises";
 import { join, extname, resolve, dirname, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,7 @@ const REPO = resolve(HERE, "../../../../..");
 const ROOT = resolve(REPO, "packages/keiko-ui/out");
 const OUT_DIR = resolve(REPO, "docs/design-system/evidence/1295/browser");
 await mkdir(OUT_DIR, { recursive: true });
+const ROOT_REAL = await realpath(ROOT);
 
 const MIME = {
   ".html": "text/html",
@@ -33,7 +34,6 @@ const MIME = {
   ".txt": "text/plain",
   ".map": "application/json",
 };
-const ROOT_RESOLVED = resolve(ROOT);
 const server = createServer(async (req, res) => {
   try {
     const requested = decodeURIComponent((req.url ?? "/").split("?")[0]);
@@ -41,8 +41,8 @@ const server = createServer(async (req, res) => {
     // ".." segment so the resolved path can never escape the served directory, and
     // the startsWith guard is a belt-and-braces check (CodeQL path-injection hardening).
     const safe = normalize("/" + (requested === "/" ? "index.html" : requested));
-    let fp = join(ROOT_RESOLVED, safe);
-    if (fp !== ROOT_RESOLVED && !fp.startsWith(ROOT_RESOLVED + sep)) {
+    let fp = join(ROOT_REAL, safe);
+    if (fp !== ROOT_REAL && !fp.startsWith(ROOT_REAL + sep)) {
       res.writeHead(403, { "content-type": "text/plain" });
       return res.end("forbidden");
     }
@@ -51,11 +51,23 @@ const server = createServer(async (req, res) => {
     } catch {}
     let buf;
     try {
+      // realpath containment mirrors #1300/browser/capture.mjs: even if a symlink slipped past the
+      // string-prefix guard, the file that would actually be read cannot escape ROOT_REAL.
+      const realFile = await realpath(fp);
+      if (realFile !== ROOT_REAL && !realFile.startsWith(ROOT_REAL + sep)) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        return res.end("forbidden");
+      }
       buf = await readFile(fp);
     } catch {
       try {
-        buf = await readFile(fp + ".html");
         fp += ".html";
+        const realFile = await realpath(fp);
+        if (realFile !== ROOT_REAL && !realFile.startsWith(ROOT_REAL + sep)) {
+          res.writeHead(403, { "content-type": "text/plain" });
+          return res.end("forbidden");
+        }
+        buf = await readFile(fp);
       } catch {
         res.writeHead(404, { "content-type": "text/plain" });
         return res.end("not found");
@@ -73,7 +85,15 @@ const server = createServer(async (req, res) => {
     res.end("internal error");
   }
 });
-await new Promise((r) => server.listen(4611, "127.0.0.1", r));
+// Fail fast on a bound-port collision instead of silently deadlocking the harness on the pending
+// listen() promise. #1300/browser/capture.mjs uses the same shape.
+await new Promise((resolveListen, rejectListen) => {
+  server.once("error", rejectListen);
+  server.listen(4611, "127.0.0.1", () => {
+    server.off("error", rejectListen);
+    resolveListen();
+  });
+});
 const BASE = "http://127.0.0.1:4611";
 
 // theme/contrast/motion modes (mirror the equivalence-harness 7-mode matrix)
@@ -95,11 +115,15 @@ const VIEWPORTS = [
   { id: "tablet", width: 900, height: 1024 },
   { id: "mobile", width: 420, height: 820 },
 ];
+// The `/memoriaviva` route stub was deleted in #2894 (KEIKO-0129); production `serveStatic`
+// falls back to the desktop shell for bookmarked deep links, but this evidence server serves
+// static files without that fallback and would 404. The in-desktop `memoria` window (owned by
+// #1295) is the surviving surface — reproduce it inside the shell via the `/` route rather
+// than a top-level URL.
 const ROUTES = [
   { id: "home", path: "/" },
   { id: "launch", path: "/launch" },
   { id: "local-knowledge", path: "/local-knowledge" },
-  { id: "memoriaviva", path: "/memoriaviva" },
 ];
 
 const browser = await chromium.launch();
@@ -116,23 +140,28 @@ for (const vp of VIEWPORTS) {
     });
     const page = await ctx.newPage();
     if (mode.media.contrast) await page.emulateMedia({ contrast: "more" });
+    // Register the pageerror listener and the localStorage init script ONCE per page. The mutable
+    // `errs` array is reset per route below so each iteration reports only its own errors, while
+    // the single listener keeps pushing into the same buffer — matching this file's per-(viewport,
+    // mode) page-reuse design.
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    await page.addInitScript((t) => {
+      try {
+        localStorage.setItem("keiko.theme", t);
+      } catch {}
+    }, mode.theme);
     for (const route of ROUTES) {
       // mobile/tablet only need the primary surfaces to bound shot count
       if (vp.id !== "desktop" && route.id !== "home") continue;
-      const errs = [];
-      page.on("pageerror", (e) => errs.push(String(e)));
-      await page.addInitScript((t) => {
-        try {
-          localStorage.setItem("keiko.theme", t);
-        } catch {}
-      }, mode.theme);
+      errs.length = 0;
       await page.goto(BASE + route.path, { waitUntil: "networkidle", timeout: 30000 });
       await page.evaluate(
         ({ theme, hc }) => {
           const r = document.documentElement;
-          r.setAttribute("data-theme", theme);
-          r.removeAttribute("data-hc");
-          if (hc) r.setAttribute("data-hc", hc);
+          r.dataset.theme = theme;
+          delete r.dataset.hc;
+          if (hc) r.dataset.hc = hc;
         },
         { theme: mode.theme, hc: mode.hc },
       );

@@ -31,16 +31,18 @@ describe("buildAppliedLimits — honest enforced flags (ADR-0007 D2)", () => {
     expect(net?.note).toContain("keiko-sandbox");
   });
 
-  it("memory is enforced only on Linux with a ceiling set; otherwise it carries a note", () => {
+  it("reports process-tree memory enforcement only when the monitor attests it", () => {
     const withCeiling = { ...DEFAULT_VERIFICATION_LIMITS, maxMemoryBytes: 1024 };
-    const mem = buildAppliedLimits(withCeiling, undefined).find((r) => r.dimension === "memory");
-    if (process.platform === "linux") {
-      expect(mem?.enforced).toBe(true);
-      expect(mem?.note).toBeUndefined();
-    } else {
-      expect(mem?.enforced).toBe(false);
-      expect(mem?.note).toContain("best-effort");
-    }
+    const enforced = buildAppliedLimits(withCeiling, undefined, false, true).find(
+      (r) => r.dimension === "memory",
+    );
+    const unavailable = buildAppliedLimits(withCeiling, undefined, false, false).find(
+      (r) => r.dimension === "memory",
+    );
+    expect(enforced?.enforced).toBe(true);
+    expect(enforced?.note).toBeUndefined();
+    expect(unavailable?.enforced).toBe(false);
+    expect(unavailable?.note).toContain("process-tree");
   });
 
   it("memory is never enforced without a ceiling, even on Linux", () => {

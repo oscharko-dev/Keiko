@@ -190,6 +190,30 @@ describe("ProblemsPanel", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  // KEIKO-0268: the row's aria-label previously replaced the diagnostic with a location string,
+  // hiding severity + message from assistive tech. Composed accessible name must surface both.
+  it("exposes severity and message in the accessible name of a jumpable row", () => {
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [
+      diagnostic("error", 11, "Cannot find name X"),
+    ]);
+    render(<ProblemsPanel root="/ws" openEditorFile={vi.fn()} />);
+    const row = screen.getByRole("option", { name: /Errors: Cannot find name X/ });
+    expect(row).toBeInTheDocument();
+    expect(row).toHaveAccessibleName(expect.stringContaining("src/a.ts"));
+    expect(row).toHaveAccessibleName(expect.stringContaining("12"));
+  });
+
+  it("localizes the composed jumpable accessible name in German", () => {
+    expect(
+      translateProblems("de", "problems.jumpToWithDetails", {
+        severity: "Fehler",
+        message: "Name nicht gefunden",
+        file: "src/a.ts",
+        line: 7,
+      }),
+    ).toBe("Fehler: Name nicht gefunden. src/a.ts in Zeile 7 öffnen");
+  });
+
   it("moves DOM focus with Arrow, Home, and End and activates the focused row with Space", () => {
     const openEditorFile = vi.fn(() => ({ ok: true }) as never);
     setPaneDiagnostics("/ws", "window-a", "src/a.ts", [

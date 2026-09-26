@@ -26,6 +26,7 @@ const evidenceCheckCorrection: DiscussionEvalFixture = {
     expectedUncertaintyDisclosure: true,
     expectedDecisionRecommendation: false,
     expectedContradictionPolicies: ["disclose-and-defer"],
+    expectsRecoveredContext: false,
   },
 };
 
@@ -51,6 +52,7 @@ const voiceEvidenceCheckCorrection: DiscussionEvalFixture = {
     expectedUncertaintyDisclosure: true,
     expectedDecisionRecommendation: false,
     expectedContradictionPolicies: ["disclose-and-defer"],
+    expectsRecoveredContext: false,
   },
 };
 

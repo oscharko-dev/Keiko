@@ -12,7 +12,10 @@
 // Playwright; the executable AC coverage that runs in `ci` lives in the keiko-ui vitest suites.
 
 import { expect, test, type Page } from "@playwright/test";
+import { openChatComposer } from "./support/chat-composer.js";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
+import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 
 const STT_CAPABILITY = {
   voice: {
@@ -34,70 +37,23 @@ const NO_VOICE_CAPABILITY = {
   },
 };
 
-// Injected before any app script runs: a fake getUserMedia + MediaRecorder so the real component code
-// exercises a complete capture cycle in the browser without touching hardware or a provider.
-function fakeMediaInit(mode: "grant" | "deny"): string {
-  return `
-    (() => {
-      const mode = ${JSON.stringify(mode)};
-      const fakeTrack = { stop() {} };
-      const fakeStream = { getTracks: () => [fakeTrack] };
-      Object.defineProperty(navigator, "mediaDevices", {
-        configurable: true,
-        value: {
-          getUserMedia: async () => {
-            if (mode === "deny") {
-              const error = new Error("denied");
-              error.name = "NotAllowedError";
-              throw error;
-            }
-            return fakeStream;
-          },
-        },
-      });
-      class FakeMediaRecorder {
-        static isTypeSupported() { return true; }
-        constructor() { this.state = "inactive"; this.mimeType = "audio/webm"; this._l = {}; }
-        addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
-        emit(type, event = {}) {
-          for (const cb of this._l[type] || []) cb(event);
-        }
-        start() {
-          this.state = "recording";
-          queueMicrotask(() => this.emit("start"));
-        }
-        requestData() {
-          if (this.state !== "recording") return;
-          this.emit("dataavailable", {
-            data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
-          });
-        }
-        stop() {
-          this.state = "inactive";
-          this.emit("dataavailable", {
-            data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
-          });
-          this.emit("stop");
-        }
-      }
-      window.MediaRecorder = FakeMediaRecorder;
-    })();
-  `;
-}
-
-async function openComposer(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat History", exact: true }).click();
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
-}
+const FULL_VOICE_CAPABILITY = {
+  voice: {
+    available: true,
+    profile: "full-realtime",
+    capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+    transport: { websocketControl: true, webrtcMedia: true },
+    availableVoicePersonas: ["neutral"],
+    providerLocality: "azure-foundry",
+  },
+};
 
 // Each flow is a top-level helper so the test wiring stays well under the max-lines-per-function gate.
 async function noVoiceFlow(page: Page): Promise<void> {
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(NO_VOICE_CAPABILITY) }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -105,7 +61,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
 }
 
 async function dictateInsertFlow(page: Page): Promise<void> {
-  await page.addInitScript(fakeMediaInit("grant"));
+  await page.addInitScript(fakeDictationMediaInit("grant"));
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(STT_CAPABILITY) }),
   );
@@ -115,7 +71,7 @@ async function dictateInsertFlow(page: Page): Promise<void> {
       body: JSON.stringify({ transcript: "dictated hello from the smoke test", confidence: 0.9 }),
     }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
 
   const mic = page.getByRole("button", { name: "Dictate a message" });
   await expect(mic).toBeVisible();
@@ -140,11 +96,11 @@ async function dictateInsertFlow(page: Page): Promise<void> {
 }
 
 async function deniedPermissionFlow(page: Page): Promise<void> {
-  await page.addInitScript(fakeMediaInit("deny"));
+  await page.addInitScript(fakeDictationMediaInit("deny"));
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(STT_CAPABILITY) }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
 
   await page.getByRole("button", { name: "Dictate a message" }).click();
   // Scope to the dictation error text — Next.js also renders an empty role="alert" route announcer.
@@ -170,4 +126,44 @@ test("composer dictation @smoke — denied permission does not break the compose
   page,
 }) => {
   await deniedPermissionFlow(page);
+});
+
+test("coding workbench dictation @smoke — full voice capability still uses STT only", async ({
+  page,
+}) => {
+  const workbench = await installLiveCodingWorkbenchRuntime(page);
+  await page.addInitScript(fakeDictationMediaInit("grant"));
+  await page.route("**/api/voice/capability", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(FULL_VOICE_CAPABILITY) }),
+  );
+  let transcriptionCalls = 0;
+  await page.route("**/api/voice/transcribe", (route) => {
+    transcriptionCalls += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript: "inspect this repository", confidence: 0.9 }),
+    });
+  });
+  const voiceRequests: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      path.startsWith("/api/voice/") &&
+      path !== "/api/voice/capability" &&
+      path !== "/api/voice/transcribe"
+    )
+      voiceRequests.push(path);
+  });
+  await workbench.open();
+  await page.getByRole("button", { name: "Dictate a message" }).click();
+  await page.getByRole("button", { name: "Stop dictation" }).click();
+  await expect(page.getByRole("textbox", { name: "Review your dictation" })).toHaveValue(
+    "inspect this repository",
+  );
+  await page.getByRole("button", { name: "Insert transcript into the message" }).click();
+  await expect(page.getByRole("textbox", { name: "Task instructions" })).toHaveValue(
+    "inspect this repository",
+  );
+  expect(transcriptionCalls).toBe(1);
+  expect(voiceRequests).toEqual([]);
 });

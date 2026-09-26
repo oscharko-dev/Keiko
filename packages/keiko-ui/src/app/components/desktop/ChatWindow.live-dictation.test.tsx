@@ -2,7 +2,7 @@
 // only for full-realtime + browser WebRTC posture, and the dictation mic remains separate from Voice
 // Dialogue's switch/controller.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -242,7 +242,14 @@ function renderWindow(session: ChatSessionApi = makeSession()): void {
 }
 
 function latestDictationOptions(): { readonly realtime?: { readonly enabled: boolean } } {
-  const latest = dictationMock.options.at(-1);
+  // Digital Twin also owns a dictation hook now. Select the Composer's hook by its realtime
+  // configuration rather than whichever hook happened to render last.
+  let latest: unknown;
+  for (const options of dictationMock.options) {
+    if (typeof options === "object" && options !== null && "realtime" in options) {
+      latest = options;
+    }
+  }
   expect(latest).toBeDefined();
   return latest as { readonly realtime?: { readonly enabled: boolean } };
 }
@@ -271,6 +278,25 @@ afterEach(() => {
 });
 
 describe("ChatWindow live dictation mode selection", () => {
+  it("cancels microphone capture when its window becomes suspended", () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
+    stubCaptureBrowser();
+    const value = makeSession();
+    const rendered = render(
+      <ChatSessionProvider value={value}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(dictationMock.cancel).not.toHaveBeenCalled();
+    rendered.rerender(
+      <ChatSessionProvider value={value}>
+        <ChatWindow suspended />
+      </ChatSessionProvider>,
+    );
+    expect(dictationMock.cancel).toHaveBeenCalledOnce();
+  });
+
   it("keeps STT-only dictation on the batch path", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
     stubCaptureBrowser();
@@ -291,14 +317,16 @@ describe("ChatWindow live dictation mode selection", () => {
     expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
   });
 
-  it("falls back to batch dictation when full-realtime is advertised but WebRTC APIs are absent", async () => {
+  it("uses batch capture and never starts Realtime without browser WebRTC APIs", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME });
     stubCaptureBrowser();
     renderWindow();
 
     await screen.findByRole("button", { name: "Dictate a message" });
     expect(latestDictationOptions().realtime?.enabled).toBe(false);
-    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
+    await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
+    await waitFor(() => expect(dictationMock.start).toHaveBeenCalledOnce());
+    expect(realtimeVoiceMock.start).not.toHaveBeenCalled();
   });
 
   it("keeps dictation and Voice Dialogue controls separate", async () => {
@@ -343,7 +371,7 @@ describe("insertTranscript composer join (SonarCloud S8786 regression)", () => {
 
     await screen.findByRole("button", { name: "Dictate a message" });
 
-    const { onInsert } = dictationMock.options.at(-1) as UseDictationOptions;
+    const { onInsert } = latestDictationOptions() as UseDictationOptions;
     const start = performance.now();
     onInsert("hello");
     const elapsed = performance.now() - start;

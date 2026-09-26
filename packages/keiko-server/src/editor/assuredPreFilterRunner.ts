@@ -23,14 +23,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import {
-  DEFAULT_SANDBOX_POLICY,
-  isValidScopePath,
-  type CommandRule,
-  type EditorTestGenerationWirePatch,
-  type EditorTestGenerationWireRequest,
-  type EditorTestGenerationWireTarget,
+import type {
+  CommandRule,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { runCommand } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import {
@@ -40,6 +40,8 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { AssuredPreFilterOutcome } from "./assuredPreFilter.js";
 import type { SandboxedCommand, SandboxedRunResult } from "./assuredGateRunner.js";
 import {
@@ -98,6 +100,7 @@ export const ASSURED_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
 ]);
 const ASSURED_PROOF_RULES: readonly CommandRule[] = Object.freeze([{ executable: "node" }]);
 let assuredIsolationProof: Promise<boolean> | undefined;
+const ASSURED_ISOLATION_PROOF_TIMEOUT_MS = 30_000;
 
 function npx(args: readonly string[]): SandboxedCommand {
   return { command: "npx", args };
@@ -195,6 +198,7 @@ export function candidateFileText(edits: readonly { readonly newText: string }[]
 function disposableWorkspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -205,18 +209,59 @@ function disposableWorkspace(root: string): WorkspaceInfo {
   };
 }
 
+// Probes host sandbox isolation once per process and caches ONLY a confirmed pass. The probe owns
+// its own AbortController -- deliberately NOT a caller's request-scoped signal -- so a routine
+// client disconnect (navigation, timeout, tab close) mid-probe can never be conflated with "this
+// host does not enforce the sandbox". A negative result is never memoized: it is cleared so the
+// next call re-probes, since a confirmed `true` is the only state that legitimately never changes
+// for the process's life (KEIKO-0124). `prove` defaults to the real probe; exported (and
+// injectable) so the caching/expiry contract is unit-testable the same way
+// disposableAssuredExecution.ts's node-effect ports are -- through an injected fake, never
+// `vi.mock`.
+export async function isolationProven(
+  root: string,
+  prove: (root: string, signal: AbortSignal) => Promise<boolean> = proveAssuredIsolation,
+): Promise<boolean> {
+  if (assuredIsolationProof === undefined) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, ASSURED_ISOLATION_PROOF_TIMEOUT_MS);
+    assuredIsolationProof = prove(root, controller.signal)
+      .finally(() => {
+        clearTimeout(timer);
+      })
+      .then((proven) => {
+        if (!proven) assuredIsolationProof = undefined;
+        return proven;
+      });
+  }
+  return assuredIsolationProof;
+}
+
 // Runs one untrusted command in the disposable root through the enforced sandbox (network:"none").
 async function runSandboxed(
   root: string,
   cmd: SandboxedCommand,
   signal: AbortSignal,
 ): Promise<SandboxedRunResult> {
-  const proof = (assuredIsolationProof ??= proveAssuredIsolation(root, signal));
-  if (!(await proof)) {
+  if (!(await isolationProven(root))) {
     return { exitCode: 1, networkEnforced: false, filesystemEnforced: false };
   }
   const result = await runCommand(
-    { command: cmd.command, args: cmd.args, cwd: undefined, timeoutMs: undefined, signal },
+    {
+      command: cmd.command,
+      args: cmd.args,
+      cwd: undefined,
+      timeoutMs: undefined,
+      signal,
+      // AGENTS.md §8 Rule 1: body-free runCommand termination evidence. No request-scoped
+      // correlation id is threaded this deep into the disposable-execution harness, so every line
+      // is stamped UNKNOWN_CORRELATION_ID.
+      onTerminated: (evidence): void => {
+        logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+      },
+    },
     {
       workspace: disposableWorkspace(root),
       policy: {
@@ -252,6 +297,9 @@ async function proveAssuredIsolation(root: string, signal: AbortSignal): Promise
         cwd: undefined,
         timeoutMs: undefined,
         signal,
+        onTerminated: (evidence): void => {
+          logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+        },
       },
       {
         workspace: disposableWorkspace(root),

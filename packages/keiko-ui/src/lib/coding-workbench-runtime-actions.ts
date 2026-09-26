@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeResearchGrant,
+  ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchRuntimeState,
@@ -12,16 +13,28 @@ import type {
 } from "./coding-workbench-live-state";
 import type { RuntimeMutationActions, RuntimeResources } from "./coding-workbench-runtime-hooks";
 
+export interface CodingWorkbenchIssueStartIntent {
+  readonly issueRef: string;
+  readonly expectedIssueBindingDigest: string;
+}
+
+export interface CodingWorkbenchStartOptions {
+  readonly conversationId?: string | undefined;
+  readonly issue?: CodingWorkbenchIssueStartIntent | undefined;
+  readonly projectMemoryEnabled: boolean;
+}
+
 export interface CodingWorkbenchRuntimeActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
-  readonly prepareCodexSetup?:
-    ((method: CodingWorkbenchCodexAuthMethod) => Promise<void>) | undefined;
+  readonly setSelectedModel: (modelId: string | null) => void;
+  readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
+  readonly prepareCodexSetup?: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshProfile: () => Promise<void>;
   readonly refreshSource: () => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
-  readonly start: (taskIntent: string) => Promise<void>;
+  readonly start: (taskIntent: string, options: CodingWorkbenchStartOptions) => Promise<void>;
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;
@@ -75,6 +88,8 @@ function createCodingWorkbenchRuntimeActions({
       sourceSequence.current += 1;
       dispatch({ kind: "select-runtime-preference", preference });
     },
+    setSelectedModel: (modelId) => dispatch({ kind: "select-model", modelId }),
+    setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
     prepareCodexSetup,
     refreshProfile,
     refreshSource,

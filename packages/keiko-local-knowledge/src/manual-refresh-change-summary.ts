@@ -10,15 +10,15 @@
 // set in that case is truncated, partial, or absent, not the pod's new state, so a diff against it
 // cannot distinguish "removed/changed upstream" from "not part of this run".
 
-import {
-  HTML_MANUAL_REFRESH_SCHEMA_VERSION,
-  type HtmlManualSourceKind,
-  type ManualRefreshChangeCounts,
-  type ManualRefreshChangeSummary,
-  type ManualRefreshOutcome,
-  type ManualRefreshReasonCode,
-  type ManualRefreshRemovalDetection,
+import type {
+  HtmlManualSourceKind,
+  ManualRefreshChangeCounts,
+  ManualRefreshChangeSummary,
+  ManualRefreshOutcome,
+  ManualRefreshReasonCode,
+  ManualRefreshRemovalDetection,
 } from "@oscharko-dev/keiko-contracts";
+import { HTML_MANUAL_REFRESH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 
 import type { ManualCrawlDenyReason, ManualCrawlResult } from "./crawl/index.js";
 import { diffFingerprintSets, type FingerprintSetDelta } from "./fingerprint-diff.js";

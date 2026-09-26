@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
-  MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS,
-  type MemoryId,
-  type MemoryRecord,
-  type MemoryScope,
-  type MemoryUserId,
+import type {
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import {
   buildInsertedEvent,
   buildUpdatedEvent,
@@ -91,6 +91,23 @@ describe("classifyUpdate", () => {
     const event = buildUpdatedEvent(record, "accepted", false, makeContext());
     expect(event.kind).toBe("memory:updated");
     expect(event.summary).toContain("metadata updated");
+  });
+
+  it("falls back to memory:updated when the pre-image cache had no entry (KEIKO-0431)", () => {
+    // Before the fix, an undefined previous status or pinned value was treated as a real
+    // transition ("record just moved to archived"), which fires spurious archived/accepted/
+    // rejected/pinned audit events for every already-in-that-state update after a server
+    // restart (the in-memory previousStatus/previousPinned cache resets on restart).
+    const record = makeRecord({ status: "archived", pinned: false });
+    expect(classifyUpdate(undefined, undefined, record)).toEqual({
+      kind: "memory:updated",
+      label: "metadata updated",
+    });
+    const pinnedRecord = makeRecord({ status: "accepted", pinned: true });
+    expect(classifyUpdate(undefined, undefined, pinnedRecord)).toEqual({
+      kind: "memory:updated",
+      label: "metadata updated",
+    });
   });
 });
 

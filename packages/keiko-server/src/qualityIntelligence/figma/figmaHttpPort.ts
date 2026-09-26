@@ -19,6 +19,8 @@ import {
   readJsonCapped,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 
 /** Default request timeout in milliseconds for Figma HTTP API calls. */
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -45,6 +47,7 @@ export type FigmaHttpPort = (request: FigmaHttpRequest) => Promise<FigmaHttpResp
 export interface FigmaHttpPortOptions {
   readonly timeoutMs?: number;
   readonly maxResponseBytes?: number;
+  readonly correlationId?: string;
 }
 
 // Collects the response headers into a plain lower-cased map. `Headers` already lower-cases
@@ -83,6 +86,8 @@ export const createDefaultFigmaHttpPort = (
         headers: { ...request.headers },
         redirect: "manual",
         signal,
+        log: processServerLogSink(),
+        logContext: { correlationId: options?.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(egress !== undefined ? { egress } : {}),
         ...(fetchImpl !== undefined ? { fetchImpl } : {}),
       });

@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { validateWorkspaceBinding } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceBinding } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { WORKSPACE_MANIFEST_MAX_ROOTS } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type {
   WorkspaceManifest,
   WorkspaceRootDispatch,
@@ -16,6 +17,7 @@ import {
   type WorkspaceScriptTrustService,
 } from "./workspace-script-trust.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
+import { hasCurrentWorkspaceRootMembership } from "./workspace-root-membership.js";
 
 let tmp: string;
 let rootA: string;
@@ -112,6 +114,38 @@ afterEach(() => {
 });
 
 describe("WorkspaceManifestService", () => {
+  it("refreshes an explicitly reconnected single-root identity and revokes its old trust", () => {
+    const initial = alphaWorkspace();
+    const initialRoot = initial.roots[0];
+    if (initialRoot === undefined) throw new Error("missing alpha root");
+    expect(trust.grant(rootA)).toEqual({ trusted: true });
+
+    renameSync(rootA, join(tmp, "alpha-replaced"));
+    mkdirSync(rootA);
+    expect(hasCurrentWorkspaceRootMembership(store, rootA)).toBe(false);
+
+    store.reconnectProject(rootA);
+
+    const refreshed = service.get(initial.workspaceId);
+    expect(refreshed.revision).toBe(initial.revision + 1);
+    expect(refreshed.roots[0]?.identityDigest).not.toBe(initialRoot.identityDigest);
+    expect(hasCurrentWorkspaceRootMembership(store, rootA)).toBe(true);
+    expect(store.readWorkspaceTrustRecord(initialRoot.rootRef)).toBeUndefined();
+  });
+
+  it("does not rewrite a multi-root workspace during a project reconnect", () => {
+    const combined = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
+    const before = store.readWorkspaceManifestRecord(combined.workspaceId);
+    renameSync(rootA, join(tmp, "alpha-replaced"));
+    mkdirSync(rootA);
+
+    store.reconnectProject(rootA);
+
+    expect(store.readWorkspaceManifestRecord(combined.workspaceId)).toEqual(before);
+    expect(hasCurrentWorkspaceRootMembership(store, rootA)).toBe(false);
+    expect(hasCurrentWorkspaceRootMembership(store, rootB)).toBe(true);
+  });
+
   it("runs the two-root journey with explicit dispatch and fail-closed trust recompute", () => {
     const initial = service.list();
     expect(initial).toHaveLength(2);
@@ -461,5 +495,84 @@ describe("WorkspaceManifestService", () => {
         new WorkspaceManifestService(guardedStore).resolveDispatch(dispatch(manifest, 0)),
       ),
     ).toBe("WORKSPACE_ROOT_IDENTITY_CHANGED");
+  });
+
+  // KEIKO-0213: three genuinely reachable M11 root-management error states had ZERO coverage
+  // anywhere in the repository (verified: grep for these three codes across
+  // packages/keiko-server/src/*.test.ts returned nothing before this change). A refactor of
+  // addRoot / persistRevision could have silently broken any of these fail-closed paths.
+
+  it("refuses a root past the real WORKSPACE_MANIFEST_MAX_ROOTS cap (KEIKO-0213)", () => {
+    // Exercises the production constant deliberately, so the test tracks the cap if it moves.
+    let manifest = alphaWorkspace();
+    let index = 0;
+    while (manifest.roots.length < WORKSPACE_MANIFEST_MAX_ROOTS) {
+      const extraRoot = join(tmp, `cap-${String(index)}`);
+      mkdirSync(extraRoot);
+      writeFileSync(join(extraRoot, "package.json"), `{"name":"cap-${String(index)}"}\n`);
+      store.createProject(extraRoot, `Cap ${String(index)}`);
+      manifest = service.addRoot(dispatch(manifest, 0), extraRoot).manifest;
+      index += 1;
+    }
+    expect(manifest.roots).toHaveLength(WORKSPACE_MANIFEST_MAX_ROOTS);
+
+    const overflowRoot = join(tmp, "overflow");
+    mkdirSync(overflowRoot);
+    writeFileSync(join(overflowRoot, "package.json"), '{"name":"overflow"}\n');
+    store.createProject(overflowRoot, "Overflow");
+    expect(errorCode(() => service.addRoot(dispatch(manifest, 0), overflowRoot))).toBe(
+      "WORKSPACE_ROOT_LIMIT_REACHED",
+    );
+    // Fail-closed: the rejected root must not have been absorbed.
+    expect(alphaWorkspace().roots).toHaveLength(WORKSPACE_MANIFEST_MAX_ROOTS);
+  });
+
+  it("refuses a root already bound to another MULTI-root workspace (KEIKO-0213)", () => {
+    // A single-root owner is absorbed (the #2620 path). A multi-root owner must not be, or the
+    // root would end up claimed by two workspaces at once.
+    const gammaRoot = join(tmp, "gamma");
+    mkdirSync(gammaRoot);
+    writeFileSync(join(gammaRoot, "package.json"), '{"name":"gamma"}\n');
+    store.createProject(gammaRoot, "Gamma");
+
+    // Build beta into a two-root workspace by absorbing gamma.
+    const beta = service.list().find((entry) => entry.roots[0]?.canonicalRoot === rootB);
+    if (beta === undefined) throw new Error("missing beta workspace");
+    const betaTwoRoots = service.addRoot(dispatch(beta, 0), gammaRoot).manifest;
+    expect(betaTwoRoots.roots).toHaveLength(2);
+
+    // Alpha now tries to take gamma, which beta owns as part of a multi-root workspace.
+    expect(errorCode(() => service.addRoot(dispatch(alphaWorkspace(), 0), gammaRoot))).toBe(
+      "WORKSPACE_ROOT_ALREADY_BOUND",
+    );
+    expect(alphaWorkspace().roots).toHaveLength(1);
+    expectNoOrphanedProjects();
+  });
+
+  it("refuses a mutation whose compare-and-swap loses a concurrent race (KEIKO-0213)", () => {
+    // WORKSPACE_REVISION_CONFLICT is NOT reachable via a stale dispatch — authorizeDispatch
+    // rejects that earlier with WORKSPACE_DISPATCH_STALE. It guards the narrower TOCTOU window
+    // inside a single valid call: the row is read, the new manifest is built, and only then does
+    // the store's compare-and-swap run. This drives the REAL persistRevision check by making that
+    // CAS lose the race (returning false, exactly as the store does when another writer committed
+    // first) rather than by mocking the error itself.
+    const gammaRoot = join(tmp, "cas-gamma");
+    mkdirSync(gammaRoot);
+    writeFileSync(join(gammaRoot, "package.json"), '{"name":"cas-gamma"}\n');
+    store.createProject(gammaRoot, "CAS Gamma");
+
+    const losingStore: UiStore = {
+      ...store,
+      replaceWorkspaceManifest: () => false,
+    };
+
+    expect(
+      errorCode(() =>
+        new WorkspaceManifestService(losingStore).addRoot(dispatch(alphaWorkspace(), 0), gammaRoot),
+      ),
+    ).toBe("WORKSPACE_REVISION_CONFLICT");
+    // Fail-closed: the losing writer must not have mutated the winner's manifest.
+    expect(alphaWorkspace().roots).toHaveLength(1);
+    expectNoOrphanedProjects();
   });
 });

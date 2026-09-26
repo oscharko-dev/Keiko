@@ -11,6 +11,40 @@ const MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN =
   /^@oscharko-dev\/keiko-model-gateway\/internal\/(openai-adapter|normalize)($|\/)/;
 const MODEL_GATEWAY_PROVIDER_RUNTIME_DEEP_PATH_PATTERN =
   /^(node_modules\/@oscharko-dev\/keiko-model-gateway\/|packages\/keiko-model-gateway\/)(src|dist)\/(openai-adapter|normalize)(\.[cm]?[jt]s)?($|\/)/;
+const OWNED_ROOT_INTERNAL_PREFIX = "@oscharko-dev/keiko-workspace/internal/";
+const OWNED_ROOT_CONTAINMENT_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root`;
+const OWNED_ROOT_MINT_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-mint`;
+const OWNED_ROOT_PRESERVE_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-preserve`;
+const OWNED_ROOT_LOOKUP_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-lookup`;
+const OWNED_ROOT_IMPLEMENTATION_SPECIFIER = `${OWNED_ROOT_INTERNAL_PREFIX}owned-root-authority`;
+const ownedRootDeepPathPattern = (moduleName) =>
+  new RegExp(
+    String.raw`^(node_modules/@oscharko-dev/keiko-workspace/|packages/keiko-workspace/)(src|dist)/${moduleName}(\.[cm]?[jt]s)?($|/)`,
+    "u",
+  );
+const OWNED_ROOT_CONTAINMENT_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRoot");
+const OWNED_ROOT_MINT_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootMint");
+const OWNED_ROOT_PRESERVE_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootPreserve");
+const OWNED_ROOT_LOOKUP_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootLookup");
+const OWNED_ROOT_IMPLEMENTATION_DEEP_PATH_PATTERN = ownedRootDeepPathPattern("ownedRootAuthority");
+const OWNED_ROOT_CONTAINMENT_FILES = new Set([
+  "packages/keiko-server/src/task-workspace/managed-root.ts",
+  "packages/keiko-server/src/task-workspace/reconciliation.ts",
+]);
+const OWNED_ROOT_MINT_FILES = new Set([
+  "packages/keiko-server/src/task-workspace/workspace-root-access.ts",
+]);
+const OWNED_ROOT_PRESERVE_FILES = new Set([
+  "packages/keiko-server/src/grounded-orchestrator.ts",
+  "packages/keiko-workspace/src/realpath.ts",
+  "packages/keiko-workspace/src/structuralExecution.ts",
+]);
+const OWNED_ROOT_LOOKUP_FILES = new Set(["packages/keiko-workspace/src/realpath.ts"]);
+const OWNED_ROOT_IMPLEMENTATION_FILES = new Set([
+  "packages/keiko-workspace/src/ownedRootLookup.ts",
+  "packages/keiko-workspace/src/ownedRootMint.ts",
+  "packages/keiko-workspace/src/ownedRootPreserve.ts",
+]);
 const NETWORK_CORE_MODULES = [
   "child_process",
   "http",
@@ -91,6 +125,86 @@ function isConnectorsForbiddenCapability(specifier) {
   return CONNECTORS_FORBIDDEN_PREFIXES.some((prefix) => matchesSpecifierPrefix(specifier, prefix));
 }
 
+// GEN-ARCH-CODING-RUNTIME-001 — the coding runtime is the server's largest single trust surface
+// (170+ files) and hosts the sole public-internet egress lane, yet carried no import-specifier
+// policy of its own: a new file could reach for a raw socket, an HTTP client, or a child process
+// and no gate would notice. dependency-cruiser cannot answer this — bare `fetch()` and `node:*`
+// core specifiers are not resolvable source-graph edges in this repository's configuration (see
+// the comment on `adr-0128-connectors-no-direct-egress`) — so this AST rule is the enforcement,
+// mirroring `adr-0019-trust-9-local-knowledge-no-egress`.
+//
+// Two capability classes, each with its own reviewed allow-list. Type-only imports are NOT
+// violations: `import type { IncomingMessage }` is erased at build and carries no capability, and
+// the route files legitimately type their handlers against it (see `matchesImportKind`).
+//
+// `researchEgressPort.ts` is deliberately NOT allow-listed for either class. It is documented as
+// THE public-internet lane, but it holds no RAW network capability: every outbound hop goes
+// through the governed `gatewayFetch` from keiko-model-gateway, under a registered research grant,
+// with DNS pinning, host allow-listing and loopback denial applied there. This rule now pins that
+// delegation — if that port ever reaches for a raw socket or bare `fetch`, the gate fires.
+const CODING_RUNTIME_ROOT = "packages/keiko-server/src/coding-runtime/";
+// Raw outbound/socket capability: bare `fetch` plus the network core modules. `child_process` and
+// `worker_threads` are handled by the process class below, so they are excluded here.
+const CODING_RUNTIME_NETWORK_FORBIDDEN_EXACT = new Set([
+  "fetch",
+  ...NETWORK_CORE_MODULES.filter(
+    (name) => name !== "child_process" && name !== "worker_threads",
+  ).flatMap((name) => [name, `node:${name}`]),
+]);
+const CODING_RUNTIME_PROCESS_FORBIDDEN_EXACT = new Set(
+  ["child_process", "worker_threads"].flatMap((name) => [name, `node:${name}`]),
+);
+// LOOPBACK-only network capability. Neither file performs public-internet egress, and neither is
+// granted `researchEgressPort.ts`'s lane: both are confined to `127.0.0.1` sidecar plumbing.
+//   * `opencodeRuntimeComposition.ts` — `createServer` builds the loopback tool-bridge the sidecar
+//     calls BACK into (inbound, governed tool facade), and its `unauthenticatedHealth` helper calls
+//     an INJECTED `fetch` parameter against the sidecar's own `/global/health` endpoint. The
+//     syntactic gate cannot distinguish an injected `fetch` binding from the global one.
+//   * `opencodeFunctionalHarness/_support.ts` — a test-only functional harness, referenced solely
+//     by `productionOpenCodeBackend*.test.ts`. It stands up a fake loopback gateway and drives it.
+const CODING_RUNTIME_NETWORK_CAPABILITY_FILES = new Set([
+  `${CODING_RUNTIME_ROOT}opencodeRuntimeComposition.ts`,
+  `${CODING_RUNTIME_ROOT}opencodeFunctionalHarness/_support.ts`,
+]);
+// OS-process control. Each file was read and is the process layer itself — it cannot route through
+// a workspace/tools port, because those ports are built ON these:
+//   * `devLaneRuntimeProcessBackend.ts`   — spawns the managed runtime as a POSIX process-group
+//                                           leader for dev-lane checkouts (ADR-0140).
+//   * `nativeRuntimeProcessBackend.ts`    — spawns the supervised native runtime helper process.
+//   * `productionPortableCodingRuntime.ts`— `spawnSync` during portable-installation verification.
+//   * `secureWorkspaceTextReadNodeProcess.ts` — spawns the secure text-read child (empty env,
+//                                           `shell: false`, piped stdio) behind the server-owned
+//                                           process seam.
+//   * `secureWorkspaceTextReadPlatformNode.ts` — `execFile` for platform code-identity inspection.
+//   * `windowsPortableAuthenticode.ts`    — `execFile`/`spawnSync` for Windows Authenticode checks.
+//   * `opencodeFunctionalHarness/_support.ts` — the test-only harness above; spawns the real
+//                                           sidecar under test.
+const CODING_RUNTIME_PROCESS_CAPABILITY_FILES = new Set([
+  `${CODING_RUNTIME_ROOT}devLaneRuntimeProcessBackend.ts`,
+  `${CODING_RUNTIME_ROOT}nativeRuntimeProcessBackend.ts`,
+  `${CODING_RUNTIME_ROOT}productionPortableCodingRuntime.ts`,
+  `${CODING_RUNTIME_ROOT}secureWorkspaceTextReadNodeProcess.ts`,
+  `${CODING_RUNTIME_ROOT}secureWorkspaceTextReadPlatformNode.ts`,
+  `${CODING_RUNTIME_ROOT}windowsPortableAuthenticode.ts`,
+  `${CODING_RUNTIME_ROOT}opencodeFunctionalHarness/_support.ts`,
+]);
+
+// Matched as a prefix, not an exact name: several of these core modules ship a promises subpath
+// (`node:dns/promises` is real and grants full resolver capability), so an exact-match set would let
+// the capability back in through the subpath — the review finding on the first version of this rule.
+// Mirrors CONNECTORS_FORBIDDEN_PREFIXES. `fetch` carries no subpath but matches the same way.
+function isCodingRuntimeForbiddenCapability(specifier, path) {
+  const forbiddenAs = (prefixes) =>
+    [...prefixes].some((prefix) => matchesSpecifierPrefix(specifier, prefix));
+  if (forbiddenAs(CODING_RUNTIME_NETWORK_FORBIDDEN_EXACT)) {
+    return !CODING_RUNTIME_NETWORK_CAPABILITY_FILES.has(path);
+  }
+  if (forbiddenAs(CODING_RUNTIME_PROCESS_FORBIDDEN_EXACT)) {
+    return !CODING_RUNTIME_PROCESS_CAPABILITY_FILES.has(path);
+  }
+  return false;
+}
+
 // GEN-PERF-CLI-001 — the CLI barrel is evaluated on every `keiko` invocation (the
 // root bin imports it), so keiko-cli modules must not STATICALLY value-import the
 // heavy workspace package graphs or the keiko-sdk fat barrel at module scope. The
@@ -105,6 +219,96 @@ const CLI_HEAVY_PACKAGE_PATTERN =
 const CLI_HEAVY_PACKAGE_ALLOWED_SUBPATHS = /^@oscharko-dev\/keiko-server\/credential-vault($|\/)/;
 
 const IMPORT_POLICY_RULES = [
+  {
+    name: "adr-0175-tool-catalog-pure-imports",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/tool-catalog-pure/`)
+        : path.startsWith("packages/keiko-tool-catalog/src/"),
+    matchesSpecifier: (specifier, path) => {
+      if (/^@oscharko-dev\/keiko-(contracts|security)($|\/)/u.test(specifier)) return false;
+      return (
+        !specifier.startsWith(".") ||
+        !candidateImportPaths(specifier, path).some((candidate) =>
+          candidate.startsWith("packages/keiko-tool-catalog/src/"),
+        )
+      );
+    },
+    matchesImportKind: (kind) => kind !== "raw-coordinate-lane",
+  },
+  {
+    // ADR-0165 D2: selecting a raw lane through the public search barrel is as
+    // sensitive as importing editor-read. Check the property even when its value
+    // is indirect; a variable, shorthand or computed literal cannot evade this.
+    name: "adr-0165-raw-coordinate-owner",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/raw-coordinate-owner/`)
+        : !path.startsWith("packages/keiko-workspace/src/") &&
+          path !== "packages/keiko-server/src/editor/workspaceSearchRoutes.ts",
+    matchesSpecifier: (specifier) => specifier === "contentLane",
+    matchesImportKind: (kind) => kind === "raw-coordinate-lane",
+  },
+  {
+    name: "adr-0005-owned-root-containment-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-containment-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_CONTAINMENT_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_CONTAINMENT_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_CONTAINMENT_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-mint-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-authority-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_MINT_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_MINT_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_MINT_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-preserve-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-preserve-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_PRESERVE_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_PRESERVE_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_PRESERVE_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-lookup-allowed-callers",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-lookup-allowed-callers/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_LOOKUP_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_LOOKUP_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_LOOKUP_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
+  {
+    name: "adr-0005-owned-root-authority-implementation-private",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/owned-root-authority-implementation-private/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !OWNED_ROOT_IMPLEMENTATION_FILES.has(path),
+    matchesSpecifier: (specifier, path) =>
+      specifier === OWNED_ROOT_IMPLEMENTATION_SPECIFIER ||
+      candidateImportPaths(specifier, path).some((candidate) =>
+        OWNED_ROOT_IMPLEMENTATION_DEEP_PATH_PATTERN.test(candidate),
+      ),
+  },
   {
     name: "gen-perf-cli-001-cli-heavy-graphs-load-lazily",
     matchesFile: (path, mode) =>
@@ -167,6 +371,19 @@ const IMPORT_POLICY_RULES = [
         ? path.startsWith(`${FIXTURE_ROOT}/connectors-no-egress/`)
         : path.startsWith("packages/keiko-connectors/src/"),
     matchesSpecifier: (specifier) => isConnectorsForbiddenCapability(specifier),
+  },
+  {
+    name: "gen-arch-coding-runtime-restricted-egress",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/coding-runtime-no-egress/`)
+        : path.startsWith(CODING_RUNTIME_ROOT),
+    matchesSpecifier: (specifier, path) => isCodingRuntimeForbiddenCapability(specifier, path),
+    // A fully type-only import is erased at build and grants no capability; the coding-runtime
+    // route handlers are typed against `node:http`'s `IncomingMessage`/`ServerResponse` and must
+    // stay able to be. Every value-carrying form (static, dynamic, require, bare `fetch` call) is
+    // in scope.
+    matchesImportKind: (kind) => kind !== "static-type" && kind !== "type",
   },
   {
     name: "adr-0112-provider-runtime-no-internal-bypass",
@@ -300,6 +517,9 @@ function callExpressionEntry(node) {
 }
 
 function importSpecifierEntry(node) {
+  if ((ts.isIdentifier(node) || isStringLiteralLike(node)) && node.text === "contentLane") {
+    return { node, specifier: node.text, kind: "raw-coordinate-lane" };
+  }
   return moduleSpecifierEntry(node) ?? importTypeEntry(node) ?? callExpressionEntry(node);
 }
 
@@ -341,7 +561,7 @@ function parseSourceFile(path, text) {
   return ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
 }
 
-function violationFor(rule, file, relativePath, sourceFile, specifierEntry) {
+function violationFor(rule, _file, relativePath, sourceFile, specifierEntry) {
   const location = sourceFile.getLineAndCharacterOfPosition(
     specifierEntry.node.getStart(sourceFile),
   );

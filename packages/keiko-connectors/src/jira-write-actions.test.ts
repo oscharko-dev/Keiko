@@ -114,6 +114,22 @@ describe("createJiraIssue", () => {
       await createJiraIssue(deps, { projectKey: "PROJ", issueTypeId: "1", summary: "s" }),
     ).toEqual({ ok: false, reason: "malformed-payload", httpStatus: 201 });
   });
+
+  it("rejects an issue type selected both by id and by name as field-validation, issuing no HTTP request", async () => {
+    // Regression for KEIKO-0806: CreateJiraIssueInput documents "exactly one of the two selects
+    // the issue type", but issueTypeField used to check issueTypeId first and never look at
+    // issueTypeName once it matched — silently preferring the id and dropping a contradicting
+    // name instead of rejecting the self-contradictory input like every other field here does.
+    const { deps, requests } = scripted([]);
+    const result = await createJiraIssue(deps, {
+      projectKey: "PROJ",
+      issueTypeId: "10004",
+      issueTypeName: "Bug",
+      summary: "Both selectors set",
+    });
+    expect(result).toEqual({ ok: false, reason: "field-validation" });
+    expect(requests).toHaveLength(0);
+  });
 });
 
 describe("updateJiraIssueFields", () => {
@@ -194,6 +210,27 @@ describe("transitionJiraIssue", () => {
       reason: "auth-failed",
       httpStatus: 401,
     });
+  });
+
+  it("reports invalid-transition (not the generic status reason) when the POST 400/404s right after a GET-validated listing", async () => {
+    // Regression for KEIKO-0814: the id is validated as available against the GET response, but
+    // another actor can move the issue between that GET and this POST (a narrow check-then-act
+    // race). Jira still correctly rejects the mutating request either way — only the REASON
+    // reported to the caller should become the already-typed invalid-transition, not the generic
+    // status-derived one failureOf(outcome) would otherwise produce for a 400/404.
+    const raceAs400 = scripted([response(200, transitions), response(400, "{}")]);
+    expect(
+      await transitionJiraIssue(raceAs400.deps, { issueKey: "PROJ-9", transitionId: "31" }),
+    ).toStrictEqual({ ok: false, reason: "invalid-transition" });
+    const raceAs404 = scripted([response(200, transitions), response(404, "{}")]);
+    expect(
+      await transitionJiraIssue(raceAs404.deps, { issueKey: "PROJ-9", transitionId: "31" }),
+    ).toStrictEqual({ ok: false, reason: "invalid-transition" });
+    // A POST failure NOT in {400, 404} keeps the ordinary status-derived reason unchanged.
+    const unrelatedFailure = scripted([response(200, transitions), response(500, "{}")]);
+    expect(
+      await transitionJiraIssue(unrelatedFailure.deps, { issueKey: "PROJ-9", transitionId: "31" }),
+    ).toStrictEqual({ ok: false, reason: "unavailable", httpStatus: 500 });
   });
 });
 

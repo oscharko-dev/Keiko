@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "keiko-runtime-gateway-confinement-v1",
+  "scenarioId": "egress-confinement-macos-arm64",
+  "evidenceClass": "production-functional",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "platformTarget": "macos-arm64",
+  "result": "passed",
+  "tests": {
+    "total": 41,
+    "passed": 41,
+    "failed": 0,
+    "skipped": 0,
+    "reportSha256": "228bcbbf4f6f80f8bcb841afcd2191544afc5fac3938d7fb55bb9a5ca2c306b5",
+    "assertions": [
+      "confinement-proof-1",
+      "confinement-proof-2",
+      "confinement-proof-3",
+      "confinement-proof-4"
+    ]
+  },
+  "runtime": {
+    "correlationId": "run-323714776050205645524193586379146780693",
+    "activityLogSha256": "28c6b54d82bf10000d3394583b8ab46b34c3eacc6ed87719a1d50c84a19fa086",
+    "eventSha256": "c2c6fbe1e7d628e93b38f4fc7b0f0ee1d8829b937594c68eb91e9c2c2b40abdd",
+    "backend": "seatbelt",
+    "profile": "keiko-gateway",
+    "childExecutablePolicy": "runtime-and-attested-git-only",
+    "policyDigest": "cbea878f6d96e5966765e4035b9417a48bdbcaea6ad71edfbe31448dde838875",
+    "authorityDigest": "d1ba52708c207edb3bb5b881bfa66bb2d5f7a94634306b632c98048362fd8568",
+    "runtimeArtifactDigest": "78d79e3bae8efe909508260972b6abdb4ed75d59c4a226b5e731978dd9461659",
+    "modelProfileDigest": "709b0bf0d1902d02f4e7d55b94278a5020fa7902d2f448b944418a3c4527bbb2",
+    "treeBindingId": "0ec5244833c0bc2b88efaac87abbc10bafc60415735f4678688c2ccb3d7bb369",
+    "childExecutableDigest": "be4afb2b003904725826250de9fb76567bbacf82323457b5a1ec26706b66bcae",
+    "runtimeName": "opencode-compatible",
+    "runtimeVersion": "1.17.17",
+    "runtimeTarget": "macos-arm64",
+    "catalogRevision": "713b56bb6f032cb64aae480fe7de9b07aece4b05a1e4cd645e620aae27721f4b",
+    "catalogProfileId": "opencode",
+    "catalogProfileVersion": 1,
+    "projectionDigest": "201df77730101f5fc1c1d16fe297314d25193f8c5463dc329e6bd5c4b0eaa8ae",
+    "handlerSetDigest": "cfddd9ec048916c047952291e4c83e2ff50765708d4c7b237490f969b6942869"
+  }
+}

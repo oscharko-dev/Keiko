@@ -1,7 +1,5 @@
-import {
-  parseUpdateMemoryAutonomyPolicyWire,
-  type UpdateMemoryAutonomyPolicyWire,
-} from "@oscharko-dev/keiko-contracts";
+import type { UpdateMemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
+import { parseUpdateMemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 
 /**
  * Decodes an autonomy-policy update body for the Coding Workbench runtime fixture.

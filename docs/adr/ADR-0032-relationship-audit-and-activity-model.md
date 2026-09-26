@@ -23,7 +23,7 @@ On current `dev`, the shipped audit implementation is narrower than the full des
 
 - `relationship_audit_entries` is implemented and used as the durable audit surface ([`packages/keiko-server/src/store/schema.ts`](../../packages/keiko-server/src/store/schema.ts), [`packages/keiko-server/src/store/relationship-audit.ts`](../../packages/keiko-server/src/store/relationship-audit.ts)).
 - `EvidenceManifest` does not yet define a `relationships` section ([`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
-- `resolveAuditPlacement()` currently routes every row to the sibling table and leaves manifest embedding as a TODO seam ([`relationship-audit.ts:74`](../../packages/keiko-server/src/store/relationship-audit.ts)).
+- `resolveAuditPlacement()` currently routes every row to the sibling table. Manifest embedding remains unavailable until the evidence contract owns relationship entries ([`relationship-audit.ts`](../../packages/keiko-server/src/store/relationship-audit.ts)).
 - Relationship-level evidence refs are a design target; the current `GET /api/relationships/:id/explain` surface does not return them ([`packages/keiko-ui/src/app/relationships/api.ts:61`](../../packages/keiko-ui/src/app/relationships/api.ts)).
 
 ## Decision

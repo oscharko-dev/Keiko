@@ -31,8 +31,16 @@ import {
   type LanguagePosition,
   type LanguageRange,
 } from "./language-service.js";
-import { isBoundedEditorSessionId } from "./coding-context.js";
-import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import {
+  buildContextSelectors,
+  collectContextErrors,
+  collectEditorSessionIdError,
+  isBoundedEditorSessionId,
+  isCostClass,
+  isNonEmptyString,
+  isNonNegativeInteger,
+  isRecord,
+} from "./coding-context.js";
 import type {
   EditorCompletionContextSelectors,
   EditorCompletionSource,
@@ -154,17 +162,11 @@ export interface EditorInlineCompletionParseFail {
 export type EditorInlineCompletionParse =
   EditorInlineCompletionParseOk | EditorInlineCompletionParseFail;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
+// isRecord, isNonEmptyString, isNonNegativeInteger, isCostClass, isStringArray,
+// collectEditorSessionIdError, collectContextErrors, and buildContextSelectors moved to
+// coding-context.ts (KEIKO-0159): this file previously re-implemented all eight byte-for-byte
+// identically to editor-completion.ts and (except isCostClass) editor-test-generation.ts.
+// isPositiveInteger stays local -- it is unique to this file's maxOutputTokens field.
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
@@ -175,56 +177,6 @@ function isWireTriggerKind(value: unknown): value is EditorInlineCompletionWireT
     typeof value === "string" &&
     (EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS as readonly string[]).includes(value)
   );
-}
-
-function isCostClass(value: unknown): value is CostClass {
-  return value === "low" || value === "medium" || value === "high";
-}
-
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
-function collectEditorSessionIdError(value: unknown, errors: string[]): void {
-  if (value !== undefined && !isBoundedEditorSessionId(value)) {
-    errors.push(
-      `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
-    );
-  }
-}
-
-// Collects the optional, content-bearing context selectors (identical invariants to the completion
-// gateway). Unknown-typed fields are rejected so a malformed selector cannot silently widen
-// retrieval; an absent `context` is valid (repository search only for the `inline` purpose).
-function collectContextErrors(context: unknown, errors: string[]): void {
-  if (context === undefined) {
-    return;
-  }
-  if (!isRecord(context)) {
-    errors.push("context must be an object when provided");
-    return;
-  }
-  for (const field of ["queryText", "symbol", "capsuleId", "capsuleSetId"] as const) {
-    if (context[field] !== undefined && typeof context[field] !== "string") {
-      errors.push(`context.${field} must be a string when provided`);
-    }
-  }
-  if (context.changedFiles !== undefined && !isStringArray(context.changedFiles)) {
-    errors.push("context.changedFiles must be an array of strings when provided");
-  }
-  if (context.capsuleId !== undefined && context.capsuleSetId !== undefined) {
-    errors.push("context must not set both capsuleId and capsuleSetId");
-  }
-}
-
-function buildContextSelectors(context: Record<string, unknown>): EditorCompletionContextSelectors {
-  return {
-    ...(typeof context.queryText === "string" ? { queryText: context.queryText } : {}),
-    ...(typeof context.symbol === "string" ? { symbol: context.symbol } : {}),
-    ...(isStringArray(context.changedFiles) ? { changedFiles: context.changedFiles } : {}),
-    ...(typeof context.capsuleId === "string" ? { capsuleId: context.capsuleId } : {}),
-    ...(typeof context.capsuleSetId === "string" ? { capsuleSetId: context.capsuleSetId } : {}),
-  };
 }
 
 // Collects every field-level invariant error in fixed order (kept separate from the assembly step so

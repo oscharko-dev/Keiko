@@ -62,27 +62,51 @@ import type {
   KnowledgePodSummaryKind,
   UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
-import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
+import {
+  activityLogErrorKindOr,
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  DEFAULT_DISCOVERY_OPTIONS,
+  KnowledgeNotFoundError,
+  KnowledgeStoreError,
+} from "@oscharko-dev/keiko-local-knowledge";
 import {
   findIndexingRecoveryCandidate,
   openKnowledgeStoreForDeps,
   type IndexingRecoveryCandidate,
 } from "./local-knowledge-store-open.js";
 import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown, newCorrelationId } from "./correlation.js";
+import { errorKindOf, getServerLogger, type ServerLogger } from "./observability/index.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { processServerLogSink } from "./process-log-sink.js";
+import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
-  CAPSULE_SET_MAX_MEMBERS,
-  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  electConversationDefault,
+  MODEL_COST_RANK,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
+import {
   isKnowledgePodEvidenceSafeText,
-  isSafeQualityWarning,
+  validateKnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import { isSafeQualityWarning } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation";
+import {
   standardPodModelUsePolicy,
-  stripUnsafeFormatChars,
+  validateKnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import {
   validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
-  validateKnowledgePodModelUsePolicy,
-  validateKnowledgePodSummary,
   validateKnowledgeSourceScope,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 import {
+  currentConversationReadinessObservation,
   currentGateway,
   currentGatewayConfig,
   currentGatewayEgressConfig,
@@ -94,6 +118,7 @@ import {
   EMBEDDING_INSTRUCTION_VERSION,
   EMBEDDING_NORMALIZATION,
   findConfiguredCapability,
+  listConfiguredCapabilities,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -1278,16 +1303,28 @@ function createEmbeddingAdapter(
       : {}),
     ...(egress !== undefined ? { egress } : {}),
   };
+  // The operator-configured provider timeout must govern the indexing embed path too. Without
+  // this default the adapter fell back to its built-in 30s for every batch/scalar item while
+  // the readiness probes honoured the configured value — raising timeoutMs visibly fixed the
+  // probe and silently did nothing for indexing, sending the operator's diagnosis in circles.
+  // Spread FIRST so an explicit per-request timeout (e.g. a preflight quick check) still wins.
+  //
+  // `log` rides the same defaults object, and it is what makes the whole model-gateway embedding
+  // ladder — batch dispatch, the per-item degradation, every retry and every endpoint rejection —
+  // visible for indexing, capability verification and connector sync alike. Without it those call
+  // sites resolve the frozen no-op sink and the six-minute wall this log exists to explain leaves
+  // no trace at all.
+  const requestDefaults = { timeoutMs: provider.timeoutMs, log: processServerLogSink() };
   return {
     ...providerCreds,
-    request: (request) => requestImpl({ ...request, ...providerCreds }),
+    request: (request) => requestImpl({ ...requestDefaults, ...request, ...providerCreds }),
     // #189 GRD-004: the indexing batcher prefers this array-batch port when present, turning
     // up to batchSize per-chunk HTTPS round-trips into a single array call. Omitted when no
     // batch impl is wired (scalar-stub tests) so those keep the one-request-per-chunk path.
     ...(batchImpl !== undefined
       ? {
           requestBatch: (request: OpenAIEmbeddingBatchRequest) =>
-            batchImpl({ ...request, ...providerCreds }),
+            batchImpl({ ...requestDefaults, ...request, ...providerCreds }),
         }
       : {}),
   };
@@ -1737,12 +1774,35 @@ type IndexingTerminal =
   | { readonly kind: "job-failed"; readonly jobId: string };
 
 interface RunCapsuleIndexingJobOptions {
+  // The provider the HANDLER already resolved (exact or alias-repaired). Threading it through
+  // keeps ONE resolution point: re-deriving it here with the strict configured-modelId lookup
+  // diverged for gateways whose served model name differs from the configured id (LiteLLM
+  // aliases) — the alias-repaired capsule stores the served name, the strict lookup missed it,
+  // and indexing died as a silent job-failed with an empty jobId, no job row, no diagnostics.
+  readonly provider: ModelProviderConfig;
   readonly mode: CapsuleReindexMode | undefined;
   // O2-GAP-1 (Epic #189): reindex callers can request a full re-embed when the embedding
   // model has rotated. Start-indexing keeps force=false so a first-pass run never wipes
   // a partially-built index.
   readonly force: boolean;
   readonly resumeJob?: IndexingJobRecord | undefined;
+  // Pre-generated job id so the detached start route can answer 202 with the id its job WILL
+  // persist (the orchestrator's first idSource() call becomes the job id). Standard path only —
+  // repository pods mint their id inside refreshRepositoryPod.
+  readonly jobId?: string | undefined;
+}
+
+// The orchestrator's first idSource() call becomes the job id; every later call mints vector
+// and diagnostic ids as usual.
+function firstCallIdSource(firstId: string): () => string {
+  let first = true;
+  return (): string => {
+    if (first) {
+      first = false;
+      return firstId;
+    }
+    return randomUUID();
+  };
 }
 
 type IndexingSourceSelection =
@@ -1893,7 +1953,24 @@ function resolveContextualRetrievalModelId(
   if (configured !== undefined && configured.length > 0) {
     return configured;
   }
-  return config === undefined ? undefined : selectConfiguredModel(config, { kind: "chat" });
+  return config === undefined ? undefined : fallbackContextModelId(deps, config);
+}
+
+// Fallback context-model election for contextual retrieval (2026-08 field review). The old
+// pure-costClass selection let a mode-less special-purpose id FIRST in the configured list (the
+// customer's OCR model) become the context model by position: warm, it "succeeds" and prefixes
+// every chunk with OCR garbage that pollutes the embedding space until a full re-index. Reuse
+// the shared tier-walk election: readiness is preferred only WITHIN a rank tier, so a verified
+// special-purpose model can never outrank an unprobed declared chat model (#3220 semantics).
+// The stable cost pre-sort keeps the old economy inside each tier — electConversationDefault
+// re-sorts by rank stably, so equal-rank candidates stay cheapest-first, configured order last.
+function fallbackContextModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
+  const byCost = [...listConfiguredCapabilities(config)]
+    .filter((capability) => capability.kind === "chat")
+    .sort((a, b) => MODEL_COST_RANK[a.costClass] - MODEL_COST_RANK[b.costClass]);
+  return electConversationDefault(byCost, (capability) =>
+    currentConversationReadinessObservation(deps, capability.id),
+  )?.id;
 }
 
 function contextModelCanChat(
@@ -2045,6 +2122,21 @@ interface BuildIndexingOptionsInput {
   readonly signal: AbortSignal;
 }
 
+// Operator-raisable discovery bounds (2026-08 field review): the built-in 5,000-file default
+// used to be an unraisable hard ceiling, so a larger corpus silently indexed only its first
+// walk-ordered slice. The orchestrator still clamps these to its runaway backstops.
+function operatorDiscoveryOptions(
+  deps: UiHandlerDeps,
+): Parameters<typeof runIndexingJob>[0]["discoveryOptions"] {
+  const maxFiles = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES);
+  const maxDepth = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_DEPTH);
+  if (maxFiles === undefined && maxDepth === undefined) return undefined;
+  return {
+    maxFiles: maxFiles ?? DEFAULT_DISCOVERY_OPTIONS.maxFiles,
+    maxDepth: maxDepth ?? DEFAULT_DISCOVERY_OPTIONS.maxDepth,
+  };
+}
+
 function buildIndexingOptions(
   input: BuildIndexingOptionsInput,
 ): Parameters<typeof runIndexingJob>[0] {
@@ -2061,6 +2153,7 @@ function buildIndexingOptions(
     signal,
   } = input;
   const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps, capsule);
+  const discoveryOptions = operatorDiscoveryOptions(deps);
   return {
     capsuleId: capsule.id,
     ...(sourceSelection.shouldRun && sourceSelection.sourceIds !== undefined
@@ -2071,8 +2164,15 @@ function buildIndexingOptions(
     embeddingAdapter: adapter,
     embeddingPreflightCacheScope,
     auditSink: createSqliteAuditSink(store),
+    // The orchestrator's own activity log. The `IndexingEvent` stream this route already consumes
+    // reports STATE changes ("document 0 of 1"); it cannot report why a state stopped changing.
+    // The sink carries exactly that: which embedding transport was chosen, every retry and
+    // backoff, an absorbed partial batch, a fail-closed identity rejection.
+    logSink: processServerLogSink(),
     store,
     force: options.force,
+    ...(options.jobId !== undefined ? { idSource: firstCallIdSource(options.jobId) } : {}),
+    ...(discoveryOptions !== undefined ? { discoveryOptions } : {}),
     ...(contextualRetrieval !== undefined ? { contextualRetrieval } : {}),
     largeDocumentPolicy: resolveLargeDocumentPolicy(),
     extractionCapabilities,
@@ -2159,6 +2259,10 @@ async function runRepositoryPodIndexingJob(
     embeddingPreflightCacheScope,
     workspaceFs: nodeWorkspaceFs,
     auditSink: createSqliteAuditSink(store),
+    // Same sink the folder lane gets from buildIndexingOptions. Without it a repository pod
+    // indexes through the identical orchestrator and writes not one line — the exact shape of
+    // the field incident this instrumentation exists for.
+    logSink: processServerLogSink(),
     signal,
     ...(contextualRetrieval === undefined ? {} : { contextualRetrieval }),
     onIndexEvent: (event) => {
@@ -2207,10 +2311,7 @@ async function runCapsuleIndexingJob(
   capsule: KnowledgeCapsule,
   options: RunCapsuleIndexingJobOptions,
 ): Promise<IndexingTerminal | undefined> {
-  const provider = configuredProviderForCapsule(deps, capsule);
-  if (provider === undefined) {
-    return { kind: "job-failed", jobId: "" };
-  }
+  const provider = options.provider;
   canonicalizeCapsuleSourceRoots(store, capsule);
   const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
   const embeddingPreflightCacheScope = embeddingPreflightCacheScopeForProvider(deps, provider);
@@ -2739,6 +2840,455 @@ export async function handleGetLocalKnowledgeCapsule(
   });
 }
 
+// ─── The indexing routes' own activity-log spine ──────────────────────────────
+//
+// The field incident: a Knowledge Pod run sits at "0 of 1 documents, 0 of 36 vectors" for six
+// minutes and is then cancelled, and `server.log` holds nothing at all between the operator's
+// click and the silence. `keiko-local-knowledge` instruments the run itself, but every one of its
+// lines exists only once a run REACHES the orchestrator, so their absence is ambiguous in exactly
+// the way that cost four releases of guesswork: it reads identically whether the POST was refused
+// at the route, whether the detached run died before opening the store, or whether the run started
+// and hung. These routes therefore write one line at every exit, so absence means one thing only.
+//
+// CORRELATION. The orchestrator puts the job uuid verbatim in `correlationId` and the capsule as a
+// truncated sha-256 in `extra.capsuleIdDigest` (`writeKnowledgeLog`). These lines use the same two
+// fields computed the same way — that identity is the whole of item 1: the minted job id otherwise
+// exists only in the 202 response body, and the operator's request joins to no later line at all.
+const INDEXING_LOG_DIGEST_LENGTH = 16;
+
+const INDEXING_START_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.start.refused",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.refuseIndexingStart",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "capsule-not-found",
+        "capsule-has-no-sources",
+        "no-embedding-capable-model",
+        "job-already-running",
+        "run-already-starting",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["indexing-route"],
+  proofIds: ["indexing.start.refused.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_DETACHED_RUN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.detached-run.failed",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.reportDetachedIndexingFailure",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["pre-orchestrator"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["indexing-detached-run"],
+  proofIds: ["indexing.detached-run.failed.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_DETACHED_RUN_LAUNCHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.detached-run.launched",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.launchDetachedCapsuleIndexing",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    jobIdMinted: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "parent-correlation",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["indexing-detached-run"],
+  proofIds: ["indexing.detached-run.launched.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_START_ACCEPTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.start.accepted",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.acceptDetachedIndexingStart",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    jobIdMinted: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["indexing-route"],
+  proofIds: ["indexing.start.accepted.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_CANCEL_REQUESTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.cancel.requested",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["indexing-cancellation"],
+  proofIds: ["indexing.cancel.requested.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_CANCEL_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.cancel.refused",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.refused",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["capsule-not-found", "no-running-job"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["indexing-cancellation"],
+  proofIds: ["indexing.cancel.refused.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_CANCEL_ACCEPTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.cancel.accepted",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.accepted",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    cancellationRequested: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["indexing-cancellation"],
+  proofIds: ["indexing.cancel.accepted.line"],
+  releaseImpact: "patch",
+});
+
+// The raw capsule id is a customer-chosen handle, so it is never written; the digest is one-way,
+// stable across every line of a run, and exempt from the opaque-token guard for exactly this use.
+function capsuleLogDigest(capsuleId: KnowledgeCapsule["id"]): string {
+  return createHash("sha256")
+    .update(String(capsuleId))
+    .digest("hex")
+    .slice(0, INDEXING_LOG_DIGEST_LENGTH);
+}
+
+interface IndexingRouteLog {
+  readonly logger: ServerLogger;
+  readonly capsuleIdDigest: string;
+  readonly correlationId: string;
+}
+
+function indexingRouteLog(capsuleId: KnowledgeCapsule["id"], jobId?: string): IndexingRouteLog {
+  return {
+    logger: getServerLogger(),
+    capsuleIdDigest: capsuleLogDigest(capsuleId),
+    correlationId: correlationIdOrUnknown(jobId),
+  };
+}
+
+function indexingLogWithCorrelation(
+  log: IndexingRouteLog,
+  correlationId: string | undefined,
+): IndexingRouteLog {
+  return { ...log, correlationId: correlationIdOrUnknown(correlationId) };
+}
+
+function closedIndexingErrorKind(errorKind: string): ActivityLogErrorKind {
+  return activityLogErrorKindOr(errorKind, "internal");
+}
+
+function indexingFailureKind(error: unknown): string {
+  const errorKind = errorKindOf(error);
+  return errorKind.length <= 64 ? errorKind : "unknown";
+}
+
+// The five ways the start route can say no. The status number cannot tell them apart — three of
+// them are 409 — so the reason is the field an operator actually reads, and it is a closed union
+// so a new refusal path cannot be added without naming itself here.
+type IndexingStartRefusal =
+  | "capsule-not-found"
+  | "capsule-has-no-sources"
+  | "no-embedding-capable-model"
+  | "job-already-running"
+  | "run-already-starting";
+
+function indexingStartRefusalErrorKind(reason: IndexingStartRefusal): ActivityLogErrorKind {
+  if (reason === "no-embedding-capable-model") return "unavailable";
+  if (reason === "job-already-running" || reason === "run-already-starting") return "conflict";
+  return "invalid-request";
+}
+
+// Warn, not info: a refused index is the operator's own click coming back rejected, and it must
+// survive the level an operator filters to when a pod will not build.
+function refuseIndexingStart(
+  log: IndexingRouteLog,
+  reason: IndexingStartRefusal,
+  response: RouteResult,
+): RouteResult {
+  log.logger.warn(
+    activityLogEvent(
+      INDEXING_START_REFUSED_OPERATION,
+      {
+        correlationId: log.correlationId,
+        status: response.status,
+        errorKind: indexingStartRefusalErrorKind(reason),
+      },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        reason,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return response;
+}
+
+// ─── Detached indexing runs (2026-08 field review) ───────────────────────────
+// The start route used to await the WHOLE indexing job inside one HTTP POST — a multi-hour
+// pending response with zero bytes written. Any transport blip (laptop sleep, BFF restart,
+// webview reload) rejected the fetch and decoupled the UI from a still-running job: the
+// progress panel vanished, the Index button re-enabled, and every click answered 409
+// "already running" — indistinguishable from a hang. The route now answers 202 the moment the
+// job is admitted; the persisted job row drives the UI's existing 2s polling, including
+// re-attach after a page reload. Each detached run owns its own store handle and reports its
+// failures through the job row plus a redacted operator diagnostic — never silently.
+const detachedIndexingRuns = new Map<string, Promise<void>>();
+
+// Test/shutdown seam: resolve once the capsule's detached run (if any) reaches its terminal
+// state. Production code never calls this — the job row is the production source of truth.
+export async function awaitDetachedCapsuleIndexing(capsuleId: string): Promise<void> {
+  const pending = detachedIndexingRuns.get(capsuleId);
+  if (pending !== undefined) await pending;
+}
+
+interface ResolvedIndexingProvider {
+  readonly capsule: KnowledgeCapsule;
+  readonly provider: ModelProviderConfig;
+}
+
+function reportDetachedIndexingFailure(
+  deps: UiHandlerDeps,
+  log: IndexingRouteLog,
+  correlationId: string,
+  error: unknown,
+): void {
+  // The activity log first. The diagnostic below has always existed, but it lands in a different
+  // file: an operator reading the ONE log this instrumentation exists for otherwise sees the
+  // launch line and then nothing, forever, for a run that died before the orchestrator ever wrote
+  // `indexing.job.started`. `errorKindOf` reads only a coded `code`/`name` — never the message,
+  // which can carry a path or a body fragment.
+  const failureKind = indexingFailureKind(error);
+  log.logger.error(
+    activityLogEvent(
+      INDEXING_DETACHED_RUN_FAILED_OPERATION,
+      { correlationId: log.correlationId, errorKind: closedIndexingErrorKind(failureKind) },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        stage: "pre-orchestrator",
+        failureKind,
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  // The job row already carries the terminal state for orchestrated failures; this is the backstop
+  // for failures BEFORE the orchestrator owns the run. Never silent.
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "local-knowledge.indexing",
+      source: "local-knowledge.detached-indexing",
+      error,
+      summary: "A detached capsule indexing run failed before reaching a terminal state.",
+      redact: (message): string => String(deps.redactor(message)),
+    }),
+  );
+}
+
+function launchDetachedCapsuleIndexing(
+  deps: UiHandlerDeps,
+  resolved: ResolvedIndexingProvider,
+  jobId: string | undefined,
+  requestCorrelationId: string | undefined,
+): void {
+  const key = String(resolved.capsule.id);
+  // One id across both evidence surfaces. When the route minted a job id, the launch line, every
+  // orchestrator line for the run and the failure diagnostic all carry it, so the operator reads
+  // one thread instead of three unrelated records; the repository-pod path mints its id deeper in,
+  // so a fresh correlation id stands in and `jobIdMinted: false` says so on the line.
+  const correlationId = jobId ?? newCorrelationId();
+  const log = indexingRouteLog(resolved.capsule.id, correlationId);
+  // Item 3: the launch itself. Everything between the 202 and the orchestrator's first line — the
+  // store open and its migrations — used to be unwitnessed, so a throw there surfaced as a
+  // context-free diagnostic and a HANG there was indistinguishable from a run never launched.
+  log.logger.info(
+    activityLogEvent(
+      INDEXING_DETACHED_RUN_LAUNCHED_OPERATION,
+      {
+        correlationId: log.correlationId,
+        parentCorrelationId: correlationIdOrUnknown(requestCorrelationId),
+      },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        jobIdMinted: jobId !== undefined,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  // The body starts on a microtask, after the launch-map key below is registered. Run inline, a
+  // synchronous store-open throw would execute the finally's delete BEFORE the set, and the key
+  // would then stay registered forever — answering 409 for the process lifetime.
+  const run = Promise.resolve().then(async (): Promise<void> => {
+    // The store open lives INSIDE the try: openKnowledgeStore throws on open/migration failure,
+    // and a throw before the handler would leave the rejection unhandled (production never awaits
+    // this promise).
+    let env: ReturnType<typeof openStoreForDeps> | undefined;
+    try {
+      env = openStoreForDeps(deps);
+      await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
+        provider: resolved.provider,
+        mode: undefined,
+        force: false,
+        ...(jobId !== undefined ? { jobId } : {}),
+      });
+    } catch (error) {
+      reportDetachedIndexingFailure(deps, log, correlationId, error);
+    } finally {
+      env?.close();
+      detachedIndexingRuns.delete(key);
+    }
+  });
+  detachedIndexingRuns.set(key, run);
+}
+
+function acceptDetachedIndexingStart(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  resolved: ResolvedIndexingProvider,
+  log: IndexingRouteLog,
+  requestCorrelationId: string | undefined,
+): RouteResult {
+  // Trust-boundary validation stays SYNCHRONOUS, before the 202: the deny-list is
+  // re-validated against the canonical (realpath-resolved) roots at index time, and a
+  // violation must answer this request as a 400 — detaching it would demote a refused
+  // credential-directory walk to a buried diagnostic. The detached run repeats the
+  // (idempotent) canonicalization harmlessly.
+  canonicalizeCapsuleSourceRoots(store, resolved.capsule);
+  // Repository pods mint their job id inside their own refresh flow; the standard path
+  // pins the id up front so the 202 names the job the caller can poll.
+  const jobId =
+    repositoryPodSourceId(store, resolved.capsule) === undefined ? randomUUID() : undefined;
+  // Item 1. Written BEFORE the launch so the file reads in causal order — accepted, launched,
+  // indexing.job.started — and carrying the minted id in `correlationId`, which is the single
+  // field that lets an operator grep the six blank minutes back to the request that opened them.
+  // `sourceCount` is the shape the run was admitted with: "0 of 1 documents" is only diagnosable
+  // against what the route believed it was starting.
+  const acceptedLog = indexingLogWithCorrelation(log, jobId);
+  acceptedLog.logger.info(
+    activityLogEvent(
+      INDEXING_START_ACCEPTED_OPERATION,
+      { correlationId: acceptedLog.correlationId, status: 202 },
+      {
+        capsuleIdDigest: acceptedLog.capsuleIdDigest,
+        jobIdMinted: jobId !== undefined,
+        sourceCount: resolved.capsule.sourceIds.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  launchDetachedCapsuleIndexing(deps, resolved, jobId, requestCorrelationId);
+  return {
+    status: 202,
+    body: {
+      ok: true,
+      capsuleId: resolved.capsule.id,
+      ...(jobId !== undefined ? { jobId } : {}),
+    },
+  };
+}
+
 export async function handleStartLocalKnowledgeCapsuleIndexing(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2746,37 +3296,43 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
     await readJsonObject(ctx.req);
+    const log = indexingRouteLog(capsuleId);
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);
       if (capsule === undefined) {
-        return notFound(`Capsule not found: ${capsuleId}`);
+        const response = notFound(`Capsule not found: ${capsuleId}`);
+        return refuseIndexingStart(log, "capsule-not-found", response);
       }
       if (capsule.sourceIds.length === 0) {
-        return emptyCapsuleIndexingConflict();
+        return refuseIndexingStart(log, "capsule-has-no-sources", emptyCapsuleIndexingConflict());
       }
       const resolved = await resolveIndexingProviderForCapsule(deps, env.store, capsule);
       if (resolved === undefined) {
-        return conflict(
+        const response = conflict(
           "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before indexing it.",
         );
+        return refuseIndexingStart(log, "no-embedding-capable-model", response);
       }
       // LK-003 (Epic #189): refuse to start a second concurrent indexer for the same
       // capsule — the orchestrator persists running jobs, so a duplicate POST would
-      // race the in-flight one and corrupt vector counts.
+      // race the in-flight one and corrupt vector counts. The in-memory launch map closes
+      // the window between answering 202 and the detached run persisting its job row.
       const runningJobId = latestRunningJobId(env.store, resolved.capsule.id);
       if (runningJobId !== undefined) {
-        return runningIndexingJobConflict(resolved.capsule.id, runningJobId);
+        // Correlated to the job that is BLOCKING this request, not to the refused one: "which run
+        // is holding the capsule" is the only useful next question after this 409.
+        return refuseIndexingStart(
+          indexingLogWithCorrelation(log, runningJobId),
+          "job-already-running",
+          runningIndexingJobConflict(resolved.capsule.id, runningJobId),
+        );
       }
-      const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
-        mode: undefined,
-        force: false,
-      });
-      return indexingCompletionResponse(
-        resolved.capsule.id,
-        terminal,
-        "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
-      );
+      if (detachedIndexingRuns.has(String(resolved.capsule.id))) {
+        const response = conflict("An indexing job for this capsule is already starting.");
+        return refuseIndexingStart(log, "run-already-starting", response);
+      }
+      return acceptDetachedIndexingStart(deps, env.store, resolved, log, ctx.correlationId);
     } finally {
       env.close();
     }
@@ -2787,23 +3343,74 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runHandler(async () => {
-    const capsuleId = parseCapsuleId(ctx);
-    await readJsonObject(ctx.req);
-    const env = openStoreForDeps(deps);
-    try {
-      const capsule = getCapsule(env.store, capsuleId);
-      if (capsule === undefined) {
-        return notFound(`Capsule not found: ${capsuleId}`);
-      }
-      if (!requestRunningJobCancellation(env.store, capsule.id)) {
-        return conflict("No running indexing job was found for this capsule.");
-      }
-      return actionResponse(capsule.id);
-    } finally {
-      env.close();
+  return runHandler(() => cancelLocalKnowledgeCapsuleIndexing(ctx, deps));
+}
+
+function logCancellationRefused(
+  log: IndexingRouteLog,
+  status: 404 | 409,
+  reason: "capsule-not-found" | "no-running-job",
+): void {
+  log.logger.warn(
+    activityLogEvent(
+      INDEXING_CANCEL_REFUSED_OPERATION,
+      {
+        correlationId: log.correlationId,
+        status,
+        errorKind: status === 404 ? "invalid-request" : "conflict",
+      },
+      { capsuleIdDigest: log.capsuleIdDigest, reason, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+function logCancellationAccepted(log: IndexingRouteLog): void {
+  log.logger.warn(
+    activityLogEvent(
+      INDEXING_CANCEL_ACCEPTED_OPERATION,
+      { correlationId: log.correlationId, status: 200 },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        cancellationRequested: true,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+async function cancelLocalKnowledgeCapsuleIndexing(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const capsuleId = parseCapsuleId(ctx);
+  await readJsonObject(ctx.req);
+  const log = indexingRouteLog(capsuleId);
+  log.logger.info(
+    activityLogEvent(
+      INDEXING_CANCEL_REQUESTED_OPERATION,
+      { correlationId: log.correlationId },
+      { capsuleIdDigest: log.capsuleIdDigest, completeness: "complete", loss: "none" },
+    ),
+  );
+  const env = openStoreForDeps(deps);
+  try {
+    const capsule = getCapsule(env.store, capsuleId);
+    if (capsule === undefined) {
+      logCancellationRefused(log, 404, "capsule-not-found");
+      return notFound(`Capsule not found: ${capsuleId}`);
     }
-  });
+    const runningJobId = latestRunningJobId(env.store, capsule.id);
+    if (!requestRunningJobCancellation(env.store, capsule.id)) {
+      logCancellationRefused(log, 409, "no-running-job");
+      return conflict("No running indexing job was found for this capsule.");
+    }
+    const acceptedLog = indexingLogWithCorrelation(log, runningJobId);
+    logCancellationAccepted(acceptedLog);
+    return actionResponse(capsule.id);
+  } finally {
+    env.close();
+  }
 }
 
 // ─── Connect a source folder to a capsule (Epic #189) ─────────────────────────
@@ -3136,6 +3743,7 @@ export async function handleReindexLocalKnowledgeCapsule(
       if (!provider.ok) return conflict(provider.message);
       const { resolved } = provider;
       const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
+        provider: resolved.provider,
         mode,
         force,
         ...(preflight.resumeJob !== undefined ? { resumeJob: preflight.resumeJob } : {}),

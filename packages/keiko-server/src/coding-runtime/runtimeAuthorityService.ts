@@ -1,40 +1,66 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+// KEIKO-0577: replace the file-local digest()/canonicalJson() with the shared, architecturally
+// correct helpers from @oscharko-dev/keiko-security so a second silently-diverging
+// implementation of a security-relevant hashing primitive cannot drift further.
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchBranchConstraints,
+  CodingWorkbenchBudget,
+  CodingWorkbenchCommandPolicy,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchGate,
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchMode,
+  CodingWorkbenchModelProfile,
+  CodingWorkbenchNetworkPolicy,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
+  CodingWorkbenchRuntimeAdapterKind,
+  CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchRuntimeExecutionBinding,
+  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeDelegationUsage,
+  CodingWorkbenchRuntimeIntent,
+  CodingWorkbenchRuntimeMintConfirmation,
+  CodingWorkbenchRuntimeState,
+  CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchRuntimeSource,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  isCodingWorkbenchModeWidening,
   isLegalCodingWorkbenchRuntimeTransition,
-  resolveEffectiveCodingWorkbenchMode,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
   validateCodingWorkbenchRuntimeMintConfirmation,
   validateCodingWorkbenchRuntimeState,
-  type CodingWorkbenchActionClass,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchBranchConstraints,
-  type CodingWorkbenchBudget,
-  type CodingWorkbenchCommandPolicy,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchGate,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchModelProfile,
-  type CodingWorkbenchNetworkPolicy,
-  type CodingWorkbenchRuntimeAuthorityEnvelope,
-  type CodingWorkbenchRuntimeAdapterKind,
-  type CodingWorkbenchRuntimeAuthorityFacts,
-  type CodingWorkbenchRuntimeExecutionBinding,
-  type CodingWorkbenchRuntimeFailureCode,
-  type CodingWorkbenchRuntimeDelegationUsage,
-  type CodingWorkbenchRuntimeIntent,
-  type CodingWorkbenchRuntimeMintConfirmation,
-  type CodingWorkbenchRuntimeState,
-  type CodingWorkbenchRuntimeStateName,
-  type CodingWorkbenchRuntimeSource,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  codingWorkbenchPolicyEffectFor,
+  isCodingWorkbenchModeWidening,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   EditorAgentAuthorityRegistry,
   editorAgentAuthorityEnvelopeDigest,
   editorAgentWorkspaceRootDigest,
   type EditorAgentRuntimeDelegationRequest,
 } from "../editor/agentAuthorityRegistry.js";
+import type {
+  ActiveGitDeliveryDescriptionAuthority,
+  ActiveGitDeliveryRunAuthority,
+  GitDeliveryDescriptionAuthorityPort,
+  GitDeliveryDescriptionAuthorityScope,
+  GitDeliveryRunAuthorityPort,
+} from "../gitDelivery/runBoundAuthority.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
   type SupervisedCodingApprovalBindingOnce,
@@ -48,7 +74,462 @@ import {
 import { verifyRuntimeReapReceipt, type RuntimeReapReceipt } from "./runtimeProcessSupervisor.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
 
+// Child tool mutations may only ever run against a RUNNING run; operator admissions (follow-up
+// dispatch, abort, question answers) legitimately reach a paused run — sticky pause holds the
+// runtime, not the human.
+const RUNNING_ONLY: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set(["running"]);
+const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "running",
+  "paused",
+]);
+// #3390: the real race is not in the orchestrator's own local dispatch ordering -- production
+// wiring (productionCodingRuntimePorts.ts's startProductionRuntime) already awaits the managed
+// runtime's start() to completion, including both its "ready" and "running" authority
+// transitions, before the orchestrator ever calls startInitialTurn. The actual window is earlier:
+// mint() (activateMintedRuntime / stateForMint) sets runtimeState to "starting" -- with the
+// authority ref, capability and tree binding already issued -- and that "starting" state
+// persists for the full duration of the managed runtime's own start() call. If the underlying
+// process becomes reachable and issues its own first model call before that start() promise
+// settles, the reservation lands while runtimeState.state is still "starting", not "ready" or
+// "running", and gets refused as an authority-resolution failure even though every other
+// admission fact (audience, runId, envelopeDigest) already matches. "starting" is a legal
+// interior state (LEGAL_TRANSITIONS.idle -> "starting" -> "ready" -> ...) and not a state a
+// reservation could be replayed into from anywhere else, so it is safe to admit alongside
+// "ready" and "running". Every other reservePromptTokens clause (audience, runId, envelopeDigest
+// match, paused-state refusal) stays exactly as strict; only the running-only state gate widens.
+const PROMPT_RESERVATION_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "starting",
+  "ready",
+  "running",
+]);
+
+type RuntimeAuthorityMintFailureStage =
+  | "intent-binding"
+  | "approval-digest"
+  | "confirmation-consumption"
+  | "envelope-validation"
+  | "authority-registration"
+  | "capability-issuance";
+
+type RuntimeAuthorityMintFailureReason =
+  | "model-source-mismatch"
+  | "approval-digest-invalid"
+  | "confirmation-refused"
+  | "envelope-invalid"
+  | "registration-refused"
+  | "capability-issuance-refused";
+
+const MINT_FAILURE_ERROR_KIND = {
+  "model-source-mismatch": "authority-denied",
+  "approval-digest-invalid": "validation-failed",
+  "confirmation-refused": "authority-denied",
+  "envelope-invalid": "validation-failed",
+  "registration-refused": "authority-denied",
+  "capability-issuance-refused": "authority-denied",
+} satisfies Readonly<Record<RuntimeAuthorityMintFailureReason, ActivityLogErrorKind>>;
+
+/**
+ * The closed conditions a tool-path capability recheck can be refused for, and the error class each
+ * clusters under in `keiko support analyze --clusters` — the same shape `MINT_FAILURE_ERROR_KIND`
+ * gives a refused mint (owner review, 2026-09-10). `registry-refused` carries the registry's own
+ * reason as a separate field so the class stays closed while the reason stays visible.
+ */
+type RevalidationRefusalCondition =
+  | "state-not-admissible"
+  | "tree-binding-missing"
+  | "run-mismatch"
+  | "delegation-mismatch"
+  | "audience-mismatch"
+  | "capability-invalid"
+  | "registry-refused";
+const REVALIDATION_REFUSAL_ERROR_KIND = {
+  "state-not-admissible": "authority-denied",
+  "tree-binding-missing": "authority-denied",
+  "run-mismatch": "authority-denied",
+  "delegation-mismatch": "authority-denied",
+  "audience-mismatch": "authority-denied",
+  "capability-invalid": "authority-denied",
+  "registry-refused": "authority-denied",
+} satisfies Readonly<Record<RevalidationRefusalCondition, ActivityLogErrorKind>>;
+
+const CODING_RUNTIME_AUTHORITY_MINT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.authority.mint-failed",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.refuseMint",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "intent-binding",
+        "approval-digest",
+        "confirmation-consumption",
+        "envelope-validation",
+        "authority-registration",
+        "capability-issuance",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "model-source-mismatch",
+        "approval-digest-invalid",
+        "confirmation-refused",
+        "envelope-invalid",
+        "registration-refused",
+        "capability-issuance-refused",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-authority-mint"],
+  proofIds: ["coding-runtime.authority.mint-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.authority.minted",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.activateMintedRuntime",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    effectiveMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    actionClasses: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 7,
+      values: [
+        "workspace-read",
+        "workspace-write",
+        "command-execution",
+        "verification",
+        "connector-access",
+        "network-egress",
+        "delivery-substrate",
+      ],
+    },
+    connectorScopes: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 6,
+      values: [
+        "source-control.read",
+        "source-control.write",
+        "issue-tracker.read",
+        "issue-tracker.write",
+        "knowledge-base.read",
+        "knowledge-base.write",
+      ],
+    },
+    networkPolicyMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["deny-all", "governed-egress", "connector-scoped-egress"],
+    },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-authority-mint"],
+  proofIds: ["coding-runtime.authority.minted.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DESCRIPTION_AUTHORITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.description-authority",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.logDescriptionAuthority",
+  fields: {
+    event: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["minted", "narrowed", "rejected"],
+    },
+    scopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    requestedMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    deploymentCeiling: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    effectiveMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    expiresAtMs: { type: "integer", dataClass: "count", required: false },
+    evictedCount: { type: "integer", dataClass: "count", required: false },
+    retainedCount: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-description-authority"],
+  proofIds: ["coding-runtime.description-authority.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.authority.revalidation-refused",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.recordRevalidationRefused",
+  fields: {
+    condition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "state-not-admissible",
+        "tree-binding-missing",
+        "run-mismatch",
+        "delegation-mismatch",
+        "audience-mismatch",
+        "capability-invalid",
+        "registry-refused",
+      ],
+    },
+    runtimeState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    admissibleStates: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 12,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    registryReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "runtime-unavailable",
+        "active-run-conflict",
+        "invalid-intent",
+        "approval-activation-failed",
+        "authority-resolution-failed",
+        "authority-expired",
+        "authority-replayed",
+        "task-drift",
+        "workspace-drift",
+        "project-drift",
+        "branch-drift",
+        "scope-drift",
+        "budget-drift",
+        "authority-budget-exceeded",
+        "source-drift",
+        "runtime-failed",
+        "revoked",
+        "recovery-required",
+        "replay-cap-exhausted",
+        "issue-context-unavailable",
+        "question-answer-rejected",
+        "delivery-not-evidenced",
+        "model-unavailable",
+        "workspace-unqualified",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-authority-revalidation"],
+  proofIds: ["coding-runtime.authority.revalidation-refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
+  return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
+}
+
+// ADR-0138 D2: workspace-contained effects (commands included) are approval-required, never
+// denied outright, in Ask for approval. Deriving from the shared matrix -- the same pattern
+// deliveryScopeGranted already uses -- instead of hardcoding a mode exclusion keeps this mint
+// from silently diverging from the one evaluator every other workspace-contained action reads
+// (codingToolAuthorityPort.ts's workspaceMediumRiskAllowed).
+function commandExecutionGranted(mode: CodingWorkbenchMode): boolean {
+  return codingWorkbenchPolicyEffectFor(mode, "workspace-contained", "medium") !== "denied";
+}
+
+export const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
+  "source-control.read",
+  "source-control.write",
+];
+
+export function codingRuntimeActionClassesForMode(
+  mode: CodingWorkbenchMode,
+  researchEgressEnabled: boolean | undefined,
+): readonly CodingWorkbenchActionClass[] {
+  const actionClasses: CodingWorkbenchActionClass[] = [
+    "workspace-read",
+    "workspace-write",
+    "verification",
+  ];
+  if (commandExecutionGranted(mode)) actionClasses.push("command-execution");
+  if (deliveryScopeGranted(mode)) actionClasses.push("delivery-substrate", "connector-access");
+  if (researchEgressEnabled === true || mode === "autonomous-delivery") {
+    actionClasses.push("network-egress");
+  }
+  return actionClasses;
+}
+
+export function codingRuntimeConnectorScopesForMode(
+  mode: CodingWorkbenchMode,
+): readonly CodingWorkbenchConnectorScope[] {
+  return deliveryScopeGranted(mode) ? DELIVERY_CONNECTOR_SCOPES : [];
+}
+
+export function codingRuntimeNetworkPolicyForMode(
+  mode: CodingWorkbenchMode,
+  researchEgressEnabled: boolean | undefined,
+): CodingWorkbenchNetworkPolicy {
+  // The connector scopes a mode carries follow deliveryScopeGranted (see
+  // codingRuntimeConnectorScopesForMode), but the envelope contract
+  // (validateNetworkPolicyConnectorScopesConsistency / validateNetworkPolicyActionClassConsistency)
+  // requires networkPolicy.connectorScopes to be empty while the policy is deny-all. Below
+  // autonomous-delivery without research egress the mint therefore stays deny-all with no scopes;
+  // an approved connector-scoped request (git ci, "connector") is redeemed through the approval
+  // proof, never through a scope smuggled onto a deny-all policy.
+  const connectorScopes = codingRuntimeConnectorScopesForMode(mode);
+  if (mode === "autonomous-delivery") {
+    return { mode: "connector-scoped-egress", allowLoopback: false, connectorScopes };
+  }
+  return researchEgressEnabled === true
+    ? { mode: "governed-egress", allowLoopback: false, connectorScopes }
+    : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
+}
+
+export function codingRuntimeCommandPolicyForMode(
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchCommandPolicy {
+  return {
+    mode: commandExecutionGranted(mode) ? "governed" : "deny",
+    allow: [],
+    deny: [],
+    maxCommandTimeoutMs: 120_000,
+    requirePerCommandApproval: mode !== "autonomous-delivery",
+  };
+}
+
+function narrowedCommandPolicy(
+  policy: CodingWorkbenchCommandPolicy,
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchCommandPolicy {
+  const ceiling = codingRuntimeCommandPolicyForMode(mode);
+  return {
+    ...policy,
+    mode: policy.mode === "deny" || ceiling.mode === "deny" ? "deny" : policy.mode,
+    requirePerCommandApproval:
+      policy.requirePerCommandApproval || ceiling.requirePerCommandApproval,
+  };
+}
+
+function narrowAuthorityToMode(
+  authority: CodingWorkbenchAuthorityEnvelope,
+  mode: CodingWorkbenchMode,
+): CodingWorkbenchAuthorityEnvelope {
+  if (authority.effectiveMode === mode) return authority;
+  const retainGovernedResearch = authority.networkPolicy.mode === "governed-egress";
+  const allowedActionClasses = codingRuntimeActionClassesForMode(mode, retainGovernedResearch);
+  const allowedConnectorScopes = codingRuntimeConnectorScopesForMode(mode);
+  return {
+    ...authority,
+    effectiveMode: mode,
+    actionClasses: authority.actionClasses.filter((value) => allowedActionClasses.includes(value)),
+    connectorScopes: authority.connectorScopes.filter((value) =>
+      allowedConnectorScopes.includes(value),
+    ),
+    commandPolicy: narrowedCommandPolicy(authority.commandPolicy, mode),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(mode, retainGovernedResearch),
+  };
+}
+
 export interface CodingRuntimeTrustedContext {
+  /** Captured before start confirmation; absent legacy contexts cannot execute verified commits. */
+  readonly repositoryIdentity?: {
+    readonly kind: "github-origin" | "foreign-origin" | "local";
+    readonly digest: string;
+  };
+  /** Server-resolved launch identity; absent legacy contexts cannot adopt a committed head. */
+  readonly runId?: string;
   readonly operatorId: string;
   readonly taskId: string;
   readonly projectId: string;
@@ -57,6 +538,7 @@ export interface CodingRuntimeTrustedContext {
   readonly workspaceRoot: string;
   readonly branchRef: string;
   readonly branchHeadDigest: string;
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
   readonly branch: CodingWorkbenchBranchConstraints;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
@@ -112,8 +594,78 @@ export type CodingRuntimeCapabilityRecheckInput = Omit<
   "delegationId" | "idempotencyKey" | "usage"
 >;
 
+/** A budget question for one delegation: its usage, without the identity a delegation reserves. */
+export type CodingRuntimeCapabilityBudgetInput = Omit<
+  CodingRuntimeCapabilityDelegationInput,
+  "delegationId" | "idempotencyKey"
+>;
+
+// ─── Description authority (#3399, epic #3384 correction 4) ──────────────────────────────────────
+//
+// Admits exactly two effects outside a running Code task: model egress of snapshot content through
+// the Model Gateway (description generation) and the "pull-request" body-only description apply. It
+// is minted server-side for one immutable scope — never for "every PR" or "every repository" — and
+// carries no workspace-write or command action classes: it exists only to let a Chat turn or a
+// post-terminal Workbench job re-derive admission for these two narrow effects after the run that
+// produced the snapshot has ended (or never existed), never to reuse a terminated run's own
+// capabilities (runtimeAuthorityService.ts's `revokeBeforeTerminate` already clears those). The
+// scope/authority shapes live in runBoundAuthority.ts (the module that already owns every other
+// Git-delivery authority shape and consults this one at admission) so this file stays a producer
+// of that owning module's types, exactly like `ActiveGitDeliveryRunAuthority` above.
+interface StoredDescriptionAuthority {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly expiresAtMs: number;
+}
+interface DescriptionAuthorityEvidence {
+  readonly effectiveMode?: CodingWorkbenchMode;
+  readonly expiresAtMs?: number;
+  readonly evictedCount?: number;
+  readonly retainedCount?: number;
+}
+export interface MintGitDeliveryDescriptionAuthorityInput {
+  readonly scope: GitDeliveryDescriptionAuthorityScope;
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly nowIso: string;
+  readonly ttlMs?: number;
+  readonly correlationId?: string;
+}
+
+/** Exported so the description proposal's retention window can be DERIVED from the authority that
+ * backs it, and pinned against it, instead of two independent numbers drifting apart (#3390). */
+export const DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS = 10 * 60 * 1000;
+const MAX_DESCRIPTION_AUTHORITIES = 256;
+
+function descriptionAuthorityLifetime(input: MintGitDeliveryDescriptionAuthorityInput): {
+  readonly nowMs: number;
+  readonly expiresAtMs: number;
+} {
+  const nowMs = Date.parse(input.nowIso);
+  const ttlMs = input.ttlMs ?? DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS;
+  const expiresAtMs = nowMs + ttlMs;
+  if (
+    !Number.isFinite(nowMs) ||
+    !Number.isSafeInteger(ttlMs) ||
+    ttlMs <= 0 ||
+    ttlMs > DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS ||
+    !Number.isFinite(new Date(expiresAtMs).getTime())
+  ) {
+    throw new TypeError("Invalid description authority lifetime.");
+  }
+  return { nowMs, expiresAtMs };
+}
+
+export function descriptionAuthorityScopeDigest(
+  scope: GitDeliveryDescriptionAuthorityScope,
+): string {
+  return sha256Hex(canonicalise(scope));
+}
+
 export class CodingRuntimeAuthorityService {
   private activeAuthorityRef: CodingRuntimeAuthorityRef | undefined;
+  private activeGitDeliveryAuthority: ActiveGitDeliveryRunAuthority | undefined;
+  private readonly descriptionAuthorities = new Map<string, StoredDescriptionAuthority>();
   private activeTreeBindingId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
@@ -130,6 +682,7 @@ export class CodingRuntimeAuthorityService {
     private readonly newNonce: () => string = () => randomBytes(32).toString("hex"),
     private readonly approvals: SupervisedCodingApprovalStore = createInMemorySupervisedCodingApprovalStore(),
     private readonly capabilities: RuntimeCapabilityStore = createInMemoryRuntimeCapabilityStore(),
+    private readonly activityLog?: ServerLogSink,
   ) {}
 
   public confirmStart(
@@ -174,7 +727,7 @@ export class CodingRuntimeAuthorityService {
   ): CodingRuntimeMintResult {
     if (this.runtimeState.state !== "idle") return { ok: false, reason: "active-run-conflict" };
     if (intent.modelSource !== context.modelProfile.source) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "intent-binding", "model-source-mismatch");
     }
     const approvalDigest = this.consumeConfirmation(
       intent,
@@ -183,7 +736,9 @@ export class CodingRuntimeAuthorityService {
       confirmation,
       nowIso,
     );
-    if (approvalDigest === undefined) return { ok: false, reason: "authority-resolution-failed" };
+    if (approvalDigest === undefined) {
+      return this.refuseMint(runId, "confirmation-consumption", "confirmation-refused");
+    }
     return this.mintConfirmedStartForRun(runId, intent, context, approvalDigest, nowIso);
   }
 
@@ -196,11 +751,11 @@ export class CodingRuntimeAuthorityService {
     nowIso: string,
   ): CodingRuntimeMintResult {
     if (this.runtimeState.state !== "idle") return { ok: false, reason: "active-run-conflict" };
-    if (
-      intent.modelSource !== context.modelProfile.source ||
-      !/^[a-f0-9]{64}$/u.test(approvalDigest)
-    ) {
-      return { ok: false, reason: "authority-resolution-failed" };
+    if (intent.modelSource !== context.modelProfile.source) {
+      return this.refuseMint(runId, "intent-binding", "model-source-mismatch");
+    }
+    if (!/^[a-f0-9]{64}$/u.test(approvalDigest)) {
+      return this.refuseMint(runId, "approval-digest", "approval-digest-invalid");
     }
     const envelope = buildRuntimeAuthority(
       intent,
@@ -211,22 +766,99 @@ export class CodingRuntimeAuthorityService {
       approvalDigest,
     );
     if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "envelope-validation", "envelope-invalid");
     }
-    const registered = this.registry.registerRuntime(envelope, context.deploymentCeiling, nowIso);
-    if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
-    const capabilities = this.issueCapabilities(envelope, registered.authorityRef);
+    const registered = this.registry.registerRuntime(
+      envelope,
+      context.deploymentCeiling,
+      nowIso,
+      context.issueBinding?.bindingDigest,
+    );
+    if (!registered.ok) return this.refuseRegistration(runId);
+    const capabilities = this.issueCapabilities(
+      envelope,
+      registered.authorityRef,
+      context.modelProfile,
+    );
     if (capabilities === undefined) {
-      return { ok: false, reason: "authority-resolution-failed" };
+      return this.refuseMint(runId, "capability-issuance", "capability-issuance-refused");
     }
+    return this.activateMintedRuntime({
+      runId,
+      envelope,
+      authorityRef: registered.authorityRef,
+      capabilities,
+      context,
+      nowIso,
+    });
+  }
+
+  private refuseMint(
+    runId: string,
+    stage: RuntimeAuthorityMintFailureStage,
+    reason: RuntimeAuthorityMintFailureReason,
+  ): CodingRuntimeMintResult {
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_AUTHORITY_MINT_FAILED_OPERATION,
+        { correlationId: runId, level: "warn", errorKind: MINT_FAILURE_ERROR_KIND[reason] },
+        { runId, stage, reason },
+      ),
+    );
+    return { ok: false, reason: "authority-resolution-failed" };
+  }
+
+  private refuseRegistration(runId: string): CodingRuntimeMintResult {
+    return this.refuseMint(runId, "authority-registration", "registration-refused");
+  }
+
+  private activateMintedRuntime(input: {
+    readonly runId: string;
+    readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope;
+    readonly authorityRef: CodingRuntimeAuthorityRef;
+    readonly capabilities: {
+      readonly modelGatewayCapability: string;
+      readonly toolFacadeCapability: string;
+    };
+    readonly context: CodingRuntimeTrustedContext;
+    readonly nowIso: string;
+  }): CodingRuntimeMintResult {
+    const { runId, envelope, authorityRef, capabilities, context, nowIso } = input;
     const treeBindingId = randomBytes(32).toString("hex");
-    this.activeAuthorityRef = registered.authorityRef;
+    this.activeAuthorityRef = authorityRef;
+    this.activeGitDeliveryAuthority = {
+      runId,
+      envelopeDigest: authorityRef.envelopeDigest,
+      // Git-delivery's `projectId` is the canonical workspace root its route resolves and then
+      // compares with `workspaceRoot` at admission. The runtime context's `projectId` is the
+      // repository identity used by runtime-fact projection, so projecting it here made every
+      // managed-worktree delivery request fail `workspace-out-of-envelope` even when the exact
+      // active root matched. Preserve both meanings at their owning boundaries.
+      projectId: context.workspaceRoot,
+      workspaceRoot: context.workspaceRoot,
+      branch: context.branch,
+      authority: envelope.authority,
+    };
     this.activeTreeBindingId = treeBindingId;
     this.activeEffectiveMode = envelope.authority.effectiveMode;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_AUTHORITY_MINTED_OPERATION,
+        { correlationId: runId, level: "info" },
+        {
+          runId,
+          effectiveMode: envelope.authority.effectiveMode,
+          actionClasses: envelope.authority.actionClasses,
+          connectorScopes: envelope.authority.connectorScopes,
+          networkPolicyMode: envelope.authority.networkPolicy.mode,
+          maxPromptTokens: envelope.authority.budget.maxPromptTokens,
+        },
+      ),
+    );
     return {
       ok: true,
-      authorityRef: registered.authorityRef,
+      authorityRef,
       modelGatewayCapability: capabilities.modelGatewayCapability,
       toolFacadeCapability: capabilities.toolFacadeCapability,
       effectiveMode: envelope.authority.effectiveMode,
@@ -250,6 +882,165 @@ export class CodingRuntimeAuthorityService {
     return this.activeEffectiveMode;
   }
 
+  /**
+   * Server-private projection used by Git delivery only. It deliberately exposes the live,
+   * accepted run instead of a deployment-wide ceiling or browser-provided authority object.
+   */
+  public gitDeliveryAuthorityPort(): GitDeliveryRunAuthorityPort {
+    return {
+      current: (nowIso): ActiveGitDeliveryRunAuthority | undefined =>
+        this.currentGitDeliveryAuthority(nowIso),
+    };
+  }
+
+  // B1-3 (epic #3384): a run's git-delivery authority is minted before any pull request
+  // necessarily exists, so it carries no PR identity at mint time. Once the run's PR is created
+  // and published, the caller that learns of it (Git delivery's PR-creation path) binds that
+  // identity here so `current()`'s projection — and every admission that reads it, e.g.
+  // prDescriptionRoutes.ts's `admitDescriptionModelEgress` — can compare a request's
+  // ownerAndRepo/prNumber against the run's *actual* PR scope instead of admitting any PR in the
+  // same project. Requires the exact runId of the still-active run so a stale or mismatched
+  // caller cannot bind a PR onto a different (or already-ended) run.
+  public bindPublishedPullRequest(
+    runId: string,
+    pullRequest: { readonly ownerAndRepo: string; readonly prNumber: number },
+  ): boolean {
+    if (this.activeGitDeliveryAuthority?.runId !== runId) return false;
+    this.activeGitDeliveryAuthority = { ...this.activeGitDeliveryAuthority, pullRequest };
+    return true;
+  }
+
+  // A same-scope remint can only narrow a live grant's mode and expiry. An expired grant may
+  // be replaced only by a newly admitted caller; it cannot become live through a read.
+  public mintGitDeliveryDescriptionAuthority(
+    input: MintGitDeliveryDescriptionAuthorityInput,
+  ): ActiveGitDeliveryDescriptionAuthority {
+    let lifetime: ReturnType<typeof descriptionAuthorityLifetime>;
+    try {
+      lifetime = descriptionAuthorityLifetime(input);
+    } catch (error) {
+      this.logDescriptionAuthority(input, "rejected", {}, error);
+      throw error;
+    }
+    const digest = descriptionAuthorityScopeDigest(input.scope);
+    const prior = this.descriptionAuthorities.get(digest);
+    const live = prior !== undefined && prior.expiresAtMs > lifetime.nowMs ? prior : undefined;
+    const requested = resolveEffectiveCodingWorkbenchMode(
+      input.requestedMode,
+      input.deploymentCeiling,
+    );
+    const effectiveMode = resolveEffectiveCodingWorkbenchMode(
+      requested,
+      live?.effectiveMode ?? requested,
+    );
+    const expiresAtMs = Math.min(lifetime.expiresAtMs, live?.expiresAtMs ?? lifetime.expiresAtMs);
+    const expiresAt = new Date(expiresAtMs).toISOString();
+    this.descriptionAuthorities.set(digest, { scope: input.scope, effectiveMode, expiresAtMs });
+    const evictedCount = this.pruneDescriptionAuthorities(lifetime.nowMs);
+    this.logDescriptionAuthority(input, live === undefined ? "minted" : "narrowed", {
+      effectiveMode,
+      expiresAtMs,
+      evictedCount,
+      retainedCount: this.descriptionAuthorities.size,
+    });
+    return { scope: input.scope, effectiveMode, expiresAt };
+  }
+
+  private logDescriptionAuthority(
+    input: MintGitDeliveryDescriptionAuthorityInput,
+    event: "minted" | "narrowed" | "rejected",
+    extra: DescriptionAuthorityEvidence,
+    error?: unknown,
+  ): void {
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_DESCRIPTION_AUTHORITY_OPERATION,
+        {
+          correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+          level: event === "rejected" ? "warn" : "info",
+          ...(error === undefined ? {} : { errorKind: "validation-failed" }),
+        },
+        {
+          event,
+          scopeDigest: descriptionAuthorityScopeDigest(input.scope),
+          requestedMode: input.requestedMode,
+          deploymentCeiling: input.deploymentCeiling,
+          ...extra,
+          ...(error === undefined
+            ? {}
+            : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+        },
+      ),
+    );
+  }
+
+  /**
+   * Server-private projection consumed only by `runBoundAuthority.ts`'s description-authority
+   * admission for the two operations it names. Revalidates on every read: an exact scope match
+   * (the caller's freshly re-derived snapshot/base/head digests, not a cached identity) that has
+   * not expired. A changed scope — a stale re-check, a different PR, a moved base/head — simply
+   * finds no record, which is the fail-closed default: this port never widens what it returns.
+   */
+  public gitDeliveryDescriptionAuthorityPort(): GitDeliveryDescriptionAuthorityPort {
+    return {
+      current: (scope, nowIso): ActiveGitDeliveryDescriptionAuthority | undefined =>
+        this.currentGitDeliveryDescriptionAuthority(scope, nowIso),
+      expired: (scope, nowIso): boolean =>
+        this.gitDeliveryDescriptionAuthorityExpired(scope, nowIso),
+    };
+  }
+
+  /** Explicit revocation for a scope change or stale re-check the caller has already detected. */
+  public revokeGitDeliveryDescriptionAuthority(scope: GitDeliveryDescriptionAuthorityScope): void {
+    this.descriptionAuthorities.delete(descriptionAuthorityScopeDigest(scope));
+  }
+
+  private currentGitDeliveryDescriptionAuthority(
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ): ActiveGitDeliveryDescriptionAuthority | undefined {
+    const nowMs = Date.parse(nowIso);
+    const stored = this.descriptionAuthorities.get(descriptionAuthorityScopeDigest(scope));
+    if (stored === undefined || Number.isNaN(nowMs) || stored.expiresAtMs <= nowMs) {
+      return undefined;
+    }
+    return {
+      scope: stored.scope,
+      effectiveMode: stored.effectiveMode,
+      expiresAt: new Date(stored.expiresAtMs).toISOString(),
+    };
+  }
+
+  // #3400/#3401 final-audit F1: consulted only by `authorizeGitDeliveryModelEgress` once `current`
+  // has already returned `undefined` for this exact scope. Distinguishes a record that WAS minted
+  // for this scope but has since passed its `expiresAt` (`true`) from no record ever having
+  // existed for it (`false`) — the same map lookup `currentGitDeliveryDescriptionAuthority` already
+  // performs, read for its expiry state instead of being discarded on it.
+  private gitDeliveryDescriptionAuthorityExpired(
+    scope: GitDeliveryDescriptionAuthorityScope,
+    nowIso: string,
+  ): boolean {
+    const nowMs = Date.parse(nowIso);
+    const stored = this.descriptionAuthorities.get(descriptionAuthorityScopeDigest(scope));
+    return stored !== undefined && !Number.isNaN(nowMs) && stored.expiresAtMs <= nowMs;
+  }
+
+  // Retain expired-vs-absent evidence until the bounded map needs space. At capacity, evict
+  // expired records before still-live grants, and enforce the cap after inserting the new scope.
+  private pruneDescriptionAuthorities(nowMs: number): number {
+    let evictedCount = 0;
+    while (this.descriptionAuthorities.size > MAX_DESCRIPTION_AUTHORITIES) {
+      const expired = [...this.descriptionAuthorities].find(
+        ([, value]) => value.expiresAtMs <= nowMs,
+      );
+      const oldest = expired?.[0] ?? this.descriptionAuthorities.keys().next().value;
+      if (oldest === undefined) break;
+      this.descriptionAuthorities.delete(oldest);
+      evictedCount += 1;
+    }
+    return evictedCount;
+  }
+
   /** Authenticates and atomically reserves estimated prompt tokens before provider dispatch. */
   public reservePromptTokens(
     capability: string,
@@ -264,7 +1055,7 @@ export class CodingRuntimeAuthorityService {
     if (
       authenticated.binding.audience !== "model-gateway" ||
       reference === undefined ||
-      this.runtimeState.state !== "running" ||
+      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
       this.runtimeState.runId !== authenticated.binding.runId ||
       reference.runId !== authenticated.binding.runId ||
       reference.envelopeDigest !== authenticated.binding.envelopeDigest
@@ -277,6 +1068,41 @@ export class CodingRuntimeAuthorityService {
       new Date(nowMs).toISOString(),
     );
     return reserved.ok ? { ok: true, runId: reference.runId } : reserved;
+  }
+
+  /**
+   * Authenticates and reconciles a prompt-token reservation against the provider's real reported
+   * usage for the same call, mirroring {@link reservePromptTokens}'s authentication and binding
+   * checks so a settlement can only ever land against the same run whose capability reserved it.
+   */
+  public settlePromptTokens(
+    capability: string,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+    nowMs = Date.now(),
+  ):
+    | { readonly ok: true; readonly runId: string }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    const authenticated = this.capabilities.authenticate(capability, nowMs);
+    const reference = this.activeAuthorityRef;
+    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    if (
+      authenticated.binding.audience !== "model-gateway" ||
+      reference === undefined ||
+      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
+      this.runtimeState.runId !== authenticated.binding.runId ||
+      reference.runId !== authenticated.binding.runId ||
+      reference.envelopeDigest !== authenticated.binding.envelopeDigest
+    ) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const settled = this.registry.settleRuntimePromptTokens(
+      reference,
+      reservedPromptTokens,
+      actualPromptTokens,
+      new Date(nowMs).toISOString(),
+    );
+    return settled.ok ? { ok: true, runId: reference.runId } : settled;
   }
 
   public pause(runId: string, nowIso: string): CodingRuntimeAuthorityBoundaryResult {
@@ -378,28 +1204,101 @@ export class CodingRuntimeAuthorityService {
     });
   }
 
+  /**
+   * Whether one more delegation of `input.usage` would still fit the run's budget, for the same
+   * capability, run and binding `resolveCapabilityForDelegation` admits, answered without reserving
+   * budget or replay identity: discovery lists only the skills the remaining budget can serve
+   * (#3417).
+   */
+  public delegationFits(input: CodingRuntimeCapabilityBudgetInput): boolean {
+    const reference = this.delegationReference(input);
+    return (
+      reference !== undefined &&
+      this.registry.runtimeDelegationFits(
+        reference,
+        input.workspaceRoot,
+        input.deploymentCeiling,
+        input.usage,
+        input.nowIso,
+      )
+    );
+  }
+
+  // The run a tool-facade capability may delegate for, by the conditions
+  // `resolveCapabilityForDelegation` applies, or undefined.
+  private delegationReference(
+    input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeAuthorityRef | undefined {
+    const authenticated = this.capabilities.authenticate(
+      input.capability,
+      Date.parse(input.nowIso),
+    );
+    if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") return undefined;
+    const reference = this.runningReference();
+    return reference !== undefined &&
+      capabilityMatchesDelegation(authenticated.binding, reference, input)
+      ? reference
+      : undefined;
+  }
+
+  // The active run's reference while it runs on its tree binding and is not being reaped.
+  private runningReference(): CodingRuntimeAuthorityRef | undefined {
+    const reference = this.activeAuthorityRef;
+    if (reference === undefined || this.reapPending?.runId === reference.runId) return undefined;
+    return this.runtimeState.state === "running" &&
+      this.activeTreeBindingId !== undefined &&
+      this.runtimeState.runId === reference.runId
+      ? reference
+      : undefined;
+  }
+
   public revalidateCapabilityForMutation(
     input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeResolution {
+    // A paused run must never execute a child mutation — running is the only admissible state
+    // for the tool path.
+    return this.revalidateCapabilityForStates(input, RUNNING_ONLY);
+  }
+
+  /**
+   * The operator-admission variant: dispatching a follow-up task turn, aborting, and answering
+   * questions are HUMAN operations the coordinator deliberately admits while the run is paused
+   * (sticky pause, no auto-resume). They carry the same capability, envelope, and live-facts
+   * revalidation as the tool path — only the admissible runtime states differ. Holding these to
+   * running-only silently 403'd every paused follow-up after #2644 unified the authority path.
+   */
+  public revalidateCapabilityForOperatorAdmission(
+    input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeResolution {
+    return this.revalidateCapabilityForStates(input, OPERATOR_ADMISSIBLE_STATES);
+  }
+
+  private revalidateCapabilityForStates(
+    input: CodingRuntimeCapabilityRecheckInput,
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
   ): CodingRuntimeResolution {
     const authenticated = this.capabilities.authenticate(
       input.capability,
       Date.parse(input.nowIso),
     );
     if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") {
+      this.recordRevalidationRefused(
+        admissibleStates,
+        authenticated.ok ? "audience-mismatch" : "capability-invalid",
+      );
       return authenticated.ok
         ? capabilityFailure("invalid")
         : capabilityFailure(authenticated.reason);
     }
     const reference = this.activeAuthorityRef;
-    if (
-      this.runtimeState.state !== "running" ||
-      this.activeTreeBindingId === undefined ||
-      this.runtimeState.runId !== reference?.runId ||
-      !capabilityMatchesDelegation(authenticated.binding, reference, input)
-    ) {
+    const condition = this.revalidationRefusalCondition(admissibleStates, reference, (ref) =>
+      capabilityMatchesDelegation(authenticated.binding, ref, input),
+    );
+    if (condition !== undefined || reference === undefined) {
+      this.recordRevalidationRefused(admissibleStates, condition ?? "run-mismatch");
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.restrictResolution(
+    const resolution = this.restrictResolution(
       this.registry.revalidateRuntime(
         reference,
         input.liveFacts,
@@ -408,12 +1307,60 @@ export class CodingRuntimeAuthorityService {
         input.nowIso,
       ),
     );
+    if (!resolution.ok)
+      this.recordRevalidationRefused(admissibleStates, "registry-refused", resolution.reason);
+    return resolution;
   }
 
-  public revoke(runId: string, nowIso: string): void {
-    this.revokeBeforeTerminate(runId);
-    this.transition(runId, "taken-over", nowIso);
+  /** The first structural condition a recheck fails, in the order the gate has always applied. */
+  private revalidationRefusalCondition(
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
+    reference: CodingRuntimeAuthorityRef | undefined,
+    delegationMatches: (reference: CodingRuntimeAuthorityRef) => boolean,
+  ): RevalidationRefusalCondition | undefined {
+    if (!admissibleStates.has(this.runtimeState.state)) return "state-not-admissible";
+    if (this.activeTreeBindingId === undefined) return "tree-binding-missing";
+    if (reference === undefined || this.runtimeState.runId !== reference.runId) {
+      return "run-mismatch";
+    }
+    return delegationMatches(reference) ? undefined : "delegation-mismatch";
   }
+
+  /**
+   * Every refusal of a capability recheck used to leave the log empty: the caller's guard collapsed
+   * it into a boolean and the model saw `verification-authority-revoked` for reasons as different
+   * as a paused run, a revoked tree binding and drifted live facts (run 12, 2026-09-10). One line
+   * per refusal names the condition, the admissible states the check asked for and the state the
+   * run was actually in — identifiers and closed words, never envelope content.
+   */
+  private recordRevalidationRefused(
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
+    condition: RevalidationRefusalCondition,
+    registryReason?: CodingWorkbenchRuntimeFailureCode,
+  ): void {
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION,
+        {
+          correlationId: this.runtimeState.runId ?? UNKNOWN_CORRELATION_ID,
+          level: "warn",
+          errorKind: REVALIDATION_REFUSAL_ERROR_KIND[condition],
+        },
+        {
+          condition,
+          runtimeState: this.runtimeState.state,
+          admissibleStates: [...admissibleStates],
+          ...(registryReason === undefined ? {} : { registryReason }),
+        },
+      ),
+    );
+  }
+
+  // KEIKO-0737: the combined revoke(runId, nowIso) was only ever exercised by its own unit test
+  // (production called revokeBeforeTerminate directly), and because "taken-over" is a terminal
+  // state, transition()'s applyTransition already calls revokeBeforeTerminate a second time,
+  // masking a latent double-invocation defect that no production path exercised. The method has
+  // been removed; the one caller now calls the two primitives directly and inline.
 
   /** Synchronously closes every server-owned authority before process termination is signalled. */
   public revokeBeforeTerminate(runId: string): boolean {
@@ -443,6 +1390,7 @@ export class CodingRuntimeAuthorityService {
       return false;
     if (!this.settleStateAfterObservedReap(runId, nowIso)) return false;
     this.activeAuthorityRef = undefined;
+    this.activeGitDeliveryAuthority = undefined;
     this.activeTreeBindingId = undefined;
     this.activeEffectiveMode = undefined;
     this.reapPending = undefined;
@@ -467,6 +1415,7 @@ export class CodingRuntimeAuthorityService {
     this.capabilities.revokeRun(runId);
     this.approvals.invalidateRun(runId);
     this.activeAuthorityRef = undefined;
+    this.activeGitDeliveryAuthority = undefined;
     this.activeTreeBindingId = undefined;
     this.activeEffectiveMode = undefined;
     this.runtimeState = {
@@ -509,10 +1458,7 @@ export class CodingRuntimeAuthorityService {
       ok: true,
       envelope: {
         ...resolution.envelope,
-        authority: {
-          ...resolution.envelope.authority,
-          effectiveMode: this.activeEffectiveMode,
-        },
+        authority: narrowAuthorityToMode(resolution.envelope.authority, this.activeEffectiveMode),
       },
     };
   }
@@ -527,8 +1473,31 @@ export class CodingRuntimeAuthorityService {
     this.runtimeState = candidate;
     if (terminal && this.reapPending?.runId !== runId) {
       this.activeAuthorityRef = undefined;
+      this.activeGitDeliveryAuthority = undefined;
     }
     return true;
+  }
+
+  private currentGitDeliveryAuthority(nowIso: string): ActiveGitDeliveryRunAuthority | undefined {
+    const active = this.activeGitDeliveryAuthority;
+    const reference = this.activeAuthorityRef;
+    if (
+      active === undefined ||
+      reference === undefined ||
+      this.activeEffectiveMode === undefined ||
+      this.reapPending !== undefined ||
+      this.runtimeState.state !== "running" ||
+      this.runtimeState.runId !== active.runId ||
+      reference.runId !== active.runId ||
+      reference.envelopeDigest !== active.envelopeDigest
+    ) {
+      return undefined;
+    }
+    if (!this.registry.revalidateRetainedRuntime(reference, nowIso).ok) return undefined;
+    return {
+      ...active,
+      authority: narrowAuthorityToMode(active.authority, this.activeEffectiveMode),
+    };
   }
 
   private consumeConfirmation(
@@ -556,6 +1525,7 @@ export class CodingRuntimeAuthorityService {
     envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
     authorityRef: CodingRuntimeAuthorityRef,
     audience: RuntimeCapabilityAudience,
+    modelProfile: CodingWorkbenchModelProfile,
   ): ReturnType<RuntimeCapabilityStore["issue"]> {
     const adapterKind = runtimeAdapterKind(envelope.authority.runtimeSource);
     if (adapterKind === undefined) return { ok: false, reason: "invalid" };
@@ -564,6 +1534,10 @@ export class CodingRuntimeAuthorityService {
       workspaceRootDigest: envelope.binding.workspaceRootDigest,
       envelopeDigest: authorityRef.envelopeDigest,
       adapterKind,
+      modelProfileId: modelProfile.profileId,
+      ...(modelProfile.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: modelProfile.reasoningEffort }),
       audience,
       expiresAtMs: Date.parse(envelope.authority.expiresAt),
     });
@@ -572,10 +1546,16 @@ export class CodingRuntimeAuthorityService {
   private issueCapabilities(
     envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
     authorityRef: CodingRuntimeAuthorityRef,
+    modelProfile: CodingWorkbenchModelProfile,
   ):
     { readonly modelGatewayCapability: string; readonly toolFacadeCapability: string } | undefined {
-    const modelGateway = this.issueCapability(envelope, authorityRef, "model-gateway");
-    const toolFacade = this.issueCapability(envelope, authorityRef, "tool-facade");
+    const modelGateway = this.issueCapability(
+      envelope,
+      authorityRef,
+      "model-gateway",
+      modelProfile,
+    );
+    const toolFacade = this.issueCapability(envelope, authorityRef, "tool-facade", modelProfile);
     if (modelGateway.ok && toolFacade.ok) {
       return {
         modelGatewayCapability: modelGateway.capability,
@@ -645,10 +1625,7 @@ function reusableTransitionRequiresReapProof(
   target: CodingWorkbenchRuntimeStateName,
   reapPendingRunId: string | undefined,
 ): boolean {
-  return (
-    (target === "idle" || target === "unavailable") &&
-    (current === "recovery-required" || reapPendingRunId !== undefined)
-  );
+  return target === "idle" && (current === "recovery-required" || reapPendingRunId !== undefined);
 }
 
 function transitionAllowed(
@@ -674,7 +1651,7 @@ function transitionedState(
   nowIso: string,
   failureCode: CodingWorkbenchRuntimeFailureCode | undefined,
 ): CodingWorkbenchRuntimeState {
-  const clear = target === "idle" || target === "unavailable";
+  const clear = target === "idle";
   return {
     ...previous,
     state: target,
@@ -704,7 +1681,7 @@ function mintApprovalBinding(
     runId: "coding-runtime-mint",
     requestId: intent.requestId,
     actionKind: "system-mutation",
-    scopeDigest: digest(canonicalJson({ taskId, operatorId, startIntent: intent })),
+    scopeDigest: sha256Hex(canonicalise({ taskId, operatorId, startIntent: intent })),
     connectorScopes: [],
   };
 }
@@ -712,7 +1689,7 @@ function mintApprovalBinding(
 function startIntentDigest(
   intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
 ): string {
-  return digest(canonicalJson(intent));
+  return sha256Hex(canonicalise(intent));
 }
 
 function stateForMint(
@@ -741,7 +1718,7 @@ function buildRuntimeAuthority(
   nonce: string,
   approvalDigest: string,
 ): CodingWorkbenchRuntimeAuthorityEnvelope {
-  const rootDigest = digest(context.workspaceRoot);
+  const rootDigest = sha256Hex(context.workspaceRoot);
   const identity = projectedIdentity(context, rootDigest);
   const branch = projectedBranch(context.branch);
   const modelProfile = {
@@ -777,7 +1754,7 @@ function buildRuntimeAuthority(
     authority,
     binding: identity.binding,
     intentDigest: startIntentDigest(intent),
-    nonceDigest: digest(nonce),
+    nonceDigest: sha256Hex(nonce),
     issuedAt,
   };
 }
@@ -821,10 +1798,6 @@ function projectedBranch(
   };
 }
 
-function digest(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 function runtimeAdapterKind(
   runtimeSource: CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["runtimeSource"],
 ): CodingWorkbenchRuntimeAdapterKind | undefined {
@@ -842,26 +1815,12 @@ function capabilityFailure(reason: "invalid" | "expired" | "revoked"): {
   return { ok: false, reason: "authority-resolution-failed" };
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-      a.localeCompare(b),
-    );
-    const body = entries
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",");
-    return `{${body}}`;
-  }
-  return JSON.stringify(value);
-}
-
 export function codingRuntimeBudgetDigest(budget: CodingWorkbenchBudget): string {
-  return digest(canonicalJson(budget));
+  return sha256Hex(canonicalise(budget));
 }
 
 export function codingRuntimeFactDigest(value: unknown): string {
-  return digest(canonicalJson(value));
+  return sha256Hex(canonicalise(value));
 }
 
 export function codingRuntimeAuthorityEnvelopeDigest(

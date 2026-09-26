@@ -1,12 +1,12 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
-
-const REAL_TMPDIR = realpathSync(tmpdir());
-const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(32, 0x32).toString("base64");
+import {
+  PROVIDER_CREDENTIALS_KEY,
+  REAL_TMPDIR,
+  writeReferenceOnlyGatewayConfig,
+} from "./test-support/gateway-config-fixture.js";
 
 const tmpDirs: string[] = [];
 
@@ -19,25 +19,12 @@ afterEach(() => {
 function makeConfig(): string {
   const dir = mkdtempSync(join(REAL_TMPDIR, "keiko-cli-gateway-config-"));
   tmpDirs.push(dir);
-  const configPath = join(dir, "keiko.config.json");
-  writeFileSync(
-    configPath,
-    JSON.stringify({
-      providers: [
-        {
-          modelId: "example-chat-model",
-          baseUrl: "https://host.example/v1",
-          apiKeySecretRef: "cred:example-chat-model",
-        },
-      ],
-    }),
-    "utf8",
-  );
-  openProviderCredentialVault({
-    configPath,
-    env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
-  }).set("cred:example-chat-model", "vault-resolved-key");
-  return configPath;
+  return writeReferenceOnlyGatewayConfig(dir, {
+    modelIds: ["example-chat-model"],
+    baseUrl: "https://host.example/v1",
+    apiKey: "vault-resolved-key",
+    filename: "keiko.config.json",
+  });
 }
 
 describe("loadGatewayConfigFromFile", () => {

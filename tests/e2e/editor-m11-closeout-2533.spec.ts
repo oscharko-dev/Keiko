@@ -2,11 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import {
-  encodeCodingAppSessionPairingFragment,
-  validateWorkspaceManifest,
-  type WorkspaceManifest,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
@@ -18,8 +16,8 @@ import {
   openEditorWorkspace,
   openTreeFile,
   revokeEditorWorkspaceTrust,
-  typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
 
 const FILE = "src/app.ts";
@@ -234,12 +232,93 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
   return replacement;
 }
 
+/**
+ * How long a root tab may take to appear before we call it missing.
+ *
+ * Deliberately far below the 180s test timeout: the point is that a tab which never renders fails
+ * HERE, naming the tab, instead of being absorbed into a bare "Test timeout exceeded" at the end of
+ * the run. Generous enough that a slow CI bootstrap is not mistaken for a missing tab.
+ */
+const ROOT_TAB_TIMEOUT_MS = 30_000;
+
+/**
+ * Whether a root tab is currently the selected one.
+ *
+ * The single `getAttribute` call this replaces looked harmless and was not, for two reasons. It
+ * waits only for ATTACHMENT and then samples once, so on a bootstrap slow enough that the tab has
+ * not rendered yet it blocks until the whole test times out — 180 seconds spent to learn nothing,
+ * and a failure message that names a `getAttribute` call rather than the tab that never appeared.
+ * That is exactly how this spec failed on `dev` (run 30985220224). And because `aria-selected` is
+ * set asynchronously during bootstrap, a single sample can observe the value of a tab that is
+ * about to become selected anyway.
+ *
+ * Waiting for visibility first fixes the first half. The caller asserting the END STATE rather than
+ * trusting its own click fixes the second — see `selectRootTab`.
+ */
+async function rootTabIsSelected(tab: Locator): Promise<boolean> {
+  await expect(tab).toBeVisible({ timeout: ROOT_TAB_TIMEOUT_MS });
+  return (await tab.getAttribute("aria-selected")) === "true";
+}
+
+/**
+ * A root tab, addressed through the DOM instead of the accessibility tree.
+ *
+ * Playwright's role engine honours `aria-modal`: while the workspace-trust dialog that selecting a
+ * root raises is open, every `getByRole("tab", …)` query for that tab reports "element(s) not
+ * found" for its whole timeout, even though the tab is attached, on screen, and carrying the
+ * correct `aria-selected`. That is how this spec failed on `dev` — the assertion could not observe
+ * the very state the click had just produced. A CSS locator does not consult the accessibility
+ * tree, so `aria-selected` stays readable through the dialog the selection itself raised. Measured
+ * here with the dialog open: the role query resolves 0 elements, this one resolves 1 and reads
+ * `aria-selected="true"` — the selection HAD taken, only the assertion could not see it.
+ *
+ * Scoped to the roots switcher so the locator stays strict: the editor mounts a second tablist for
+ * open documents, and a strict-mode violation here must fail by name rather than as a timeout.
+ */
+function rootTab(page: Page, displayName: string): Locator {
+  return page
+    .locator('[role="tablist"][aria-label="Editor workspace roots"]')
+    .first()
+    .locator('[role="tab"]')
+    .filter({ hasText: displayName });
+}
+
+/**
+ * Selects a root tab and proves it took, idempotently.
+ *
+ * Clicking is still conditional — clicking an already-selected tab is not a no-op in this UI, it
+ * re-enters the trust flow the caller may have just resolved. What changed is that the outcome is
+ * asserted with a retrying, web-first expectation instead of being inferred from the click having
+ * been issued: under the bootstrap race described in `rootTabIsSelected`, the click and the
+ * bootstrap's own selection can land in either order, and only the end state is stable.
+ */
+async function selectRootTab(tab: Locator): Promise<void> {
+  if (!(await rootTabIsSelected(tab))) await tab.click();
+  // Still `aria-selected` on THIS tab, and nothing weaker. Treating "some trust dialog is open" as
+  // proof that the selection took would accept a dialog raised for a different root — and would
+  // answer it, which is how the caller below silently restricted the wrong workspace. `rootTab`
+  // keeps the attribute observable through the dialog, so the strict assertion needs no escape.
+  await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: ROOT_TAB_TIMEOUT_MS });
+}
+
 async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
-  // Project bootstrap may focus either root when both registrations share the same timestamp.
-  // Select Beta explicitly so this proof never depends on catalog tie-breaking.
-  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
-  if ((await betaTab.getAttribute("aria-selected")) !== "true") await betaTab.click();
   const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  // Project bootstrap may focus either root when both registrations share the same timestamp, and
+  // WHICH one it focused decides whether Beta can be clicked at all. When bootstrap lands on Beta,
+  // Beta's trust prompt is already open — and it is `aria-modal`, so everything outside it leaves
+  // the accessibility tree. Role-based locators then resolve to nothing even though the tab is in
+  // the DOM and 235x32 pixels large: measured directly, `querySelector` finds the tablist in 3ms
+  // while `getByRole` reports "element(s) not found" for the entire timeout. That is the whole
+  // flake — not a slow bootstrap and not a sampling race, but a modal that legitimately hides the
+  // tab this step used to insist on clicking first.
+  //
+  // So the prompt is consulted BEFORE the tab. If it is already open, bootstrap focused Beta, the
+  // selection this function wanted has already happened, and clicking a tab that is not in the
+  // accessibility tree is both impossible and unnecessary.
+  if (!(await prompt.isVisible())) {
+    // Bootstrap focused Alpha instead: Beta is reachable, and selecting it raises its prompt.
+    await selectRootTab(rootTab(page, "M11 Root Beta"));
+  }
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
   await expect(page.getByRole("note", { name: "Restricted Mode", exact: true })).toContainText(
@@ -248,7 +327,7 @@ async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Beta" }).getByLabel("Restricted Mode"),
   ).toBeVisible();
-  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  await rootTab(page, "M11 Root Alpha").click();
   await expect(prompt).toHaveCount(0);
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
@@ -260,7 +339,7 @@ async function switchProfile(
   root: string,
   profileRef: string,
 ): Promise<ProfileSwitchResult> {
-  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  await rootTab(page, "M11 Root Alpha").click();
   const settingsWindow = seededWindows(root).filter((window) => window.type === "settings");
   const settingsPage = await replacePage(page, settingsWindow);
   const settings = settingsPage.locator(SETTINGS_WINDOW);
@@ -282,8 +361,13 @@ async function switchProfile(
   return { page: await replacePage(settingsPage, seededWindows(root)), durationMs };
 }
 
-async function saveVersion(page: Page, pane: Locator, content: string): Promise<void> {
-  await typeIntoActiveEditor(page, pane, content);
+async function saveVersion(
+  page: Page,
+  pane: Locator,
+  content: string,
+  workspaceRoot: string,
+): Promise<void> {
+  await replaceEditorBuffer(page, pane, content, workspaceRoot);
   const saved = page.waitForResponse(
     (response) =>
       response.request().method() === "PATCH" && response.url().endsWith("/api/files/content"),
@@ -306,7 +390,11 @@ async function saveVersion(page: Page, pane: Locator, content: string): Promise<
  * rather than on a sleep, and it is the request whose body is the thing that must not also land in
  * the browser.
  */
-async function leaveUnsavedHotExitEdit(page: Page, pane: Locator): Promise<void> {
+async function leaveUnsavedHotExitEdit(
+  page: Page,
+  pane: Locator,
+  workspaceRoot: string,
+): Promise<void> {
   // `restoreOldest` leaves the history panel open, and it overlays the editor surface — typing has
   // to reach Monaco, so close it through its own control rather than clicking past it.
   await pane.getByRole("button", { name: "Close file history" }).click();
@@ -316,7 +404,7 @@ async function leaveUnsavedHotExitEdit(page: Page, pane: Locator): Promise<void>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/editor/hot-exit/write"),
   );
-  await typeIntoActiveEditor(page, pane, UNSAVED_VERSION);
+  await replaceEditorBuffer(page, pane, UNSAVED_VERSION, workspaceRoot);
   expect((await persisted).ok()).toBe(true);
   // The index write is a separate IndexedDB transaction the POST only precedes, so settle on the
   // product's own observable outcome — the dirty marker the same effect gates on — before dumping.
@@ -422,15 +510,15 @@ async function reopenTrustedAlphaAfterProfileSwitch(page: Page, root: string): P
   // The active root is server-owned and can legitimately start on either root after replacement.
   // Clear only Beta's expected restricted prompt when Beta is active, then select Alpha explicitly
   // and prove the profile switch preserved Alpha's server-owned grant.
-  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
-  if ((await betaTab.getAttribute("aria-selected")) === "true") {
+  const betaTab = rootTab(page, "M11 Root Beta");
+  if (await rootTabIsSelected(betaTab)) {
     await page
       .getByRole("alertdialog", { name: "Trust this workspace?" })
       .getByRole("button", { name: "Stay restricted" })
       .click();
   }
-  const alphaTab = page.getByRole("tab", { name: /M11 Root Alpha/u });
-  if ((await alphaTab.getAttribute("aria-selected")) !== "true") await alphaTab.click();
+  const alphaTab = rootTab(page, "M11 Root Alpha");
+  await selectRootTab(alphaTab);
   const editor = await openEditorWorkspace(page, { dismissTrustPrompt: false });
   await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
   await expectRootStillTrusted(page.request, root);
@@ -450,17 +538,16 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   const journeyPage = switched.page;
   const editor = await reopenTrustedAlphaAfterProfileSwitch(journeyPage, harness.alpha.root);
   const pane = firstPane(editor);
-  await saveVersion(journeyPage, pane, VERSION_ONE);
+  await saveVersion(journeyPage, pane, VERSION_ONE, harness.alpha.root);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
-  // journey established this pattern): `typeIntoActiveEditor` selects-all-and-replaces, but how
-  // much Monaco actually selects differs per platform/focus timing, so a literal expectation
-  // encodes one platform's artifact. What restore must guarantee is exactly "the file equals the
-  // oldest checkpoint" — assert that.
+  // journey established this pattern): `replaceEditorBuffer` now VERIFIES the replacement rather
+  // than assuming it, but what restore must guarantee is exactly "the file equals the oldest
+  // checkpoint", and asserting that directly stays independent of how the buffer got there.
   const oldestContent = readFileSync(join(harness.alpha.root, FILE), "utf8");
-  await saveVersion(journeyPage, pane, VERSION_TWO);
+  await saveVersion(journeyPage, pane, VERSION_TWO, harness.alpha.root);
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
   expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
-  await leaveUnsavedHotExitEdit(journeyPage, pane);
+  await leaveUnsavedHotExitEdit(journeyPage, pane, harness.alpha.root);
   const storage = await browserStorageDump(journeyPage);
   // Assert on booleans and carry the diagnosis in the message, never in the subject: a failing
   // `toContain` prints what it searched, and here that is every browser sink including cookies —

@@ -15,12 +15,12 @@ import {
   isCommandAllowed,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
-import {
-  CONTAINER_TASK_RULES,
-  type ContainerCapabilityResponse,
-  type ContainerRunnerEvent,
-  type ContainerTask,
+import type {
+  ContainerCapabilityResponse,
+  ContainerRunnerEvent,
+  ContainerTask,
 } from "@oscharko-dev/keiko-contracts";
+import { CONTAINER_TASK_RULES } from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildContainerRunArgv,
@@ -32,6 +32,7 @@ import {
 } from "./containerRunner.js";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 
 // ── Fake spawn helpers (mirrors command-runner.test.ts) ──────────────────────────
 
@@ -337,13 +338,49 @@ describe("ContainerRunnerManager — execution", () => {
     expect(result.failureReason).toBe("output-capped");
   });
 
-  it("times out a hanging container run", async () => {
+  it("times out a hanging container run and emits run-completed (ADR-0018 D7)", async () => {
     const manager = makeManager(makeSpawn({ hangs: true }), {
       policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 20 },
     });
+    const events = collect(manager);
     const result = await manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID });
     expect(result.timedOut).toBe(true);
     expect(result.failureReason).toBe("timed-out");
+    // ADR-0018 D7: a timeout is a "completed with timedOut=true" outcome — Terminal and
+    // Commands emit run-completed here; container-run must not diverge into run-failed.
+    expect(events.map((event) => event.kind)).toEqual(["run-started", "run-completed"]);
+  });
+
+  // AGENTS.md §8 Rule 1 (PR reviewer finding): the keiko-tools win32 taskkill.exe tree-kill
+  // decision shipped with no activity-log evidence anywhere. Proves the wiring to this manager's
+  // injected activityLog port; the seam's own reason/pid/tree-kill-outcome matrix is covered by
+  // packages/keiko-tools/src/exec.test.ts.
+  it("logs command.terminated with the run's own correlationId on timeout", async () => {
+    const logged: ServerLogEvent[] = [];
+    const manager = makeManager(makeSpawn({ hangs: true }), {
+      policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 20 },
+      activityLog: { write: (event): void => void logged.push(event) },
+    });
+    const events = collect(manager);
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID });
+    expect(result.timedOut).toBe(true);
+    const runId = events.find((event) => event.kind === "run-started")?.runId ?? "";
+    expect(runId).not.toBe("");
+    const terminated = logged.find((event) => event.op === "command.terminated");
+    expect(terminated).toBeDefined();
+    expect(terminated?.category).toBe("diagnostic");
+    expect(terminated?.correlationId).toBe(runId);
+    expect(terminated?.extra?.reason).toBe("timeout");
+    // Body-free: exactly the three evidence fields — never the image, engine argv, or task id.
+    // `childPid` (not the reserved `pid`) so the child identity survives the real redactor —
+    // pinned against redactLogFields in command-runner.test.ts.
+    expect(Object.keys(terminated?.extra ?? {}).sort()).toEqual([
+      "childPid",
+      "completeness",
+      "loss",
+      "reason",
+      "windowsTreeKill",
+    ]);
   });
 
   it("cancels an in-flight run via abort", async () => {

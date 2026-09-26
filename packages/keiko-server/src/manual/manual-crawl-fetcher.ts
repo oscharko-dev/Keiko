@@ -5,9 +5,9 @@
 // traversal, delegating byte retrieval to an injected `ManualCrawlFetcher`. This is the production
 // HTTP implementation, and it lives HERE in keiko-server (the sole egress composition root), built
 // on the shared proxy/CA-aware `gatewayFetch` transport (ADR-0038). `gatewayFetch` owns the network
-// trust boundary: it always issues `redirect: "manual"` (a 3xx is surfaced, never followed) and
-// re-validates redirect targets, blocks literal/loopback/link-local/blocked targets, and — on the
-// direct path — pins the outbound connect to the DNS-validated address set, closing the
+// trust boundary: it always issues `redirect: "manual"` (a 3xx is surfaced, never followed),
+// blocks literal/loopback/link-local/blocked targets, and — on the direct path — pins the
+// outbound connect to the DNS-validated address set, closing the
 // resolve-then-connect DNS-rebinding gap (AUDIT-SEC-001). The crawl scope guard (in the runner)
 // remains the authority on WHICH origin/path may be fetched; this fetcher adds a cheap defense-in-
 // depth re-check (scheme + no embedded credentials) and never lets a raw upstream error, header, or
@@ -35,6 +35,8 @@ import type {
   ManualFetchResult,
   ManualFetchTarget,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 // A single manual page is small; a hostile or dead origin must not hold a crawl slot open.
 const MANUAL_FETCH_TIMEOUT_MS = 20_000;
@@ -44,6 +46,7 @@ export interface GatewayManualFetcherOptions {
   readonly egress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 interface FetchOptions {
@@ -148,6 +151,8 @@ async function fetchHttpPage(
       headers: { accept: "text/html,application/xhtml+xml" },
       signal: composeSignal(config.timeoutMs ?? MANUAL_FETCH_TIMEOUT_MS, options.signal),
       ...(egress === undefined ? {} : { egress }),
+      log: processServerLogSink(),
+      logContext: { correlationId: config.correlationId ?? UNKNOWN_CORRELATION_ID },
       ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
     });
     return await classifyResponse(response, options.maxBytes);

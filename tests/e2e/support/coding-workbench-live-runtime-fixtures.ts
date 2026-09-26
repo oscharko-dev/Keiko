@@ -1,20 +1,30 @@
 import { expect, type Route } from "@playwright/test";
+import type {
+  CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchSidecarGatewayResult,
+  WorkspaceBinding,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
+import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import {
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchCodexAuthMethod,
-  type CodingWorkbenchCodexAuthSetupPlan,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchRuntimeStateName,
-  type CodingWorkbenchSidecarGatewayResult,
-  type WorkspaceBinding,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
+
+/** Binds `snapshot()`'s hardcoded `awaiting-approval` permission to its authenticated review. */
+export const FIXTURE_APPROVAL_REQUEST_ID = "permission-2257";
 
 export type FixtureAuthStatus = Extract<
   CodingWorkbenchCodexSubscriptionProfile["status"],
@@ -23,10 +33,14 @@ export type FixtureAuthStatus = Extract<
 
 const AT = "2026-07-13T12:00:00.000Z";
 export const FIXTURE_RUN_ID = "run-2257";
+/** A well-formed sha256 hex digest; this fixture never has real content to hash. */
+const FIXTURE_DIGEST = "a".repeat(64);
 
 export interface RuntimeFixtureState {
   state: CodingWorkbenchRuntimeStateName;
   revision: number;
+  approvalDecisions: number;
+  editorSnapshotRegistrations: number;
   recoveryAcknowledged: boolean;
   streamConnections: number;
   readonly validationErrors: string[];
@@ -187,13 +201,30 @@ export function snapshot(fixture: RuntimeFixtureState): CodingWorkbenchRuntimeSn
     state,
     revision,
     updatedAt: AT,
-    ...(state === "idle" || state === "unavailable"
+    ...(state === "idle"
       ? {}
-      : { runId: FIXTURE_RUN_ID, requestedMode: "governed-assist" }),
+      : {
+          runId: FIXTURE_RUN_ID,
+          requestedMode: "governed-assist",
+          // Bound identically to `pushDeliveryRecord()`'s binding below: the client cross-checks a
+          // pending push/PR delivery review against this snapshot field
+          // (`deliveryMatchesPermission` in CodingWorkbenchCommitReview.tsx) before it will treat
+          // the review as bound to the on-screen request, so the two must always agree.
+          issueBinding: {
+            schemaVersion: "1",
+            repositoryId: "repository-2257",
+            remoteDigest: FIXTURE_DIGEST,
+            issueIdDigest: FIXTURE_DIGEST,
+            issueNumber: 2257,
+            defaultBaseRef: "dev",
+            contentRevisionDigest: FIXTURE_DIGEST,
+            bindingDigest: FIXTURE_DIGEST,
+          },
+        }),
     ...(state === "awaiting-approval"
       ? {
           pendingPermission: {
-            requestId: "permission-2257",
+            requestId: FIXTURE_APPROVAL_REQUEST_ID,
             kind: "delivery-substrate",
             actionClass: "delivery-substrate",
             reasonCode: "approval-required",
@@ -214,14 +245,82 @@ export function snapshot(fixture: RuntimeFixtureState): CodingWorkbenchRuntimeSn
   return value;
 }
 
+/**
+ * The authenticated review the real server would serve for `snapshot()`'s hardcoded
+ * `awaiting-approval` push permission. The real `/approval-review` route (#2802) resolves the
+ * pending approval from the actual orchestrator's run state; this fixture drives the run entirely
+ * through mocked snapshots, so no such run ever exists server-side and the route would otherwise
+ * 404 forever, leaving `evidenceBound` (CodingWorkbenchWindow.tsx) permanently false and the
+ * Approve control permanently disabled (release-smoke failure on coding-workbench-1992.spec.ts:
+ * locator.click timed out waiting for "Approve once" to become enabled).
+ */
+function pushDeliveryRecord(): DraftDeliveryRecord {
+  return {
+    schemaVersion: "1",
+    revision: 1,
+    phase: "push-proposed",
+    reason: "approval-required",
+    proposalId: FIXTURE_APPROVAL_REQUEST_ID,
+    proposalDigest: FIXTURE_DIGEST,
+    recordedAt: AT,
+    binding: {
+      runId: FIXTURE_RUN_ID,
+      workspaceDigest: FIXTURE_DIGEST,
+      runtimeAuthorityDigest: FIXTURE_DIGEST,
+      envelopeDigest: FIXTURE_DIGEST,
+      remoteDigest: FIXTURE_DIGEST,
+      issueBindingDigest: FIXTURE_DIGEST,
+      issueIdDigest: FIXTURE_DIGEST,
+      issueNumber: 2257,
+      repository: "oscharko-dev/keiko",
+      remoteAlias: "origin",
+      baseRef: "dev",
+      baseSha: "1".repeat(40),
+      headRef: "issue/2257-live-runtime",
+      headSha: "3".repeat(40),
+      verifiedCommitProposalId: "commit-2257",
+      recoveryId: "delivery-2257",
+    },
+  };
+}
+
+export function approvalReview(
+  fixture: RuntimeFixtureState,
+): CodingWorkbenchRuntimeApprovalReviewChannelPayload {
+  const payload: CodingWorkbenchRuntimeApprovalReviewChannelPayload = {
+    session: "active",
+    ...(fixture.state === "awaiting-approval"
+      ? {
+          pending: {
+            requestId: FIXTURE_APPROVAL_REQUEST_ID,
+            paths: [],
+            pathsTruncated: false,
+            fileCount: 0,
+            addedLines: 0,
+            deletedLines: 0,
+            draftDelivery: { record: pushDeliveryRecord() },
+          },
+        }
+      : {}),
+  };
+  expect(validateCodingWorkbenchRuntimeApprovalReviewChannelPayload(payload).ok).toBe(true);
+  return payload;
+}
+
 export function activeWorkspace(): ActiveWorkspaceFixture {
   return workspace();
 }
 
 export function createRuntimeFixture(options: LiveRuntimeFixtureOptions): RuntimeFixtureState {
+  // KEIKO-0539: the FSM state must never encode host qualification — no orchestrator code path
+  // can produce an "unavailable" state. Unavailability is modelled where the product actually
+  // reports it: through readiness (`runtimeAvailable` / `runtimeUnavailableReason`), wired at
+  // coding-workbench-live-runtime-routes.ts:221-226.
   return {
-    state: options.runtimeAvailable === false ? "unavailable" : (options.initialState ?? "idle"),
+    state: options.initialState ?? "idle",
     revision: 1,
+    approvalDecisions: 0,
+    editorSnapshotRegistrations: 0,
     recoveryAcknowledged: false,
     streamConnections: 0,
     validationErrors: [],

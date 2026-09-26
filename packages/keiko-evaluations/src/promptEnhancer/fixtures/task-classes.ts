@@ -95,7 +95,16 @@ const dataAnalysis: PromptEnhancerEvalFixture = {
     text: "Analyze this data and report the correlation between advertising spend and monthly revenue.",
   },
   dimensions: new Set([...CORE, "format-adherence"]),
-  oracle: { expectedTaskClasses: ["data-analysis"], expectedProfiles: ["technical"] },
+  oracle: {
+    expectedTaskClasses: ["data-analysis"],
+    expectedProfiles: ["technical"],
+    // KEIKO-0676: pinned from the pipeline's actually-observed EnhancedPrompt.outputSchema for this
+    // draft (no explicit format signal in the request text, so the analyzer defaults data-analysis to
+    // a structured table) -- verified by runEnhancement("task-data-analysis", ...) before pinning, not
+    // guessed. Makes scoreFormatAdherence's first two checks load-bearing for this fixture.
+    expectedOutputStructured: true,
+    expectedOutputFormat: "table",
+  },
 };
 
 const codeGeneration: PromptEnhancerEvalFixture = {

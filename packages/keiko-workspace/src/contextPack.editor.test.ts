@@ -8,13 +8,14 @@ import { buildContextPackFromFiles, buildContextPack } from "./contextPack.js";
 import { lexicalRetrievalStrategy } from "./retrieval.js";
 import type { ContextRequest, DiscoveredFile, WorkspaceInfo } from "./types.js";
 import { memFs } from "./_memfs.js";
-import type { WorkspaceFs } from "./fs.js";
+import type { WorkspaceDescriptorUtf8Read, WorkspaceFs } from "./fs.js";
 
 const ROOT = "/ws";
 
 function workspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -64,9 +65,11 @@ describe("buildContextPackFromFiles – readEntry returns null on read error", (
   it("skips a file without counting it as a budget drop when readFileUtf8 throws", () => {
     const base = memFs(ROOT, { "src/a.ts": "content\n" });
     // Throw a generic Error (not IO, not FileTooLargeError) so the catch-all in readEntry fires.
+    // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+    // readFileUtf8 fallback was removed), so the injected failure has to live there.
     const fs: WorkspaceFs = {
       ...base,
-      readFileUtf8: (): string => {
+      readFileUtf8SameDescriptor: (): WorkspaceDescriptorUtf8Read => {
         throw new Error("synthetic read error");
       },
     };
@@ -87,9 +90,11 @@ describe("buildContextPackFromFiles – buildEntry returns null when content is 
     // Verify that tryAddEntry's `if (entry === null) { return; }` path is distinct from the
     // budget-drop path: droppedForBudget stays 0 while selected stays empty.
     const base = memFs(ROOT, { "src/a.ts": "data\n", "src/b.ts": "data\n" });
+    // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+    // readFileUtf8 fallback was removed), so the injected failure has to live there.
     const fs: WorkspaceFs = {
       ...base,
-      readFileUtf8: (): string => {
+      readFileUtf8SameDescriptor: (): WorkspaceDescriptorUtf8Read => {
         throw new Error("simulate unreadable");
       },
     };
@@ -164,14 +169,24 @@ describe("buildContextPackFromFiles – tryAddEntry early-returns without droppe
       "src/bad.ts": readable,
     });
     let callCount = 0;
+    // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+    // readFileUtf8 fallback was removed), so the injected failure has to live there.
     const fs: WorkspaceFs = {
       ...base,
-      readFileUtf8: (abs: string): string => {
-        if (abs.endsWith("bad.ts")) {
+      readFileUtf8SameDescriptor: (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): WorkspaceDescriptorUtf8Read => {
+        if (absolutePath.endsWith("bad.ts")) {
           callCount += 1;
           throw new Error("unreadable");
         }
-        return base.readFileUtf8(abs);
+        if (base.readFileUtf8SameDescriptor === undefined) {
+          throw new Error("test fixture requires memFs's readFileUtf8SameDescriptor");
+        }
+        return base.readFileUtf8SameDescriptor(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
     const result = buildContextPackFromFiles(

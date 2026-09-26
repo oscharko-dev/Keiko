@@ -4,20 +4,22 @@
 // keeps keiko-workflows free of any keiko-memory-capture edge). Split from compaction.ts to hold
 // both files under the 400-LOC budget.
 
+import type {
+  ContextAssumption,
+  ContextCommandOutcome,
+  ContextInvalidationKey,
+  ContextLaneId,
+  ContextPreservedFact,
+  ContextProvenanceRef,
+  ContextRehydrationHandle,
+  ContextTokenAccounting,
+  ContextUserConstraint,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   countContextTokens,
-  validateContextPreservedFact,
-  type ContextAssumption,
-  type ContextCommandOutcome,
-  type ContextInvalidationKey,
-  type ContextLaneId,
-  type ContextPreservedFact,
-  type ContextProvenanceRef,
-  type ContextRehydrationHandle,
-  type ContextTokenAccounting,
-  type ContextUserConstraint,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextPreservedFact } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { hashExcerptContent } from "@oscharko-dev/keiko-workspace";
 import { redact } from "@oscharko-dev/keiko-security";
 

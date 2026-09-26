@@ -2,21 +2,25 @@ import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  CodingContextPack,
+  CodingContextRequest,
+  EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_BUDGETS,
-  UNVERIFIED_GATEWAY,
   CODING_CONTEXT_PURPOSES,
-  EDITOR_AGENT_SCHEMA_VERSION,
   toCodingContextWirePack,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { deriveRepositoryId } from "../task-workspace/naming.js";
 import type {
   GatewayConfig,
   LiteLLMRerankRequest,
   RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
@@ -82,10 +86,23 @@ function fakeGitHubPort(): GitHubCodeContextApiPort {
   };
 }
 
+// #3385: the GitHub reader is authorized per repository through a server-persisted store row,
+// replacing the `GITHUB_CONNECTOR_AUTHORIZED` environment variable that was bound to the process
+// launch path. The double answers for exactly this project root and nothing else.
+// The provider authorizes the repository it is actually operating on (`ctx.realRoot`), which here
+// is the per-test temporary root, not a fixed path or the process launch directory.
+
 function connectedDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
+  const authorizedId = deriveRepositoryId(root);
   return {
     redactor: buildRedactor({}),
-    env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+    env: {},
+    preferredProjectPath: root,
+    codingContextGitHubRemoteResolver: () => Promise.resolve("acme/widgets"),
+    store: {
+      readGitHubIssueReaderAuthorization: (repositoryId: string) =>
+        repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
+    },
     codingContextGitHubPort: fakeGitHubPort(),
     ...overrides,
   } as unknown as UiHandlerDeps;
@@ -113,9 +130,11 @@ function ctx(
   return {
     deps: deps(),
     realRoot: root,
+    fs: nodeWorkspaceFs,
     signal,
     nowMs,
     currentTimeMs: () => nowMs,
+    correlationId: undefined,
     ...overrides,
   };
 }
@@ -291,6 +310,17 @@ describe("assembleCodingContext", () => {
     const connected = pack.excerpts.find((e) => e.citation.sourceKind === "connected-context");
 
     expect(connected).toBeDefined();
+    // ADR-0152 D6 correction (post-KEIKO-0176): connected-context's CODING tier must stay
+    // byte-identical to what shipped in v0.3.7 (`git merge-base --is-ancestor` against the
+    // introducing commit confirms `first-party-workspace` is the released value; the
+    // `external-connected` reclassification is unreleased, not yet on dev, and lives only on this
+    // PR). KEIKO-0176's underlying concern — an evidence manifest hiding externally-authored
+    // content behind the first-party tier — is real and stays fixed for the NEUTRAL retrieval
+    // surface (retrieval-context.test.ts pins `tierForRetrievalContextSource("connected-context")
+    // === "external-connected"`), which has no released wire to break. Promoting the improved
+    // classification into the CODING wire is D6's own "separate schema decision" (a version bump),
+    // not something a shared-table alias may do silently — see the comment on
+    // CODING_CONTEXT_SOURCE_TIER_BY_KIND in retrieval-context.ts.
     expect(connected?.citation.sourceTier).toBe("first-party-workspace");
     expect(connected?.citation.citationRef).toBe("untrusted-source-control-issue-42");
     expect(connected?.text).toContain(CONNECTED_ISSUE_TITLE);
@@ -317,10 +347,24 @@ describe("assembleCodingContext", () => {
     expect(pack.excerpts.some((e) => e.citation.sourceKind === "connected-context")).toBe(false);
   });
 
+  // #3385 relocated this pin: "not authorized" used to mean an absent environment variable and now
+  // means no stored grant for THIS repository. The store below authorizes a different repository, so
+  // the case also proves the grant is scoped rather than process-wide — which the environment gate
+  // could not express at all.
   it("records a denied omission when the connected-context connector is not authorized", async () => {
+    const otherRepositoryId = deriveRepositoryId("/workspace/some-other-project");
     const pack = await assembleCodingContext(
       request({ queryText: CONNECTED_QUERY }),
-      ctx(new AbortController().signal, { deps: connectedDeps({ env: {} }) }),
+      ctx(new AbortController().signal, {
+        deps: connectedDeps({
+          store: {
+            readGitHubIssueReaderAuthorization: (repositoryId: string) =>
+              repositoryId === otherRepositoryId
+                ? { repositoryId, authorized: true, revision: 1 }
+                : undefined,
+          },
+        } as unknown as Partial<UiHandlerDeps>),
+      }),
     );
 
     expect(pack.omissions).toContainEqual({ sourceKind: "connected-context", reason: "denied" });

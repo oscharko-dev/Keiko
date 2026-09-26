@@ -46,7 +46,7 @@ const indexEnvelope = (
   groupLabel: string,
   byIdentity: Map<string, Envelope>,
   provByIdentity: Map<string, { firstGroupLabel: string; contributingGroupLabels: string[] }>,
-  conflicts: Set<EnvelopeId>,
+  _conflicts: Set<EnvelopeId>,
   duplicates: Set<EnvelopeId>,
 ): void => {
   const identity = `${envelope.kind}\u0000${envelope.id}`;

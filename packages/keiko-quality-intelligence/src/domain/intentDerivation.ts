@@ -139,7 +139,7 @@ const canonicalThemeToken = (token: string): string | null => {
   if (domainToken !== undefined) {
     return domainToken;
   }
-  if (normalised.length < 3 && !TRACEABILITY_ID_PATTERN.test(normalised)) {
+  if (normalised.length < 3) {
     return null;
   }
   if (TRACEABILITY_ID_PATTERN.test(normalised) || UPPERCASE_SIGNAL_PATTERN.test(normalised)) {

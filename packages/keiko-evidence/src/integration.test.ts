@@ -6,13 +6,13 @@ import { persistEvidence } from "./persist.js";
 import { createNodeEvidenceStore } from "./store.js";
 import { listEvidence, loadEvidence } from "./index-api.js";
 import type { EvidenceBuildInput } from "./types.js";
-import {
-  DEFAULT_LIMITS,
-  type HarnessEvent,
-  type RunManifest,
-  type RunResult,
-  type TaskInput,
+import type {
+  HarnessEvent,
+  RunManifest,
+  RunResult,
+  TaskInput,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/harness";
 
 const FP = "fp-int";
 

@@ -5,6 +5,8 @@
  * editor coordinates to where they land once a single {@link EditorTextEdit} has been applied, so a
  * pending completion or diagnostic range stays valid after the buffer changes underneath it.
  */
+import { computeLineStarts } from "@oscharko-dev/keiko-contracts/line-offsets";
+
 import type { EditorPosition, EditorRange, EditorTextEdit } from "./types.js";
 
 /** Total order on positions: line first, then column. */
@@ -33,11 +35,14 @@ interface NewTextShape {
 }
 
 function measureNewText(newText: string): NewTextShape {
-  const segments = newText.split("\n");
-  // `split` always yields at least one segment, but `noUncheckedIndexedAccess` types the access as
-  // possibly-undefined; the `?? ""` is load-bearing for the compiler, never reached at runtime.
-  const lastSegment = segments[segments.length - 1] ?? "";
-  return { addedLines: segments.length - 1, lastLineLength: lastSegment.length };
+  // KEIKO-0590: delegate to the CRLF/lone-CR-aware shared line-start primitive so this side of the
+  // edit matches apply-text-edits.ts's line-terminator semantics (GEN-DUP-SEMANTIC-017). An
+  // LF-only `split("\n")` silently mis-counted lines when an inserted newText carried a lone CR.
+  const lineStarts = computeLineStarts(newText);
+  // computeLineStarts always yields at least one entry (starts[0] === 0); noUncheckedIndexedAccess
+  // types the read as possibly-undefined, so the `?? 0` is load-bearing for the compiler only.
+  const lastLineStart = lineStarts[lineStarts.length - 1] ?? 0;
+  return { addedLines: lineStarts.length - 1, lastLineLength: newText.length - lastLineStart };
 }
 
 /**

@@ -5,6 +5,12 @@
 #
 # node_modules is a named volume, not a bind mount: the host tree may be macOS/arm64 while this
 # container is Linux, and sharing one install swaps platform-native binaries under both.
+#
+# KEIKO-0578: explicit Compose project name so direct/manual `docker compose -f docker-compose.yml`
+# use never collides with sibling gates files (sonar-compose.yml). COMPOSE_PROJECT_NAME still
+# overrides this per Compose precedence, so run-*.sh scripts that export their own project id are
+# unaffected — this is the identity a bare invocation falls back to.
+name: keiko-gates
 services:
   gates:
     build:

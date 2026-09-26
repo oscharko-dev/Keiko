@@ -134,6 +134,36 @@ describe("editor agent contracts", () => {
     ).toMatchObject({ ok: true });
   });
 
+  // KEIKO-0747: a payload that also carries a `kind` discriminator must be routed by that
+  // discriminator, not through the bare-action branch. Before the fix, adding `kind:"action"`
+  // and `bridgeDecisionCapability:"invalid"` on top of a valid EditorAgentAction body was silently
+  // accepted (bare-action branch matched first and dropped both extra fields). The bridge branch
+  // now runs first and rejects an invalid bridgeDecisionCapability.
+  it("routes by the `kind` discriminator when present, not the bare-action branch (KEIKO-0747)", () => {
+    const validBareAction = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: "action-1",
+      idempotencyKey: "idempotency-1", // gitleaks:allow — test fixture, not a real key
+      sessionId: "session-1",
+      type: "save" as const,
+      expectedContentHash: HASH,
+    };
+    // Bare action still accepted.
+    expect(parseEditorAgentActionsPostBody(validBareAction)).toMatchObject({ ok: true });
+    // Same body with kind:"action" but an invalid bridgeDecisionCapability must now fail — before
+    // the fix the bare-action branch matched first and returned {ok:true}.
+    const withInvalidBridge = {
+      ...validBareAction,
+      kind: "action" as const,
+      action: validBareAction,
+      bridgeDecisionCapability: "not-a-capability",
+    };
+    expect(parseEditorAgentActionsPostBody(withInvalidBridge)).toEqual({
+      ok: false,
+      errors: ["browser action request is invalid"],
+    });
+  });
+
   it("validates the additive browser bridge decision capability envelopes", () => {
     expect(isEditorAgentBridgeDecisionCapability(BRIDGE_CAPABILITY)).toBe(true);
     expect(
@@ -660,6 +690,31 @@ describe("validateAgentTextEdits (Issue #1394)", () => {
     ]);
     expect(result).toBeNull();
   });
+
+  // KEIKO-0756: the comparator used to return ±1 always (never 0 for equal starts). That
+  // violates the ECMAScript sort contract for equal elements. A stable-comparator regression
+  // proves the fix: many edits with an identical range.start must produce a deterministic
+  // "Edits I and J overlap" error string (lo/hi indices in input order) instead of a
+  // non-deterministic pair.
+  it("comparePositions returns a stable total order for identical range.start (KEIKO-0756)", () => {
+    const edits = Array.from({ length: 4 }, (_, index) => ({
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+      newText: `edit-${String(index)}`,
+    }));
+    // Same array many times — comparator must produce the same error every run.
+    const results = new Set<string>();
+    for (let i = 0; i < 8; i += 1) {
+      const r = validateAgentTextEdits(edits);
+      if (r !== null) results.add(r);
+    }
+    expect(results.size).toBe(1);
+    const only = [...results][0] ?? "";
+    // First overlapping pair is (0, 1): the sort must have placed index 0 before index 1.
+    expect(only).toMatch(/Edits 0 and 1/);
+  });
 });
 
 describe("isContainedAgentPath (Issue #1394)", () => {
@@ -712,7 +767,7 @@ describe("isContainedAgentPath (Issue #1394)", () => {
 });
 
 describe("isEditorAgentConflictCode (Issue #1394)", () => {
-  it("returns true for all eight valid conflict codes", () => {
+  it("returns true for all nine hand-enumerated conflict codes", () => {
     expect(isEditorAgentConflictCode("DIRTY")).toBe(true);
     expect(isEditorAgentConflictCode("VERSION_MISMATCH")).toBe(true);
     expect(isEditorAgentConflictCode("CONTENT_HASH_MISMATCH")).toBe(true);
@@ -1846,6 +1901,8 @@ describe("failure-code taxonomy (Issue #1392)", () => {
       "PROVIDER_UNAVAILABLE",
       "UNSUPPORTED_OPERATION",
       "LIMIT_EXCEEDED",
+      "DUPLICATE_ACTION",
+      "MUTATION_IN_FLIGHT",
     ]);
     for (const code of EDITOR_AGENT_FAILURE_CODES) {
       expect(isEditorAgentFailureCode(code)).toBe(true);
@@ -2031,5 +2088,89 @@ describe("requestVerification action type (Issue #2210, ADR-0126 D5)", () => {
   it("leaves existing schemaVersion-1 action fixtures parsing unchanged (additive)", () => {
     expect(isEditorAgentAction(baseAction({ type: "openFile" }))).toBe(true);
     expect(isEditorAgentAction(baseAction({ type: "applyPatch" }))).toBe(true);
+  });
+});
+
+// KEIKO-0481 / KEIKO-0518 — the applyTextEdits/applyPatch primitives carry the same payload shapes a
+// prepared changeset caps, at the same trust boundary, but were unbounded and skipped the overlap
+// check; and the changeset validator ran its per-file sort + UTF-8 encoding pass BEFORE the cheap
+// aggregate edit-count bound that was going to reject the payload anyway.
+describe("editor agent action payload bounds", () => {
+  function editsAction(count: number, newText = "x"): unknown {
+    return baseAction({
+      type: "applyTextEdits",
+      textEdits: Array.from({ length: count }, (_unused, index) => ({
+        range: {
+          start: { line: index, character: 0 },
+          end: { line: index, character: 0 },
+        },
+        newText,
+      })),
+    });
+  }
+
+  it("rejects an applyTextEdits action whose edit array exceeds the changeset cap", () => {
+    expect(isEditorAgentAction(editsAction(EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS))).toBe(true);
+    expect(isEditorAgentAction(editsAction(EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS + 1))).toBe(
+      false,
+    );
+  });
+
+  it("rejects an applyTextEdits action whose total newText exceeds the byte cap", () => {
+    expect(
+      isEditorAgentAction(editsAction(2, "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES))),
+    ).toBe(false);
+  });
+
+  // Overlap/inversion is the ROUTE's business: it answers 409 INVALID_EDITS, a conflict the client
+  // can act on, and that status is pinned. This guard owns the BOUNDS the route does not check, so
+  // an overlapping edit array passes here and is classified there.
+  it("leaves overlap detection to the route's 409 classifier rather than failing the shape", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "applyTextEdits",
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+              newText: "a",
+            },
+            {
+              range: { start: { line: 0, character: 2 }, end: { line: 0, character: 7 } },
+              newText: "b",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an applyPatch action whose patch string exceeds the byte cap", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "applyPatch",
+          patch: "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1),
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects an oversized prepared changeset without running the per-file work", () => {
+    const files = Array.from({ length: 2 }, (_unused, fileIndex) => ({
+      file: `src/f${String(fileIndex)}.ts`,
+      expectedContentHash: HASH,
+      textEdits: Array.from(
+        { length: EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS },
+        (_each, index) => ({
+          range: {
+            start: { line: index, character: 0 },
+            end: { line: index, character: 0 },
+          },
+          newText: "x",
+        }),
+      ),
+    }));
+    expect(isEditorAgentPreparedChangeset({ files })).toBe(false);
   });
 });

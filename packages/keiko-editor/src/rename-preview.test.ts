@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION,
-  type LanguageRenameChangeset,
-} from "@oscharko-dev/keiko-contracts";
+import type { LanguageRenameChangeset } from "@oscharko-dev/keiko-contracts";
+import { LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 
 import { buildRenamePreview, renameChangesetTruncation } from "./rename-preview.js";
 

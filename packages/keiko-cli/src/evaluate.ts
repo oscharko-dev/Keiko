@@ -14,6 +14,10 @@ import type {
   EvalScorecard,
   EvaluationFixture,
 } from "@oscharko-dev/keiko-evaluations";
+// KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy and the
+// structurally-identical readValueFlags loop this file, gen-tests.ts, and investigate.ts held —
+// flagValue itself is used only inside readNamedValueFlags now, so only that is imported here.
+import { readNamedValueFlags } from "./cli-arg-parsing.js";
 import { runGenTestsCli } from "./gen-tests.js";
 import { gatewayConfigFileLoader } from "./gateway-config.js";
 import { runInvestigateCli } from "./investigate.js";
@@ -32,6 +36,8 @@ const USAGE = `Usage:
 Runs the evaluation harness against the built-in fixtures. Offline by default
 (deterministic, no network); pass --live to evaluate against a configured model.
 --suite and --fixture are mutually exclusive.
+A bare --fixture <name> that matches more than one workflow kind is rejected as
+ambiguous; disambiguate with --fixture <kind>/<name> (e.g. unit-tests/happy-path).
 `;
 
 export interface EvaluateDeps {
@@ -48,29 +54,12 @@ interface EvaluateArgs {
   readonly output: string | undefined;
 }
 
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
-
 const VALUE_FLAGS = ["--suite", "--fixture", "--model", "--config", "--output"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 const BOOLEAN_FLAGS = ["--live", "--json"] as const;
 
 function readValueFlags(args: readonly string[]): Record<ValueFlag, string | undefined> | null {
-  const values = {} as Record<ValueFlag, string | undefined>;
-  for (const flag of VALUE_FLAGS) {
-    const value = flagValue(args, flag);
-    if (value === null) {
-      return null;
-    }
-    values[flag] = value;
-  }
-  return values;
+  return readNamedValueFlags(args, VALUE_FLAGS);
 }
 
 function isValueFlag(value: string): value is ValueFlag {
@@ -128,10 +117,18 @@ function selectFixtures(parsed: EvaluateArgs, evaluations: EvaluationsModule): S
     return { usageError: "Error: --suite and --fixture are mutually exclusive.\n" };
   }
   if (parsed.fixture !== undefined) {
-    const fixture = evaluations.fixtureByName(parsed.fixture);
-    return fixture === undefined
+    const result = evaluations.fixtureByName(parsed.fixture);
+    if (result.status === "ambiguous") {
+      const candidates = result.matches.map((f) => `${f.workflowKind}/${f.name}`).join('", "');
+      return {
+        usageError:
+          `Error: ambiguous fixture "${parsed.fixture}" matches multiple fixtures. ` +
+          `Use --fixture <kind>/<name> to disambiguate: "${candidates}".\n`,
+      };
+    }
+    return result.status === "not-found"
       ? { usageError: `Error: unknown fixture "${parsed.fixture}".\n` }
-      : { fixtures: [fixture] };
+      : { fixtures: [result.fixture] };
   }
   const suite = parsed.suite ?? "all";
   if (!evaluations.isSuiteName(suite)) {
@@ -212,7 +209,7 @@ export async function runEvaluateCli(
     io.err(USAGE);
     return 2;
   }
-  const [gateway, evaluations, evidence, { parseRunRequest }, configLoader] = await Promise.all([
+  const [gateway, evaluations, evidence, server, configLoader] = await Promise.all([
     loadModelGateway(),
     loadEvaluations(),
     loadEvidence(),
@@ -228,8 +225,9 @@ export async function runEvaluateCli(
     gateway,
     evaluations,
     evidence,
-    parseRunRequest,
+    parseRunRequest: server.parseRunRequest,
     configLoader,
+    gatewayLogSink: server.processServerLogSink(),
   });
 }
 
@@ -239,6 +237,10 @@ interface EvaluateRuntime {
   readonly evidence: EvidenceModule;
   readonly parseRunRequest: (typeof import("@oscharko-dev/keiko-server"))["parseRunRequest"];
   readonly configLoader: (path: string, env: EnvSource) => GatewayConfig;
+  // The process-wide Activity Log port a live evaluation's Model Gateway writes through (#3532).
+  readonly gatewayLogSink: ReturnType<
+    (typeof import("@oscharko-dev/keiko-server"))["processServerLogSink"]
+  >;
 }
 
 async function runSuite(
@@ -267,6 +269,7 @@ async function runSuite(
         env,
         now: Date.now,
         configLoader: runtime.configLoader,
+        gatewayLogSink: runtime.gatewayLogSink,
         surfaceParity: {
           runGenTestsCli,
           runInvestigateCli,
@@ -317,7 +320,7 @@ function resolveLiveModelId(
   } catch (error) {
     if (error instanceof gateway.GatewayError) {
       io.err(
-        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
+        `Error: model gateway configuration problem — ${error.message /* KEIKO-0910: GatewayError self-redacts (ADR-0003) */}\n` +
           `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
       );
       return 1;
@@ -385,7 +388,7 @@ function handleRunError(
 ): number {
   if (error instanceof gateway.GatewayError) {
     io.err(
-      `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
+      `Error: model gateway configuration problem — ${error.message /* KEIKO-0910: GatewayError self-redacts (ADR-0003) */}\n` +
         (parsed.live
           ? "Live evaluation requires a configured provider. Pass --config PATH or set " +
             "KEIKO_CONFIG_FILE.\n"

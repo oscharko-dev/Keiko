@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts";
+import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
 import type { UnsupportedDocumentGuidanceCode } from "@oscharko-dev/keiko-contracts";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 
@@ -84,6 +84,13 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.nativeDialog.busy": "A native dialog is already open. Close it first.",
   "localKnowledge.nativeDialog.unavailable":
     "Native dialogs are unavailable on this platform. Enter the path manually.",
+  // #2906 round 3: "{count} selected item(s)" was wrong for count === 1 ("1 selected item(s)
+  // ... were skipped" -- wrong article and wrong verb number). Branch on count like the
+  // established quickAccess.result.singular/.plural pair instead of a fake plural marker.
+  "localKnowledge.nativeDialog.partialSelection.singular":
+    "{count} selected item could not be added and was skipped.",
+  "localKnowledge.nativeDialog.partialSelection.plural":
+    "{count} selected items could not be added and were skipped.",
   "localKnowledge.detail.loading": "Loading Knowledge Pod…",
   "localKnowledge.detail.pageLabel": "Knowledge Pod detail",
   "localKnowledge.detail.noSelection":
@@ -328,6 +335,7 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     "This Knowledge Pod was removed from {count} Knowledge Pod Sets it belonged to.",
   "localKnowledge.detail.index.title": "Index status",
   "localKnowledge.detail.index.noJobRecorded": "No job recorded",
+  "localKnowledge.detail.index.runFailed": "Indexing failed: {message}",
   "localKnowledge.detail.index.eta": "ETA {duration}",
   "localKnowledge.detail.index.updating": "Updating every 2s",
   "localKnowledge.detail.index.latestRun": "Latest run",
@@ -576,6 +584,10 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Es ist bereits ein nativer Dialog geöffnet. Schließe ihn zuerst.",
   "localKnowledge.nativeDialog.unavailable":
     "Native Dialoge sind auf dieser Plattform nicht verfügbar. Gib den Pfad manuell ein.",
+  "localKnowledge.nativeDialog.partialSelection.singular":
+    "{count} ausgewähltes Element konnte nicht hinzugefügt werden und wurde übersprungen.",
+  "localKnowledge.nativeDialog.partialSelection.plural":
+    "{count} ausgewählte Elemente konnten nicht hinzugefügt werden und wurden übersprungen.",
   "localKnowledge.detail.loading": "Knowledge Pod wird geladen…",
   "localKnowledge.detail.pageLabel": "Knowledge Pod-Detailansicht",
   "localKnowledge.detail.noSelection":
@@ -826,6 +838,7 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Dieser Knowledge Pod wurde aus {count} Knowledge Pod Sets entfernt, zu denen er gehörte.",
   "localKnowledge.detail.index.title": "Indexstatus",
   "localKnowledge.detail.index.noJobRecorded": "Kein Job aufgezeichnet",
+  "localKnowledge.detail.index.runFailed": "Indexierung fehlgeschlagen: {message}",
   "localKnowledge.detail.index.eta": "ETA {duration}",
   "localKnowledge.detail.index.updating": "Aktualisiert alle 2 s",
   "localKnowledge.detail.index.latestRun": "Letzter Lauf",

@@ -101,6 +101,8 @@ const DELETE_PARSED_UNITS_SQL =
   "DELETE FROM parsed_units WHERE capsule_id = :c AND document_id = :d";
 const DELETE_DIAGNOSTICS_SQL =
   "DELETE FROM parser_diagnostics WHERE capsule_id = :c AND document_id = :d";
+const DELETE_CAPSULE_DIAGNOSTICS_BY_CODE_SQL =
+  "DELETE FROM parser_diagnostics WHERE capsule_id = :c AND document_id IS NULL AND code = :code";
 const SELECT_DOCUMENT_TEXT_SQL =
   "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d";
 
@@ -182,6 +184,7 @@ interface DiscoveryStatements {
   readonly deleteDocumentText: RunStatement;
   readonly deleteParsedUnits: RunStatement;
   readonly deleteDiagnostics: RunStatement;
+  readonly deleteCapsuleDiagnosticsByCode: RunStatement;
   readonly deleteDocument: RunStatement;
   readonly deleteDocumentById: RunStatement;
   readonly deleteUnreferencedDocumentBlobs: RunStatement;
@@ -217,6 +220,9 @@ function statements(db: DatabaseSync): DiscoveryStatements {
     deleteDocumentText: db.prepare(DELETE_DOCUMENT_TEXT_SQL) as RunStatement,
     deleteParsedUnits: db.prepare(DELETE_PARSED_UNITS_SQL) as RunStatement,
     deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
+    deleteCapsuleDiagnosticsByCode: db.prepare(
+      DELETE_CAPSULE_DIAGNOSTICS_BY_CODE_SQL,
+    ) as RunStatement,
     deleteDocument: db.prepare(DELETE_DOCUMENT_SQL) as RunStatement,
     deleteDocumentById: db.prepare(DELETE_DOCUMENT_BY_ID_SQL) as RunStatement,
     deleteUnreferencedDocumentBlobs: db.prepare(
@@ -616,6 +622,17 @@ export function insertDiagnosticRow(
     page_number: params.diagnostic.pageNumber ?? null,
     created_at: params.createdAt,
   });
+}
+
+// Capsule-level diagnostics (document_id NULL) carry walk-scoped warnings such as the
+// discovery-limit truncation notice; the code-scoped delete lets a new run clear ONLY its own
+// warning class without touching per-document parser diagnostics.
+export function deleteCapsuleDiagnosticsByCode(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  code: string,
+): void {
+  statements(db).deleteCapsuleDiagnosticsByCode.run({ c: capsuleId, code });
 }
 
 interface ExistingDocumentRow {

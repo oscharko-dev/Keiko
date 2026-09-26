@@ -36,8 +36,8 @@ function workbench(page: Page): Locator {
 
 async function openWorkbench(page: Page): Promise<void> {
   await page.goto("/");
-  await page.getByRole("button", { name: "Coding Workbench" }).click();
-  await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding Workbench", exact: true })).toBeVisible();
 }
 
 // Drives the #2385/#2476 "Code setup" section end to end through UI interactions only: binding the

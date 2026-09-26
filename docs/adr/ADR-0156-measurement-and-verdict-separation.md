@@ -108,6 +108,25 @@ requirement is self-enforcing and fail-closed. What was missing was saying so, a
 lane that could only ever fail. Changing the reference class is
 [#2587](https://github.com/oscharko-dev/Keiko/issues/2587), and needs its own decision.
 
+**D7 — Coding-runtime evidence has its own native reference (#2952).** The same producer/judge
+separation covers the native coding-runtime target. Its producer records every trustworthy latency
+sample, including budget overruns. Schema, output-causality, calibration-binding, source-stability
+and reference-environment defects abort production; the judge returns defects and budget verdicts
+as separate arrays and cannot classify one by matching the other's message. The required PR lane
+checks committed evidence and diff-owned ruler freshness. Only the native reference/release lane
+measures and checks exact source freshness. Hosted scheduled automation owns drift reporting,
+without comparing foreign hardware against absolute native budgets. ADR-0162 also applies here:
+source-tree and candidate-lockfile age are structured advisory findings under
+`--enforce-source-freshness --report-subject-drift`; every finding remains fatal for strict
+reference/release validation.
+
+The coding target declares its own macOS arm64 reference because production sidecar discovery does
+not support the editor's Linux reference. Environment comparability is explicit: architecture,
+kernel release, logical-core count, total memory, hashed CPU model, Node/npm/Git versions, approved
+runtime version and payload/native-helper digests must match the frozen calibration. A faster but
+incompatible document is rejected as a provenance defect. The bounded provider fixture isolates
+runtime performance; its evidence is not approved live-model or platform-signature qualification.
+
 ## Consequences
 
 - A noisy neighbour on a shared runner costs one measurement, not the ability to measure.

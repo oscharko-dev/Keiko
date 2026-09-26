@@ -871,6 +871,8 @@ export function buildRestorePatch(
 }
 
 export interface ApplyDeps {
+  /** Trusted live admission check for forward effects; rollback is required remediation. */
+  readonly beforeEffect?: (() => boolean) | undefined;
   readonly applyEnabled: boolean;
   readonly signal: AbortSignal;
   readonly fs?: WorkspaceFs | undefined;
@@ -939,13 +941,15 @@ function planWrites(
   }
 }
 
-function applyOne(writer: WorkspaceWriter, plan: PlannedWrite): void {
+function applyOne(writer: WorkspaceWriter, plan: PlannedWrite, requireEffect: () => void): void {
+  requireEffect();
   if (plan.kind === "delete") {
     writer.remove(plan.absolute);
     return;
   }
   const dir = plan.absolute.replace(/[/\\][^/\\]*$/, "");
   writer.mkdirp(dir);
+  requireEffect();
   writer.writeFileUtf8(plan.absolute, plan.newContent ?? "");
 }
 
@@ -962,31 +966,30 @@ function rollback(writer: WorkspaceWriter, done: readonly PlannedWrite[]): void 
 function commit(
   writer: WorkspaceWriter,
   plans: readonly PlannedWrite[],
-  signal: AbortSignal,
+  requireEffect: () => void,
 ): void {
   const done: PlannedWrite[] = [];
   for (const plan of plans) {
-    if (isAbortRequested(signal)) {
-      rollback(writer, done);
-      throw new CommandCancelledError("apply cancelled during write phase");
-    }
     try {
-      applyOne(writer, plan);
+      applyOne(writer, plan, requireEffect);
       done.push(plan);
+      requireEffect();
     } catch (error) {
+      // Restoration must remain possible after authority expiry or cancellation.
       rollback(writer, done);
+      if (error instanceof CommandCancelledError) throw error;
       const message = error instanceof Error ? error.message : "write failed";
       throw new PatchApplyError(`apply failed, rolled back: ${message}`, plan.path);
-    }
-    if (isAbortRequested(signal)) {
-      rollback(writer, done);
-      throw new CommandCancelledError("apply cancelled during write phase");
     }
   }
 }
 
-function isAbortRequested(signal: AbortSignal): boolean {
-  return signal.aborted;
+function patchEffectGuard(signal: AbortSignal, beforeEffect?: () => boolean): () => void {
+  return (): void => {
+    if (signal.aborted || beforeEffect?.() === false) {
+      throw new CommandCancelledError("apply cancelled during write phase");
+    }
+  };
 }
 
 function summarize(plans: readonly PlannedWrite[]): PatchApplyResult {
@@ -1007,6 +1010,8 @@ export function applyPatch(
   if (!deps.applyEnabled) {
     throw new PatchApplyDisabledError("apply is disabled (applyEnabled is false)");
   }
+  const { signal, beforeEffect } = deps;
+  const requireEffect = patchEffectGuard(signal, beforeEffect);
   const fs = deps.fs ?? nodeWorkspaceFs;
   const writer = deps.writer ?? createContainedNodeWorkspaceWriter(workspace.root);
   const allowOverwrite = deps.allowOverwrite ?? false;
@@ -1022,10 +1027,10 @@ export function applyPatch(
       validation.conflicts,
     );
   }
-  if (deps.signal.aborted) {
+  if (signal.aborted) {
     throw new CommandCancelledError("apply cancelled before write phase");
   }
-  const plans = planWrites(workspace, fs, deps.signal, validation.files, allowOverwrite);
-  commit(writer, plans, deps.signal);
+  const plans = planWrites(workspace, fs, signal, validation.files, allowOverwrite);
+  commit(writer, plans, requireEffect);
   return summarize(plans);
 }

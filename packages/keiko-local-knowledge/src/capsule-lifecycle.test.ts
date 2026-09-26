@@ -1,10 +1,10 @@
 // capsule-lifecycle.test.ts — CRUD round-trips plus the mutation-robust cascade test.
 
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {

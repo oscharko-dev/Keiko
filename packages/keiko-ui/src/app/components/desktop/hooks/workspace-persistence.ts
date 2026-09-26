@@ -1,7 +1,16 @@
 "use client";
 
-import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts";
+import {
+  GITHUB_ISSUE_NUMBER_MAX,
+  isGitHubOwnerAndRepo,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CLIENT_BINDING_WINDOW_REF_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
+// KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
+// parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
+// root suite's stricter node16 tsconfig. looksLikeSecretShape (from keiko-contracts) is imported
+// by the leaf, not here.
+import { isSecretShapedString } from "./isSecretShapedString";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
@@ -14,7 +23,21 @@ import {
 
 type JsonScalar = string | number | boolean;
 
-const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
+export const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
+// A chat window's one-way fingerprint of a chat id the heuristic redacts (#3557 review): the window
+// finds its chat again by comparing it with the chats the server lists, and nothing expands it back
+// into the id (widgets/chatReferenceFingerprint.ts).
+export const CHAT_ID_FINGERPRINT_CFG_KEY = "chatIdFingerprint";
+// A chat window bound to the chat the person chose for a redacted snapshot, which they have not kept
+// yet (#3557 review): until they keep it, the window offers to withdraw it and choose again.
+export const CHAT_ID_CHOSEN_CFG_KEY = "chatIdChosen";
+// An RFC 9562 version-4 UUID, the shape of every server-issued id. Shape alone is never proof of
+// origin, so no value of this shape is exempted from the secret heuristic, and no stored form works
+// around it (#3557 review). The shared card-number rule reads the digits across a random UUID's
+// last hyphen as a card number for about 2 in 10,000 ids, so the server issues every reference a
+// window persists through `newReferenceId` (keiko-server), which never draws such an id.
+const SERVER_ISSUED_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_REFERENCE_VALUE_LENGTH = 256;
 const MAX_FIGMA_SELECTED_SCREEN_IDS = 16;
 const MAX_FIGMA_SCREEN_NAME_LENGTH = 256;
@@ -51,8 +74,10 @@ const MAX_EDITOR_LAYOUT_SPLIT_DEPTH = 32;
 // MAX_WORKSPACE_WINDOWS/MAX_WORKSPACE_CONNECTIONS) on the client parse path: the
 // localStorage route otherwise accepts unbounded arrays the server would reject,
 // leaving local state permanently divergent from the server snapshot.
-const MAX_PERSISTED_WINDOWS = 128;
+export const MAX_WORKSPACE_WINDOWS = 128;
+export const MAX_PERSISTED_WINDOW_SCAN = MAX_WORKSPACE_WINDOWS * 16;
 const MAX_PERSISTED_CONNECTIONS = 512;
+export const MAX_PERSISTED_CONNECTION_SCAN = MAX_PERSISTED_CONNECTIONS * 16;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -65,34 +90,40 @@ const CREDENTIAL_KEY_MARKERS = [
   "token",
 ] as const;
 
-const CREDENTIAL_ASSIGNMENT_MARKERS = [
-  "api_key=",
-  "apikey=",
-  "client_secret=",
-  "clientsecret=",
-  "credential=",
-  "authorization:",
-  "password=",
-  "secret=",
-  "token=",
-] as const;
-
-const ENV_CREDENTIAL_FILENAMES = [
-  ".env",
-  ".env.local",
-  ".env.development",
-  ".env.test",
-  ".env.production",
-] as const;
+// KEIKO-0628: CREDENTIAL_ASSIGNMENT_MARKERS and ENV_CREDENTIAL_FILENAMES moved to the leaf
+// isSecretShapedString.ts module together with containsBearerSecret / containsUrlCredentials /
+// containsCredentialPath, so tests/qa's cross-package parity test can consume the same detection
+// logic without also compiling this file (which brings in keiko-ui's own bundler resolution).
 
 const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>> = {
   // 0.3.0 release audit — `titleIsDefault` is the structural, locale-independent record of "this
   // chat has not been named yet". It must survive the snapshot: a dropped marker would be
   // re-derived from the title TEXT on the next reload, which is the display-string dependency it
   // was introduced to remove.
-  chat: ["chatId", CHAT_TITLE_IS_DEFAULT_CFG_KEY],
+  chat: [
+    "chatId",
+    CHAT_ID_FINGERPRINT_CFG_KEY,
+    CHAT_ID_CHOSEN_CFG_KEY,
+    "memoryEnabled",
+    "projectPath",
+    "projectPathPrivacy",
+    CHAT_TITLE_IS_DEFAULT_CFG_KEY,
+  ],
   editor: ["openFiles", "layoutJson", "rootSessionsJson"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
+  // The Coding Workbench can explicitly open the user-selected repository rather than an active
+  // task worktree. Retain only this closed marker, never an arbitrary binding instruction.
+  governedGit: ["rootBinding"],
+  // Epic #3384 (#3401 "Review description"): the governed pull request window carries the exact
+  // server-held retained description proposal it must review. Each key has a closed value shape
+  // (owner/repo, positive integer, opaque reference, sha256 digest) so a reload restores the same
+  // binding the Workbench opened and never a hostile or free-form value.
+  governedPullRequest: [
+    "descriptionOwnerAndRepo",
+    "descriptionPrNumber",
+    "descriptionProposalId",
+    "descriptionSnapshotDigest",
+  ],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaView: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
@@ -111,6 +142,52 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
     "zoomMode",
     "zoomValue",
   ],
+};
+
+type ClosedConfigValueSanitizer = (value: unknown) => AppWindow["cfg"][string];
+
+function sanitizeCodingRepositoryBinding(value: unknown): AppWindow["cfg"][string] {
+  return value === "coding-repository" ? value : undefined;
+}
+
+const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;
+
+// The owner/repo vocabulary and the issue/PR number ceiling are owned by keiko-contracts
+// (`github-issue-reference.ts`); this boundary reuses them rather than restating either rule.
+function sanitizeGitHubOwnerAndRepo(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && isGitHubOwnerAndRepo(value) ? value : undefined;
+}
+
+function sanitizePullRequestNumber(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= GITHUB_ISSUE_NUMBER_MAX
+    ? value
+    : undefined;
+}
+
+function sanitizeOpaqueReferenceValue(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && isSafeOpaqueReference(value) ? value : undefined;
+}
+
+function sanitizeSha256Digest(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && SHA256_HEX_DIGEST.test(value) ? value : undefined;
+}
+
+// A marker that is either set or absent: only `true` persists.
+function sanitizeSetMarker(value: unknown): AppWindow["cfg"][string] {
+  return value === true ? true : undefined;
+}
+
+const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
+  "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
+  "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
+  "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
+  "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
+  "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
+  [`chat:${CHAT_ID_FINGERPRINT_CFG_KEY}`]: sanitizeSha256Digest,
+  [`chat:${CHAT_ID_CHOSEN_CFG_KEY}`]: sanitizeSetMarker,
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -170,56 +247,6 @@ function isCredentialKey(key: string): boolean {
   return CREDENTIAL_KEY_MARKERS.some((marker) => normalized.includes(marker));
 }
 
-function containsBearerSecret(value: string): boolean {
-  const marker = "bearer ";
-  const at = value.toLowerCase().indexOf(marker);
-  if (at === -1) return false;
-  let length = 0;
-  for (let idx = at + marker.length; idx < value.length; idx += 1) {
-    const char = value[idx] ?? "";
-    if (char.trim().length === 0) break;
-    length += 1;
-  }
-  return length >= 8;
-}
-
-function containsUrlCredentials(value: string): boolean {
-  if (!value.includes("://")) return false;
-  try {
-    const parsed = new URL(value);
-    return parsed.username.length > 0 || parsed.password.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-function containsCredentialPath(value: string): boolean {
-  const segments = value.toLowerCase().replaceAll("\\", "/").split("/");
-  for (let idx = 0; idx < segments.length; idx += 1) {
-    const segment = segments[idx] ?? "";
-    const next = segments[idx + 1] ?? "";
-    if (ENV_CREDENTIAL_FILENAMES.includes(segment as (typeof ENV_CREDENTIAL_FILENAMES)[number]))
-      return true;
-    if (segment === ".npmrc" || segment === "credentials.json") return true;
-    if (segment === ".aws" && next === "credentials") return true;
-    if (segment === ".ssh" && next.startsWith("id_")) return true;
-  }
-  return false;
-}
-
-function isSecretShapedString(value: string): boolean {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return false;
-  const lower = trimmed.toLowerCase();
-  return (
-    looksLikeSecretShape(trimmed) ||
-    containsBearerSecret(trimmed) ||
-    containsUrlCredentials(trimmed) ||
-    CREDENTIAL_ASSIGNMENT_MARKERS.some((marker) => lower.includes(marker)) ||
-    containsCredentialPath(trimmed)
-  );
-}
-
 function looksLikeLocalPath(value: string): boolean {
   const trimmed = value.trim();
   const normalized = trimmed.replaceAll("\\", "/");
@@ -248,6 +275,44 @@ function isAllowedReferenceChar(char: string): boolean {
   return isDigit || isUpper || isLower || isPunct;
 }
 
+// Reports the SHAPE only; it grants nothing. Shape alone is never proof of origin (#3557 review).
+function isServerIssuedUuidReference(value: string): boolean {
+  return SERVER_ISSUED_UUID_PATTERN.test(value);
+}
+
+/**
+ * The closed, body-free shape of a restored reference, for evidence: whether it was persisted as
+ * the redaction marker, is a server-issued UUID, or is some other opaque value. Never the value.
+ */
+export function persistedReferenceShape(value: string): "redacted" | "uuid" | "opaque" {
+  if (value === REDACTED_WORKSPACE_CONFIG_VALUE) return "redacted";
+  return isServerIssuedUuidReference(value) ? "uuid" : "opaque";
+}
+
+/**
+ * The body-free evidence of a bound reference (#3557): its closed shape, and whether it is a
+ * server-issued UUID the shared secret heuristic reads as a card number. The server no longer
+ * issues such ids, but an older chat can still carry one, and persistence redacts it, so a flagged
+ * binding tells why a window will lose its target on reload (this evidence function is called with
+ * a chat window's chatId only). Never the value.
+ */
+export function persistedReferenceEvidence(value: string): {
+  readonly referenceShape: "redacted" | "uuid" | "opaque";
+  readonly heuristicFlagged: boolean;
+} {
+  const referenceShape = persistedReferenceShape(value);
+  return {
+    referenceShape,
+    heuristicFlagged: referenceShape === "uuid" && isSecretShapedString(value),
+  };
+}
+
+// The generic opaque-reference check for every evidence-reference field with no dedicated
+// sanitizer — review.runId, qiRun.runId, figma*.snapshotRunId, governedPullRequest's
+// descriptionProposalId, and any future one. Deliberately carries NO UUID shortcut: #3557 review
+// found that a v4-shaped value was accepted outright here regardless of field, so a user could type
+// a v4-shaped, Luhn-valid-tail lookalike straight into the editable review.runId field and have it
+// persist unredacted. Every value is judged on its content, in every field.
 function isSafeOpaqueReference(value: string): boolean {
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH || value.startsWith("."))
     return false;
@@ -302,6 +367,10 @@ function isSafeFigmaImageSrc(value: string): boolean {
 
 function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | undefined {
   if (typeof value !== "string") return undefined;
+  // snapshotRunId is app-written-only (updateCfg from a server build/list response in
+  // FigmaSnapshotWindow.tsx) and absent from every figma* WIN_TYPES.config, so it is never
+  // user-typed. The server issues it through `newReferenceId("fs-")` (figmaSnapshotRoutes.ts),
+  // which never draws a value this check rejects.
   if (key === "snapshotRunId") return isSafeOpaqueReference(value) ? value : undefined;
   if (key === "screenId") return isSafeFigmaScreenId(value) ? value : undefined;
   if (key === "imageSrc") return isSafeFigmaImageSrc(value) ? value : undefined;
@@ -619,6 +688,9 @@ function sanitizeConfigValue(
   key: string,
   value: unknown,
 ): AppWindow["cfg"][string] {
+  if (type === "chat" && key === "projectPathPrivacy") {
+    return value === "omit" ? value : undefined;
+  }
   if (type === "editor") return sanitizeEditorConfigValue(key, value);
   if (type === "pdfCitationPreview") {
     return sanitizePdfCitationPreviewConfigValue(key, value);
@@ -627,6 +699,15 @@ function sanitizeConfigValue(
     return sanitizeFigmaConfigValue(key, value);
   }
   return sanitizeGenericConfigValue(type, key, value);
+}
+
+function sanitizeWindowConfigValue(
+  type: WindowType,
+  key: string,
+  value: unknown,
+): AppWindow["cfg"][string] {
+  const sanitizer = CLOSED_CONFIG_VALUE_SANITIZERS[`${type}:${key}`];
+  return sanitizer === undefined ? sanitizeConfigValue(type, key, value) : sanitizer(value);
 }
 
 function sanitizeGenericConfigValue(
@@ -658,8 +739,11 @@ function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["c
   const out: AppWindow["cfg"] = {};
   for (const [key, value] of Object.entries(cfg)) {
     if (!allowedKeys.has(key)) continue;
-    const next = sanitizeConfigValue(type, key, value);
+    const next = sanitizeWindowConfigValue(type, key, value);
     if (next !== undefined) out[key] = next;
+  }
+  if (type === "chat" && out["projectPathPrivacy"] === "omit") {
+    delete out["projectPath"];
   }
   return out;
 }
@@ -682,12 +766,19 @@ function sanitizePrev(prev: unknown): AppWindow["prev"] | undefined {
   };
 }
 
+// A window id reaches DOM attributes, connection ids and the binding evidence, so a restored one is
+// held to the closed shape the app itself mints (`type` or `type-<base36>…`); a window with any
+// other id is dropped rather than repaired (#3557 review).
+function isPersistableWindowId(value: unknown): value is string {
+  return typeof value === "string" && CLIENT_BINDING_WINDOW_REF_PATTERN.test(value);
+}
+
 function sanitizeWindow(win: unknown): AppWindow | null {
   if (!isRecord(win) || !hasWindowType(win["type"])) return null;
   const type = win["type"];
   if (WIN_META[type].persistence === "transient") return null;
   if (
-    typeof win["id"] !== "string" ||
+    !isPersistableWindowId(win["id"]) ||
     !isFiniteNumber(win["x"]) ||
     !isFiniteNumber(win["y"]) ||
     !isFiniteNumber(win["w"]) ||
@@ -742,28 +833,97 @@ function migrateLegacyFigmaWindow(win: AppWindow): AppWindow {
   };
 }
 
-function dedupeSingletonWindows(wins: readonly AppWindow[]): AppWindow[] {
-  const keepers = new Map<WindowType, AppWindow>();
-  for (const win of wins) {
-    if (WIN_TYPES[win.type].singleton !== true) continue;
-    const current = keepers.get(win.type);
-    if (current === undefined || win.z > current.z) keepers.set(win.type, win);
-  }
-  return wins.filter(
-    (win) => WIN_TYPES[win.type].singleton !== true || keepers.get(win.type) === win,
-  );
+function workspaceWindowIdentity(win: AppWindow): string | undefined {
+  if (WIN_TYPES[win.type].singleton === true) return `singleton:${win.type}`;
+  let identity: unknown;
+  if (win.type === "chat") identity = win.cfg["chatId"];
+  else if (win.type === "qiRun") identity = win.cfg["runId"];
+  return typeof identity === "string" && identity.length > 0
+    ? `${win.type}:${identity}`
+    : undefined;
 }
 
-export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[] {
-  const out: AppWindow[] = [];
+function keepTopmostWindowByIdentity(
+  wins: AppWindow[],
+  identityFor: (win: AppWindow) => string | undefined,
+): AppWindow[] {
+  const keepers = new Map<string, AppWindow>();
   for (const win of wins) {
-    const next = sanitizeWindow(win);
-    if (next !== null) out.push(migrateLegacyFigmaWindow(next));
-    // Mirror the server's MAX_WORKSPACE_WINDOWS bound; anything beyond it could
-    // never round-trip through the server snapshot anyway.
-    if (out.length >= MAX_PERSISTED_WINDOWS) break;
+    const identity = identityFor(win);
+    if (identity === undefined) continue;
+    const current = keepers.get(identity);
+    if (current === undefined || win.z > current.z) keepers.set(identity, win);
   }
-  return dedupeSingletonWindows(out);
+  return wins.filter((win) => {
+    const identity = identityFor(win);
+    return identity === undefined || keepers.get(identity) === win;
+  });
+}
+
+export function enforceWorkspaceWindowInvariants(wins: AppWindow[]): AppWindow[] {
+  const physical = keepTopmostWindowByIdentity(wins, (win) => win.id);
+  const filtered = keepTopmostWindowByIdentity(physical, workspaceWindowIdentity);
+  if (filtered.length === wins.length && wins.length <= MAX_WORKSPACE_WINDOWS) return wins;
+  return filtered.slice(0, MAX_WORKSPACE_WINDOWS);
+}
+
+interface SanitizedWorkspaceWindows {
+  readonly wins: AppWindow[];
+  readonly aliases: ReadonlyMap<string, string>;
+}
+
+function survivingWindow(
+  removed: AppWindow,
+  retained: readonly AppWindow[],
+): AppWindow | undefined {
+  const physical = retained.find((candidate) => candidate.id === removed.id);
+  if (physical !== undefined) return physical;
+  const identity = workspaceWindowIdentity(removed);
+  return identity === undefined
+    ? undefined
+    : retained.find((candidate) => workspaceWindowIdentity(candidate) === identity);
+}
+
+function recordWindowAlias(aliases: Map<string, string>, removedId: string, keptId: string): void {
+  if (removedId === keptId) return;
+  for (const [alias, target] of aliases) {
+    if (target === removedId) aliases.set(alias, keptId);
+  }
+  aliases.set(removedId, keptId);
+}
+
+function collectPersistedWindows(
+  wins: readonly unknown[],
+  onScanLimitReached?: (() => void) | undefined,
+): SanitizedWorkspaceWindows {
+  let retained: AppWindow[] = [];
+  const aliases = new Map<string, string>();
+  let scanned = 0;
+  for (const win of wins) {
+    if (scanned >= MAX_PERSISTED_WINDOW_SCAN) {
+      onScanLimitReached?.();
+      break;
+    }
+    scanned += 1;
+    const next = sanitizeWindow(win);
+    if (next === null) continue;
+    const candidates = [...retained, migrateLegacyFigmaWindow(next)];
+    const filtered = enforceWorkspaceWindowInvariants(candidates);
+    for (const removed of candidates) {
+      if (filtered.includes(removed)) continue;
+      const survivor = survivingWindow(removed, filtered);
+      if (survivor !== undefined) recordWindowAlias(aliases, removed.id, survivor.id);
+    }
+    retained = filtered;
+    // Count the identities that can actually survive, not hostile/legacy duplicates. This keeps
+    // scanning until the bounded snapshot contains MAX_WORKSPACE_WINDOWS distinct windows.
+    if (retained.length >= MAX_WORKSPACE_WINDOWS) break;
+  }
+  return { wins: retained, aliases };
+}
+
+export function sanitizePersistedWindows(wins: readonly unknown[]): AppWindow[] {
+  return collectPersistedWindows(wins).wins;
 }
 
 export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
@@ -771,56 +931,202 @@ export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    const wins = sanitizePersistedWindows(parsed as AppWindow[]);
+    const wins = sanitizePersistedWindows(parsed);
     return wins.length > 0 ? wins : null;
   } catch {
     return null;
   }
 }
 
-export function sanitizePersistedConnections(
-  conns: readonly Connection[],
+function remapWindowId(windowId: string, aliases: ReadonlyMap<string, string>): string {
+  return aliases.get(windowId) ?? windowId;
+}
+
+function connectionEndpointKey(a: string, b: string): string {
+  return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
+}
+
+function collapsedConnectionKey(connection: Connection): string {
+  return JSON.stringify([
+    connectionEndpointKey(connection.a, connection.b),
+    connection.boundChatWindowId ?? null,
+    connection.boundScopeElided === true,
+    connection.boundConnectorKind ?? null,
+    connection.boundConnectorId ?? null,
+  ]);
+}
+
+function remappedBoundChatWindowId(
+  conn: Readonly<Record<string, unknown>>,
+  aliases: ReadonlyMap<string, string>,
+  windowIds: ReadonlySet<string>,
+): string | undefined {
+  if (typeof conn.boundChatWindowId !== "string" || conn.boundChatWindowId.length === 0) {
+    return undefined;
+  }
+  const remapped = remapWindowId(conn.boundChatWindowId, aliases);
+  return windowIds.has(remapped) ? remapped : undefined;
+}
+
+interface SanitizedConnection {
+  readonly connection: Connection;
+  readonly endpointRemapped: boolean;
+}
+
+interface SanitizedConnectionEndpoints {
+  readonly a: string;
+  readonly b: string;
+  readonly remapped: boolean;
+}
+
+function sanitizedConnectionEndpoints(
+  conn: Readonly<Record<string, unknown>>,
+  aliases: ReadonlyMap<string, string>,
+  windowIds: ReadonlySet<string>,
+): SanitizedConnectionEndpoints | null {
+  if (typeof conn.a !== "string" || typeof conn.b !== "string") return null;
+  const a = remapWindowId(conn.a, aliases);
+  const b = remapWindowId(conn.b, aliases);
+  return windowIds.has(a) && windowIds.has(b)
+    ? { a, b, remapped: a !== conn.a || b !== conn.b }
+    : null;
+}
+
+function hasElidedScopeSnapshot(conn: Readonly<Record<string, unknown>>): boolean {
+  return (
+    conn.boundScopeElided === true ||
+    typeof conn.boundRoot === "string" ||
+    typeof conn.boundScopeKind === "string" ||
+    typeof conn.boundRelativePath === "string"
+  );
+}
+
+function sanitizedBoundConnector(
+  conn: Readonly<Record<string, unknown>>,
+): Pick<Connection, "boundConnectorKind" | "boundConnectorId"> | undefined {
+  const kind = conn.boundConnectorKind;
+  if (kind !== "capsule" && kind !== "capsule-set") return undefined;
+  if (typeof conn.boundConnectorId !== "string" || conn.boundConnectorId.length === 0) {
+    return undefined;
+  }
+  return { boundConnectorKind: kind, boundConnectorId: conn.boundConnectorId };
+}
+
+// #3506 review — the Git↔Chat bind's server-side relationship id must survive a reload. Without
+// it, `removeConn` cannot unbind the remote relationship (it falls through to "no unbind work"),
+// and the operator's disconnect click leaks the relationship. The two ref fields are the pair
+// snapshot the relationship was minted from, so the whole triplet is either kept or dropped.
+function sanitizedBoundGitChange(
+  conn: Readonly<Record<string, unknown>>,
+): Pick<
+  Connection,
+  "boundGitChangeBaseRef" | "boundGitChangeHeadRef" | "boundGitChangeRelationshipId"
+> {
+  const baseRef = conn.boundGitChangeBaseRef;
+  const headRef = conn.boundGitChangeHeadRef;
+  const relationshipId = conn.boundGitChangeRelationshipId;
+  return {
+    ...(typeof baseRef === "string" && baseRef.length > 0
+      ? { boundGitChangeBaseRef: baseRef }
+      : {}),
+    ...(typeof headRef === "string" && headRef.length > 0
+      ? { boundGitChangeHeadRef: headRef }
+      : {}),
+    ...(typeof relationshipId === "string" && relationshipId.length > 0
+      ? { boundGitChangeRelationshipId: relationshipId }
+      : {}),
+  };
+}
+
+function sanitizeConnection(
+  conn: unknown,
+  aliases: ReadonlyMap<string, string>,
+  windowIds: ReadonlySet<string>,
+): SanitizedConnection | null {
+  if (!isRecord(conn) || typeof conn.id !== "string") return null;
+  const endpoints = sanitizedConnectionEndpoints(conn, aliases, windowIds);
+  if (endpoints === null) return null;
+  const boundChatWindowId = remappedBoundChatWindowId(conn, aliases, windowIds);
+  const boundConnector = sanitizedBoundConnector(conn);
+  const boundGitChange = sanitizedBoundGitChange(conn);
+  return {
+    endpointRemapped: endpoints.remapped,
+    connection: {
+      id: conn.id,
+      a: endpoints.a,
+      b: endpoints.b,
+      ...(boundChatWindowId === undefined ? {} : { boundChatWindowId }),
+      ...(hasElidedScopeSnapshot(conn) ? { boundScopeElided: true } : {}),
+      ...boundConnector,
+      ...boundGitChange,
+    },
+  };
+}
+
+function sanitizeConnections(
+  conns: readonly unknown[],
   wins: readonly AppWindow[],
+  aliases: ReadonlyMap<string, string>,
+  onScanLimitReached?: (() => void) | undefined,
 ): Connection[] {
   const windowIds = new Set(wins.map((win) => win.id));
+  const connectionIds = new Set<string>();
+  const connectionKeys = new Set<string>();
+  const collapsedConnectionKeys = new Set<string>();
   const out: Connection[] = [];
+  let scanned = 0;
   for (const conn of conns) {
-    if (
-      typeof conn.id !== "string" ||
-      typeof conn.a !== "string" ||
-      typeof conn.b !== "string" ||
-      !windowIds.has(conn.a) ||
-      !windowIds.has(conn.b)
-    ) {
+    if (scanned >= MAX_PERSISTED_CONNECTION_SCAN) {
+      onScanLimitReached?.();
+      break;
+    }
+    scanned += 1;
+    const sanitized = sanitizeConnection(conn, aliases, windowIds);
+    if (sanitized === null) continue;
+    const connection = sanitized.connection;
+    if (connectionIds.has(connection.id)) continue;
+    const connectionKey = collapsedConnectionKey(connection);
+    if (sanitized.endpointRemapped) collapsedConnectionKeys.add(connectionKey);
+    if (connectionKeys.has(connectionKey) && collapsedConnectionKeys.has(connectionKey)) {
       continue;
     }
-    const scopeSnapshotElided =
-      conn.boundScopeElided === true ||
-      typeof conn.boundRoot === "string" ||
-      typeof conn.boundScopeKind === "string" ||
-      typeof conn.boundRelativePath === "string";
-    const boundChatWindowId =
-      typeof conn.boundChatWindowId === "string" &&
-      conn.boundChatWindowId.length > 0 &&
-      windowIds.has(conn.boundChatWindowId);
-    const boundConnector =
-      (conn.boundConnectorKind === "capsule" || conn.boundConnectorKind === "capsule-set") &&
-      typeof conn.boundConnectorId === "string" &&
-      conn.boundConnectorId.length > 0;
-    out.push({
-      id: conn.id,
-      a: conn.a,
-      b: conn.b,
-      ...(boundChatWindowId ? { boundChatWindowId: conn.boundChatWindowId } : {}),
-      ...(scopeSnapshotElided ? { boundScopeElided: true } : {}),
-      ...(boundConnector
-        ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
-        : {}),
-    });
+    out.push(connection);
+    connectionIds.add(connection.id);
+    connectionKeys.add(connectionKey);
     // Mirror the server's MAX_WORKSPACE_CONNECTIONS bound (see sanitizePersistedWindows).
     if (out.length >= MAX_PERSISTED_CONNECTIONS) break;
   }
   return out;
+}
+
+export function sanitizePersistedConnections(
+  conns: readonly unknown[],
+  wins: readonly AppWindow[],
+  onScanLimitReached?: (() => void) | undefined,
+): Connection[] {
+  return sanitizeConnections(conns, wins, new Map(), onScanLimitReached);
+}
+
+export interface PersistedWorkspaceSanitizerOptions {
+  readonly onWindowScanLimitReached?: (() => void) | undefined;
+  readonly onConnectionScanLimitReached?: (() => void) | undefined;
+}
+
+export function sanitizePersistedWorkspace(
+  wins: readonly unknown[],
+  conns: readonly unknown[],
+  options: PersistedWorkspaceSanitizerOptions = {},
+): { readonly wins: AppWindow[]; readonly conns: Connection[] } {
+  const sanitized = collectPersistedWindows(wins, options.onWindowScanLimitReached);
+  return {
+    wins: sanitized.wins,
+    conns: sanitizeConnections(
+      conns,
+      sanitized.wins,
+      sanitized.aliases,
+      options.onConnectionScanLimitReached,
+    ),
+  };
 }
 
 export function parsePersistedConnections(
@@ -831,7 +1137,7 @@ export function parsePersistedConnections(
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return sanitizePersistedConnections(parsed as Connection[], wins);
+    return sanitizePersistedConnections(parsed, wins);
   } catch {
     return [];
   }

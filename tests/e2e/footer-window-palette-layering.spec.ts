@@ -41,8 +41,13 @@ async function seedFilesWindow(page: Page): Promise<void> {
   }, fixtureRoot);
 }
 
+// GEN-UI-A11Y-025 turned the right rail from a named <aside> landmark into a plain <div> layout
+// spacer. The old `aside.rail.rail-right` selector kept matching nothing, which made the
+// `insideRightRail` assertion below vacuously true: `closest()` on a selector no element can
+// satisfy returns null whatever the palette actually overlaps. Selecting the rail by its class is
+// what makes the negative a real one.
 async function expectTriggerClearsRightRail(page: Page): Promise<void> {
-  const rightRail = page.locator("aside.rail.rail-right");
+  const rightRail = page.locator(".rail.rail-right");
   await expect(rightRail).toBeVisible();
 
   const trigger = page.getByRole("button", { name: /1 window/u });
@@ -80,7 +85,7 @@ async function edgeHitTest(page: Page, selector: string): Promise<PaletteHitTest
       topClass: top instanceof HTMLElement ? top.className : null,
       insidePalette:
         top instanceof Element && top.closest(".ft-window-palette, .ft-window-card") !== null,
-      insideRightRail: top instanceof Element && top.closest("aside.rail.rail-right") !== null,
+      insideRightRail: top instanceof Element && top.closest(".rail.rail-right") !== null,
     };
   }, selector);
 }
@@ -89,7 +94,7 @@ async function expectGatewaySetupClearsRailReserve(page: Page): Promise<void> {
   await page.evaluate(() => {
     document.documentElement.setAttribute("data-keiko-gateway-setup-open", "true");
   });
-  await expect(page.locator("aside.rail.rail-right")).toBeHidden();
+  await expect(page.locator(".rail.rail-right")).toBeHidden();
 
   const footerSpacing = await page.evaluate(() => {
     const footer = document.querySelector(".footer");

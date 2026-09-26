@@ -4,10 +4,8 @@
 // mapping, one truncation classification, one single-host URL builder. Package-internal: adapters
 // consume it; it is deliberately not part of the public barrel surface.
 
-import {
-  isSafeAtlassianConnectorBaseUrl,
-  type AtlassianSyncFailureReason,
-} from "@oscharko-dev/keiko-contracts";
+import type { AtlassianSyncFailureReason } from "@oscharko-dev/keiko-contracts";
+import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type { AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 

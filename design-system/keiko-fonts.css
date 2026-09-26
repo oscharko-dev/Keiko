@@ -31,3 +31,21 @@
   font-display: swap;
   src: url(assets/fonts/JetBrainsMono-Bold.woff2) format("woff2");
 }
+/* KEIKO-0714: italic and bold-italic faces so .ed-ghost (editor ghost text),
+   .t-com (code comments) and .mdi (markdown italic spans) render with the
+   real oblique glyphs the type family supplies, not the browser's synthesized
+   fake-oblique — synthesized italics skew monospace metrics and read wrong. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(assets/fonts/JetBrainsMono-Italic.woff2) format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url(assets/fonts/JetBrainsMono-BoldItalic.woff2) format("woff2");
+}

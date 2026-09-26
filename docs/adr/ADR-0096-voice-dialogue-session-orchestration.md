@@ -4,11 +4,12 @@
 
 Partially superseded by
 [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) (Accepted, 2026-07-22). D2, D3, D7, and D8's
-batch STT+TTS dialogue fallback and deferred-Realtime-transcript posture are historical. D10's
+original batch STT+TTS implementation and deferred-Realtime-transcript posture are historical. A
+turn-based STT + canonical chat + TTS path was restored under ADR-0154 in September 2026. D10's
 content-free turn-manager rule remains applicable, but its statement that no transcript is persisted is
 superseded: a settled final transcript is intentionally persisted as the canonical user chat message.
-Twin Voice now requires Realtime WebRTC for media/VAD/final transcription, routes the final exactly once
-through canonical chat, and speaks that canonical answer through a separate explicit TTS provider. The
+Twin Voice uses Realtime WebRTC when available and otherwise turn-based STT capture, routes the final
+exactly once through canonical chat, and speaks that canonical answer through a separate explicit TTS provider. The
 turn-manager reuse, barge-in, and deterministic cleanup decisions remain applicable.
 
 Originally proposed for Issue #1560, Epic #1556 (2026-06-26).

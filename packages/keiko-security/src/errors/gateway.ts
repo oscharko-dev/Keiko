@@ -22,6 +22,11 @@ export const ERROR_CODES = {
   PROXY_EGRESS_FAILED: "GATEWAY_PROXY_EGRESS_FAILED",
   PROXY_BLOCKED_BY_POLICY: "GATEWAY_PROXY_BLOCKED_BY_POLICY",
   TLS_CA_FAILURE: "GATEWAY_TLS_CA_FAILURE",
+  // #3591: a reasoning model that spends its whole output budget before any content is a
+  // different, actionable failure from a generic provider error — the chat surfaces need to tell
+  // them apart to show a distinct message, so this carries its own code instead of inheriting
+  // PROVIDER_ERROR from ProviderOutputExhaustedError's base class.
+  OUTPUT_EXHAUSTED: "GATEWAY_OUTPUT_EXHAUSTED",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -72,7 +77,7 @@ export class ModelRefusalError extends GatewayError {
 
 export class MalformedToolCallError extends GatewayError {
   readonly code = ERROR_CODES.MALFORMED_TOOL_CALL;
-  readonly retryable = false;
+  readonly retryable: boolean = false;
 }
 
 export class ContextOverflowError extends GatewayError {
@@ -80,18 +85,32 @@ export class ContextOverflowError extends GatewayError {
   readonly retryable = false;
 }
 
+// A rate limit is always an HTTP 429 by definition (that is the status the provider used to
+// signal it), so httpStatus defaults to 429 rather than requiring every call site to repeat the
+// literal. The parameter exists — instead of hardcoding 429 into the field — only so a caller that
+// somehow observes a different provider-reported status (there is none today; every known
+// RateLimitError construction maps HTTP 429, see openai-adapter.ts's mapHttpError) is not forced
+// to lie about it.
+const DEFAULT_RATE_LIMIT_HTTP_STATUS = 429;
+
 export class RateLimitError extends GatewayError {
   readonly code = ERROR_CODES.RATE_LIMIT;
   readonly retryable = true;
   readonly retryAfterMs: number | null;
+  // NEW: carried so a diagnostic record or a retry log line does not have to infer "429" from
+  // errorKind === GATEWAY_RATE_LIMIT — a downstream consumer (e.g. a replay-script builder) can
+  // read the status directly off the same shape ProviderError already exposes it through.
+  readonly httpStatus: number;
 
   constructor(
     message: string,
     retryAfterMs: number | null = null,
     secrets: readonly string[] = [],
+    httpStatus: number = DEFAULT_RATE_LIMIT_HTTP_STATUS,
   ) {
     super(message, secrets);
     this.retryAfterMs = retryAfterMs;
+    this.httpStatus = httpStatus;
   }
 }
 
@@ -119,7 +138,9 @@ export class CircuitOpenError extends GatewayError {
 const RETRYABLE_PROVIDER_HTTP_STATUS: ReadonlySet<number> = new Set([500, 502, 503, 529]);
 
 export class ProviderError extends GatewayError {
-  readonly code = ERROR_CODES.PROVIDER_ERROR;
+  // Explicit `ErrorCode` (rather than the inferred narrow literal) so a subclass — currently
+  // ProviderOutputExhaustedError (#3591) — can override it with its own, more specific code.
+  readonly code: ErrorCode = ERROR_CODES.PROVIDER_ERROR;
   readonly retryable: boolean;
   readonly httpStatus: number;
 
@@ -127,6 +148,40 @@ export class ProviderError extends GatewayError {
     super(message, secrets);
     this.httpStatus = httpStatus;
     this.retryable = RETRYABLE_PROVIDER_HTTP_STATUS.has(httpStatus);
+  }
+}
+
+// #3591 (1.1.7): a reasoning model that spends its whole output budget before the first content
+// token answers with HTTP 200, `finish_reason: "length"` and no content. That is neither a broken
+// stream nor a provider refusal; it is a budget the caller can raise. It keeps the provider error
+// code (no wire change) and is never retried as is — the same request would exhaust the same budget.
+export class ProviderOutputExhaustedError extends ProviderError {
+  // Overrides ProviderError's inherited GATEWAY_PROVIDER_ERROR: the chat surfaces map on `.code`,
+  // and this failure needs a distinct, actionable message (#3591) — httpStatus/retryable are still
+  // set by the ProviderError constructor below (200 / false) and are unaffected by this override.
+  override readonly code = ERROR_CODES.OUTPUT_EXHAUSTED;
+  readonly outputExhausted = true;
+
+  constructor(modelId: string, secrets: readonly string[] = []) {
+    super(
+      `provider exhausted the output budget for '${modelId}' before producing any content`,
+      200,
+      secrets,
+    );
+  }
+}
+
+// #3610: an HTTP 200 answer that completed without `finish_reason: "length"` and carries neither
+// content nor a tool call — gpt-oss behind LiteLLM ends a turn this way when it drops a tool call
+// and keeps only its reasoning. The provider answered, so this is neither a broken stream nor an
+// outage: it never counts toward the circuit breaker, and the coding runtime reports it as its own
+// turn-failure cause. It keeps the provider error code and message, so the chat surfaces and the
+// wire are unchanged, and it is not retried as is.
+export class ProviderEmptyAnswerError extends ProviderError {
+  readonly emptyAnswer = true;
+
+  constructor(modelId: string, secrets: readonly string[] = []) {
+    super(`provider returned an empty assistant response for '${modelId}'`, 200, secrets);
   }
 }
 

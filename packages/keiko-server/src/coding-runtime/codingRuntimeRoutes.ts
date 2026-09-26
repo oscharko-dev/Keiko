@@ -2,23 +2,34 @@
 // POST CSRF and JSON content-type enforcement is centralized in server.ts.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  parseCodingWorkbenchRuntimeReadinessRequest,
-  resolveEffectiveCodingWorkbenchMode,
-  unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
-  unpairedCodingWorkbenchRuntimeResearchChannelPayload,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  type CodingWorkbenchRuntimeFailureCode,
-  type CodingWorkbenchRuntimeQuestionsChannelPayload,
-  type CodingWorkbenchRuntimeResearchChannelPayload,
-  type CodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchRuntimeStateName,
+import type {
+  CodingWorkbenchIssueBindingFailure,
+  CodingWorkbenchMode,
+  CodingWorkbenchModelRefusalReason,
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeQuestionsChannelPayload,
+  CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeSkillsChannelPayload,
+  CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
+import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
+import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
   errorBody,
   STREAMING,
@@ -33,6 +44,124 @@ import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
+type RuntimeMutationRefusalReason = CodingWorkbenchRuntimeFailureCode | "payload-too-large";
+
+// Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
+// route it backs so a log line names exactly which mutation was refused.
+const RUNTIME_MUTATION_OPERATIONS = [
+  "start",
+  "approval",
+  "stop",
+  "takeover",
+  "retry",
+  "recovery-ack",
+  "pause",
+  "resume",
+  "research-revoke",
+  "follow-up",
+  "answer",
+  "reject",
+] as const;
+
+type RuntimeMutationOperationName = (typeof RUNTIME_MUTATION_OPERATIONS)[number];
+
+const RUNTIME_REFUSAL_REASONS = [
+  "runtime-unavailable",
+  "active-run-conflict",
+  "invalid-intent",
+  "approval-activation-failed",
+  "authority-resolution-failed",
+  "authority-expired",
+  "authority-replayed",
+  "task-drift",
+  "workspace-drift",
+  "project-drift",
+  "branch-drift",
+  "scope-drift",
+  "budget-drift",
+  "authority-budget-exceeded",
+  "source-drift",
+  "runtime-failed",
+  "revoked",
+  "recovery-required",
+  "replay-cap-exhausted",
+  "issue-context-unavailable",
+  "question-answer-rejected",
+  "delivery-not-evidenced",
+  "model-unavailable",
+  "workspace-unqualified",
+  "payload-too-large",
+] as const satisfies readonly RuntimeMutationRefusalReason[];
+
+const CODING_RUNTIME_OPERATION_REFUSED_BASE = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.operation.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeRoutes.logRuntimeOperationRefusal",
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-operation-refusal"],
+  proofIds: ["coding-runtime.operation.refused.emitted-line"],
+  releaseImpact: "patch",
+} as const;
+
+const CODING_RUNTIME_OPERATION_REFUSED_FIELDS = {
+  operation: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: RUNTIME_MUTATION_OPERATIONS,
+  },
+  reason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: RUNTIME_REFUSAL_REASONS,
+  },
+  runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+} as const;
+
+const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_REFUSED_BASE,
+  fields: {
+    ...CODING_RUNTIME_OPERATION_REFUSED_FIELDS,
+  },
+});
+
+const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
+  Readonly<Record<RuntimeMutationRefusalReason, ActivityLogErrorKind>>
+> = {
+  "runtime-unavailable": "unavailable",
+  "issue-context-unavailable": "unavailable",
+  "model-unavailable": "unavailable",
+  "workspace-unqualified": "conflict",
+  "active-run-conflict": "conflict",
+  "recovery-required": "conflict",
+  "task-drift": "conflict",
+  "workspace-drift": "conflict",
+  "project-drift": "conflict",
+  "branch-drift": "conflict",
+  "scope-drift": "conflict",
+  "budget-drift": "conflict",
+  "source-drift": "conflict",
+  "replay-cap-exhausted": "rate-limited",
+  "authority-budget-exceeded": "rate-limited",
+  "authority-resolution-failed": "authority-denied",
+  "authority-expired": "authority-denied",
+  "authority-replayed": "authority-denied",
+  revoked: "authority-denied",
+  "invalid-intent": "invalid-request",
+  "question-answer-rejected": "invalid-request",
+  "payload-too-large": "invalid-request",
+};
+
+function runtimeRefusalErrorKind(reason: RuntimeMutationRefusalReason): ActivityLogErrorKind {
+  return RUNTIME_REFUSAL_ERROR_KINDS[reason] ?? "internal";
+}
+
 class BodyTooLargeError extends Error {}
 
 interface RuntimeDeps {
@@ -40,18 +169,22 @@ interface RuntimeDeps {
   readonly eventHub: CodingRuntimeEventHub;
 }
 
-function unavailable(): RouteResult {
+// KEIKO-0534: helper wrappers now accept the request's correlation id so 4xx/404/503 error
+// bodies match manual-pod-routes.ts's convention (errorBody(code, message, ctx.correlationId)).
+function unavailable(correlationId?: string): RouteResult {
   return {
     status: 503,
     body: errorBody(
       "CODING_RUNTIME_UNAVAILABLE",
       "Coding runtime is not configured for this server.",
+      correlationId,
     ),
   };
 }
 
-function requireRuntime(deps: UiHandlerDeps): RuntimeDeps | RouteResult {
-  if (!deps.codingRuntimeOrchestrator || !deps.codingRuntimeEventHub) return unavailable();
+function requireRuntime(deps: UiHandlerDeps, correlationId?: string): RuntimeDeps | RouteResult {
+  if (!deps.codingRuntimeOrchestrator || !deps.codingRuntimeEventHub)
+    return unavailable(correlationId);
   return { orchestrator: deps.codingRuntimeOrchestrator, eventHub: deps.codingRuntimeEventHub };
 }
 
@@ -62,25 +195,72 @@ function isRouteResult(value: RuntimeDeps | RouteResult): value is RouteResult {
 function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
   if (failureCode === "active-run-conflict" || failureCode === "recovery-required") return 409;
   if (failureCode === "authority-resolution-failed") return 403;
+  if (failureCode === "model-unavailable" || failureCode === "workspace-unqualified") return 409;
   return 400;
 }
 
-function failureResult(failureCode: CodingWorkbenchRuntimeFailureCode): RouteResult {
+function failureResult(
+  failureCode: CodingWorkbenchRuntimeFailureCode,
+  correlationId?: string,
+  issueBindingFailure?: CodingWorkbenchIssueBindingFailure,
+  modelRefusalReason?: CodingWorkbenchModelRefusalReason,
+): RouteResult {
   const status = failureStatus(failureCode);
   return {
     status,
-    body: errorBody(
-      `CODING_RUNTIME_${failureCode.replaceAll("-", "_").toUpperCase()}`,
-      "Runtime request was rejected.",
-    ),
+    body: {
+      ...errorBody(
+        `CODING_RUNTIME_${failureCode.replaceAll("-", "_").toUpperCase()}`,
+        "Runtime request was rejected.",
+        correlationId,
+      ),
+      ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
+      ...(modelRefusalReason === undefined ? {} : { modelRefusalReason }),
+    },
   };
 }
 
-function notFound(): RouteResult {
+function notFound(correlationId?: string): RouteResult {
   return {
     status: 404,
-    body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found."),
+    body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", correlationId),
   };
+}
+
+// AGENTS.md §8 rule 1 / epic #3384 defect B: a refused runtime operation (a malformed body, a
+// replay-cap exhaustion, a question answer the runtime rejected, ...) used to return its 400/403
+// with NOTHING in the activity log -- an operator-visible refusal an agent replaying the log could
+// never reconstruct. ONE body-free warn line, closed op, from the single mutation() funnel so no
+// route can forget it. `reason` is always a closed CodingWorkbenchRuntimeFailureCode value, never
+// free text; `runId` is absent for the run-creating `start` mutation, which names none.
+function logRuntimeOperationRefusal(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  operation: RuntimeMutationOperationName,
+  runId: string | undefined,
+  reason: RuntimeMutationRefusalReason,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_OPERATION_REFUSED_OPERATION,
+      {
+        level: "warn",
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        errorKind: runtimeRefusalErrorKind(reason),
+      },
+      { operation, reason, ...(runId === undefined ? {} : { runId }) },
+    ),
+  );
+}
+
+function logMutationRefusal(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  operation: RuntimeMutationOperationName,
+  runId: string | undefined,
+  reason: RuntimeMutationRefusalReason,
+): void {
+  logRuntimeOperationRefusal(deps, ctx.correlationId, operation, runId, reason);
 }
 
 function readBody(req: IncomingMessage): Promise<unknown> {
@@ -123,17 +303,33 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-async function withBody(work: () => Promise<RouteResult>): Promise<RouteResult> {
+async function withBody(
+  work: () => Promise<RouteResult>,
+  correlationId?: string,
+  onTooLarge?: () => void,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
-    if (error instanceof BodyTooLargeError)
+    if (error instanceof BodyTooLargeError) {
+      onTooLarge?.();
       return {
         status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
+    }
     throw error;
   }
+}
+
+// PR #3394 review: the two denial shapes below used to be selected purely by whether `runId` was
+// defined, which is exactly right for the ten lifecycle mutations (a per-run route always has one,
+// the run-creating `start` never does) but left no way for a call site to STATE the existence-
+// concealing requirement it is under. `concealment` makes that contract explicit and closed instead
+// of an incidental consequence of `runId`'s presence, so a route documented to never answer with a
+// distinct auth error (ADR-0141 D6) can declare it and inherit the shape from this one function.
+interface MutationConcealment {
+  readonly conceal: "not-found";
 }
 
 /**
@@ -143,65 +339,107 @@ async function withBody(work: () => Promise<RouteResult>): Promise<RouteResult> 
  * as routing facts that never grant a route; D2 makes the launcher-attested app session the
  * authority. Enforcement was scoped to the content-bearing question and research reads (W1.5,
  * #2478), which left the authority-GRANTING lifecycle mutations — start, approve, stop, takeover,
- * retry, recovery-ack, pause, resume, follow-up, research revoke — reachable by any same-user local
- * process that replayed those routing facts. Every one of them funnels through this helper, so the
- * boundary lives here once: a route that cannot mutate without `mutation()` cannot forget the
- * guard, and a future lifecycle route inherits it by construction.
+ * retry, recovery-ack, pause, resume, follow-up, research revoke, answer, reject — reachable by any
+ * same-user local process that replayed those routing facts. Every one of them funnels through this
+ * helper, so the boundary lives here once: a route that cannot mutate without `mutation()` cannot
+ * forget the guard, and a future lifecycle route inherits it by construction.
  *
  * The check runs BEFORE run resolution and before the body is read (ADR-0141 F1 ordering), and it
  * fails closed: an absent channel, an absent cookie, a forged, revoked, rotated-away, or expired
  * session all resolve to no authority and are denied. The denial shape is deliberately split:
  *   - a per-run mutation answers with the existence-concealing not-found result, byte-identical to
  *     the response an unknown `runId` yields, so the denial is not a run-existence oracle
- *     (ADR-0141 D6, the same posture the question mutations already take);
+ *     (ADR-0141 D6);
  *   - the run-creating `POST /runs` names no run and conceals no existence, so it answers with the
- *     honest `authority-resolution-failed` the Workbench already renders as an actionable start
- *     failure — never a dead button, and never a silent success.
+ *     honest `authority-resolution-failed` response for a stale or hostile caller, never a
+ *     silent success;
+ *   - `concealment: { conceal: "not-found" }` forces the first shape even on a call otherwise shaped
+ *     like the second, for a route whose documented posture (ADR-0141 D6) requires it explicitly —
+ *     the question `answer`/`reject` mutations below pass it and call `mutation()` directly, so they
+ *     inherit both the concealing 404 and its refusal log from this function by construction.
  */
 function requireMutationAuthority(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string | undefined,
+  concealment?: MutationConcealment,
 ): RouteResult | undefined {
   if (resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) return undefined;
-  return runId === undefined ? failureResult("authority-resolution-failed") : notFound();
+  return runId === undefined && concealment?.conceal !== "not-found"
+    ? failureResult("authority-resolution-failed", ctx.correlationId)
+    : notFound(ctx.correlationId);
 }
 
 async function mutation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string | undefined,
-  operation: (
+  operationName: RuntimeMutationOperationName,
+  invoke: (
     runtime: CodingRuntimeOrchestrator,
     body: unknown,
+    correlationId?: string,
   ) => ReturnType<CodingRuntimeOrchestrator["start"]>,
+  concealment?: MutationConcealment,
 ): Promise<RouteResult> {
-  const denied = requireMutationAuthority(ctx, deps, runId);
-  if (denied !== undefined) return denied;
-  const required = requireRuntime(deps);
-  if (isRouteResult(required)) return required;
-  if (runId !== undefined && !required.orchestrator.getSnapshot(runId)) return notFound();
-  return withBody(async () => {
-    const body = await readBody(ctx.req);
-    if (body === undefined) return failureResult("invalid-intent");
-    const result = await operation(required.orchestrator, body);
-    return result.ok ? { status: 200, body: result.snapshot } : failureResult(result.failureCode);
-  });
+  const denied = requireMutationAuthority(ctx, deps, runId, concealment);
+  if (denied !== undefined) {
+    // The request is refused before a per-run identifier can be resolved. Keep the evidence
+    // content-free by logging only the closed operation and reason, never the caller-supplied id.
+    logMutationRefusal(deps, ctx, operationName, undefined, "authority-resolution-failed");
+    return denied;
+  }
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) {
+    logMutationRefusal(deps, ctx, operationName, runId, "runtime-unavailable");
+    return required;
+  }
+  if (runId !== undefined && !required.orchestrator.getSnapshot(runId))
+    return notFound(ctx.correlationId);
+  return withBody(
+    async () => {
+      const body = await readBody(ctx.req);
+      if (body === undefined) {
+        logMutationRefusal(deps, ctx, operationName, runId, "invalid-intent");
+        return failureResult("invalid-intent", ctx.correlationId);
+      }
+      const result = await invoke(required.orchestrator, body, ctx.correlationId);
+      if (result.ok) return { status: 200, body: result.snapshot };
+      // The refusal line names the run the refusal happened under, so this request-scoped line joins
+      // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
+      // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
+      // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
+      // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
+      logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, result.failureCode);
+      return failureResult(
+        result.failureCode,
+        ctx.correlationId,
+        result.issueBindingFailure,
+        result.modelRefusalReason,
+      );
+    },
+    ctx.correlationId,
+    () => {
+      logMutationRefusal(deps, ctx, operationName, runId, "payload-too-large");
+    },
+  );
 }
 
 export function handleCreateCodingRuntimeRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return mutation(ctx, deps, undefined, (runtime, body) => runtime.start(body));
+  return mutation(ctx, deps, undefined, "start", (runtime, body, correlationId) =>
+    runtime.start(body, correlationId),
+  );
 }
 
 export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   // The status request has no input surface. Rejecting every query parameter both makes the
   // transport contract exact and ensures this handler cannot silently grow a caller-controlled
   // selector that turns the otherwise content-free projection into an existence oracle (#2644).
-  if (ctx.url.searchParams.size !== 0) return failureResult("invalid-intent");
-  const required = requireRuntime(deps);
+  if (ctx.url.searchParams.size !== 0) return failureResult("invalid-intent", ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
   return isRouteResult(required) ? required : { status: 200, body: required.orchestrator.status() };
 }
 
@@ -212,9 +450,9 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
     values.length !== 1 ||
     [...ctx.url.searchParams.keys()].some((key) => key !== "requestedMode")
   ) {
-    return failureResult("invalid-intent");
+    return failureResult("invalid-intent", ctx.correlationId);
   }
-  if (!parsed.ok) return failureResult("invalid-intent");
+  if (!parsed.ok) return failureResult("invalid-intent", ctx.correlationId);
   // The readiness projection must report the same ceiling the coding-runtime mint clamp
   // enforces; the autonomous-delivery ceiling is a separate authority knob (#2475).
   const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
@@ -227,8 +465,14 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
       runtimeAvailable,
+      // Both branches name themselves. The available branch's `??` is the fail-closed default: an
+      // unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified
+      // claim (audit F-01).
       ...(runtimeAvailable
-        ? {}
+        ? {
+            runtimeEvidenceClass:
+              deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
+          }
         : {
             runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
           }),
@@ -276,10 +520,10 @@ function confirmedEffectiveMode(
 }
 
 export function handleGetCodingRuntimeRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const required = requireRuntime(deps);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
   const snapshot = required.orchestrator.getSnapshot(ctx.params.runId ?? "");
-  return snapshot ? { status: 200, body: snapshot } : notFound();
+  return snapshot ? { status: 200, body: snapshot } : notFound(ctx.correlationId);
 }
 
 export function handleCodingRuntimeApproval(
@@ -288,8 +532,10 @@ export function handleCodingRuntimeApproval(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.decideApproval(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "approval", (runtime, body) =>
+        runtime.decideApproval(runId, body),
+      );
 }
 export function handleCodingRuntimeStop(
   ctx: RouteContext,
@@ -297,8 +543,8 @@ export function handleCodingRuntimeStop(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.stop(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "stop", (runtime, body) => runtime.stop(runId, body));
 }
 export function handleCodingRuntimeTakeover(
   ctx: RouteContext,
@@ -306,8 +552,8 @@ export function handleCodingRuntimeTakeover(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.takeover(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "takeover", (runtime, body) => runtime.takeover(runId, body));
 }
 export function handleCodingRuntimeRetry(
   ctx: RouteContext,
@@ -315,8 +561,10 @@ export function handleCodingRuntimeRetry(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.retry(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "retry", (runtime, body, correlationId) =>
+        runtime.retry(runId, body, correlationId),
+      );
 }
 export function handleCodingRuntimeRecoveryAcknowledgement(
   ctx: RouteContext,
@@ -324,8 +572,10 @@ export function handleCodingRuntimeRecoveryAcknowledgement(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.acknowledgeRecovery(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "recovery-ack", (runtime, body) =>
+        runtime.acknowledgeRecovery(runId, body),
+      );
 }
 
 export function handleCodingRuntimePause(
@@ -334,8 +584,8 @@ export function handleCodingRuntimePause(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.pause(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "pause", (runtime, body) => runtime.pause(runId, body));
 }
 
 export function handleCodingRuntimeResume(
@@ -344,8 +594,8 @@ export function handleCodingRuntimeResume(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "resume", (runtime, body) => runtime.resume(runId, body));
 }
 
 // Revoking the #2387 internet research grant drops it for the parent run and every child in one
@@ -357,8 +607,10 @@ export function handleCodingRuntimeResearchRevoke(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.revokeResearch(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "research-revoke", (runtime, body) =>
+        runtime.revokeResearch(runId, body),
+      );
 }
 
 // Inline follow-up: a drafted message is admitted only while the run is running; the
@@ -370,44 +622,66 @@ export function handleCodingRuntimeFollowUp(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.submitFollowUp(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(ctx, deps, runId, "follow-up", (runtime, body, correlationId) =>
+        runtime.submitFollowUp(runId, body, correlationId),
+      );
 }
 
 // Required-question surface. Question text is browser-rendered untrusted content: it never enters
 // snapshots, diagnostics, evidence, or persistence. The answer/reject operations bind to the
 // server-owned revision through the same serialized coordinator as every other mutation.
 //
-// All three question routes are content-bearing and therefore enforce the app-session read
-// authority (ADR-0141 D2, #2478) BEFORE any runId or runtime resolution: an unpaired list read
-// receives the one constant content-free projection, and an unpaired answer/reject receives the
-// same existence-concealing not-found result an unknown run yields — never a distinct auth error,
-// so no probe can tell "not paired" from "does not exist" (ADR-0141 D6). Loopback, Origin, CSRF,
-// and runId knowledge remain routing facts and never grant these routes (ADR-0141 D1).
+// The list read below is content-bearing and therefore enforces the app-session read authority
+// (ADR-0141 D2, #2478) itself, before any runId or runtime resolution, because an unpaired caller
+// gets a distinct 200 content-free projection that no other route shares. answer/reject are
+// state-changing mutations like every other route in this file, so they enforce authority through
+// the shared `mutation()` funnel, and their denial must still be the same existence-concealing
+// not-found result an unknown run yields — never a distinct auth error, so no probe can tell "not
+// paired" from "does not exist" (ADR-0141 D6). Loopback, Origin, CSRF, and runId knowledge remain
+// routing facts and never grant these routes (ADR-0141 D1).
+//
+// Epic #3384 defect B follow-up / PR #3394 review: answer/reject used to resolve that concealment
+// with their own hand-rolled "check authority, log the refusal, return not-found" block, pasted
+// identically into both handlers, instead of going through the shared `mutation()` funnel that
+// already logs `coding-runtime.operation.refused` once, centrally, for every other mutation — the
+// exact gap defect B fixed everywhere else. A third route added later by copying that precheck
+// shape without also copying the inline log call would have silently reproduced it. Both handlers
+// now call `mutation()` directly with `{ conceal: "not-found" }` (see `requireMutationAuthority`),
+// so the concealing 404 and its refusal log are inherited from the funnel by construction, exactly
+// like every other per-run mutation below.
 export function handleCodingRuntimeQuestionAnswer(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return Promise.resolve(notFound());
-  }
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.answerQuestion(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(
+        ctx,
+        deps,
+        runId,
+        "answer",
+        (runtime, body, correlationId) => runtime.answerQuestion(runId, body, correlationId),
+        { conceal: "not-found" },
+      );
 }
 
 export function handleCodingRuntimeQuestionReject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return Promise.resolve(notFound());
-  }
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
-    : mutation(ctx, deps, runId, (runtime, body) => runtime.rejectQuestion(runId, body));
+    ? Promise.resolve(notFound(ctx.correlationId))
+    : mutation(
+        ctx,
+        deps,
+        runId,
+        "reject",
+        (runtime, body, correlationId) => runtime.rejectQuestion(runId, body, correlationId),
+        { conceal: "not-found" },
+      );
 }
 
 export function handleCodingRuntimeQuestionList(
@@ -421,21 +695,22 @@ export function handleCodingRuntimeQuestionList(
     });
   }
   const runId = ctx.params.runId;
-  if (runId === undefined) return Promise.resolve(notFound());
-  const required = requireRuntime(deps);
+  if (runId === undefined) return Promise.resolve(notFound(ctx.correlationId));
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return Promise.resolve(required);
-  if (!required.orchestrator.getSnapshot(runId)) return Promise.resolve(notFound());
+  if (!required.orchestrator.getSnapshot(runId))
+    return Promise.resolve(notFound(ctx.correlationId));
   return withBody(async () => {
     const body = await readBody(ctx.req);
-    if (body === undefined) return failureResult("invalid-intent");
-    const result = await required.orchestrator.listQuestions(runId, body);
-    if (!result.ok) return failureResult(result.failureCode);
+    if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
+    const result = await required.orchestrator.listQuestions(runId, body, ctx.correlationId);
+    if (!result.ok) return failureResult(result.failureCode, ctx.correlationId);
     const payload: CodingWorkbenchRuntimeQuestionsChannelPayload = {
       session: "active",
       questions: result.questions.questions,
     };
     return { status: 200, body: payload };
-  });
+  }, ctx.correlationId);
 }
 
 /**
@@ -449,16 +724,40 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
     return { status: 200, body: unpairedCodingWorkbenchRuntimeResearchChannelPayload() };
   }
   const runId = ctx.params.runId;
-  if (runId === undefined) return notFound();
-  const required = requireRuntime(deps);
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
   const pending = required.orchestrator.pendingResearchAsk(runId);
   const grant = required.orchestrator.researchGrant(runId);
   const payload: CodingWorkbenchRuntimeResearchChannelPayload = {
     session: "active",
     ...(pending === undefined ? {} : { pending }),
     ...(grant === undefined ? {} : { grant }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
+ * The authenticated skills projection (#3417): every approved skill of the run the operator is
+ * watching, with the readiness the catalog itself can tell. The record is the closed, body-free one
+ * discovery reports the model. An unpaired caller receives the one constant content-free payload
+ * BEFORE any run resolution, so this route is never an existence oracle (ADR-0141 D6); a run without
+ * a composed runtime host simply carries no skills.
+ */
+export function handleCodingRuntimeSkills(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeSkillsChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  const skills = required.orchestrator.approvedSkills(runId);
+  const payload: CodingWorkbenchRuntimeSkillsChannelPayload = {
+    session: "active",
+    ...(skills === undefined ? {} : { skills }),
   };
   return { status: 200, body: payload };
 }
@@ -479,16 +778,37 @@ export function handleCodingRuntimeApprovalReview(
     return { status: 200, body: unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload() };
   }
   const runId = ctx.params.runId;
-  if (runId === undefined) return notFound();
-  const required = requireRuntime(deps);
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
   const pending = required.orchestrator.pendingApprovalReview(runId);
   const payload: CodingWorkbenchRuntimeApprovalReviewChannelPayload = {
     session: "active",
     ...(pending === undefined ? {} : { pending }),
   };
   return { status: 200, body: payload };
+}
+
+export function handleCodingRuntimeDescriptionDraft(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return notFound(ctx.correlationId);
+  }
+  const runId = ctx.params.runId;
+  const proposalId = ctx.url.searchParams.get("proposalId");
+  const snapshotDigest = ctx.url.searchParams.get("snapshotDigest");
+  if (runId === undefined || proposalId === null || snapshotDigest === null) {
+    return notFound(ctx.correlationId);
+  }
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  const review = required.orchestrator.reviewDescriptionDraft(runId, proposalId, snapshotDigest);
+  return review === undefined
+    ? notFound(ctx.correlationId)
+    : { status: 200, body: { outcome: "draft", draft: review } };
 }
 
 function frame(event: CodingWorkbenchRuntimeSseEvent): string {
@@ -508,11 +828,27 @@ function resolveEventCursor(
   return queryCursor === null || queryCursor.length === 0 ? undefined : queryCursor;
 }
 
+// Sonar function-return-type (PR #3394 review): the previous shape returned RouteResult from two
+// early guards and the disjoint `typeof STREAMING` sentinel from a third, later return statement --
+// one function, three return statements, two incompatible result shapes. Folding the guards into a
+// single typed outcome expression and moving the sentinel-producing side effect into its own
+// single-return helper gives this function exactly one return statement, so its return type reads as
+// one thing at the point of return instead of drifting per branch.
 export function handleCodingRuntimeEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
-  const required = requireRuntime(deps);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
   const runId = ctx.params.runId ?? "";
-  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  const outcome: HandlerOutcome = required.orchestrator.getSnapshot(runId)
+    ? subscribeCodingRuntimeEvents(ctx, required, runId)
+    : notFound(ctx.correlationId);
+  return outcome;
+}
+
+function subscribeCodingRuntimeEvents(
+  ctx: RouteContext,
+  required: RuntimeDeps,
+  runId: string,
+): typeof STREAMING {
   const lastEventId = ctx.req.headers["last-event-id"];
   const queryCursor = ctx.url.searchParams.get("cursor");
   const cursor = resolveEventCursor(lastEventId, queryCursor);
@@ -584,8 +920,18 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
   },
   {
     method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/skills",
+    handler: handleCodingRuntimeSkills,
+  },
+  {
+    method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/approval-review",
     handler: handleCodingRuntimeApprovalReview,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/description-draft",
+    handler: handleCodingRuntimeDescriptionDraft,
   },
   {
     method: "POST",

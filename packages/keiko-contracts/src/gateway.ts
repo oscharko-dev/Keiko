@@ -1,3 +1,5 @@
+import type { GatewayToolCatalogAdvertisement } from "./governed-tool-bridge.js";
+import type { BoundToolInvocation } from "./governed-tool-lifecycle.js";
 // Gateway-layer WIRE contract types: model identity, request/response shapes, streaming envelope,
 // and tool-call normalisation. Credential-bearing or runtime-port shapes (ModelProviderConfig,
 // GatewayConfig, CircuitBreakerConfig, ProviderAdapter, Clock, CircuitBreakerStatus) STAY in
@@ -10,7 +12,7 @@
 // (Epic #491 Voice Digital Twin): ModelKind gained the "voice" member — a STRUCTURAL change
 // that adds a new literal discriminant. A structural break adds a new literal member (and bumps
 // this constant); additive OPTIONAL flags (Epic #761 determinism, Issue #1210 infilling, the
-// #493 voice sub-capability flags) never bump it.
+// #493 voice sub-capability flags and #3182 transient conversation readiness) never bump it.
 export const CONVERSATION_CAPABILITY_CONTRACT_VERSION = 3 as const;
 
 // ─── Modality discriminant ────────────────────────────────────────────────────
@@ -25,13 +27,57 @@ export type ModelKind = "chat" | "embedding" | "ocr-vision" | "voice";
 
 export type CostClass = "low" | "medium" | "high";
 
-export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = {
+export type ModelReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export const MODEL_REASONING_EFFORTS: readonly ModelReasoningEffort[] = Object.freeze([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const);
+
+export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = Object.freeze({
   low: 0,
   medium: 1,
   high: 2,
-};
+});
 
 export type LatencyClass = "fast" | "standard" | "slow";
+
+/**
+ * Content-free proof that a configured deployment accepted Keiko's forced tool-call probe.
+ * The fingerprint binds the observation to the deployment's request-shaping configuration, so a
+ * copied capability record cannot enable tools after its endpoint or protocol changes.
+ */
+export interface ToolCallingVerification {
+  readonly status: "verified" | "unsupported" | "unverified";
+  readonly checkedAt: string;
+  readonly probe: "gateway-tool-calling-v1";
+  readonly configurationFingerprint: string;
+}
+
+/** A forced tool-call proof expires unless the deployment is probed again. */
+export const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * Returns whether the proof itself is current. Callers that know the provider must additionally
+ * compare its configuration fingerprint before relying on the capability.
+ *
+ * The instant is an object, never a bare number: a rule with an optional numeric trailing parameter
+ * that is handed point-free to `Array.filter` or `Array.map` receives each element's index as that
+ * instant. Coding run 25 (2026-09-11) found the Coding Workbench judging every model as of the
+ * epoch that way and offering none (F76); an object parameter makes such a call a type error.
+ */
+export function isToolCallingVerificationFresh(
+  verification: ToolCallingVerification | undefined,
+  at?: { readonly nowMs: number },
+): boolean {
+  if (verification?.status !== "verified") return false;
+  const checkedAt = Date.parse(verification.checkedAt);
+  const ageMs = (at?.nowMs ?? Date.now()) - checkedAt;
+  return Number.isFinite(checkedAt) && ageMs >= 0 && ageMs <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS;
+}
 
 export type ModelTokenAccountingSource = "calibrated";
 
@@ -73,13 +119,43 @@ export const INFILLING_ALIGNMENTS: readonly InfillingAlignment[] = [
 //                         may be a private/RFC-1918 host (regulated bank/insurance professional
 //                         deployments). Private hosts are first-class.
 //   - "local-only"      — a voice endpoint that never leaves the Keiko host (loopback / on-device).
-export type VoiceProviderLocality = "azure-foundry" | "customer-hosted" | "local-only";
+// A gateway can disclose a voice model's role without disclosing where it routes requests.
+// Keep that state explicit instead of guessing Azure or customer residency from its URL.
+export type VoiceProviderLocality =
+  "azure-foundry" | "customer-hosted" | "local-only" | "gateway-managed";
 
 export const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
   "azure-foundry",
   "customer-hosted",
   "local-only",
+  "gateway-managed",
 ] as const;
+
+// ─── Provider endpoint protocol (wire-value unions, #3037 follow-up) ───────────
+// How a provider endpoint speaks: the OpenAI-compatible path shape (LiteLLM, OpenAI, most
+// gateways) or the Azure deployment-path shape (which additionally requires an apiVersion).
+// These literals live in the contract seam so the UI upload parser, the server setup route, and
+// the model gateway validate against ONE source. The value arrays derive from Record<Union, true>
+// tables: adding a union member without registering its value — or a value without its member —
+// fails to compile in both directions.
+export type ProviderEndpointStyle = "openai-compatible" | "azure-openai-deployment";
+export type RealtimeAuthMode = "api-key" | "ephemeral-session";
+
+const PROVIDER_ENDPOINT_STYLE_TABLE: Record<ProviderEndpointStyle, true> = {
+  "openai-compatible": true,
+  "azure-openai-deployment": true,
+};
+export const PROVIDER_ENDPOINT_STYLES = Object.keys(
+  PROVIDER_ENDPOINT_STYLE_TABLE,
+) as readonly ProviderEndpointStyle[];
+
+const REALTIME_AUTH_MODE_TABLE: Record<RealtimeAuthMode, true> = {
+  "api-key": true,
+  "ephemeral-session": true,
+};
+export const REALTIME_AUTH_MODES = Object.keys(
+  REALTIME_AUTH_MODE_TABLE,
+) as readonly RealtimeAuthMode[];
 
 // ─── Product voice persona (Issue #1557, Epic #1556, ADR-0094 D1) ──────────────
 // A `VoicePersona` is a PRODUCT-level voice identity the operator offers to the end user — "what
@@ -100,9 +176,33 @@ export const VOICE_PERSONAS: readonly VoicePersona[] = ["male", "female", "neutr
 export interface ModelCapability {
   readonly id: string;
   readonly kind: ModelKind;
+  /**
+   * Transient server observation that this configured chat model passed a basic-chat probe for the
+   * current runtime configuration generation. This is never persisted as provider capability
+   * metadata. Tri-state on the wire: `true`/`false` only when a current-generation observation
+   * exists; ABSENT when the model was never probed since the configuration was (re)loaded. A
+   * consumer must not collapse "unknown" into "not ready" — that turned every process restart
+   * into a dead model picker until a manual probe (customer field incident, 0.3.11).
+   */
+  readonly conversationReady?: boolean | undefined;
+  /**
+   * Whether the provider's discovery metadata explicitly declared a chat-compatible mode for this
+   * model (e.g. a LiteLLM `/model/info` `mode` of "chat" / "completion" / "responses"). Absent
+   * when discovery declared no mode either way — such models stay conversation-eligible but rank
+   * behind mode-declared ones as the DEFAULT conversation model (`conversationDefaultRank`),
+   * because a mode-less entry may be a special-purpose engine (customer field incident: an OCR
+   * model first in the configured list captured the default for every new chat). Additive
+   * optional flag — no contract version bump.
+   */
+  readonly chatModeDeclared?: boolean | undefined;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
   readonly toolCalling: boolean;
+  /**
+   * Durable, content-free provenance for `toolCalling`. A consumer must treat a missing, stale,
+   * unverified, or unsupported record as `toolCalling: false`.
+   */
+  readonly toolCallingVerification?: ToolCallingVerification | undefined;
   readonly structuredOutput: boolean;
   readonly streaming: boolean;
   // Conversation Center modality flags (Issue #143 / Epic #142). Conservative
@@ -127,6 +227,8 @@ export interface ModelCapability {
   readonly supportsSeeding?: boolean | undefined;
   /** Whether the model supports a `responseFormat` parameter for JSON output (Epic #761). */
   readonly supportsResponseFormat?: boolean | undefined;
+  /** Provider-declared reasoning levels. Absent or empty means the model exposes no user choice. */
+  readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;
   /**
    * Whether the model supports suffix-aware (fill-in-the-middle / FIM) completion (Issue #1210).
    * Required for Keiko editor inline completion; a prefix-only model is a documented anti-pattern
@@ -179,6 +281,119 @@ export interface ModelCapability {
    * provider that advertises speech output.
    */
   readonly supportedVoicePersonas?: readonly VoicePersona[] | undefined;
+  /**
+   * Optional per-token USD pricing (live-journey-readiness-1). Absent means the model carries no
+   * known dollar cost: a caller enforcing a spend budget against an un-priced model must fail
+   * closed (reason `spend-pricing-unavailable`) rather than silently treat it as free. Content-free
+   * — a public list price, never a negotiated rate or an account-specific discount.
+   */
+  readonly pricing?: ModelCapabilityPricing | undefined;
+}
+
+/** Public per-million-token USD list price for a model capability. See {@link ModelCapability.pricing}. */
+export interface ModelCapabilityPricing {
+  readonly inputUsdPerMillionTokens: number;
+  readonly outputUsdPerMillionTokens: number;
+}
+
+function normalizedCodingUseCase(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+const CODING_WORKBENCH_USE_CASES: ReadonlySet<string> = new Set([
+  "code",
+  "code-review",
+  "coding",
+  "coding-workflow",
+  "local-coding-workflow",
+  "software-development",
+]);
+
+/**
+ * Why a capability can or cannot power the Coding Workbench at `nowMs`. A model that qualifies in
+ * every other respect but whose forced tool-call proof is missing or older than
+ * `TOOL_CALLING_VERIFICATION_MAX_AGE_MS` is `tool-calling-unverified`: the remedy is a new probe,
+ * not another model. `at` lets an admitted run judge the proof as of its admission (F73); it is an
+ * object for the reason `isToolCallingVerificationFresh` states (F76).
+ */
+export type CodingWorkbenchModelEligibility = "eligible" | "tool-calling-unverified" | "ineligible";
+
+/**
+ * Whether a configured model is structurally suitable for a Coding Workbench readiness probe.
+ * Tool calling is deliberately excluded: the probe exists to discover that capability, so making
+ * the provider claim a prerequisite would leave a fresh or changed configuration unable to heal.
+ *
+ * Every chat model is a candidate (owner decision for 1.1.1). The rule used to demand a manually
+ * declared `workflowEligible` flag plus a coding use case, which a discovered gateway model never
+ * carries: a customer whose models all passed the live tool-calling probe was offered none. What
+ * admits a model to a run is the fresh forced tool-call proof, not a label.
+ */
+export function isCodingWorkbenchReadinessCandidate(capability: ModelCapability): boolean {
+  return capability.kind === "chat";
+}
+
+/**
+ * Whether the operator labelled the model for coding. It no longer gates anything; it only orders
+ * the automatic readiness probe so a labelled coding model is tried before an unlabelled one.
+ */
+function hasCodingUseCase(capability: ModelCapability): boolean {
+  return capability.preferredUseCases.some((value) =>
+    CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
+  );
+}
+
+/** Lists candidates: coding-labelled first, then by cost, keeping configuration order on ties. */
+export function listCodingWorkbenchReadinessCandidates(
+  capabilities: readonly ModelCapability[],
+): readonly ModelCapability[] {
+  return capabilities
+    .filter((capability) => isCodingWorkbenchReadinessCandidate(capability))
+    .sort(
+      (left, right) =>
+        Number(hasCodingUseCase(right)) - Number(hasCodingUseCase(left)) ||
+        MODEL_COST_RANK[left.costClass] - MODEL_COST_RANK[right.costClass],
+    );
+}
+
+/** Selects the cheapest configured structural candidate, preserving configuration order on ties. */
+export function selectCodingWorkbenchReadinessCandidate(
+  capabilities: readonly ModelCapability[],
+): ModelCapability | undefined {
+  return listCodingWorkbenchReadinessCandidates(capabilities).at(0);
+}
+
+/**
+ * Whether the model claims tool calling: it is admitted to call tools, or Keiko's forced tool-call
+ * probe verified it before. The gateway config loader stores a proof that aged out, or that no
+ * longer matches the deployment's configuration, as `toolCalling: false`, so the flag alone read a
+ * lapsed proof as a model that never called tools: after a restart the day after setup nothing
+ * renewed the proof and the Workbench stayed blocked (1.1.8 lab). A refuted (`unsupported`) or
+ * never concluded proof claims nothing.
+ */
+function claimsToolCalling(capability: ModelCapability): boolean {
+  return capability.toolCalling || capability.toolCallingVerification?.status === "verified";
+}
+
+export function codingWorkbenchModelEligibility(
+  capability: ModelCapability,
+  at?: { readonly nowMs: number },
+): CodingWorkbenchModelEligibility {
+  const qualified =
+    isCodingWorkbenchReadinessCandidate(capability) && claimsToolCalling(capability);
+  if (!qualified) return "ineligible";
+  return capability.toolCalling &&
+    isToolCallingVerificationFresh(capability.toolCallingVerification, at)
+    ? "eligible"
+    : "tool-calling-unverified";
+}
+
+/**
+ * The single browser/server rule for models eligible to power the Coding Workbench, as of now. It
+ * takes the capability alone, so it is safe to hand to `Array.filter` (F76); a caller that must
+ * judge another instant uses `codingWorkbenchModelEligibility` with `{ nowMs }`.
+ */
+export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
+  return codingWorkbenchModelEligibility(capability) === "eligible";
 }
 
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────
@@ -538,9 +753,10 @@ export function assertValidGatewaySamplingParameters(parameters: GatewaySampling
 }
 
 export interface GatewayRequest {
+  /** Server-produced projection/offer. Tool-bearing requests require this exact bound arm. */
+  readonly toolCatalog?: GatewayToolCatalogAdvertisement | undefined;
   readonly modelId: string;
   readonly messages: readonly ChatMessage[];
-  readonly tools?: readonly ToolDefinition[] | undefined;
   readonly responseFormat?: ResponseFormat | undefined;
   readonly stream?: boolean | undefined;
   readonly cancellationSignal?: AbortSignal | undefined;
@@ -555,11 +771,15 @@ export interface GatewayRequest {
   readonly topP?: number | undefined;
   /** Optional seed for deterministic sampling when the model supports it (Epic #761). */
   readonly seed?: number | undefined;
+  /** Optional provider-neutral reasoning level, admitted only from the selected model capability. */
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
 }
 
 // ─── Tool-call normalisation ──────────────────────────────────────────────────
 
 export interface NormalizedToolCall {
+  /** Required on new tool-bearing gateway responses; alias remains provider transport data. */
+  readonly invocation?: BoundToolInvocation | undefined;
   readonly id: string;
   readonly name: string;
   readonly arguments: Record<string, unknown>;
@@ -605,13 +825,10 @@ export type StreamEvent =
 
 // ─── Conversation eligibility (Issue #144 / Epic #142) ────────────────────────
 // Why: the chat-completions dropdown must only show models that can actually
-// hold a conversation. Eligibility derives from the `kind` discriminant alone
-// because chat-kind capabilities that reach persistence are smoke-tested by
-// construction at `defaultGatewaySetupTester` in `keiko-server` (non-chat
-// `kind`s are filtered earlier by the discovery normaliser before any model
-// id reaches the smoke loop). This is a derived discriminant, not a new wire
-// field — `CONVERSATION_CAPABILITY_CONTRACT_VERSION` is intentionally not
-// bumped. The pure helpers live in contracts (not in keiko-model-gateway) so
+// hold a conversation by modality. This configured eligibility derives from the `kind`
+// discriminant alone; the separate optional `conversationReady` field is a transient live
+// observation that consumers must additionally require before productive chat. The pure helpers
+// live in contracts (not in keiko-model-gateway) so
 // the browser-tier `keiko-ui` package can value-import them without violating
 // ADR-0019 trust rule 3 (UI → model-gateway/src is forbidden at error severity).
 // Pinned by keiko-model-gateway/src/capabilities.test.ts (re-exported there).
@@ -646,4 +863,178 @@ export function explainConversationIneligibility(
 ): ConversationIneligibilityReason | undefined {
   if (capability.kind === "chat") return undefined;
   return INELIGIBILITY_REASON_BY_KIND[capability.kind];
+}
+
+// ─── Conversation default preference ─────────────────────────────────────────
+// Choosing the DEFAULT conversation model among eligible chat capabilities ranks them in three
+// tiers; order within a tier is preserved by the stable sort below, so the configured order keeps
+// breaking ties. Pure and total; lives in contracts so the browser-tier UI picker and the
+// server-side default selection can never disagree (mirrors isConversationEligibleModel).
+//
+// Customer field incident (0.3.11): a mode-less OCR model sat FIRST in the configured list. It
+// answers a minimal chat probe while its backend is warm, so every "first eligible model wins"
+// default durably pinned new chats to an engine that is useless for conversation. A declared
+// chat-compatible mode is the only affirmative signal a gateway gives; a special-purpose id is
+// the strongest negative one. Ranking is a PREFERENCE, never an eligibility gate — with one
+// configured model the rank-2 entry is still chosen and still probed honestly.
+const SPECIAL_PURPOSE_ID_TOKENS: ReadonlySet<string> = new Set([
+  "ocr",
+  "whisper",
+  "speech",
+  "tts",
+  "asr",
+  "rerank",
+  "reranker",
+]);
+
+// Token-wise match so "dots.ocr" and "my-ocr-model" rank down while ordinary chat ids never can.
+// The suffix form covers separator-free composites like "dotsocr"; it is deliberately limited to
+// "ocr" — the only marker observed fused into an id in the field — because broader suffix
+// matching starts swallowing legitimate names.
+function isLikelySpecialPurposeModelId(modelId: string): boolean {
+  const tokens = modelId.toLowerCase().split(/[^a-z0-9]+/u);
+  return tokens.some(
+    (token) => SPECIAL_PURPOSE_ID_TOKENS.has(token) || (token.length > 3 && token.endsWith("ocr")),
+  );
+}
+
+/**
+ * The role a gateway's DECLARED model mode maps onto, FOR DISCOVERY. "unsupported" means discovery
+ * will not configure the model from this declaration — deliberately distinct from "unknown", so a
+ * recognised rerank/speech/image engine is reported to the operator instead of silently
+ * disappearing. It does NOT mean the product has no lane for that capability: reranking and speech
+ * have their own configuration surfaces, which discovery does not populate.
+ */
+export type DeclaredModeRole = "chat" | "embedding" | "unsupported";
+
+/**
+ * Modes a provider may declare for a model. LiteLLM's `/model/info` `mode` is the vocabulary this
+ * covers; "responses" is accepted for OpenAI-style gateways that name the Responses lane.
+ */
+export type DeclaredModelMode =
+  | "chat"
+  | "completion"
+  | "responses"
+  | "embedding"
+  | "rerank"
+  | "image_generation"
+  | "audio_transcription"
+  | "audio_speech"
+  | "moderation";
+
+// Total over DeclaredModelMode: adding a mode to the union without a role here fails the compile.
+// A DECLARATION IS AUTHORITATIVE. Keiko is model-agnostic — a customer hosts whatever models they
+// like behind their gateway, so the only trustworthy statement about what a model IS comes from
+// the gateway itself. Name heuristics may express a PREFERENCE (conversationDefaultRank), never a
+// role: a field incident bound a rerank endpoint named "bge-reranker-v2-m3" to every Knowledge Pod
+// as its embedding model, purely because the id contains "bge".
+const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
+  chat: "chat",
+  completion: "chat",
+  responses: "chat",
+  embedding: "embedding",
+  rerank: "unsupported",
+  image_generation: "unsupported",
+  audio_transcription: "unsupported",
+  audio_speech: "unsupported",
+  moderation: "unsupported",
+};
+
+/**
+ * Every mode Keiko recognises, DERIVED from the role table so the two cannot drift. Used to keep
+ * foreign mode strings out of logs and wire payloads.
+ */
+export const DECLARED_MODEL_MODES: readonly DeclaredModelMode[] = Object.keys(
+  DECLARED_MODE_ROLES,
+) as DeclaredModelMode[];
+
+/**
+ * Closed vocabulary for "why discovery will not configure this model". Either a mode the gateway
+ * declared and Keiko knows, or one of two fixed markers. A gateway-supplied string is never echoed:
+ * `mode` is unbounded third-party text, and this union is what keeps it out of the diagnostic
+ * channel and the setup response.
+ */
+export type GatewayModelUnsupportedReason =
+  DeclaredModelMode | "unrecognised-mode" | "not-chat-capable";
+
+/** One model discovery recognised but will not configure, with the reason it was refused. */
+export interface GatewayUnsupportedDiscoveredModel {
+  readonly id: string;
+  readonly reason: GatewayModelUnsupportedReason;
+}
+
+/**
+ * Maps a declared mode string onto the role Keiko can use it for. Unrecognised declarations are
+ * "unsupported", NOT "chat": a gateway that names a mode Keiko does not know has still stated the
+ * model is something specific, and guessing from the id is what this function exists to prevent.
+ */
+export function modelKindForDeclaredMode(mode: string): DeclaredModeRole {
+  const normalized = mode.trim().toLowerCase();
+  return Object.hasOwn(DECLARED_MODE_ROLES, normalized)
+    ? DECLARED_MODE_ROLES[normalized as DeclaredModelMode]
+    : "unsupported";
+}
+
+/**
+ * Narrows a gateway-declared mode onto the closed reason vocabulary. A mode Keiko knows is echoed
+ * as itself; anything else — including unbounded vendor text — collapses to one fixed marker.
+ */
+export function boundedUnsupportedReason(mode: string): GatewayModelUnsupportedReason {
+  const normalized = mode.trim().toLowerCase();
+  return Object.hasOwn(DECLARED_MODE_ROLES, normalized)
+    ? (normalized as DeclaredModelMode)
+    : "unrecognised-mode";
+}
+
+/** True when a declared mode names a chat-compatible lane. Single source for the chat vocabulary. */
+export function isChatCompatibleDeclaredMode(mode: string): boolean {
+  return modelKindForDeclaredMode(mode) === "chat";
+}
+
+/**
+ * Preference tier for electing a DEFAULT conversation model:
+ * 0 — discovery explicitly declared a chat-compatible mode;
+ * 1 — no mode signal either way;
+ * 2 — no declared chat mode AND the id names a special-purpose engine (OCR, speech, reranking).
+ */
+export function conversationDefaultRank(
+  capability: Pick<ModelCapability, "id" | "chatModeDeclared">,
+): 0 | 1 | 2 {
+  if (capability.chatModeDeclared === true) return 0;
+  return isLikelySpecialPurposeModelId(capability.id) ? 2 : 1;
+}
+
+/** Stable rank-ordering of conversation candidates; configured order breaks ties within a tier. */
+export function preferredConversationModelOrder<
+  T extends Pick<ModelCapability, "id" | "chatModeDeclared">,
+>(models: readonly T[]): readonly T[] {
+  return [...models].sort((a, b) => conversationDefaultRank(a) - conversationDefaultRank(b));
+}
+
+/**
+ * Elects the DEFAULT conversation model. Tiers are walked in rank order; within a tier a
+ * VERIFIED conversation probe wins, then an UNPROBED model. Verification never promotes a
+ * worse-ranked model past a better-ranked candidate that is merely unprobed — a
+ * special-purpose engine that happened to answer one probe while warm would otherwise capture
+ * the default, which is the exact field capture this rank exists to prevent. A tier whose
+ * members are all OBSERVED-unready is exhausted, so the walk falls through to the next tier
+ * instead of forcing an admission already known to fail. Callers supply the tri-state
+ * observation (true = verified, false = observed unready, undefined = never probed) because
+ * the signal lives in different places (the UI reads the wire capability, the server reads
+ * its observation store).
+ */
+export function electConversationDefault<
+  T extends Pick<ModelCapability, "id" | "chatModeDeclared">,
+>(models: readonly T[], observation: (model: T) => boolean | undefined): T | undefined {
+  const ordered = preferredConversationModelOrder(models);
+  for (const tier of [0, 1, 2] as const) {
+    const members = ordered.filter((model) => conversationDefaultRank(model) === tier);
+    const pick =
+      members.find((model) => observation(model) === true) ??
+      members.find((model) => observation(model) === undefined);
+    if (pick !== undefined) return pick;
+  }
+  // Every candidate is observed-unready: return the best-ranked head so the caller's
+  // admission yields the precise "not ready" error for the most legitimate candidate.
+  return ordered.at(0);
 }

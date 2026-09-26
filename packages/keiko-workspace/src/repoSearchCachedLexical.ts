@@ -15,6 +15,8 @@ import type { PreparedWorkspaceIndexEntry, WorkspaceIndexLexicalRecord } from ".
 interface CachedHashGroup {
   readonly hashes: ReadonlySet<string>;
   readonly structuredHashes: ReadonlySet<string>;
+  readonly minTermLength: number;
+  readonly lengthProofEligible: boolean;
 }
 
 interface CachedRouteQuery {
@@ -32,10 +34,17 @@ function hashTerm(term: string): string {
   return createHash("sha256").update(term.toLowerCase()).digest("hex");
 }
 
+const LENGTH_PROOF_SAFE_TERM_RE = /^[\p{L}\p{N}]+$/u;
+
 function hashGroups(groups: readonly (readonly string[])[]): readonly CachedHashGroup[] {
   return groups.map((group) => ({
     hashes: new Set(group.map(hashTerm)),
     structuredHashes: new Set(group.filter((term) => term.includes("/")).map(hashTerm)),
+    minTermLength: group.reduce(
+      (minimum, term) => Math.min(minimum, term.length),
+      Number.POSITIVE_INFINITY,
+    ),
+    lengthProofEligible: group.every((term) => LENGTH_PROOF_SAFE_TERM_RE.test(term)),
   }));
 }
 
@@ -127,6 +136,42 @@ export function cachedLexicalRecordMatches(
   return (
     !record.truncated && matchedGroupCounts(record.termHashes, prepared.lineGroups).exactHits > 0
   );
+}
+
+export function cachedLexicalRecordDefinitelyDoesNotMatch(
+  record: WorkspaceIndexLexicalRecord,
+  prepared: CachedLexicalQuery,
+): boolean {
+  const maxTermLength = record.maxTermLength;
+  if (record.truncated || maxTermLength === undefined) return false;
+  const termHashes = new Set(record.termHashes);
+  return prepared.lineGroups.every(
+    (group) =>
+      group.lengthProofEligible &&
+      !intersects(termHashes, group.hashes) &&
+      group.minTermLength >= maxTermLength,
+  );
+}
+
+function cachedLexicalRecordCoversSubstringMatches(
+  record: WorkspaceIndexLexicalRecord,
+  prepared: CachedLexicalQuery,
+): boolean {
+  const maxTermLength = record.maxTermLength;
+  return (
+    !record.truncated &&
+    maxTermLength !== undefined &&
+    prepared.lineGroups.every(
+      (group) => group.lengthProofEligible && group.minTermLength >= maxTermLength,
+    )
+  );
+}
+
+export function cachedLexicalRecordRequiresLiveMatch(
+  record: WorkspaceIndexLexicalRecord,
+  prepared: CachedLexicalQuery,
+): boolean {
+  return !cachedLexicalRecordCoversSubstringMatches(record, prepared);
 }
 
 export function bestCachedLexicalLines(

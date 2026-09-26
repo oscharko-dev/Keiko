@@ -22,9 +22,11 @@ import {
   checkpointCompatibility,
   isTerminalExtractionPhase,
   largeDocumentPolicyFingerprint,
+} from "./local-knowledge-large-document.js";
+import {
   validateExtractionCheckpointRecord,
   validateLargeDocumentResourcePolicy,
-} from "./index.js";
+} from "./local-knowledge-large-document-validation.js";
 
 const IDENTITY: EmbeddingModelIdentity = {
   provider: "keiko",
@@ -258,4 +260,3 @@ describe("enumerations", () => {
 
 // Keep the policy type import referenced so the type-only import is not pruned.
 const _policyTypeWitness: LargeDocumentResourcePolicy = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
-void _policyTypeWitness;

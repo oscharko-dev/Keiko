@@ -211,6 +211,22 @@ describe("writeDurableUtf8TempFile", () => {
 });
 
 describe("replaceViaDurableTempFile", () => {
+  it("writes, fsyncs, renames, and fsyncs the containing directory on success", async () => {
+    const fs = createFsMock();
+    const { replaceViaDurableTempFile } = await importDurableWriteWithFs(fs);
+
+    replaceViaDurableTempFile("/evidence/run.json", "/evidence/.run.tmp", "content");
+
+    expect(fs.openSync).toHaveBeenCalledWith("/evidence/.run.tmp", "wx", 0o600);
+    expect(fs.writeSync).toHaveBeenCalled();
+    expect(fs.fsyncSync).toHaveBeenCalledWith(17);
+    expect(fs.renameSync).toHaveBeenCalledWith("/evidence/.run.tmp", "/evidence/run.json");
+    // Post-rename: the containing directory is opened+fsynced+closed too (durability of the
+    // rename itself, not just the file content).
+    expect(fs.openSync).toHaveBeenCalledWith("/evidence", "r");
+    expect(fs.rmSync).not.toHaveBeenCalled();
+  });
+
   it("removes the temporary file with force=true when replacement fails", async () => {
     const error = new Error("rename failed");
     const fs = createFsMock();
@@ -224,5 +240,50 @@ describe("replaceViaDurableTempFile", () => {
     }).toThrow(error);
     expect(fs.renameSync).toHaveBeenCalledWith("/evidence/.run.tmp", "/evidence/run.json");
     expect(fs.rmSync).toHaveBeenCalledWith("/evidence/.run.tmp", { force: true });
+  });
+
+  // KEIKO-0388 / KEIKO-1034: post-rename fsync failure was misclassified as a pre-rename write
+  // failure. The old implementation wrapped writeDurableTempFile + renameSync + fsyncDirectoryContaining
+  // in one try/catch, then ran rmSync on a temp path that had already been renamed away — a no-op
+  // that hid the real story: content is durably on disk under the target, only the containing-
+  // directory fsync failed. Callers wrapped the raw fsync error as "evidence write failed", which
+  // is the opposite of what happened.
+  //
+  // After the fix:
+  //   * renameSync is still called (rename succeeded — content is durable on the target)
+  //   * the thrown value is a distinct PostRenameFsyncError, not the raw fsync error
+  //   * rmSync is NOT called against the temp path (nothing to clean; would have been a no-op)
+  //   * the error carries the underlying fsync cause so callers can classify without stringly
+  //     matching a message.
+  it("surfaces a post-rename dir-fsync failure as a distinct PostRenameFsyncError and does not clean the (already gone) temp", async () => {
+    const fsyncError = new Error("dir fsync failed");
+    const fs = createFsMock();
+    // First fsync is for the temp file inside writeDurableTempFile — that must succeed so the
+    // rename actually runs. Second fsync is fsyncDirectoryContaining after the rename — that is
+    // the one we make fail.
+    fs.fsyncSync.mockImplementationOnce(() => {
+      return undefined;
+    });
+    fs.fsyncSync.mockImplementationOnce(() => {
+      throw fsyncError;
+    });
+    const { replaceViaDurableTempFile, PostRenameFsyncError } = await importDurableWriteWithFs(fs);
+
+    let thrown: unknown;
+    try {
+      replaceViaDurableTempFile("/evidence/run.json", "/evidence/.run.tmp", "content");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(fs.renameSync).toHaveBeenCalledWith("/evidence/.run.tmp", "/evidence/run.json");
+    // No rmSync against the (already renamed away) temp path — the durable rename means the
+    // temp path no longer exists on disk, so the previous no-op rmSync was pure noise.
+    expect(fs.rmSync).not.toHaveBeenCalledWith("/evidence/.run.tmp", { force: true });
+    expect(thrown).toBeInstanceOf(PostRenameFsyncError);
+    expect(thrown).not.toBe(fsyncError);
+    const wrapped = thrown as InstanceType<typeof PostRenameFsyncError>;
+    expect(wrapped.cause).toBe(fsyncError);
+    expect(wrapped.message).toContain("dir fsync failed");
   });
 });

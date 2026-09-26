@@ -20,7 +20,7 @@ import {
   type AtlassianCredentialExecutionResolver,
   type AtlassianResolvedCredential,
 } from "@oscharko-dev/keiko-connectors";
-import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import {
   createGatewayAtlassianHttpBodyPort,

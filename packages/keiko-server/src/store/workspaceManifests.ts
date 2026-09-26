@@ -3,9 +3,14 @@
 // project registry reference and make membership/ordering constraints transactional.
 
 import type { DatabaseSync } from "node:sqlite";
-import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
+import { workspaceTrustRootBindingsMatch } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
-import { createSingleRootWorkspaceManifest } from "../workspace-manifest-identity.js";
+import {
+  createSingleRootWorkspaceManifest,
+  inspectWorkspaceRootDescriptor,
+  reviseWorkspaceManifest,
+} from "../workspace-manifest-identity.js";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { projectExists } from "./errors.js";
 import type {
@@ -112,19 +117,36 @@ function rootIdentities(
  * grant — invalidating the union of previous and next members revoked trust on every root for a
  * plain focus click, which made persisted trust (#2521) unobservable in practice.
  */
-function invalidatedRootRefs(
+function trustRootBinding(
+  rootRef: string,
+  identity: StoredRootIdentity | undefined,
+):
+  | {
+      readonly rootRef: string;
+      readonly rootIdentityDigest: string;
+      readonly rootIdentityProvenanceDigest: string | null;
+    }
+  | undefined {
+  return identity === undefined
+    ? undefined
+    : {
+        rootRef,
+        rootIdentityDigest: identity.identityDigest,
+        rootIdentityProvenanceDigest: identity.objectIdentityDigest,
+      };
+}
+
+export function invalidatedRootRefs(
   previous: ReadonlyMap<string, StoredRootIdentity>,
   next: ReadonlyMap<string, StoredRootIdentity>,
 ): ReadonlySet<string> {
   const invalidated = new Set<string>();
-  for (const rootRef of previous.keys()) {
-    if (!next.has(rootRef)) invalidated.add(rootRef);
-  }
-  for (const [rootRef, nextIdentity] of next) {
-    const previousIdentity = previous.get(rootRef);
+  for (const rootRef of new Set([...previous.keys(), ...next.keys()])) {
     if (
-      previousIdentity?.identityDigest !== nextIdentity.identityDigest ||
-      previousIdentity.objectIdentityDigest !== nextIdentity.objectIdentityDigest
+      !workspaceTrustRootBindingsMatch(
+        trustRootBinding(rootRef, previous.get(rootRef)),
+        trustRootBinding(rootRef, next.get(rootRef)),
+      )
     ) {
       invalidated.add(rootRef);
     }
@@ -315,7 +337,85 @@ export function ensureProjectWorkspaceManifest(
   insertManifest(db, manifest, [{ rootRef: root.rootRef, projectPath }], now);
 }
 
+function storedManifest(record: WorkspaceManifestRecordRow): WorkspaceManifest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(record.recordJson);
+  } catch {
+    throw new Error("WORKSPACE_MANIFEST_INVALID");
+  }
+  if (!validateWorkspaceManifest(parsed).ok) throw new Error("WORKSPACE_MANIFEST_INVALID");
+  const manifest = parsed as WorkspaceManifest;
+  if (
+    manifest.workspaceId !== record.workspaceId ||
+    manifest.schemaVersion !== record.schemaVersion ||
+    manifest.manifestRef !== record.manifestRef ||
+    manifest.revision !== record.revision ||
+    manifest.manifestDigest !== record.manifestDigest ||
+    manifest.roots.length !== record.rootProjects.length ||
+    manifest.roots.some(
+      (root, index): boolean => root.rootRef !== record.rootProjects[index]?.rootRef,
+    )
+  ) {
+    throw new Error("WORKSPACE_MANIFEST_INVALID");
+  }
+  return manifest;
+}
+
+/**
+ * An explicit reconnect accepts the filesystem object currently occupying a registered
+ * single-root project's path. It never rewrites a multi-root workspace, and replacement always
+ * revokes the former root's trust before the refreshed identity becomes dispatchable.
+ */
+export function reconnectProjectWorkspaceManifest(
+  db: DatabaseSync,
+  projectPath: string,
+  projectName: string,
+  now: number,
+): void {
+  const record = findWorkspaceManifestRecordByProject(db, projectPath);
+  if (record === undefined) {
+    ensureProjectWorkspaceManifest(db, projectPath, projectName, now);
+    return;
+  }
+  if (record.rootProjects.length !== 1) return;
+  const manifest = storedManifest(record);
+  const previousRoot = manifest.roots[0];
+  const projectRoot = record.rootProjects[0];
+  if (previousRoot === undefined || projectRoot?.projectPath !== projectPath) {
+    throw new Error("WORKSPACE_MANIFEST_INVALID");
+  }
+  const inspected = inspectWorkspaceRootIdentity(projectPath);
+  if (
+    inspected.rootRef === previousRoot.rootRef &&
+    inspected.identityDigest === previousRoot.identityDigest &&
+    inspected.objectIdentityDigest === (projectRoot.objectIdentityDigest ?? undefined)
+  ) {
+    return;
+  }
+  const refreshedRoot = inspectWorkspaceRootDescriptor(projectPath, projectName);
+  const refreshed = reviseWorkspaceManifest(manifest, [refreshedRoot], refreshedRoot.rootRef);
+  updateTargetManifest(
+    db,
+    {
+      manifest: refreshed,
+      expectedRevision: manifest.revision,
+      absorbedWorkspaceIds: [],
+      rootProjects: [{ rootRef: refreshedRoot.rootRef, projectPath }],
+      releasedProjectPaths: [],
+    },
+    now,
+  );
+  db.prepare("DELETE FROM workspace_trust_records WHERE root_ref = ?").run(previousRoot.rootRef);
+}
+
 export function migrateLegacyProjectManifests(db: DatabaseSync): void {
+  // KEIKO-0803: `LIMIT 1` is deliberate per ADR-0147 D9. The V15 migration backfills a workspace
+  // manifest only for the SINGLE most-recently-opened legacy project row so a large store does
+  // not do bulk-schema work at startup. Every other pre-existing project intentionally stays
+  // pre-manifest and is served by the governed WORKSPACE_STATE_UNAVAILABLE fallback downstream --
+  // it is NOT backfilled here, and the ORDER BY / LIMIT 1 shape is the migration behavior, not
+  // just documentation. Do NOT widen the LIMIT or drop the ORDER BY without amending ADR-0147.
   const projects = db
     .prepare("SELECT path, name FROM projects ORDER BY last_opened_at DESC, path LIMIT 1")
     .all() as unknown as readonly ProjectRow[];

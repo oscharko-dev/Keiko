@@ -509,7 +509,7 @@ for (const mode of MODES) {
   dRaw.pre[mode.id] = await collectD(page, PRE, mode);
   dRaw.post[mode.id] = await collectD(page, POST, mode);
 
-  await applyMode(page, POST, mode);
+  // The DOM is already in POST state from the collectD(POST, mode) call above.
   byMode[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(
@@ -628,9 +628,17 @@ if (missing.size) {
 console.log(
   `ACCESSIBILITY: row focus active=${accessibilityProof.rowFocus.activeElementId}; sort live="${accessibilityProof.sortAnnouncement.liveRegionText}"`,
 );
-console.log(
-  `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
-);
+// Narrow on ok=true before formatting durationMs / stickyHeaderDeltaPx: runBoundedRowSmoke returns
+// `{ ok: false, reason }` when the DOM probe elements are absent, and calling .toFixed() on a
+// missing field would throw here — before browser.close() and before the exit code is taken — so
+// Chromium would leak and the proof JSON's exit contribution would be lost.
+if (boundedRowSmoke.ok === true) {
+  console.log(
+    `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
+  );
+} else {
+  console.log(`BOUNDED ROW SMOKE: skipped — ${boundedRowSmoke.reason}`);
+}
 
 await browser.close();
 const focusFailed =
@@ -650,7 +658,12 @@ const mediaFailed = Object.entries(byMode).some(
   ([modeId, mode]) => !mediaMatchesMode(modeId, mode.mediaProbe),
 );
 const failed =
-  aDiffs.length > 0 || rDiffsGated.length > 0 || focusFailed || perfFailed || mediaFailed;
+  aDiffs.length > 0 ||
+  rDiffsGated.length > 0 ||
+  focusFailed ||
+  perfFailed ||
+  mediaFailed ||
+  missing.size > 0;
 console.log(
   `\n${failed ? "FAIL" : "PASS"} — Group A 0-diff: ${aDiffs.length === 0}; Group R dark/light 0-diff: ${rDiffsGated.length === 0}; media isolation: ${!mediaFailed}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
 );

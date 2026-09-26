@@ -6,12 +6,16 @@ import {
 import { validateKnowledgeSourceScope } from "./local-knowledge-validation.js";
 import {
   deriveHtmlManualSource,
+  htmlManualSourceFingerprintTag,
   htmlManualLocalFolderScope,
   htmlManualReachableFilesScope,
+  htmlManualSourceKindTag,
   HTML_MANUAL_INCLUDE_GLOBS,
+  HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX,
   HTML_MANUAL_SOURCE_SCHEMA_VERSION,
   isSafeManualOrigin,
   isSafeManualPathPrefix,
+  parseHtmlManualSourceTagMetadata,
   summarizeHtmlManualSource,
   validateHtmlManualCrawlScope,
   validateHtmlManualScopeLimits,
@@ -92,6 +96,21 @@ describe("isSafeManualPathPrefix", () => {
     expect(isSafeManualPathPrefix("/docs#frag")).toBe(false);
     expect(isSafeManualPathPrefix("/docs@evil")).toBe(false);
     expect(isSafeManualPathPrefix("/docs\0")).toBe(false);
+  });
+
+  // KEIKO-0316-class authority escape: `//host` and `/\host` are protocol-relative references.
+  // `new URL("//attacker.example/x", "https://intranet.local").href` resolves to
+  // `https://attacker.example/x`, so a prefix the contract certifies as same-origin would name a
+  // different authority. A backslash anywhere is rejected too — Windows-style separators are not
+  // part of a URL path and browsers normalise `\` to `/`.
+  it("rejects protocol-relative and backslash prefixes that can name another authority", () => {
+    expect(isSafeManualPathPrefix("//attacker.example/x")).toBe(false);
+    expect(isSafeManualPathPrefix("//attacker.example")).toBe(false);
+    expect(isSafeManualPathPrefix("/\\attacker.example")).toBe(false);
+    expect(isSafeManualPathPrefix("/a\\b")).toBe(false);
+    expect(isSafeManualPathPrefix("/")).toBe(true);
+    expect(isSafeManualPathPrefix("/manual")).toBe(true);
+    expect(isSafeManualPathPrefix("/manual/en/")).toBe(true);
   });
 });
 
@@ -302,5 +321,40 @@ describe("additive: existing scope union is untouched", () => {
     expect(
       validateKnowledgeSourceScope({ kind: "folder", rootPath: "m/x", recursive: true }).ok,
     ).toBe(true);
+  });
+});
+
+// KEIKO-0785: parseHtmlManualSourceTagMetadata must fail closed on empty and conflicting tags
+// instead of last-write-wins. Both directions of the fix (empty fingerprint suffix, conflicting
+// kind, conflicting fingerprint) are asserted here.
+describe("parseHtmlManualSourceTagMetadata fail-closed (KEIKO-0785)", () => {
+  it("omits sourceFingerprint on an empty suffix", () => {
+    expect(parseHtmlManualSourceTagMetadata([HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX])).toEqual(
+      {},
+    );
+  });
+
+  it("omits sourceKind when the tag list carries two different html-manual kinds", () => {
+    const md = parseHtmlManualSourceTagMetadata([
+      htmlManualSourceKindTag("html-manual-local"),
+      htmlManualSourceKindTag("html-manual-http"),
+    ]);
+    expect(md.sourceKind).toBeUndefined();
+  });
+
+  it("omits sourceFingerprint when the tag list carries two different fingerprints", () => {
+    const md = parseHtmlManualSourceTagMetadata([
+      htmlManualSourceFingerprintTag("abcdef01"),
+      htmlManualSourceFingerprintTag("deadbeef"),
+    ]);
+    expect(md.sourceFingerprint).toBeUndefined();
+  });
+
+  it("accepts a well-formed pair", () => {
+    const md = parseHtmlManualSourceTagMetadata([
+      htmlManualSourceKindTag("html-manual-local"),
+      htmlManualSourceFingerprintTag("abcdef01"),
+    ]);
+    expect(md).toEqual({ sourceKind: "html-manual-local", sourceFingerprint: "abcdef01" });
   });
 });

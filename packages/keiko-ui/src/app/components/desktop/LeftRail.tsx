@@ -11,7 +11,7 @@ const NewChatIcon = Icons.newChat;
 const BrainIcon = Icons.brain;
 const CheckIcon = Icons.check;
 const SparkIcon = Icons.spark;
-const CodeIcon = Icons.code;
+const CodingWorkbenchIcon = Icons.codingWorkbench;
 const GitIcon = Icons.git;
 const EditorIcon = Icons.editor;
 const LocalKnowledgeIcon = Icons.localKnowledge;
@@ -21,12 +21,14 @@ const SunIcon = Icons.sun;
 const SettingsIcon = Icons.settings;
 
 interface RailTool {
-  readonly id: string;
+  readonly id: "chatHistory" | "codingHistory";
   readonly icon: IconName;
-  readonly img?: string;
 }
 
-const PRIMARY: readonly RailTool[] = [{ id: "chatHistory", icon: "archive" }];
+const PRIMARY: readonly RailTool[] = [
+  { id: "chatHistory", icon: "archive" },
+  { id: "codingHistory", icon: "codingHistory" },
+];
 
 function RailButton({
   tool,
@@ -51,12 +53,7 @@ function RailButton({
       data-tip={label}
       onClick={onClick}
     >
-      {tool.img !== undefined ? (
-        // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG via .rail-img
-        <img className="rail-img" src={tool.img} alt="" />
-      ) : (
-        <Icon size={19} />
-      )}
+      <Icon size={19} />
     </button>
   );
 }
@@ -95,7 +92,7 @@ function LeftRailImpl({
           <RailButton
             key={tool.id}
             tool={tool}
-            label={t("rail.chatHistory")}
+            label={t(`rail.${tool.id}`)}
             active={openTools.has(tool.id)}
             onClick={() => onTool(tool.id)}
           />
@@ -151,7 +148,7 @@ function LeftRailImpl({
           data-tip={t("rail.coding")}
           onClick={() => onTool("coding")}
         >
-          <CodeIcon size={19} />
+          <CodingWorkbenchIcon size={19} />
         </button>
         <button
           type="button"

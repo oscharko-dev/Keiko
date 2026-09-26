@@ -1,7 +1,10 @@
 "use client";
 
 import { useRef } from "react";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitHistoryEntry, GitHistoryResponse } from "@/lib/types";
 import { Icons } from "../../../Icons";
@@ -52,7 +55,7 @@ function isHeadCommit(entry: GitHistoryEntry): boolean {
 function loadMoreLabel(
   loadingMore: boolean,
   loadMoreError: string | null,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (loadingMore) return t("gitClientWindow.history.loadingMore");
   if (loadMoreError === null) return t("gitClientWindow.history.loadMore");
@@ -69,7 +72,7 @@ export function HistoryPane({
   selectedSha,
   onSelect,
 }: HistoryPaneProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const entries = history?.entries ?? [];
 
@@ -250,7 +253,7 @@ export function HistoryPane({
 // Commit-detail metadata block rendered in the diff pane body (the subject + author/hash/stats live
 // in the diff-pane header). Exposes the full sha, parents, changed-file count and refs.
 export function CommitDetailMeta({ entry }: { readonly entry: GitHistoryEntry }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   return (
     <section className="rv-empty" aria-label={t("gitClientWindow.history.commitDetailsAria")}>
       <dl

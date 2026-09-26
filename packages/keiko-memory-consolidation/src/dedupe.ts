@@ -10,7 +10,7 @@
 //   4. Sort members oldest-first (createdAt ASC, id ASC). Sort clusters by canonical (oldest)
 //      member id so the output is byte-stable across input shuffles.
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
 import { compareRecordsByAge, scopeCoordinateKey } from "./_ordering.js";

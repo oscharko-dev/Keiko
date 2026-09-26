@@ -42,6 +42,7 @@ const DEFAULT_VAD_THRESHOLDS: VoiceActivityThresholds = {
 // A live VAD monitor over one stream. `stop()` releases the analysis resources only — the caller still
 // owns (and stops) the underlying MediaStream tracks.
 export interface VoiceActivityMonitor {
+  readonly available?: boolean | undefined;
   stop(): void;
 }
 
@@ -136,13 +137,13 @@ export function createBrowserVoiceActivityDetector(
   return {
     start(stream, onEvent): VoiceActivityMonitor {
       if (!voiceActivityDetectionSupported()) {
-        return { stop: (): void => {} };
+        return { available: false, stop: (): void => {} };
       }
       let context: AudioContext;
       try {
         context = new AudioContext();
       } catch {
-        return { stop: (): void => {} };
+        return { available: false, stop: (): void => {} };
       }
       let source: MediaStreamAudioSourceNode;
       let analyser: AnalyserNode;
@@ -155,20 +156,14 @@ export function createBrowserVoiceActivityDetector(
         void context.close().catch(() => {
           // A detector setup failure must not fail the realtime session.
         });
-        return { stop: (): void => {} };
+        return { available: false, stop: (): void => {} };
       }
-      const buffer = new Float32Array(analyser.fftSize);
-      const state = new VoiceActivityState(thresholds);
-
-      const timer = setInterval(() => {
-        analyser.getFloatTimeDomainData(buffer);
-        const event = state.feed(rms(buffer), SAMPLE_INTERVAL_MS);
-        if (event !== undefined) {
-          onEvent(event);
-        }
-      }, SAMPLE_INTERVAL_MS);
+      const timer = startVoiceActivitySamples(analyser, thresholds, onEvent);
 
       return {
+        get available(): boolean {
+          return context.state === "running";
+        },
         stop(): void {
           clearInterval(timer);
           try {
@@ -183,4 +178,21 @@ export function createBrowserVoiceActivityDetector(
       };
     },
   };
+}
+
+function startVoiceActivitySamples(
+  analyser: AnalyserNode,
+  thresholds: VoiceActivityThresholds,
+  onEvent: (event: VoiceActivityEvent) => void,
+): ReturnType<typeof setInterval> {
+  const buffer = new Float32Array(analyser.fftSize);
+  const state = new VoiceActivityState(thresholds);
+
+  return setInterval(() => {
+    analyser.getFloatTimeDomainData(buffer);
+    const event = state.feed(rms(buffer), SAMPLE_INTERVAL_MS);
+    if (event !== undefined) {
+      onEvent(event);
+    }
+  }, SAMPLE_INTERVAL_MS);
 }

@@ -1,11 +1,11 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
-import { fetchHealth } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { DiagnosticReadinessBadge } from "./DiagnosticReadinessBadge";
+import { useBackendHealth, type BackendHealth } from "./hooks/useBackendHealth";
 import { Icons } from "./Icons";
-import type { TwinMode } from "./hooks/useTwinMode";
 import { localizedWindowTitle, WIN_TYPES } from "./windows/WindowsRegistry";
 import { subText } from "./windows/connectionUtils";
 import type { AppWindow } from "./windows/types";
@@ -20,6 +20,13 @@ function windowStateLabel(win: AppWindow, t: I18nTranslate): string {
   return t("footer.visible");
 }
 
+function installedVersionLabel(backendHealth: BackendHealth, t: I18nTranslate): string {
+  if (backendHealth.state === "loaded") return backendHealth.health.version;
+  return backendHealth.state === "loading"
+    ? t("footer.versionLoading")
+    : t("footer.versionUnavailable");
+}
+
 interface FooterProps {
   readonly winCount: number;
   readonly windows: readonly AppWindow[];
@@ -27,14 +34,6 @@ interface FooterProps {
   readonly onToggleWindowPalette: () => void;
   readonly onSelectWindow: (id: string) => void;
   readonly onCloseWindowPalette: () => void;
-  readonly mode: TwinMode;
-  // AC #4: the currently selected model id, undefined when no eligible model is
-  // configured. Passed by value from AppShell so no Context provider is needed.
-  readonly selectedModel: string | undefined;
-  readonly projectName: string;
-  readonly branchLabel: string;
-  readonly shellStatusLabel: string;
-  readonly evidenceStatusLabel: string;
   readonly statusRef?: (node: HTMLElement | null) => void;
 }
 
@@ -51,28 +50,13 @@ function FooterImpl({
   const windowPaletteRef = useRef<HTMLSpanElement | null>(null);
   const windowTriggerRef = useRef<HTMLButtonElement | null>(null);
   const windowPanelRef = useRef<HTMLDivElement | null>(null);
-  const [installedVersion, setInstalledVersion] = useState(t("footer.versionLoading"));
+  const backendHealth = useBackendHealth();
+  const installedVersion = installedVersionLabel(backendHealth, t);
   const windowLabel =
     winCount === 1
       ? t("footer.windowSingular", { count: winCount })
       : t("footer.windowPlural", { count: winCount });
   const sortedWindows = useMemo(() => [...windows].sort((a, b) => b.z - a.z), [windows]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadInstalledVersion(): Promise<void> {
-      try {
-        const health = await fetchHealth();
-        if (!cancelled) setInstalledVersion(health.version);
-      } catch {
-        if (!cancelled) setInstalledVersion(t("footer.versionUnavailable"));
-      }
-    }
-    void loadInstalledVersion();
-    return () => {
-      cancelled = true;
-    };
-  }, [t]);
 
   useEffect(() => {
     if (!windowPaletteOpen) return;
@@ -93,8 +77,8 @@ function FooterImpl({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         // GEN-UI-FOCUS-011 — Escape closes the palette AND returns focus to the trigger button
-        // (mirrors TaskWorkspaceSwitcher's Escape→triggerRef.focus()), so a keyboard user is never
-        // stranded on a removed palette element after dismissal.
+        // (mirrors RepositoryFolderSwitcher's Escape→triggerRef.focus()), so a keyboard user is
+        // never stranded on a removed palette element after dismissal.
         onCloseWindowPalette();
         windowTriggerRef.current?.focus();
       }
@@ -130,6 +114,9 @@ function FooterImpl({
       aria-label={t("footer.status")}
       aria-live="polite"
     >
+      <DiagnosticReadinessBadge
+        snapshot={backendHealth.state === "loaded" ? backendHealth.health.diagnostics : undefined}
+      />
       <span className="spacer" />
       <span className="ft-brand" aria-label={t("footer.version", { version: installedVersion })}>
         Keiko | {installedVersion}
@@ -148,11 +135,10 @@ function FooterImpl({
           <TileIcon size={13} /> {windowLabel}
         </button>
         {windowPaletteOpen && winCount > 0 ? (
-          <div
+          <section
             ref={windowPanelRef}
             id="footer-window-palette"
             className="ft-window-palette"
-            role="group"
             aria-label={t("footer.openWindows")}
             // GEN-UI-FOCUS-011 — focusable fallback target so focus can move into the palette on open
             // even when no window card exists to receive it.
@@ -200,7 +186,7 @@ function FooterImpl({
                 );
               })}
             </div>
-          </div>
+          </section>
         ) : null}
       </span>
     </footer>

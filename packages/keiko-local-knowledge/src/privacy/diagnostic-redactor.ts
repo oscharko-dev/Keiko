@@ -15,7 +15,7 @@
 // The cap is plain slice (no trailing ellipsis) so the result length is `<= 1024`, not the
 // `<= 1025` you would get from "…"-suffix on a 1024-char prefix.
 
-import { redactPathInDiagnostic } from "@oscharko-dev/keiko-contracts";
+import { redactPathInDiagnostic } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema-validation";
 
 const HARD_CAP_CHARS = 1024;
 const PATH_BREAK_CHARS = new Set([" ", "\n", "\r", "\t", '"', "'", "<", ">", "|"]);

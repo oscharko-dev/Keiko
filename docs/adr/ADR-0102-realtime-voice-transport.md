@@ -164,3 +164,7 @@ Recap and memory-candidate state remain governed by their owning subsystems and 
   [`packages/keiko-model-gateway/src/realtime-voice-adapter.ts`](../../packages/keiko-model-gateway/src/realtime-voice-adapter.ts),
   and the keiko-ui `hooks/voice-rtc-transport.ts` / `hooks/voice-realtime-client.ts` /
   `hooks/useRealtimeVoice.ts` client.
+
+## Date
+
+2026-06-24

@@ -8,7 +8,7 @@
 //     proving the forget operation did not collateral-damage the unrelated record. The
 //     selector's result list also asserts exactly 2 ids selected (not 1, not 3).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-eval-forget-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-eval-forget-"));
   cleanups.push(dir);
   return dir;
 }

@@ -4,7 +4,7 @@
 // deliberately narrower than a full requirement NLP pipeline: every emitted finding must be
 // explainable, traceable to a concrete evidence atom, and redaction-safe.
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { containsNegation, normaliseCandidateText, stripFirstNegation } from "./assertions.js";

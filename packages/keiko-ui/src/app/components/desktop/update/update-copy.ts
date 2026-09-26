@@ -22,8 +22,8 @@ export function sessionForDisplay(
   }
   if (
     report.updateAvailable &&
-    report.targetVersion !== undefined &&
-    session.targetVersion !== report.targetVersion
+    ((report.targetVersion !== undefined && session.targetVersion !== report.targetVersion) ||
+      (report.candidate !== undefined && session.candidateId !== report.candidate.candidateId))
   ) {
     return undefined;
   }

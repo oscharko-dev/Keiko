@@ -14,6 +14,31 @@ path-free.
 Amended by Issue #2774 (Epic #2285, 2026-07-27) to bound the private history index before parsing
 and repeat root identity validation immediately before history effects.
 
+Amended by [ADR-0155](ADR-0155-root-scoped-workspace-trust-binding.md) to narrow the trust validity
+comparison to root-describing dimensions and the workspace-authority `manifestRef` — a root moving
+to a different workspace is a different authority context and still invalidates. Only `manifestRevision`
+and `manifestDigest` are excluded from the equality check that governs re-authorization; they remain
+recorded as provenance but change on ordinary focus/reorder within the same workspace and were the
+false-positive drivers ADR-0155 removed.
+
+Amended on 2026-09-10 (Coding Workbench run 8, PR #3452) so that D3 admits a managed task
+worktree's package scripts under an explicit human grant recorded for the worktree root itself once
+its `package.json` no longer matches the repository's trust basis — the repository's grant cannot
+clear that drift, and until this amendment nothing could — and so that every script-trust refusal
+names its reason in one closed vocabulary on the run's own activity line. Derived records never serve
+as that alternative basis; revoking the repository still stops every worktree that only inherited its
+grant.
+
+Amended again on 2026-09-10 (owner decision, Coding Workbench run 14, PR #3452) so that D3 admits,
+in `autonomous-delivery` only, the manifest a governed effect of the live run itself left behind
+under the operator's standing repository grant: the mode's promise is file and verification work
+inside the validated Authority Envelope without per-action approval (ADR-0129, ADR-0138), the
+scripts still execute only under the enforced, fail-closed egress isolation of ADR-0043, and the
+pull request carries the manifest diff to review before anything persists. Asking a human to approve
+each byte of a manifest the run was authorized to write added friction without containment — run 14
+paused twice within 22 seconds for the same manifest and delivered nothing. The two modes that ask
+before risky work keep asking.
+
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
 [Issue #2520](https://github.com/oscharko-dev/Keiko/issues/2520#issuecomment-5012022731) that
@@ -174,13 +199,16 @@ tagged fact union `known | unknown | unavailable | absent`; no `undefined`, empt
 default, or inferred trust is valid. Unknown, unavailable, absent, malformed, corrupt, stale, or
 mismatched state resolves to restricted.
 
-A trust record is server-owned and binds all of:
+A trust record is server-owned. Under
+[ADR-0155](ADR-0155-root-scoped-workspace-trust-binding.md), its dimensions split into two roles:
 
-- manifest reference, revision, and digest;
-- root reference and current filesystem identity digest;
-- an explicit capability-specific trust-basis digest fact (the current package-script consumer uses
-  the exact raw-byte `package.json` digest);
-- trust revision, policy version, reason, and server ownership.
+- **Recorded provenance** (documented on the record, not compared): manifest reference, revision,
+  and digest.
+- **Validity comparison dimensions** (equality-checked to decide whether an existing grant still
+  authorizes the current request): root reference and current filesystem identity digest; an
+  explicit capability-specific trust-basis digest fact (the current package-script consumer uses
+  the exact raw-byte `package.json` digest); trust revision, policy version, reason, and server
+  ownership.
 
 The browser may later request grant or revocation for a bounded root reference with concurrency and
 idempotency data. It never supplies `trusted`, canonical paths, identity/manifest/source digests,
@@ -190,9 +218,57 @@ A package-script consumer projects `trusted` only when canonical trust is truste
 binding dimension and current trust-basis digest matches. Every other cell projects to today's
 `CommandTaskTrustState = "approval-required"`. A digest/root mismatch immediately persists a
 restricted invalidation at a newer revision. Restoring the old `package.json` bytes therefore does
-not resurrect the prior grant; a new explicit grant is required. The existing command,
-verification, and debug decider seams remain the only consumer path until #2521 migrates their
-implementation.
+not resurrect the prior grant; a new explicit grant is required. Binding a repository into a managed
+task workspace registers BOTH roots as projects — the worktree and the repository it was bound from —
+because a root that is not registered cannot be a trust subject at all: script trust is resolved only
+for a registered root, and the trust surfaces list registered roots. Registration alone is never a
+grant; the repository stays restricted until the operator decides. Choosing a folder in the browser
+and a project selection explicitly attested by a trusted launcher are the two equivalent local-human
+selection paths that grant through the same trust service. An ambient process working directory may
+seed the preferred project, but carries no grant; restoring a stored project row or opening an
+arbitrary URL does not grant either. A repository that CONTAINS the managed worktree is left
+unregistered, because that root also contains the UI database. A managed task worktree is a
+registered project row whose script decision is resolved from the repository it was bound from, and
+that inherited decision holds only while the worktree's `package.json` is byte-identical to that
+repository's — the same trust-basis digest this decision already binds (PR #3381). Once a governed
+run has rewritten that manifest, or while the repository holds no grant, the only remaining basis is
+an explicit human grant recorded for the worktree root itself, bound to the worktree's current bytes
+(`WorkspaceScriptTrustService.holdsHumanGrantForRoot`, asked by the one shared `decideScriptTrust`
+rule the verification runner, the command runner and the agent verification route all use). A
+record merely derived from the repository never serves as that alternative — it inherits the
+repository's grant and stops with it — and the Coding Workbench offers the worktree grant as one
+explicit operator action only once the runner's own decision for the worktree is approval-required
+(2026-09-10, run 8). In `autonomous-delivery` — and in no other mode — one further basis exists under
+the repository's standing grant: the worktree's current `package.json` is exactly the one the run's
+own last governed effect (an edit or a vetted command) left behind, recorded by
+`WorkspaceScriptTrustService.admitRunManifest` after every completed effect and consulted by the same
+`decideScriptTrust` rule as `run-manifest`. The operator's authority for this basis is the mode
+itself: `autonomous-delivery` authorizes the run to edit the workspace, including its manifest, and
+to verify it without per-action approval (ADR-0129, ADR-0138 D4), while the containment that makes
+this safe is not the grant but the execution boundary — the verification runner executes package
+scripts only under ADR-0043's enforced, fail-closed egress isolation, and the pull request carries the
+manifest diff to review before anything persists. The admission is held in memory only, keyed by the
+worktree's canonical root, bound to the exact manifest bytes (the same trust-basis fact), expires
+with the run's authority and is revoked with the run; a manifest changed by anything else since — the
+operator's editor, another process — no longer matches and is the same `worktree-manifest-drift` as
+before. A repository nobody trusted admits no run manifest (`repository-not-trusted` stands), an
+explicit worktree grant takes precedence, and `governed-assist` and `supervised-coding` never use this
+basis: they ask before risky work by definition. Every admission and revocation leaves a body-free
+line (`workspace-script-trust.run-manifest-admitted` with the manifest digest,
+`workspace-script-trust.run-manifest-revoked` with the count), and the runner's selection line names
+the basis the scripts ran under (`trustBasis`). Every refusal names its reason in the closed
+vocabulary `root-not-trusted`, `repository-not-trusted`, `worktree-manifest-drift`,
+`decision-failed` on the run's own activity line (`editor.verification.execute`,
+`state: "refused"`, `trustRefusal`). Its canonical root is
+resolved by containment in the Keiko-owned managed root
+(`<stateDir>/ui/task-workspaces`), never through the user-workspace root rules: those deny every
+path below the state directory's `.keiko` segment, and applying them to the worktree refused every
+grant, status read and repository-derived trust for it — binding a trusted repository failed
+`PROVISIONING_FAILED` on a default installation until the script-trust service was composed with the
+managed root (2026-09-10). Containment admits only a REGISTERED project below the configured managed
+root; an unconfigured service and a denied root outside that root keep failing closed. The existing
+command, verification, and debug decider seams remain the only consumer path until #2521 migrates
+their implementation.
 
 Every durable trust or effect resolution also compares the manifest row's server-private
 filesystem-object digest with a fresh inspection. The public V1 identity remains necessary for
@@ -296,6 +372,24 @@ fails closed without returning bytes or deleting unrelated history. The store us
 file, environment key name, keychain service, and keyfile namespace; it reuses the audited
 `LocalSecretVault`/AES-256-GCM primitive but not hot exit's key or records. The keyfile tier remains
 honestly documented as weaker, and plaintext exists in process memory during an authorized read.
+
+Capture also fails closed on secret-shaped content itself (#2898), mirroring hot exit's
+`containsRedactableSecret` gate (ADR-0065 D2) rather than relying on encryption-at-rest alone: before
+any vault or index write, `capture()` scans `input.content` and, on a match, throws
+`SECRET_CONTENT_SUPPRESSED` without writing a checkpoint body, an index entry, or any other record of
+the attempt — list/entry/read stay exactly as they were before the call. Unlike hot exit's single
+overwritten snapshot, a suppressed Local History checkpoint has no prior version to fall back to and
+no in-place row to mark, so suppression is a thrown error the caller must handle rather than a stored
+`suppressed: true` flag. `captureEditorLocalHistorySafely` maps that error to its own
+`FilesContentResponse.localHistoryProtection` status — `{status: "suppressed", reason:
+"secret-detected", correlationId}` — kept apart from the unavailable-infrastructure `degraded` status
+because a suppression is the protection working as intended, not a failure of it; the editor's save
+still succeeds. The 90-day TTL below was reconsidered and deliberately kept: unlike hot exit's single
+fire-and-forget recovery snapshot, Local History is a listed, diffable, user-facing checkpoint feed,
+so a materially shorter default would reduce the feature's value for its actual purpose (recovering
+an earlier revision of ordinary source) without narrowing the risk this change already closes — the
+gap was the unfiltered capture of secret-shaped content, not the retention window applied to
+everything else.
 
 Normative fixed V1 bounds are 512 entries/workspace, 8 MiB/entry, 256 MiB/workspace, 64 MiB pinned,
 50 versions/file, and 90 days TTL. Pruning is deterministic oldest-accessed first with checkpoint-id

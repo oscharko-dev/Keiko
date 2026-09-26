@@ -16,6 +16,17 @@ describe("runGroundedEntailmentEval", () => {
     expect(scorecard.failures).toEqual([]);
   });
 
+  it("keeps both path and numeric citation branch fixtures in the deterministic gate", async () => {
+    // The outer gate already asserts 1.0 across variants; the exact count prevents a future
+    // refactor from silently dropping numeric membership, duplicate, malformed, or judge cases.
+    const scorecard = await runGroundedEntailmentEval();
+    // 9 existing path fixtures + 6 numeric connector fixtures = 15.
+    expect(scorecard.fixtures).toBe(15);
+    expect(scorecard.unsupportedClaimDetectionRate).toBe(1);
+    expect(scorecard.degradationCorrectnessRate).toBe(1);
+    expect(scorecard.failures).toEqual([]);
+  });
+
   it("passes the default budget on the real scorecard", async () => {
     const scorecard = await runGroundedEntailmentEval();
     expect(evaluateGroundedEntailmentBudget(scorecard).ok).toBe(true);

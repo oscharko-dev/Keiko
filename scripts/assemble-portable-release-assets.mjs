@@ -1,6 +1,7 @@
 import {
-  cpSync,
+  copyFileSync,
   lstatSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -17,13 +18,18 @@ import {
   hashDirectoryTree,
   portableVerificationSummaryForManifest,
   PORTABLE_TARGETS,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   sha256File,
   validatePortableCandidateManifest,
+  validatePortableReleaseTrustCandidateManifest,
 } from "./portable-runtime.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
+import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
+import { qualificationReceiptFor as linuxQualificationReceiptFor } from "./qualify-linux-runtime-release.mjs";
+import { qualificationReceiptFor as macosQualificationReceiptFor } from "./qualify-macos-runtime-release.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -35,6 +41,12 @@ function fail(message) {
   throw new Error(`assemble-portable-release-assets: ${message}`);
 }
 
+function resolvedStagesRoot(options) {
+  return resolve(
+    options.stagesRoot === undefined ? join(options.bundleRoot, "artifacts") : options.stagesRoot,
+  );
+}
+
 function parseArgs(argv) {
   const options = {
     bundleRoot: join(repoRoot, ".portable-release-assets"),
@@ -43,6 +55,7 @@ function parseArgs(argv) {
     runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 0),
     runId: Number(process.env.GITHUB_RUN_ID ?? 0),
     stagePrefix: "portable-stage-",
+    stagesRoot: undefined,
     version: rootPackage.version,
   };
   const fields = new Map([
@@ -52,6 +65,7 @@ function parseArgs(argv) {
     ["--run-attempt", "runAttempt"],
     ["--run-id", "runId"],
     ["--stage-prefix", "stagePrefix"],
+    ["--stages-root", "stagesRoot"],
     ["--version", "version"],
   ]);
   for (let index = 0; index < argv.length; index += 2) {
@@ -62,6 +76,7 @@ function parseArgs(argv) {
     options[field] = ["runAttempt", "runId"].includes(field) ? Number(value) : value;
   }
   options.bundleRoot = resolve(options.bundleRoot);
+  options.stagesRoot = resolvedStagesRoot(options);
   return options;
 }
 
@@ -130,25 +145,57 @@ function commonIdentity(manifest) {
     },
     releaseTag: field(manifest, "release", "releaseTag"),
     sourceCommitSha: field(manifest, "release", "commitSha"),
+    // rootPackageTarballSha256 is deliberately absent: every native runner builds and packs the root
+    // package itself, so the digest is per-target provenance, bound in each manifest beside its
+    // packagedAppTreeSha256 and provenance statement. Demanding one digest across runners made every
+    // real stable set unassemblable (the v1.0.0 artifacts carried four different ones).
     provenance: {
       buildWorkflowAttempt: field(manifest, "provenance", "buildWorkflowAttempt"),
       buildWorkflowRunId: field(manifest, "provenance", "buildWorkflowRunId"),
-      rootPackageTarballSha256: field(manifest, "provenance", "rootPackageTarballSha256"),
       rootPackageVersion: field(manifest, "provenance", "rootPackageVersion"),
       sourceCommitSha: field(manifest, "provenance", "sourceCommitSha"),
     },
-    securityState: {
-      verificationPolicy: field(manifest, "security", "verificationPolicy"),
-      verificationReasonCodes: field(manifest, "security", "verificationReasonCodes"),
-      verificationStatus: field(manifest, "security", "verificationStatus"),
-    },
     stateExclusion: manifest.stateExclusion,
-    updateEligibility: manifest.updateEligibility,
+    updateEligibility: laneIndependentUpdateEligibility(manifest.updateEligibility),
   });
 }
 
+// The stable lane is not symmetric, so the release identity must not demand one shared security state:
+// it did from #2261, and once Linux became the production-signed target no stable four-target set
+// could assemble. Each target is held to the lane it may carry instead. Linux must be production,
+// because the runtime qualification evidence is only asserted for a non-evaluation artifact and a
+// Linux release-trust candidate would otherwise ship without it. The other targets are release-trust
+// candidates, or production once a platform signature is verified.
+function stableReleaseLaneFailures(manifest, target) {
+  const policy = manifest.security?.verificationPolicy;
+  const permitted =
+    policy === "production" || (target.nodePlatform !== "linux" && policy === "evaluation");
+  if (permitted) return [];
+  const lanes = target.nodePlatform === "linux" ? "production" : "production or evaluation";
+  return [`security.verificationPolicy must be ${lanes} in a stable release (${String(policy)})`];
+}
+
+// platformSignatureLocallyVerified follows each target's own lane - true only where a platform
+// signature was verified - and its lane contract already validates it per manifest. It is the one
+// update-eligibility field the targets of a stable release legitimately do not share.
+function laneIndependentUpdateEligibility(updateEligibility) {
+  const predicates = updateEligibility?.requiredPredicates;
+  if (predicates === null || typeof predicates !== "object") return updateEligibility;
+  const copy = structuredClone(updateEligibility);
+  delete copy.requiredPredicates.platformSignatureLocallyVerified;
+  return copy;
+}
+
 function targetFailures(manifest, target, expected) {
-  const failures = validatePortableCandidateManifest(manifest);
+  // A stable-tag build stages every target as a release-trust candidate (--release-build sets the
+  // evaluation lane with releaseTrustRequired), and stage-linux-production then signs Linux into the
+  // production lane. Each manifest is validated against the contract of the lane it carries.
+  const failures = [
+    ...(manifest.security?.verificationPolicy === "evaluation"
+      ? validatePortableReleaseTrustCandidateManifest(manifest)
+      : validatePortableCandidateManifest(manifest)),
+    ...stableReleaseLaneFailures(manifest, target),
+  ];
   const checks = [
     [
       "artifact.platformTarget",
@@ -193,7 +240,7 @@ function targetFailures(manifest, target, expected) {
 
 function collectTargetManifests(manifests, failures) {
   if (!Array.isArray(manifests) || manifests.length !== PORTABLE_TARGETS.length) {
-    failures.push("release set must contain exactly three portable targets");
+    failures.push("release set must contain exactly four portable targets");
   }
   const byTarget = new Map();
   for (const manifest of manifests ?? []) {
@@ -225,7 +272,7 @@ function validateRequiredTargets(byTarget, expected, failures) {
 }
 
 // Deliberate defense-in-depth: release-publish.mjs (portableAssetsFromManifest) re-enforces this
-// same exact-three/qualification-binding invariant at the publish trust boundary; keep in sync.
+// same exact-four/qualification-binding invariant at the publish trust boundary; keep in sync.
 export function validatePortableReleaseSet(manifests, expected) {
   const failures = [];
   const byTarget = collectTargetManifests(manifests, failures);
@@ -242,7 +289,7 @@ function assertExactDownloadedSet(artifactsRoot, prefix) {
   const expected = new Set(PORTABLE_TARGETS.map((target) => `${prefix}${target.platformTarget}`));
   const actual = readdirSync(artifactsRoot);
   if (actual.length !== expected.size || actual.some((name) => !expected.has(name))) {
-    fail("downloaded artifacts must be exactly the three canonical target names");
+    fail("downloaded artifacts must be exactly the four canonical target names");
   }
 }
 
@@ -299,48 +346,56 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
   ) {
     fail(`${target.platformTarget} runtime activation binding is invalid`);
   }
+  // A release-trust candidate carries no runtime qualification or attestation yet; those belong to a
+  // production-lane artifact, and stableReleaseLaneFailures keeps Linux out of the evaluation lane.
+  if (manifest.security.verificationPolicy === "evaluation") return;
   if (target.nodePlatform === "win32") {
     assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
   } else {
-    assertMacosRuntimeQualificationEvidence(resourceRoot, manifest);
+    assertRuntimeQualificationEvidence(resourceRoot, manifest, target);
   }
 }
 
-function assertMacosRuntimeQualificationEvidence(resourceRoot, manifest) {
+function assertRuntimeQualificationEvidence(resourceRoot, manifest, target) {
   const qualification = manifest.runtimeQualification;
+  if (qualification?.path === undefined || qualification.sha256 === undefined) {
+    fail(`${target.platformTarget} production artifact carries no runtime qualification binding`);
+  }
   const path = regularContainedFile(
     resourceRoot,
     qualification.path,
-    "macOS runtime qualification",
+    `${target.platformTarget} runtime qualification`,
   );
   const bytes = readFileSync(path);
   const receipt = JSON.parse(bytes.toString("utf8"));
-  const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
-  const expected = {
-    schemaVersion: 1,
-    suiteVersion: "runtime-tree-qualification-v1",
-    platformTarget: manifest.artifact.platformTarget,
-    sourceCommitSha: manifest.release.commitSha,
-    activationManifestSha256: manifest.runtimeActivation.sha256,
-    supervisorSha256: helpers.get("keiko-runtime-supervisor")?.shippedSha256,
-    secureReadSha256: helpers.get("keiko-secure-workspace-read")?.shippedSha256,
-    sidecars: (manifest.sidecarRuntimes ?? []).map((sidecar) => ({
-      name: sidecar.name,
-      sha256: sidecar.payloadSha256,
-    })),
-    backend: "macos-endpoint-security",
-    result: "passed",
-  };
   if (
     createHash("sha256").update(bytes).digest("hex") !== qualification.sha256 ||
-    !isDeepStrictEqual(receipt, expected)
+    !isDeepStrictEqual(receipt, expectedQualificationReceipt(resourceRoot, manifest, target))
   ) {
     fail(`${manifest.artifact.platformTarget} runtime qualification binding is invalid`);
   }
 }
 
+// Derived from the producer that writes the receipt, never restated here. The Linux producer moved
+// to schemaVersion 2 with a runtimeComponents list in #3455 while this consumer kept a copy of the
+// schemaVersion 1 shape, so an isDeepStrictEqual over an extra key failed every stable Linux
+// bundle -- AGENTS.md section 7: a fixture derives from the production entry point.
+function expectedQualificationReceipt(resourceRoot, manifest, target) {
+  const input = {
+    activationPath: join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/")),
+    resourceRoot,
+    sourceCommitSha: manifest.release.commitSha,
+  };
+  return target.nodePlatform === "linux"
+    ? linuxQualificationReceiptFor(input)
+    : macosQualificationReceiptFor({ ...input, target: target.platformTarget });
+}
+
 function assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom) {
   const attestation = manifest.runtimeAttestation;
+  if (attestation?.executablePath === undefined) {
+    fail("windows-x64 production artifact carries no runtime attestation binding");
+  }
   const executable = regularContainedFile(
     resourceRoot,
     attestation.executablePath,
@@ -353,6 +408,10 @@ function assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom) {
   ) {
     fail("windows-x64 runtime attestation carrier is invalid");
   }
+  assertRuntimeAttestationSbomBinding(manifest, attestation, sbom);
+}
+
+function assertRuntimeAttestationSbomBinding(manifest, attestation, sbom) {
   const bomRef = `pkg:generic/keiko-runtime-attestation@${manifest.product.packageVersion}?platform=windows-x64`;
   const components = (sbom.components ?? []).filter(
     (component) => component?.["bom-ref"] === bomRef,
@@ -372,20 +431,18 @@ function assertNativeHelperEvidence(stageRoot, manifest, target, sbom) {
     fail(`${target.platformTarget} must contain the complete native helper set`);
   }
   for (const helper of manifest.nativeHelpers) {
-    assertOneNativeHelperEvidence(stageRoot, helper, target, sbom);
+    assertOneNativeHelperEvidence(
+      stageRoot,
+      helper,
+      target,
+      sbom,
+      manifest.security.verificationPolicy,
+    );
   }
 }
 
-// This release gate deliberately evaluates the complete helper proof in one atomic assertion.
-// eslint-disable-next-line complexity
-function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
-  if (
-    helper.signing?.verificationStatus !== "verified-production" ||
-    helper.signing?.signatureVerified !== true ||
-    (target.nodePlatform === "darwin" && helper.signing?.notarizationVerified !== true)
-  ) {
-    fail(`${target.platformTarget} native helper is not production verified`);
-  }
+function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom, verificationPolicy) {
+  assertNativeHelperTrustState(helper, target, verificationPolicy);
   const resourceRoot = sidecarPayloadRoot(stageRoot, target);
   const executable = regularContainedFile(resourceRoot, helper.executablePath, "native helper");
   const bytes = readFileSync(executable);
@@ -405,6 +462,25 @@ function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
     hashes[0].content !== helper.shippedSha256
   ) {
     fail(`${target.platformTarget} native helper SBOM binding is invalid`);
+  }
+}
+
+function assertNativeHelperTrustState(helper, target, verificationPolicy) {
+  const signing = helper.signing;
+  const evaluation = verificationPolicy === "evaluation";
+  const expected = evaluation
+    ? [
+        signing.verificationStatus === "evaluation-unqualified",
+        signing.signatureVerified === false,
+        signing.notarizationVerified === false,
+      ]
+    : [
+        signing?.verificationStatus === "verified-production",
+        signing?.signatureVerified === true,
+        target.nodePlatform !== "darwin" || signing?.notarizationVerified === true,
+      ];
+  if (!expected.every(Boolean)) {
+    fail(`${target.platformTarget} native helper has inconsistent trust evidence`);
   }
 }
 
@@ -471,7 +547,7 @@ function nativeHelperProvenance(helper) {
     sourceTreeSha256: helper.source?.treeSha256,
     shippedSha256: helper.shippedSha256,
     signatureKind: helper.signing?.signatureKind,
-    signatureVerified: true,
+    signatureVerified: helper.signing?.signatureVerified,
     notarizationVerified: helper.signing?.notarizationVerified,
   };
 }
@@ -528,7 +604,7 @@ function assertSidecarEvidence(stageRoot, manifest, target) {
 
 async function loadTarget(options, target) {
   const downloaded = requiredDirectory(
-    join(options.bundleRoot, "artifacts", `${options.stagePrefix}${target.platformTarget}`),
+    join(options.stagesRoot, `${options.stagePrefix}${target.platformTarget}`),
     `${target.platformTarget} artifact`,
   );
   const archivePath = regularContainedFile(
@@ -548,15 +624,75 @@ async function loadTarget(options, target) {
     (await sha256File(archivePath)) !== manifest.artifact?.sha256
   )
     fail(`${target.platformTarget} archive bytes do not match the manifest`);
+  const setupPath = windowsSetupCompanionPath(downloaded, target);
   assertEvidence(downloaded, manifest, target);
-  return { downloaded, manifest };
+  return { downloaded, manifest, setupPath };
 }
 
-export async function assemblePortableReleaseAssets(argv) {
+function windowsSetupCompanionPath(root, target) {
+  if (target.platformTarget !== "windows-x64") return undefined;
+  const setupPath = regularContainedFile(
+    root,
+    WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+    `${target.platformTarget} setup companion`,
+    MAX_ARCHIVE_BYTES,
+  );
+  if (!isPortableExecutableFile(setupPath)) {
+    fail(`${target.platformTarget} setup companion must be a PE file`);
+  }
+  return setupPath;
+}
+
+function notifyTargetCopied(deps, sourceRoot, target) {
+  deps.afterTargetCopy?.({ sourceRoot, target });
+}
+
+function portableBundleRelativePaths(manifest, target, setupPath) {
+  const paths = new Set([
+    target.assetName,
+    "manifest/portable-manifest.json",
+    manifest.evidence.checksumsPath,
+    manifest.evidence.sbomPath,
+    manifest.evidence.licenseNoticePath,
+    manifest.security.verificationSummaryPath,
+    manifest.provenance.provenanceStatementPath,
+  ]);
+  const resourceRoot =
+    target.nodePlatform === "darwin"
+      ? "payload/Keiko/Keiko.app/Contents/Resources"
+      : "payload/Keiko";
+  for (const sidecar of manifest.sidecarRuntimes ?? []) {
+    paths.add(join(resourceRoot, sidecar.licenseEvidence.path));
+    paths.add(join(resourceRoot, sidecar.sbomEvidence.path));
+  }
+  if (setupPath !== undefined) paths.add(WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+  return [...paths];
+}
+
+async function copyPortableBundleFiles(sourceRoot, finalRoot, manifest, target, setupPath) {
+  mkdirSync(finalRoot, { recursive: false });
+  for (const relativePath of portableBundleRelativePaths(manifest, target, setupPath)) {
+    const maxBytes =
+      relativePath === target.assetName || relativePath === WINDOWS_PORTABLE_SETUP_ASSET_NAME
+        ? MAX_ARCHIVE_BYTES
+        : MAX_EVIDENCE_BYTES;
+    const source = regularContainedFile(sourceRoot, relativePath, relativePath, maxBytes);
+    const destination = resolve(finalRoot, relativePath);
+    if (!contained(finalRoot, destination)) fail("compact bundle path escapes its target root");
+    mkdirSync(dirname(destination), { recursive: true });
+    const sourceDigest = await sha256File(source);
+    copyFileSync(source, destination);
+    if ((await sha256File(destination)) !== sourceDigest) {
+      fail(`${target.platformTarget} compact bundle copy changed ${relativePath}`);
+    }
+  }
+}
+
+export async function assemblePortableReleaseAssets(argv, deps = {}) {
   const options = parseArgs(argv);
-  requiredDirectory(options.bundleRoot, "bundle root");
-  const artifactsRoot = requiredDirectory(join(options.bundleRoot, "artifacts"), "artifacts root");
-  assertExactDownloadedSet(artifactsRoot, options.stagePrefix);
+  const bundleRoot = requiredDirectory(options.bundleRoot, "bundle root");
+  const stagesRoot = requiredDirectory(options.stagesRoot, "stages root");
+  assertExactDownloadedSet(stagesRoot, options.stagePrefix);
   const loaded = [];
   for (const target of PORTABLE_TARGETS) loaded.push(await loadTarget(options, target));
   const expected = {
@@ -571,24 +707,35 @@ export async function assemblePortableReleaseAssets(argv) {
     expected,
   );
   if (failures.length > 0) fail(`release set is invalid:\n  - ${failures.join("\n  - ")}`);
-  const artifacts = PORTABLE_TARGETS.map((target, index) => {
-    const finalRoot = join(artifactsRoot, target.platformTarget);
-    cpSync(loaded[index].downloaded, finalRoot, {
-      errorOnExist: true,
-      force: false,
-      recursive: true,
-    });
-    return {
-      platformTarget: target.platformTarget,
-      archivePath: `artifacts/${target.platformTarget}/${target.assetName}`,
-      manifestPath: `artifacts/${target.platformTarget}/manifest/portable-manifest.json`,
-    };
-  });
-  const manifest = { schemaVersion: 1, artifacts };
-  writeFileSync(
-    join(options.bundleRoot, BUNDLE_MANIFEST_NAME),
-    `${JSON.stringify(manifest, null, 2)}\n`,
+  const artifactsRoot = join(bundleRoot, "artifacts");
+  if (artifactsRoot !== stagesRoot) mkdirSync(artifactsRoot, { recursive: false });
+  const artifacts = await Promise.all(
+    PORTABLE_TARGETS.map(async (target, index) => {
+      const finalRoot = join(artifactsRoot, target.platformTarget);
+      await copyPortableBundleFiles(
+        loaded[index].downloaded,
+        finalRoot,
+        loaded[index].manifest,
+        target,
+        loaded[index].setupPath,
+      );
+      notifyTargetCopied(deps, loaded[index].downloaded, target);
+      const artifact = {
+        platformTarget: target.platformTarget,
+        archivePath: `artifacts/${target.platformTarget}/${target.assetName}`,
+        manifestPath: `artifacts/${target.platformTarget}/manifest/portable-manifest.json`,
+      };
+      if (loaded[index].setupPath !== undefined) {
+        artifact.setupPath = `artifacts/${target.platformTarget}/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`;
+        const copiedSetupPath = join(finalRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+        artifact.setupSha256 = await sha256File(copiedSetupPath);
+        artifact.setupSizeBytes = statSync(copiedSetupPath).size;
+      }
+      return artifact;
+    }),
   );
+  const manifest = { schemaVersion: 1, artifacts };
+  writeFileSync(join(bundleRoot, BUNDLE_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }
 

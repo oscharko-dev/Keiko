@@ -1,50 +1,70 @@
-import { useEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { type CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
-import { useTranslate } from "@/lib/i18n";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimeStateName,
+  ModelCapability,
+  ModelReasoningEffort,
+} from "@oscharko-dev/keiko-contracts";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
-import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
-import { activeRunState, runStateLabel } from "./codingWorkbenchLabels";
 export { PanelTitle } from "./CodingWorkbenchPanelTitle";
 export { Timeline } from "./CodingWorkbenchTimeline";
 import { Icons } from "../../Icons";
+import {
+  ComposerShell,
+  composerEnterSubmits,
+  useComposerAutoGrow,
+} from "../../composer/ComposerShell";
+import KeikoSelect from "../../KeikoSelect";
+import { VoiceDictationButton, VoiceDictationPreviewFromController } from "../../VoiceDictation";
+import { OrganicWorkspaceBubble } from "../../EmptyWorkspaceBlob";
+// KeikoSelect is retained above for the model/source/authority controls; the composer's own
+// repository chooser was removed with #3563 (single source of truth is the header-wide workspace
+// switcher).
+import { useDictation } from "../../hooks/useDictation";
+import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapability";
+import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
+import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const CodeIcon = Icons.code;
+const CodingWorkbenchIcon = Icons.codingWorkbench;
 const MinimizeIcon = Icons.minimize;
 const FwdIcon = Icons.fwd;
 const ArrowUpIcon = Icons.arrowUp;
+const CubeIcon = Icons.cube;
+const BrainIcon = Icons.brain;
 
-export function WorkbenchHeader({
-  state,
-  focusRef,
-}: {
-  readonly state: CodingWorkbenchRuntimeState;
-  readonly focusRef: RefObject<HTMLHeadingElement | null>;
-}): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  const sharedT = useTranslate();
-  const snapshotState = state.run.value?.state ?? "idle";
-  // Release-audit F-01: the idle pill's "Ready to start" is a READINESS claim, not a run state.
-  // It consumes the one aggregated, server-confirmed readiness the start action itself gates on
-  // (`canStart` — model source incl. the sidecar gateway profile, workspace, runtime, run), so
-  // the header can never claim ready while any of those resources is unavailable or unconfirmed.
-  const blockedIdle = snapshotState === "idle" && !state.canStart;
+// Only the workbench uses this glyph; retain it behind the workbench's lazy boundary.
+function StopIcon({ size }: { readonly size: number }): ReactNode {
   return (
-    <header className={styles.header}>
-      <h2 className={styles.title} ref={focusRef} tabIndex={-1}>
-        {sharedT("rail.coding")}
-      </h2>
-      <span className={styles.statePill} data-state={blockedIdle ? "not-ready" : snapshotState}>
-        <span className={styles.statusSymbol} aria-hidden="true">
-          {activeRunState(snapshotState) ? "●" : "○"}
-        </span>
-        {blockedIdle ? t("codingWorkbench.header.notReady") : runStateLabel(snapshotState, t)}
-      </span>
-    </header>
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function WorkbenchWelcome(): ReactNode {
+  return (
+    <div className={styles.welcome}>
+      <OrganicWorkspaceBubble
+        accessibleDescription="Keiko"
+        centeredLogo
+        className={styles.welcomeBubble}
+      />
+    </div>
   );
 }
 
@@ -53,18 +73,29 @@ export interface TaskComposerActions {
   readonly onPause: () => void;
   readonly onResume: () => void;
   readonly onSend: () => void;
+  readonly onStop: () => void;
 }
 
-export function TaskStartSection({
-  taskIntent,
-  onTaskIntentChange,
-  actions,
-  canStart,
-  canResume,
-  runState,
-  mutationPending,
-  startBusy,
-}: {
+function runtimePreferenceOptions(
+  t: CodingWorkbenchTranslate,
+): readonly { readonly value: CodingWorkbenchRuntimePreference; readonly label: string }[] {
+  return [
+    { value: "managed-gateway", label: t("codingWorkbench.source.gateway.label") },
+    { value: "codex-subscription", label: t("codingWorkbench.source.codex.label") },
+  ];
+}
+
+function autonomyOptions(
+  t: CodingWorkbenchTranslate,
+): readonly { readonly value: CodingWorkbenchMode; readonly label: string }[] {
+  return [
+    { value: "governed-assist", label: t("codingWorkbench.mode.governed-assist.label") },
+    { value: "supervised-coding", label: t("codingWorkbench.mode.supervised-coding.label") },
+    { value: "autonomous-delivery", label: t("codingWorkbench.mode.autonomous-delivery.label") },
+  ];
+}
+
+interface TaskStartSectionProps {
   readonly taskIntent: string;
   readonly onTaskIntentChange: (value: string) => void;
   readonly actions: TaskComposerActions;
@@ -73,32 +104,129 @@ export function TaskStartSection({
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly mutationPending: boolean;
   readonly startBusy: boolean;
-}): ReactNode {
-  const t = useCodingWorkbenchTranslate();
+  readonly startBlockedReason: string | null;
+  /** Retained so `ProjectMemoryToggle` can be re-mounted (currently hidden per owner directive)
+   * without a signature change; the composer's context row is not rendered at all right now. */
+  readonly projectMemoryEnabled: boolean;
+  readonly onProjectMemoryEnabledChange: (enabled: boolean) => void;
+  readonly autonomyMode: CodingWorkbenchMode | null;
+  readonly autonomyLabel: string;
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly runtimePreference: CodingWorkbenchRuntimePreference;
+  readonly configurationLocked: boolean;
+  readonly onRequestedModeChange: (mode: CodingWorkbenchMode) => void;
+  readonly onRuntimePreferenceChange: (preference: CodingWorkbenchRuntimePreference) => void;
+  readonly models: readonly ModelCapability[];
+  readonly selectedModelId: string | null;
+  readonly reasoningEffort: ModelReasoningEffort | null;
+  readonly onSelectedModelChange: (modelId: string | null) => void;
+  readonly onReasoningEffortChange: (effort: ModelReasoningEffort | null) => void;
+}
+
+interface TaskComposerController {
+  readonly textareaRef: RefObject<HTMLTextAreaElement | null>;
+  readonly micButtonRef: RefObject<HTMLButtonElement | null>;
+  readonly dictation: ReturnType<typeof useDictation>;
+  readonly dictationVisible: boolean;
+  readonly submitBlocked: boolean;
+  readonly submitFeedback: string | null;
+  readonly submitFeedbackId: string;
+  readonly submit: () => void;
+}
+
+function submitBlockedReason(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (input.mutationPending) return t("codingWorkbench.composer.blocked.busy");
+  if (input.runState === "running") return null;
+  return emptySubmitReason(input, t) ?? unavailableSubmitReason(input, t);
+}
+
+function emptySubmitReason(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (input.taskIntent.trim().length > 0) return null;
+  return input.runState === "paused"
+    ? t("codingWorkbench.composer.blocked.emptyFollowUp")
+    : t("codingWorkbench.composer.blocked.emptyStart");
+}
+
+function unavailableSubmitReason(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (input.runState === "paused") {
+    return input.canResume ? null : t("codingWorkbench.composer.blocked.pauseDecision");
+  }
+  if (!input.startBusy && input.canStart) return null;
+  return input.startBlockedReason ?? t("codingWorkbench.composer.blocked.notReady");
+}
+
+function submitTask(input: TaskStartSectionProps): void {
+  if (input.runState === "running") input.actions.onPause();
+  else if (input.runState === "paused") input.actions.onSend();
+  else input.actions.onStart();
+}
+
+function useTaskComposerController(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): TaskComposerController {
+  const { onTaskIntentChange, taskIntent } = input;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const submitBlocked =
-    mutationPending ||
-    (runState !== "running" && taskIntent.trim().length === 0) ||
-    (runState !== "running" && runState !== "paused" && (!canStart || startBusy));
+  const micButtonRef = useRef<HTMLButtonElement>(null);
+  const submitFeedbackId = useId();
+  const [blockedSubmitAttempted, setBlockedSubmitAttempted] = useState(false);
+  const voiceCapability = useVoiceCapability();
+  const dictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  const insertTranscript = useCallback(
+    (text: string): void => {
+      onTaskIntentChange(taskIntent.trim().length === 0 ? text : `${taskIntent.trimEnd()} ${text}`);
+      textareaRef.current?.focus();
+    },
+    [onTaskIntentChange, taskIntent],
+  );
+  const dictation = useDictation({
+    onInsert: insertTranscript,
+  });
+  const blockedReason = submitBlockedReason(input, t);
+  const submitBlocked = blockedReason !== null;
   const submit = (): void => {
-    if (submitBlocked) return;
-    if (runState === "running") actions.onPause();
-    else if (runState === "paused") actions.onSend();
-    else actions.onStart();
+    if (submitBlocked) {
+      setBlockedSubmitAttempted(true);
+      return;
+    }
+    setBlockedSubmitAttempted(false);
+    submitTask(input);
   };
-  useEffect((): void => {
-    const textarea = textareaRef.current;
-    if (textarea === null) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${String(Math.min(textarea.scrollHeight, 220))}px`;
-  }, [taskIntent]);
+  useEffect(() => {
+    if (!submitBlocked) setBlockedSubmitAttempted(false);
+  }, [submitBlocked]);
+  useComposerAutoGrow(textareaRef, taskIntent);
+  return {
+    textareaRef,
+    micButtonRef,
+    dictation,
+    dictationVisible,
+    submitBlocked,
+    submitFeedback: blockedSubmitAttempted ? blockedReason : null,
+    submitFeedbackId,
+    submit,
+  };
+}
+
+export function TaskStartSection(input: TaskStartSectionProps): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const controller = useTaskComposerController(input, t);
   return (
     <form
       className="composer"
       aria-labelledby="coding-workbench-task-title"
       onSubmit={(event): void => {
         event.preventDefault();
-        submit();
+        controller.submit();
       }}
     >
       <h3 className="sr-only" id="coding-workbench-task-title">
@@ -107,124 +235,377 @@ export function TaskStartSection({
       <label className="sr-only" htmlFor="coding-workbench-task-intent">
         {t("codingWorkbench.task.instructions")}
       </label>
-      <div className="cmp-box">
-        <div className="cmp-input-stack">
-          <div className="cmp-input-combobox">
-            <textarea
-              id="coding-workbench-task-intent"
-              className="cmp-input"
-              ref={textareaRef}
-              rows={2}
-              value={taskIntent}
-              maxLength={65_536}
-              disabled={mutationPending}
-              placeholder={t("codingWorkbench.task.placeholder")}
-              onChange={(event): void => onTaskIntentChange(event.target.value)}
-              onKeyDown={(event): void => handleComposerKeyDown(event, submit, submitBlocked)}
-            />
-          </div>
-        </div>
-        <div className="cmp-footer-row">
-          <div className="cmp-bar cmp-bar-compact">
-            <div className="cmp-bar-model">
-              <span className="cmp-model mono">
-                <CodeIcon size={15} />
-                {t("codingWorkbench.header.eyebrow")}
-              </span>
-            </div>
-            <ComposerControls
-              actions={actions}
-              runState={runState}
-              submitBlocked={submitBlocked}
-              busy={mutationPending}
-              startBusy={startBusy}
-              canResume={canResume}
-              t={t}
-            />
-          </div>
-        </div>
-      </div>
+      <TaskComposerBox input={input} controller={controller} t={t} />
     </form>
   );
 }
 
-function handleComposerKeyDown(
-  event: KeyboardEvent<HTMLTextAreaElement>,
-  submit: () => void,
-  blocked: boolean,
-): void {
-  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-  event.preventDefault();
-  if (!blocked) submit();
+// #3563 owner directive: the composer no longer renders its own repository chip, branch chip, or
+// MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
+// workspace-context truth, exactly like every other window (Editor, Git, Local Knowledge).
+// `ProjectMemoryToggle` is kept below (unused) so re-enabling MemoriaViva is a one-line change: add
+// a wrapper that renders `<ProjectMemoryToggle input={input} t={t} />` above `TaskComposerBox`.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained for MemoriaViva re-enable
+function ProjectMemoryToggle({ input, t }: ControlProps): ReactNode {
+  const enabled = input.projectMemoryEnabled;
+  return (
+    <button
+      className={`${styles.composerContextChip} ${styles.composerMemoryChip}`}
+      type="button"
+      data-enabled={enabled ? "true" : "false"}
+      aria-pressed={enabled}
+      aria-label={t(
+        enabled
+          ? "codingWorkbench.composer.projectMemory.disable"
+          : "codingWorkbench.composer.projectMemory.enable",
+      )}
+      title={t(
+        enabled
+          ? "codingWorkbench.composer.projectMemory.help.enabled"
+          : "codingWorkbench.composer.projectMemory.help.disabled",
+      )}
+      disabled={input.configurationLocked}
+      onClick={(): void => input.onProjectMemoryEnabledChange(!enabled)}
+    >
+      <BrainIcon size={14} />
+      <span>{t("codingWorkbench.composer.projectMemory.label")}</span>
+    </button>
+  );
 }
 
-function ComposerControls({
-  actions,
-  runState,
-  submitBlocked,
-  busy,
-  startBusy,
-  canResume,
-  t,
-}: {
-  readonly actions: TaskComposerActions;
-  readonly runState: CodingWorkbenchRuntimeStateName | undefined;
-  readonly submitBlocked: boolean;
-  readonly busy: boolean;
-  readonly startBusy: boolean;
-  readonly canResume: boolean;
+function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode {
+  return (
+    <div className="cmp-box">
+      <ComposerShell
+        id="coding-workbench-task-intent"
+        value={input.taskIntent}
+        placeholder={t("codingWorkbench.task.placeholder")}
+        textareaRef={controller.textareaRef}
+        maxLength={65_536}
+        disabled={input.mutationPending}
+        onChange={(event): void => input.onTaskIntentChange(event.target.value)}
+        onKeyDown={(event): void => {
+          if (composerEnterSubmits(event)) controller.submit();
+        }}
+        belowInput={<DictationPreview controller={controller} />}
+        footer={<ComposerFooter input={input} controller={controller} t={t} />}
+      />
+    </div>
+  );
+}
+
+interface ControlProps {
+  readonly input: TaskStartSectionProps;
   readonly t: CodingWorkbenchTranslate;
+}
+
+interface ComposerViewProps extends ControlProps {
+  readonly controller: TaskComposerController;
+}
+
+function DictationPreview({
+  controller,
+}: {
+  readonly controller: TaskComposerController;
 }): ReactNode {
-  if (runState === "running") {
+  return (
+    <>
+      {controller.dictationVisible ? (
+        <VoiceDictationPreviewFromController
+          controller={controller.dictation}
+          onAfterDiscard={() => controller.micButtonRef.current?.focus()}
+        />
+      ) : null}
+      <SubmitBlockedFeedback controller={controller} />
+    </>
+  );
+}
+
+function SubmitBlockedFeedback({
+  controller,
+}: {
+  readonly controller: TaskComposerController;
+}): ReactNode {
+  if (controller.submitFeedback === null) return null;
+  return (
+    <p className={styles.composerSubmitNotice} id={controller.submitFeedbackId} role="alert">
+      {controller.submitFeedback}
+    </p>
+  );
+}
+
+function ComposerFooter({ input, controller, t }: ComposerViewProps): ReactNode {
+  return (
+    <div className="cmp-bar cmp-bar-compact">
+      <ComposerConfigurationControls input={input} t={t} />
+      <div className="cmp-bar-main">
+        <DictationControl controller={controller} />
+        <ComposerControls input={input} controller={controller} t={t} />
+      </div>
+    </div>
+  );
+}
+
+function DictationControl({
+  controller,
+}: {
+  readonly controller: TaskComposerController;
+}): ReactNode {
+  return controller.dictationVisible ? (
+    <VoiceDictationButton
+      phase={controller.dictation.phase}
+      audioLevel={controller.dictation.audioLevel}
+      onStart={controller.dictation.start}
+      onStop={controller.dictation.stop}
+      buttonRef={controller.micButtonRef}
+      compact
+    />
+  ) : null;
+}
+
+function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
+  const selected = input.models.find((model) => model.id === input.selectedModelId);
+  const efforts = selected?.reasoningEfforts ?? [];
+  // #3563 owner directive: only Keiko Gateway ships today; a Codex-subscription source is not
+  // decided yet. Hiding the source dropdown avoids offering a choice that does not exist. The
+  // `SourceControl` component below stays defined so re-enabling it is a one-line change once
+  // that decision lands (add `<SourceControl input={input} t={t} />` back into this row).
+  return (
+    <div className={`cmp-bar-model ${styles.composerConfiguration}`}>
+      <CodingModelControl input={input} t={t} />
+      <ReasoningControl input={input} efforts={efforts} t={t} />
+      <AuthorityControl input={input} t={t} />
+    </div>
+  );
+}
+
+function CodingModelControl({ input, t }: ControlProps): ReactNode {
+  if (input.runtimePreference !== "managed-gateway") return null;
+  const options = input.models.map((model) => ({ value: model.id, label: model.id }));
+  return (
+    <div className={`cmp-model mono ${styles.modelControl}`}>
+      <KeikoSelect
+        triggerClassName="cmp-model-select"
+        value={input.selectedModelId ?? ""}
+        placeholder={t("codingWorkbench.composer.model.none")}
+        ariaLabel={t("codingWorkbench.composer.model.label")}
+        menuTitle={t("codingWorkbench.composer.model.menu")}
+        menuMinWidth={280}
+        disabled={input.configurationLocked}
+        mono
+        leadingVisual={<CubeIcon size={14} />}
+        onOpen={requestGatewayModelCatalogRefresh}
+        sections={[{ options }]}
+        onValueChange={(value): void => {
+          if (input.models.some((model) => model.id === value)) input.onSelectedModelChange(value);
+        }}
+      />
+    </div>
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained for the restore-path
+function SourceControl({ input, t }: ControlProps): ReactNode {
+  const options = runtimePreferenceOptions(t);
+  return (
+    <div className={`cmp-model mono ${styles.sourceControl}`}>
+      <KeikoSelect
+        value={input.runtimePreference}
+        ariaLabel={t("codingWorkbench.composer.source.label")}
+        menuTitle={t("codingWorkbench.composer.source.menu")}
+        menuMinWidth={220}
+        disabled={input.configurationLocked}
+        mono
+        sections={[{ options }]}
+        onValueChange={(value): void => {
+          const option = options.find((item) => item.value === value);
+          if (option !== undefined) input.onRuntimePreferenceChange(option.value);
+        }}
+      />
+    </div>
+  );
+}
+
+interface ReasoningControlProps extends ControlProps {
+  readonly efforts: readonly ModelReasoningEffort[];
+}
+
+function ReasoningControl({ input, efforts, t }: ReasoningControlProps): ReactNode {
+  if (efforts.length < 2) return null;
+  const options = efforts.map((effort) => ({
+    value: effort,
+    label: t(`codingWorkbench.composer.effort.${effort}`),
+  }));
+  return (
+    <div className={`cmp-model mono ${styles.reasoningControl}`}>
+      <KeikoSelect
+        value={input.reasoningEffort ?? ""}
+        ariaLabel={t("codingWorkbench.composer.effort.label")}
+        menuTitle={t("codingWorkbench.composer.effort.menu")}
+        menuMinWidth={180}
+        disabled={input.configurationLocked}
+        mono
+        leadingVisual={<BrainIcon size={14} />}
+        sections={[{ options }]}
+        onValueChange={(value): void => {
+          const effort = efforts.find((item) => item === value);
+          if (effort !== undefined) input.onReasoningEffortChange(effort);
+        }}
+      />
+    </div>
+  );
+}
+
+function AuthorityControl({ input, t }: ControlProps): ReactNode {
+  const confirmed = input.autonomyMode !== null;
+  const confirmedModeId = useId();
+  return (
+    <div
+      className={`cmp-model ${styles.authorityControl}`}
+      {...(confirmed && input.autonomyMode === "autonomous-delivery"
+        ? { "data-full-access": "true" }
+        : {})}
+    >
+      <KeikoSelect
+        value={input.requestedMode}
+        ariaLabel={t("codingWorkbench.composer.authority.label")}
+        ariaDescribedBy={confirmed ? confirmedModeId : undefined}
+        menuTitle={t("codingWorkbench.composer.authority.menu")}
+        menuMinWidth={180}
+        showMenuHeader={false}
+        disabled={input.configurationLocked}
+        leadingVisual={<CodingWorkbenchIcon size={14} />}
+        sections={[{ options: autonomyOptions(t) }]}
+        onValueChange={(value): void => {
+          if (isCodingWorkbenchMode(value)) input.onRequestedModeChange(value);
+        }}
+      />
+      {confirmed ? (
+        <span className="sr-only" id={confirmedModeId}>
+          {input.autonomyLabel}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function ComposerControls({ input, controller, t }: ComposerViewProps): ReactNode {
+  if (input.runState === "running") {
+    return <RunningControl input={input} t={t} />;
+  }
+  if (input.runState === "paused") {
+    return <PausedControls input={input} controller={controller} t={t} />;
+  }
+  if (
+    input.runState === "starting" ||
+    input.runState === "ready" ||
+    input.runState === "awaiting-approval" ||
+    input.runState === "stopping"
+  ) {
     return (
       <div className="cmp-bar-main">
-        <button
-          className="cmp-send cmp-send-cancel cmp-tip-end"
-          type={submitBlocked ? "button" : "submit"}
-          data-on={!submitBlocked}
-          data-tip={t("codingWorkbench.composer.pause")}
-          aria-label={t("codingWorkbench.composer.pause")}
-          aria-disabled={submitBlocked}
-        >
-          <MinimizeIcon size={16} />
-        </button>
+        <StopControl input={input} t={t} />
       </div>
     );
   }
-  if (runState === "paused") {
-    return (
-      <div className="cmp-bar-main">
-        <button
-          className="cmp-icon ui-tip"
-          type="button"
-          data-tip={t("codingWorkbench.composer.resume")}
-          aria-label={t("codingWorkbench.composer.resume")}
-          disabled={busy || !canResume}
-          onClick={actions.onResume}
-        >
-          <FwdIcon size={16} />
-        </button>
-        <button
-          className="cmp-send cmp-tip-end"
-          type={submitBlocked ? "button" : "submit"}
-          data-on={!submitBlocked}
-          data-tip={t("codingWorkbench.composer.send")}
-          aria-label={t("codingWorkbench.composer.send")}
-          aria-disabled={submitBlocked}
-        >
-          <ArrowUpIcon size={16} />
-        </button>
-      </div>
-    );
-  }
+  return <StartControl input={input} controller={controller} t={t} />;
+}
+
+function StopControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): ReactNode {
+  return (
+    <button
+      className={`cmp-icon ui-tip ${styles.cmpRunStop}`}
+      type="button"
+      data-tip={t("codingWorkbench.controls.stop")}
+      aria-label={t("codingWorkbench.controls.stop")}
+      disabled={input.mutationPending || input.runState === "stopping"}
+      onClick={input.actions.onStop}
+    >
+      <StopIcon size={14} />
+    </button>
+  );
+}
+
+function RunningControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): ReactNode {
+  return (
+    <div className="cmp-bar-main">
+      <button
+        className="cmp-icon ui-tip"
+        type="button"
+        data-tip={t("codingWorkbench.composer.pause")}
+        aria-label={t("codingWorkbench.composer.pause")}
+        disabled={input.mutationPending}
+        onClick={input.actions.onPause}
+      >
+        <MinimizeIcon size={16} />
+      </button>
+      <button
+        className="cmp-send cmp-send-cancel cmp-tip-end"
+        type="button"
+        data-on="true"
+        data-tip={t("codingWorkbench.controls.stop")}
+        aria-label={t("codingWorkbench.controls.stop")}
+        disabled={input.mutationPending}
+        onClick={input.actions.onStop}
+      >
+        <StopIcon size={16} />
+      </button>
+    </div>
+  );
+}
+
+function PausedControls({ input, controller, t }: ComposerViewProps): ReactNode {
+  // A follow-up resumes the paused run on the server before it replaces the task, so it is offered
+  // exactly where Resume is: a run paused for an operator decision keeps that decision as its one
+  // exit (run 16, 2026-09-10: a follow-up sent into such a pause was refused by the runtime).
+  const sendBlocked = controller.submitBlocked || !input.canResume;
+  return (
+    <div className="cmp-bar-main">
+      <StopControl input={input} t={t} />
+      <button
+        className="cmp-icon ui-tip"
+        type="button"
+        data-tip={t("codingWorkbench.composer.resume")}
+        aria-label={t("codingWorkbench.composer.resume")}
+        disabled={input.mutationPending || !input.canResume}
+        onClick={input.actions.onResume}
+      >
+        <FwdIcon size={16} />
+      </button>
+      <button
+        className="cmp-send cmp-tip-end"
+        type={sendBlocked ? "button" : "submit"}
+        data-on={!sendBlocked}
+        data-tip={t("codingWorkbench.composer.send")}
+        aria-label={t("codingWorkbench.composer.send")}
+        aria-disabled={sendBlocked}
+        aria-describedby={
+          controller.submitFeedback === null ? undefined : controller.submitFeedbackId
+        }
+        onClick={sendBlocked ? controller.submit : undefined}
+      >
+        <ArrowUpIcon size={16} />
+      </button>
+    </div>
+  );
+}
+
+function StartControl({ input, controller, t }: ComposerViewProps): ReactNode {
+  const label = input.startBusy
+    ? t("codingWorkbench.task.starting")
+    : t("codingWorkbench.task.start");
   return (
     <button
       className="cmp-send cmp-tip-end"
-      type={submitBlocked ? "button" : "submit"}
-      data-on={!submitBlocked}
-      data-tip={startBusy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
-      aria-label={startBusy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
-      aria-disabled={submitBlocked}
+      type={controller.submitBlocked ? "button" : "submit"}
+      data-on={!controller.submitBlocked}
+      data-tip={label}
+      aria-label={label}
+      aria-disabled={controller.submitBlocked}
+      aria-describedby={
+        controller.submitFeedback === null ? undefined : controller.submitFeedbackId
+      }
+      onClick={controller.submitBlocked ? controller.submit : undefined}
     >
       <ArrowUpIcon size={16} />
     </button>

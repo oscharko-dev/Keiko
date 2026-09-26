@@ -39,6 +39,7 @@ export function computeEditorViewModel(props: KeikoCodeEditorProps): EditorViewM
     saveError: props.saveError,
     dirty: isDocumentDirty(props.fileModel),
     truncated,
+    overLimit,
     modifiedAt: props.modifiedAt,
   });
   return {

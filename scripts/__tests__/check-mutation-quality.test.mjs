@@ -7,8 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   changedLineRanges,
   evaluateMutationBaseline,
+  evaluateStrictMutation,
   evaluateScopedMutation,
   executeMutationQualityCli,
+  mutationQualityCliInput,
   mutationFingerprint,
   mutantTouchesChangedLine,
   parseChangedLineRanges,
@@ -103,6 +105,44 @@ describe("mutation quality", () => {
         "Surviving mutant count regressed.",
         "No-coverage mutant count regressed.",
         expect.stringContaining("Unexpected mutant result"),
+      ]),
+    );
+  });
+
+  it("flags zero-kill reports as instrumentation failures before quality interpretation", () => {
+    expect(
+      evaluateMutationBaseline(report(mutant("Survived")), {
+        acceptedDebt: [mutationFingerprint("src/security.ts", mutant("Survived"))],
+        maximumNoCoverage: 0,
+        maximumSurvived: 1,
+        minimumScore: 0,
+      }).failures,
+    ).toContain(
+      "Mutation run detected zero killed or timed-out mutants; verify Stryker/Vitest instrumentation before interpreting the score.",
+    );
+  });
+
+  it("enforces strict mutation reports without a historical-debt allowance", () => {
+    expect(evaluateStrictMutation(report(mutant("Killed"))).failures).toEqual([]);
+    expect(evaluateStrictMutation(report(mutant("Killed"), mutant("Survived"))).failures).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("below 100.00%"),
+        "Surviving mutant count 1 exceeds 0.",
+      ]),
+    );
+    expect(evaluateStrictMutation(report(mutant("Killed"), mutant("NoCoverage"))).failures).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("below 100.00%"),
+        "No-coverage mutant count 1 exceeds 0.",
+      ]),
+    );
+    expect(evaluateStrictMutation(report()).failures).toEqual([
+      "Mutation score 0.00% is below 100.00%.",
+    ]);
+    expect(evaluateStrictMutation(report(mutant("CompileError"))).failures).toEqual(
+      expect.arrayContaining([
+        "Unexpected mutant result: src/security.ts:1:CompileError",
+        "Mutation score 0.00% is below 100.00%.",
       ]),
     );
   });
@@ -250,6 +290,96 @@ describe("mutation quality", () => {
       run,
     });
     expect(run).toHaveBeenCalledWith({ base: "base", head: "head", mode: "scoped" });
+  });
+
+  it("passes strict report arguments to the runner", async () => {
+    const run = vi.fn(async () => undefined);
+    await executeMutationQualityCli({
+      args: [
+        "--strict",
+        "--report",
+        "debug.json",
+        "--minimum-score",
+        "100",
+        "--maximum-survived",
+        "0",
+        "--maximum-no-coverage",
+        "0",
+      ],
+      run,
+    });
+    expect(run).toHaveBeenCalledWith({
+      maximumNoCoverage: 0,
+      maximumSurvived: 0,
+      minimumScore: 100,
+      mode: "strict",
+      reportPath: "debug.json",
+    });
+  });
+
+  it("runs strict report evaluation with the constitutional defaults", async () => {
+    const log = vi.fn();
+    const read = vi.fn(async () => JSON.stringify(report(mutant("Killed"))));
+
+    await expect(runMutationQuality({ log, mode: "strict", read })).resolves.toMatchObject({
+      current: { score: 100 },
+      failures: [],
+    });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("100.00%"));
+  });
+
+  it("parses baseline paths and rejects ambiguous modes or invalid numeric thresholds", () => {
+    expect(
+      mutationQualityCliInput(["--baseline", "baseline.json", "--report", "report.json"]),
+    ).toEqual({
+      baselinePath: "baseline.json",
+      mode: "baseline",
+      reportPath: "report.json",
+    });
+    expect(() => mutationQualityCliInput(["--scoped", "--strict"])).toThrow(
+      "choose only one mutation-quality mode",
+    );
+    expect(() => mutationQualityCliInput(["--strict", "--minimum-score", "not-a-number"])).toThrow(
+      "--minimum-score must be a non-negative number",
+    );
+    expect(() => mutationQualityCliInput(["--strict", "--maximum-survived", "-1"])).toThrow(
+      "--maximum-survived must be a non-negative number",
+    );
+  });
+
+  it("rejects weakened strict CLI thresholds before invoking the runner", async () => {
+    const error = vi.fn();
+    const run = vi.fn(async () => undefined);
+    const setExitCode = vi.fn();
+
+    await executeMutationQualityCli({
+      args: ["--strict", "--minimum-score", "0", "--maximum-no-coverage", "1"],
+      error,
+      run,
+      setExitCode,
+    });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      "mutation-quality: FAIL - strict mode requires --minimum-score 100, --maximum-survived 0, and --maximum-no-coverage 0.",
+    );
+    expect(setExitCode).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects weakened strict run input before reading the report", async () => {
+    const read = vi.fn(async () => JSON.stringify(report(mutant("Killed"))));
+
+    await expect(
+      runMutationQuality({
+        maximumNoCoverage: 1,
+        minimumScore: 0,
+        mode: "strict",
+        read,
+      }),
+    ).rejects.toThrow(
+      "strict mode requires --minimum-score 100, --maximum-survived 0, and --maximum-no-coverage 0.",
+    );
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("uses default CLI error adapters for non-Error failures", async () => {

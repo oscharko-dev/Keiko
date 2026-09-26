@@ -13,12 +13,17 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
-  fetchGitDeliverySyncExecute,
+  fetchGitDeliveryCommitDraft,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
+  fetchGitDeliveryPrApprove,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionStatus,
   fetchGitDeliveryPushExecute,
   fetchGitDeliveryPushPreview,
   fetchGitDeliveryStage,
@@ -28,7 +33,11 @@ import {
   fetchGitRemotes,
   fetchGitSummary,
   fetchGitStatus,
+  fetchGitStructuredDiff,
   fetchProjects,
+  proposeCommit,
+  proposeGitDeliverySync,
+  proposePush,
   reconnectProject,
 } from "@/lib/api";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
@@ -48,10 +57,70 @@ import {
 
 // ─── DEFAULT_GIT_CLIENT wiring ────────────────────────────────────────────────
 
-describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
-  it("listRepositories is fetchProjects", () => {
-    expect(DEFAULT_GIT_CLIENT.listRepositories).toBe(fetchProjects);
+// The window's pairing attempt, held open by a case until it settles it.
+const pairing = vi.hoisted(() => ({ settled: Promise.resolve(true) }));
+vi.mock("@/lib/coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/coding-app-session-client")>()),
+  codingAppSessionPairingSettled: (): Promise<boolean> => pairing.settled,
+}));
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  const read = (): Promise<undefined> => Promise.resolve(undefined);
+  return {
+    ...actual,
+    fetchProjects: vi.fn(read),
+    fetchGitBranches: vi.fn(read),
+    fetchGitStatus: vi.fn(read),
+    fetchGitSummary: vi.fn(read),
+    fetchGitHistory: vi.fn(read),
+    fetchGitRemotes: vi.fn(read),
+    fetchGitDiff: vi.fn(read),
+    fetchGitStructuredDiff: vi.fn(read),
+  };
+});
+
+function pendingPairing(): { readonly settle: (paired: boolean) => void } {
+  let settle = (_paired: boolean): void => undefined;
+  pairing.settled = new Promise<boolean>((resolve) => {
+    settle = resolve;
   });
+  return { settle: (paired): void => settle(paired) };
+}
+
+describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
+  // A Git read may name a managed task-workspace root, which the BFF answers only for a paired
+  // browser (ADR-0141): each read waits for the window's pairing attempt to settle, then reaches its
+  // BFF function with the caller's arguments (PR #3452 review).
+  it.each([
+    ["listRepositories", fetchProjects, []],
+    ["listBranches", fetchGitBranches, ["/repo"]],
+    ["getStatus", fetchGitStatus, ["/repo", { includeIgnored: true }]],
+    ["getSummary", fetchGitSummary, ["/repo"]],
+    ["getHistory", fetchGitHistory, [{ root: "/repo", limit: 20, skip: 0 }]],
+    ["getRemotes", fetchGitRemotes, ["/repo"]],
+    ["getDiff", fetchGitDiff, [{ root: "/repo", path: "src/a.ts" }]],
+    [
+      "getStructuredDiff",
+      fetchGitStructuredDiff,
+      [{ root: "/repo", path: "src/a.ts", scope: "unstaged" }],
+    ],
+  ] as const)(
+    "%s reaches its BFF function once the pairing has settled",
+    async (method, read, args) => {
+      vi.mocked(read).mockClear();
+      const attempt = pendingPairing();
+      const call = (
+        DEFAULT_GIT_CLIENT[method] as unknown as (...input: readonly unknown[]) => Promise<unknown>
+      )(...args);
+      await Promise.resolve();
+      expect(read).not.toHaveBeenCalled();
+
+      attempt.settle(true);
+      await call;
+
+      expect(read).toHaveBeenCalledWith(...args);
+    },
+  );
 
   it("registerRepository is createProject", () => {
     expect(DEFAULT_GIT_CLIENT.registerRepository).toBe(createProject);
@@ -63,30 +132,6 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("cloneRepository is cloneRepository (fetchCloneRepository)", () => {
     expect(DEFAULT_GIT_CLIENT.cloneRepository).toBe(fetchCloneRepository);
-  });
-
-  it("listBranches is fetchGitBranches", () => {
-    expect(DEFAULT_GIT_CLIENT.listBranches).toBe(fetchGitBranches);
-  });
-
-  it("getStatus is fetchGitStatus", () => {
-    expect(DEFAULT_GIT_CLIENT.getStatus).toBe(fetchGitStatus);
-  });
-
-  it("getSummary is fetchGitSummary", () => {
-    expect(DEFAULT_GIT_CLIENT.getSummary).toBe(fetchGitSummary);
-  });
-
-  it("getHistory is fetchGitHistory", () => {
-    expect(DEFAULT_GIT_CLIENT.getHistory).toBe(fetchGitHistory);
-  });
-
-  it("getRemotes is fetchGitRemotes", () => {
-    expect(DEFAULT_GIT_CLIENT.getRemotes).toBe(fetchGitRemotes);
-  });
-
-  it("getDiff is fetchGitDiff", () => {
-    expect(DEFAULT_GIT_CLIENT.getDiff).toBe(fetchGitDiff);
   });
 
   it("branchCreate is fetchGitDeliveryLocalBranchCreate", () => {
@@ -109,16 +154,27 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
     expect(DEFAULT_GIT_CLIENT.commitPreview).toBe(fetchGitDeliveryCommitPreview);
   });
 
+  it("commitDraft is fetchGitDeliveryCommitDraft", () => {
+    expect(DEFAULT_GIT_CLIENT.commitDraft).toBe(fetchGitDeliveryCommitDraft);
+  });
+
   it("commitExecute is fetchGitDeliveryCommitExecute", () => {
     expect(DEFAULT_GIT_CLIENT.commitExecute).toBe(fetchGitDeliveryCommitExecute);
+  });
+
+  // F3 (epic #3384 final audit): commitPropose is the mint-then-execute entry point
+  // commitChanges (GitClientWindow.tsx) actually calls, so it must wire to the real
+  // mint-then-execute wrapper, not to the bare execute call.
+  it("commitPropose is proposeCommit", () => {
+    expect(DEFAULT_GIT_CLIENT.commitPropose).toBe(proposeCommit);
   });
 
   it("syncPreview is fetchGitDeliverySyncPreview", () => {
     expect(DEFAULT_GIT_CLIENT.syncPreview).toBe(fetchGitDeliverySyncPreview);
   });
 
-  it("syncExecute is fetchGitDeliverySyncExecute", () => {
-    expect(DEFAULT_GIT_CLIENT.syncExecute).toBe(fetchGitDeliverySyncExecute);
+  it("syncExecute is the approval-minting sync proposal", () => {
+    expect(DEFAULT_GIT_CLIENT.syncExecute).toBe(proposeGitDeliverySync);
   });
 
   it("pushPreview is fetchGitDeliveryPushPreview", () => {
@@ -127,6 +183,37 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("pushExecute is fetchGitDeliveryPushExecute", () => {
     expect(DEFAULT_GIT_CLIENT.pushExecute).toBe(fetchGitDeliveryPushExecute);
+  });
+
+  // F3 (epic #3384 final audit): pushPropose is the mint-then-execute entry point runPushSync
+  // (GitClientWindow.tsx) actually calls, so it must wire to the real mint-then-execute
+  // wrapper, not to the bare execute call.
+  it("pushPropose is proposePush", () => {
+    expect(DEFAULT_GIT_CLIENT.pushPropose).toBe(proposePush);
+  });
+
+  // #3387/#3399 (epic #3384): before this pass, DEFAULT_GIT_CLIENT had no prApprove or
+  // prDescription* fields at all, so GovernedPullRequestCard rendered through the generic Git
+  // window (GitClientWindow) always degraded to the pre-#3387 unapproved pr-execute call and never
+  // showed the preview -> approve -> apply Description panel. Wired exactly like mergeApprove.
+  it("prApprove is fetchGitDeliveryPrApprove", () => {
+    expect(DEFAULT_GIT_CLIENT.prApprove).toBe(fetchGitDeliveryPrApprove);
+  });
+
+  it("prDescriptionPreview is fetchGitDeliveryPrDescriptionPreview", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionPreview).toBe(fetchGitDeliveryPrDescriptionPreview);
+  });
+
+  it("prDescriptionApprove is fetchGitDeliveryPrDescriptionApprove", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionApprove).toBe(fetchGitDeliveryPrDescriptionApprove);
+  });
+
+  it("prDescriptionApply is fetchGitDeliveryPrDescriptionApply", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionApply).toBe(fetchGitDeliveryPrDescriptionApply);
+  });
+
+  it("prDescriptionStatus is fetchGitDeliveryPrDescriptionStatus", () => {
+    expect(DEFAULT_GIT_CLIENT.prDescriptionStatus).toBe(fetchGitDeliveryPrDescriptionStatus);
   });
 });
 
@@ -362,7 +449,19 @@ describe("useGitActions", () => {
       // commitPreview/pushPreview are not driven by these tests (runPreview is never called);
       // a bare typed mock satisfies the seam type without fabricating a full preview envelope.
       commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        source: "model",
+        suggestedMessage: "chore: update staged changes\n\nBody.",
+        summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+      })),
       commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        actionKind: "commit",
+      })),
+      commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ({
         schemaVersion: "1",
         status: "succeeded",
         actionKind: "commit",
@@ -375,8 +474,18 @@ describe("useGitActions", () => {
         status: "succeeded",
         actionKind: "push",
       })),
+      pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        actionKind: "push",
+      })),
       prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+      prApprove: vi.fn<GitClientSeam["prApprove"]>(),
       prExecute: vi.fn<GitClientSeam["prExecute"]>(),
+      prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(),
+      prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(),
+      prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(),
+      prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(),
       mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
       mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(),
       mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),

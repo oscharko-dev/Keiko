@@ -11,10 +11,15 @@ import {
   signatureKind,
 } from "./update-portable-staging-shared.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./coding-runtime/opencodeProtocolSurface.js";
 import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeToolSchemas.js";
+import {
+  evaluationAttestationDeclaredNegative,
+  platformCheckKeys,
+  type PortableRuntimeLane,
+} from "./coding-runtime/portableRuntimeLane.js";
 
 export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
@@ -28,7 +33,7 @@ export interface PortableSidecarRuntimeVerification {
   readonly sbomEvidenceSha256: string;
   readonly protocolSchemaRawSha256: string;
   readonly protocolHandshakeDigest: string;
-  readonly protocolHandshakeAlgorithm: typeof OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM;
+  readonly protocolHandshakeAlgorithm: typeof OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM;
   /**
    * Server-owned provenance facts. This projection is intentionally content-free and is the
    * only portable-runtime evidence a launch path may consume.
@@ -60,6 +65,13 @@ export interface PortableSidecarAvailabilityEvidence {
 
 export interface PortableSidecarAvailabilityInput {
   readonly target: UpdatePortableTarget;
+  /**
+   * Whether the admitting policy actually performs platform signature and supervisor-qualification
+   * checks. `false` (the dev lane and the packaged evaluation lane) OMITS those two checks from the
+   * closed order instead of asserting a record that is honestly false. It can only remove a check,
+   * never turn a stored `false` into a pass — `remainsVerified` still governs the other six.
+   */
+  readonly platformAttested: boolean;
   readonly redistributionApproved?: boolean | undefined;
   readonly payloadPresent?: boolean | undefined;
   readonly archiveDigestVerified?: boolean | undefined;
@@ -101,8 +113,8 @@ export class PortableSidecarVerificationError extends Error {
 
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
-const OPENCODE_COMMIT = "474abdd7ee60f4b67476cfcef7e5311beff4a824";
-const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const OPENCODE_COMMIT = "b8cedc1a7a5e2916bbb65dc1d4b620729c261638";
+const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const SIGNING_KEYS = [
   "notarizationRequired",
   "notarizationVerified",
@@ -166,14 +178,18 @@ function availabilityChecks(
       reason: "protocol-schema-mismatch",
       verified: remainsVerified(evidence.protocolSchemaVerified, input.protocolSchemaVerified),
     },
-    {
-      reason: "signature-unverified",
-      verified: remainsVerified(evidence.signatureVerified, input.signatureVerified),
-    },
-    {
-      reason: "qualification-missing",
-      verified: remainsVerified(evidence.qualificationVerified, input.qualificationVerified),
-    },
+    ...(input.platformAttested
+      ? ([
+          {
+            reason: "signature-unverified",
+            verified: remainsVerified(evidence.signatureVerified, input.signatureVerified),
+          },
+          {
+            reason: "qualification-missing",
+            verified: remainsVerified(evidence.qualificationVerified, input.qualificationVerified),
+          },
+        ] as const)
+      : []),
   ];
 }
 
@@ -249,30 +265,57 @@ function targetChecksVerified(
   target: UpdatePortableTarget,
   checks: Record<string, unknown> | undefined,
 ): boolean {
-  const keys =
-    target === "windows-x64"
-      ? ["publisherChainVerified", "timestampVerified"]
-      : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
-  return keys.every((key) => checks?.[key] === true);
+  return platformCheckKeys(target).every((key) => checks?.[key] === true);
+}
+
+/**
+ * The lane-independent half. The exact 11-key signing set, the target's signature kind, the
+ * macOS-bound notarization requirement and all three shipped-executable digests are demanded
+ * identically on every lane — the evaluation lane waives platform PROOF, never evidence.
+ */
+function signingIntegrityVerified(
+  signing: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): boolean {
+  return (
+    signingKeysExact(signing) &&
+    fieldEquals(signing, "signatureKind", signatureKind(target)) &&
+    fieldEquals(
+      signing,
+      "notarizationRequired",
+      target === "macos-arm64" || target === "macos-x64",
+    ) &&
+    shippedExecutableEvidenceVerified(signing)
+  );
 }
 
 function signingVerified(
   signing: Record<string, unknown> | undefined,
   target: UpdatePortableTarget,
+  lane: PortableRuntimeLane,
 ): boolean {
   if (signing === undefined) return false;
-  if (!signingKeysExact(signing)) return false;
-  const checks = recordAt(signing, "verificationChecks");
-  const macos = target !== "windows-x64";
+  if (!signingIntegrityVerified(signing, target)) return false;
+  return lane === "release-qualified"
+    ? releaseQualifiedAttestationVerified(signing, target)
+    : evaluationAttestationDeclaredNegative(signing, target, {
+        requireReasonCodes: true,
+        requirePolicy: true,
+      });
+}
+
+/** The production clause, unchanged: every platform boolean must be present and TRUE. */
+function releaseQualifiedAttestationVerified(
+  signing: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): boolean {
+  const macos = target === "macos-arm64" || target === "macos-x64";
   return (
     fieldEquals(signing, "verificationPolicy", "production") &&
     fieldEquals(signing, "verificationStatus", "verified-production") &&
-    fieldEquals(signing, "signatureKind", signatureKind(target)) &&
     fieldEquals(signing, "signatureVerified", true) &&
-    fieldEquals(signing, "notarizationRequired", macos) &&
     fieldEquals(signing, "notarizationVerified", macos) &&
-    shippedExecutableEvidenceVerified(signing) &&
-    targetChecksVerified(target, checks)
+    targetChecksVerified(target, recordAt(signing, "verificationChecks"))
   );
 }
 
@@ -317,9 +360,9 @@ function portableProvenanceVerified(
     fieldEquals(upstream, "tag", `v${OPENCODE_PINNED_VERSION}`),
     fieldEquals(upstream, "commit", OPENCODE_COMMIT),
     fieldEquals(adapter, "adapterName", "keiko-coding-sidecar"),
-    fieldEquals(adapter, "adapterVersion", "1"),
+    fieldEquals(adapter, "adapterVersion", "2"),
     fieldEquals(adapter, "transport", "http-sse"),
-    fieldEquals(schema, "path", "packages/sdk/openapi.json"),
+    fieldEquals(schema, "path", "packages/protocol/openapi.json"),
     fieldEquals(schema, "sha256", OPENCODE_SCHEMA_SHA256),
     fieldEquals(schema, "hashAlgorithm", "sha256"),
     fieldEquals(schema, "hashEncoding", "lowercase-hex"),
@@ -390,6 +433,7 @@ function parseRuntime(
   entry: unknown,
   target: UpdatePortableTarget,
   names: Set<string>,
+  lane: PortableRuntimeLane,
 ): PortableSidecarRuntimeVerification {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     fail("sidecar-metadata-malformed", "sidecar metadata is malformed");
@@ -400,7 +444,7 @@ function parseRuntime(
     fail("sidecar-metadata-malformed", "sidecar identity is malformed");
   }
   names.add(name);
-  return parseNamedRuntime(runtime, target, name);
+  return parseNamedRuntime(runtime, target, name, lane);
 }
 
 function parsePayload(runtime: Record<string, unknown>, name: string): ParsedSidecarPayload {
@@ -421,9 +465,10 @@ function parsePayload(runtime: Record<string, unknown>, name: string): ParsedSid
 function requiredShippedExecutableDigests(
   runtime: Record<string, unknown>,
   target: UpdatePortableTarget,
+  lane: PortableRuntimeLane,
 ): { readonly sha256: string; readonly treeSha256: string } {
   const signing = recordAt(runtime, "signing");
-  if (signing === undefined || !signingVerified(signing, target)) {
+  if (signing === undefined || !signingVerified(signing, target, lane)) {
     fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
   }
   const sha256 = digestFieldRequired(signing, "shippedExecutableSha256");
@@ -450,6 +495,7 @@ function parseNamedRuntime(
   runtime: Record<string, unknown>,
   target: UpdatePortableTarget,
   name: string,
+  lane: PortableRuntimeLane,
 ): PortableSidecarRuntimeVerification {
   if (runtime.platformTarget !== target)
     fail("sidecar-platform-mismatch", "sidecar target mismatch");
@@ -462,7 +508,7 @@ function parseNamedRuntime(
     fail("sidecar-metadata-malformed", "sidecar executable tree digest is invalid");
   }
   const evidence = requiredRuntimeEvidence(runtime, payload.payloadRootPath);
-  const shipped = requiredShippedExecutableDigests(runtime, target);
+  const shipped = requiredShippedExecutableDigests(runtime, target, lane);
   const summary = baseSummary(runtime, target, payload.payloadSha256, payload.sizeBytes);
   if (summary === undefined) fail("sidecar-metadata-malformed", "sidecar metadata is incomplete");
   return {
@@ -476,18 +522,29 @@ function parseNamedRuntime(
     sbomEvidencePath: evidence.sbom.path,
     sbomEvidenceSha256: evidence.sbom.sha256,
     protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-    protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
-    availability: {
-      redistributionApproved: true,
-      payloadPresent: true,
-      archiveDigestVerified: true,
-      executableTreeDigestVerified: true,
-      runtimeVersionVerified: true,
-      protocolSchemaVerified: true,
-      signatureVerified: true,
-      qualificationVerified: true,
-    },
+    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
+    availability: laneAvailability(lane),
+  };
+}
+
+/**
+ * Honest availability record. The evaluation lane never claims platform signature or supervisor
+ * qualification: recording them true would forge packaged-grade evidence and make the two lanes
+ * indistinguishable to every downstream consumer, including the readiness projection. This is the
+ * same rule ADR-0140 placed on the dev lane (devLanePortableCodingRuntime.ts `devLaneAvailability`).
+ */
+function laneAvailability(lane: PortableRuntimeLane): PortableSidecarAvailabilityEvidence {
+  const platformAttested = lane === "release-qualified";
+  return {
+    redistributionApproved: true,
+    payloadPresent: true,
+    archiveDigestVerified: true,
+    executableTreeDigestVerified: true,
+    runtimeVersionVerified: true,
+    protocolSchemaVerified: true,
+    signatureVerified: platformAttested,
+    qualificationVerified: platformAttested,
   };
 }
 
@@ -548,12 +605,17 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * `lane` defaults CLOSED to the release-qualified clause, so the update/promotion entry point below
+ * keeps its original call shape and can never reach the evaluation lane.
+ */
 function verifiedSidecars(
   rawSidecars: readonly unknown[],
   target: UpdatePortableTarget,
+  lane: PortableRuntimeLane = "release-qualified",
 ): readonly PortableSidecarRuntimeVerification[] {
   const names = new Set<string>();
-  return rawSidecars.map((entry) => parseRuntime(entry, target, names));
+  return rawSidecars.map((entry) => parseRuntime(entry, target, names, lane));
 }
 
 export function verifyPortableManifestSidecars(
@@ -583,15 +645,20 @@ export function verifyPortableManifestSidecars(
  * Parses sidecars from the smaller platform-sealed runtime activation document. The activation
  * signature/receipt binds the complete document at the caller's trust boundary, so it deliberately
  * has no second mutable release-impact copy.
+ *
+ * `lane` defaults CLOSED: an omitted argument evaluates the release-qualified clause, so an
+ * evaluation-declared artifact is refused unless the caller has itself derived the declared lane
+ * from the artifact's own activation document.
  */
 export function verifyPortableAttestedSidecars(
   activation: Record<string, unknown>,
   target: UpdatePortableTarget,
+  lane: PortableRuntimeLane = "release-qualified",
 ): PortableSidecarManifestVerification {
   const rawSidecars = activation.sidecarRuntimes;
   if (!Array.isArray(rawSidecars)) {
     fail("sidecar-metadata-malformed", "attested sidecar metadata is malformed");
   }
-  const sidecars = verifiedSidecars(rawSidecars, target);
+  const sidecars = verifiedSidecars(rawSidecars, target, lane);
   return { sidecars, summaries: sidecars.map((sidecar) => sidecar.summary) };
 }

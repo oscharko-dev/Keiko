@@ -1,5 +1,8 @@
 // runConsolidation: the engine entry point. Pure function; no IO; no clock reads; no
-// randomness. Every impurity is injected via ConsolidationOptions.
+// randomness. Every impurity is injected via ConsolidationOptions — including the one optional
+// activity-log write (`logSink`, see `log-port.ts`): absent by default, so the default call
+// remains IO-free, and a caller that opts in only ever observes a `consolidation.summary.fallback`
+// event synchronously during the call, never anything that changes the returned result.
 //
 // Merge / supersession relationships are routed through ReviewItems; optional body summaries are
 // emitted as MemoryUpdate envelopes in updatesProposed only when the caller supplies the pure
@@ -20,6 +23,10 @@ import {
   type MemoryUpdate,
   validateMemoryRecord,
 } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   JACCARD_DEFAULT,
@@ -31,9 +38,15 @@ import {
   SEMANTIC_SIMILARITY_DEFAULT,
   STALE_CONFIDENCE_DEFAULT,
 } from "./_constants.js";
-import { compareEdges, compareRecordsByAge, compareReviewItems } from "./_ordering.js";
+import {
+  compareEdges,
+  compareRecordsByAge,
+  compareRecordsByRecency,
+  compareReviewItems,
+} from "./_ordering.js";
 import { CONFLICT_OVERLAP_THRESHOLD, detectConflicts, findConflictPairs } from "./conflicts.js";
 import { scanDuplicateClusters, type DuplicateCluster } from "./dedupe.js";
+import { emitConsolidationLogEvent, type ConsolidationLogSink } from "./log-port.js";
 import { normalizeBody } from "./similarity.js";
 import { findStaleMemories } from "./stale.js";
 import type {
@@ -63,7 +76,31 @@ interface ResolvedOptions {
   readonly embeddingFor?: (memoryId: MemoryId) => ConsolidationEmbedding | undefined;
   readonly accessStatsFor?: (memoryId: MemoryId) => ConsolidationAccessStat | undefined;
   readonly summaryGenerator?: ConsolidationSummaryGenerator;
+  readonly logSink?: ConsolidationLogSink;
 }
+
+const CONSOLIDATION_SUMMARY_FALLBACK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "consolidation.summary.fallback",
+  category: "consolidation",
+  owner: "keiko-memory-consolidation",
+  emitter: "consolidate.logSummaryFallback",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["absent", "invalid-output", "union-not-preserved", "generator-threw"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["consolidation-summary-generation"],
+  proofIds: ["consolidation.summary.fallback.reason"],
+  releaseImpact: "patch",
+});
 
 const DEFAULT_ELIGIBLE_STATUSES: readonly MemoryStatus[] = ["accepted", "proposed", "conflicted"];
 const DEFAULT_REVIEWER_ID = "memory-consolidation" as MemoryReviewerId;
@@ -110,6 +147,7 @@ function optionalResolvedPorts(options: ConsolidationOptions): Partial<ResolvedO
     ...(options.summaryGenerator !== undefined
       ? { summaryGenerator: options.summaryGenerator }
       : {}),
+    ...(options.logSink !== undefined ? { logSink: options.logSink } : {}),
   };
 }
 
@@ -206,11 +244,23 @@ function eligibleMemories(
   return eligible;
 }
 
+// Selects the run's CPU work window. This is NOT canonical-member selection: it must be ordered by
+// recency, not by compareRecordsByAge. With the oldest-first comparator the window past the cap was
+// a permanently frozen prefix of the oldest records — and because every merge becomes a review item
+// awaiting a human rather than an automatic deletion, that prefix never shrank, so no memory
+// captured after the vault reached the cap was ever deduplicated, conflict-checked or stale-flagged
+// again. Newest-first keeps the window on the live head of the vault, which is where new duplicates
+// and contradictions actually appear.
+//
+// Records older than the window are still not re-inspected on a later run; closing that residual
+// tail needs a persisted (scope, type) rotation cursor, which would have to enter through the
+// options seam to keep runConsolidation's "same input + same options => byte-identical result"
+// contract. That is tracked separately — it is a different change from correcting the comparator.
 function boundedEligibleMemories(
   memories: readonly MemoryRecord[],
   resolved: ResolvedOptions,
 ): { readonly records: readonly MemoryRecord[]; readonly truncated: boolean } {
-  const sorted = [...memories].sort(compareRecordsByAge);
+  const sorted = [...memories].sort(compareRecordsByRecency);
   return {
     records: sorted.slice(0, resolved.maxRecordsPerRun),
     truncated: sorted.length > resolved.maxRecordsPerRun,
@@ -376,10 +426,18 @@ function normalizeSummaryOutput(
   return output;
 }
 
+// The distinct cause behind a deterministic-union fallback. All four branches below collapsed to
+// an identical `fallbackUsed: true` before this field existed, discarding the actual cause the
+// moment it was known — this is the ONLY place any of the four is ever determined, so it must be
+// captured here rather than re-derived by a caller from the (already fallback-shaped) body.
+export type SummaryFallbackReason =
+  "absent" | "invalid-output" | "union-not-preserved" | "generator-threw";
+
 interface GeneratedSummaryChoice {
   readonly body: string;
   readonly reviewerNote?: string;
   readonly fallbackUsed: boolean;
+  readonly summaryFallbackReason?: SummaryFallbackReason;
 }
 
 function chooseSummaryBody(
@@ -388,14 +446,16 @@ function chooseSummaryBody(
   sourceBodies: readonly string[],
   unionBody: string,
 ): GeneratedSummaryChoice {
-  if (generator === undefined) return { body: unionBody, fallbackUsed: true };
+  if (generator === undefined) {
+    return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "absent" };
+  }
   try {
     const generated = normalizeSummaryOutput(generator(input));
     if (generated === null || generated.body.trim().length === 0) {
-      return { body: unionBody, fallbackUsed: true };
+      return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "invalid-output" };
     }
     if (!summaryPreservesUnion(generated.body, sourceBodies)) {
-      return { body: unionBody, fallbackUsed: true };
+      return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "union-not-preserved" };
     }
     return {
       body: generated.body.trim(),
@@ -403,7 +463,7 @@ function chooseSummaryBody(
       fallbackUsed: false,
     };
   } catch {
-    return { body: unionBody, fallbackUsed: true };
+    return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "generator-threw" };
   }
 }
 
@@ -419,6 +479,22 @@ function summaryReviewerNote(
   }
   if (reviewerNote !== undefined && reviewerNote.length > 0) noteParts.push(reviewerNote);
   return noteParts.join(" ");
+}
+
+// Fires exactly when `chooseSummaryBody` fell back to the deterministic union — the ONE call
+// site (this package's composition root, `runConsolidation`, via `buildSummaryUpdate`) that both
+// knows the cause AND has the caller-supplied sink. `extra.reason` is the closed-union label
+// only, never the generated body, the union body, or any source content.
+function logSummaryFallback(resolved: ResolvedOptions, summary: GeneratedSummaryChoice): void {
+  if (!summary.fallbackUsed || summary.summaryFallbackReason === undefined) return;
+  emitConsolidationLogEvent(
+    resolved.logSink,
+    activityLogEvent(
+      CONSOLIDATION_SUMMARY_FALLBACK_OPERATION,
+      {},
+      { reason: summary.summaryFallbackReason },
+    ),
+  );
 }
 
 function buildSummaryUpdate(
@@ -446,6 +522,7 @@ function buildSummaryUpdate(
     sourceBodies,
     unionBody,
   );
+  logSummaryFallback(resolved, summary);
   return {
     update: {
       schemaVersion: "1",

@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -17,13 +18,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bindRuntimeAttestation,
   catalogForInventory,
+  closeWindowsGenerationDirectory,
+  completeInventoryMatchesGeneration,
   inventoriesMatch,
   inventoryAddsOnlyRuntimeAttestation,
+  inventoryAddsOnlySetupCompanion,
   inventoryPathsMatch,
   inventoryWindowsPortablePeFiles,
+  inventoryWindowsPortableCompletePeFiles,
+  inventoryWindowsPortableCorePeFiles,
+  inventoryWindowsPortableStagePeFiles,
   main,
   rebindArchive,
+  verifyClosedWindowsGeneration,
 } from "../windows-portable-signing.mjs";
+import { stageWindowsPortableRootFiles } from "../stage-portable-runtime.mjs";
 import { assertWindowsProductionVerificationInput } from "../windows-portable-verification-input.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
 import { qualificationReceiptFor } from "../qualify-windows-runtime-release.mjs";
@@ -90,6 +99,27 @@ function validStage() {
     portableExecutable(5),
   );
   write(join(payload, "runtime", "native", "keiko-runtime-supervisor.exe"), portableExecutable(6));
+  // KEIKO-0658: inventoryCommand now cross-checks manifest.sidecarRuntimes[].executablePath
+  // against the PE inventory, mirroring the macOS side. Write a minimal manifest so the check
+  // has something to compare against; the two sidecars named here match the payload above.
+  write(
+    join(stage, "manifest", "portable-manifest.json"),
+    Buffer.from(
+      JSON.stringify({
+        sidecarRuntimes: [
+          {
+            name: "keiko-secure-workspace-read",
+            executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+          },
+          {
+            name: "keiko-runtime-supervisor",
+            executablePath: "runtime/native/keiko-runtime-supervisor.exe",
+          },
+        ],
+      }),
+      "utf8",
+    ),
+  );
   return { payload, stage };
 }
 
@@ -193,6 +223,7 @@ function windowsPrepareStage() {
     join(stage, "evidence", "sbom.cdx.json"),
     `${JSON.stringify({
       bomFormat: "CycloneDX",
+      specVersion: "1.6",
       components: manifest.nativeHelpers
         .map((helper) => ({
           "bom-ref": helper.sbomBomRef,
@@ -235,6 +266,38 @@ afterEach(() => {
 });
 
 describe("Windows portable PE signing inventory", () => {
+  it("accepts exactly one setup companion PE beyond the unchanged payload inventory", () => {
+    const { payload, stage } = validStage();
+    const expected = inventoryWindowsPortablePeFiles(payload);
+    write(join(stage, "keiko-windows-x64-setup.exe"), portableExecutable(9));
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, inventoryWindowsPortableStagePeFiles(stage)),
+    ).toBe(true);
+
+    write(join(stage, "unexpected-helper.exe"), portableExecutable(10));
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, inventoryWindowsPortableStagePeFiles(stage)),
+    ).toBe(false);
+    rmSync(join(stage, "unexpected-helper.exe"));
+    write(join(payload, "Keiko.exe"), portableExecutable(11));
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, inventoryWindowsPortableStagePeFiles(stage)),
+    ).toBe(false);
+    write(join(payload, "Keiko.exe"), portableExecutable(1));
+    expect(inventoryAddsOnlySetupCompanion(expected, { files: [] })).toBe(false);
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, {
+        files: [
+          ...expected.files.map((file) => ({
+            ...file,
+            relativePath: `payload/Keiko/${file.relativePath}`,
+          })),
+          { relativePath: "keiko-windows-x64-setup.exe", sha256: "not-a-digest", sizeBytes: 0 },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("binds qualification to the exact activation, helpers, OpenCode payload, and source", () => {
     const resourceRoot = root();
     const supervisorBytes = portableExecutable(6);
@@ -268,6 +331,8 @@ describe("Windows portable PE signing inventory", () => {
           artifact: { platformTarget: "windows-x64" },
           runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
           security: { verificationStatus: "verified-production" },
+          // runtimeActivationManifest emits nativeAddons unconditionally (#3455).
+          nativeAddons: [],
           nativeHelpers: [
             {
               name: "keiko-runtime-supervisor",
@@ -374,6 +439,196 @@ describe("Windows portable PE signing inventory", () => {
     );
   });
 
+  it("separates the signed generation inventory from the final root launcher", async () => {
+    const stage = root();
+    const generationId = "a".repeat(64);
+    const generationRoot = join(
+      stage,
+      "payload",
+      "Keiko",
+      ".portable",
+      "generations",
+      generationId,
+    );
+    write(join(generationRoot, "runtime", "node", "node.exe"), portableExecutable(2));
+    write(
+      join(generationRoot, "runtime", "native", "keiko-secure-workspace-read.exe"),
+      portableExecutable(5),
+    );
+    write(
+      join(generationRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+      portableExecutable(6),
+    );
+    write(
+      join(generationRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
+      portableExecutable(7),
+    );
+    const generationInventory = inventoryWindowsPortableCorePeFiles(generationRoot);
+    write(join(stage, "payload", "Keiko", "Keiko.exe"), portableExecutable(1));
+    const complete = inventoryWindowsPortableCompletePeFiles(stage, generationId);
+
+    const launcherSha256 = complete.files.find((file) => file.relativePath === "Keiko.exe").sha256;
+    expect(
+      completeInventoryMatchesGeneration(
+        generationInventory,
+        complete,
+        generationId,
+        launcherSha256,
+      ),
+    ).toBe(true);
+    expect(complete.files.map((file) => file.relativePath)).toEqual([
+      `.portable/generations/${generationId}/runtime/native/keiko-runtime-attestation.exe`,
+      `.portable/generations/${generationId}/runtime/native/keiko-runtime-supervisor.exe`,
+      `.portable/generations/${generationId}/runtime/native/keiko-secure-workspace-read.exe`,
+      `.portable/generations/${generationId}/runtime/node/node.exe`,
+      "Keiko.exe",
+    ]);
+    write(join(stage, "payload", "Keiko", "support", "keiko-support.cmd"), portableExecutable(8));
+    expect(() => inventoryWindowsPortableCompletePeFiles(stage, generationId)).toThrow(
+      /escapes the generation and root launcher/u,
+    );
+    rmSync(join(stage, "payload", "Keiko", "support"), { recursive: true });
+    const tampered = structuredClone(complete);
+    tampered.files[0].sha256 = "b".repeat(64);
+    expect(
+      completeInventoryMatchesGeneration(
+        generationInventory,
+        tampered,
+        generationId,
+        launcherSha256,
+      ),
+    ).toBe(false);
+    expect(
+      completeInventoryMatchesGeneration(
+        generationInventory,
+        complete,
+        generationId,
+        "c".repeat(64),
+      ),
+    ).toBe(false);
+    const expectedInventoryPath = join(stage, "generation-inventory.json");
+    const completeInventoryPath = join(stage, "complete-inventory.json");
+    writeFileSync(expectedInventoryPath, JSON.stringify(generationInventory));
+    write(
+      join(stage, "manifest", "portable-manifest.json"),
+      Buffer.from(JSON.stringify({ windowsGeneration: { launcherSha256 } })),
+    );
+    await expect(
+      main([
+        "inventory-complete",
+        "--stage-root",
+        stage,
+        "--generation-id",
+        generationId,
+        "--expected-inventory",
+        expectedInventoryPath,
+        "--inventory",
+        completeInventoryPath,
+      ]),
+    ).resolves.toBeUndefined();
+    expect(JSON.parse(readFileSync(completeInventoryPath, "utf8"))).toEqual(complete);
+    write(
+      join(stage, "manifest", "portable-manifest.json"),
+      Buffer.from(JSON.stringify({ windowsGeneration: { launcherSha256: "b".repeat(64) } })),
+    );
+    await expect(
+      main([
+        "inventory-complete",
+        "--stage-root",
+        stage,
+        "--generation-id",
+        generationId,
+        "--expected-inventory",
+        expectedInventoryPath,
+        "--inventory",
+        completeInventoryPath,
+        "--launcher-sha256",
+        launcherSha256,
+      ]),
+    ).rejects.toThrow(/does not match the closed generation/u);
+    write(join(stage, "payload", "Keiko", "app", "flat-copy.txt"), "forbidden");
+    expect(() => inventoryWindowsPortableCompletePeFiles(stage, generationId)).toThrow(
+      /unexpected flat-layout entry/u,
+    );
+  });
+
+  it("closes identical final bytes under the same immutable KHT1 generation", async () => {
+    const stages = [root(), root()];
+    for (const stage of stages) {
+      const stagingRoot = join(stage, "payload", "Keiko", ".portable", "generation-staging");
+      write(join(stagingRoot, "app", "package.json"), '{"name":"fixture"}\n');
+      write(join(stagingRoot, "runtime", "node", "NOTICE"), "node fixture\n");
+    }
+
+    const generationIds = await Promise.all(
+      stages.map((stage) => closeWindowsGenerationDirectory(stage)),
+    );
+
+    expect(generationIds[0]).toMatch(/^[a-f0-9]{64}$/u);
+    expect(generationIds[1]).toBe(generationIds[0]);
+    for (const stage of stages) {
+      expect(existsSync(join(stage, "payload", "Keiko", ".portable", "generation-staging"))).toBe(
+        false,
+      );
+      expect(
+        readFileSync(
+          join(
+            stage,
+            "payload",
+            "Keiko",
+            ".portable",
+            "generations",
+            generationIds[0],
+            "app",
+            "package.json",
+          ),
+          "utf8",
+        ),
+      ).toBe('{"name":"fixture"}\n');
+    }
+  });
+
+  it("preserves staging for an invalid generation ID and detects post-relocation mutation", async () => {
+    const invalidStage = root();
+    const invalidStaging = join(
+      invalidStage,
+      "payload",
+      "Keiko",
+      ".portable",
+      "generation-staging",
+    );
+    write(join(invalidStaging, "app", "package.json"), '{"name":"fixture"}\n');
+    const invalidHashTree = vi.fn(async () => "not-a-generation-id");
+
+    await expect(
+      closeWindowsGenerationDirectory(invalidStage, { hashTree: invalidHashTree }),
+    ).rejects.toThrow(/Windows generation ID is invalid/u);
+    expect(existsSync(invalidStaging)).toBe(true);
+    expect(invalidHashTree).toHaveBeenCalledOnce();
+
+    const changedStage = root();
+    const changedStaging = join(
+      changedStage,
+      "payload",
+      "Keiko",
+      ".portable",
+      "generation-staging",
+    );
+    write(join(changedStaging, "app", "package.json"), '{"name":"fixture"}\n');
+    const generationId = "a".repeat(64);
+    const changedHashTree = vi.fn(async () =>
+      changedHashTree.mock.calls.length === 1 ? generationId : "b".repeat(64),
+    );
+
+    await expect(
+      closeWindowsGenerationDirectory(changedStage, { hashTree: changedHashTree }),
+    ).rejects.toThrow(/generation changed after relocation/u);
+    expect(existsSync(changedStaging)).toBe(false);
+    expect(
+      existsSync(join(changedStage, "payload", "Keiko", ".portable", "generations", generationId)),
+    ).toBe(true);
+  });
+
   it("fails closed when a required launcher is absent or an exe/dll is not PE", () => {
     const missingLauncher = root();
     write(join(missingLauncher, "runtime", "node", "node.exe"));
@@ -478,6 +733,33 @@ describe("Windows portable PE signing inventory", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("rejects a manifest sidecar that is absent from the signed PE inventory", async () => {
+    const { stage } = validStage();
+    const manifestPath = join(stage, "manifest", "portable-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.sidecarRuntimes.push({
+      name: "missing-sidecar",
+      executablePath: "runtime/sidecars/missing/sidecar.exe",
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const inventoryPath = join(stage, "inventory.json");
+    const catalogPath = join(stage, "catalog.txt");
+
+    await expect(
+      main([
+        "inventory",
+        "--stage-root",
+        stage,
+        "--inventory",
+        inventoryPath,
+        "--catalog",
+        catalogPath,
+      ]),
+    ).rejects.toThrow(/manifest sidecar executable is missing from the Windows PE inventory/u);
+    expect(existsSync(inventoryPath)).toBe(false);
+    expect(existsSync(catalogPath)).toBe(false);
+  });
+
   it("promotes a complete signed Windows payload and binds its activation manifest", async () => {
     const fixture = windowsPrepareStage();
     await expect(
@@ -506,6 +788,115 @@ describe("Windows portable PE signing inventory", () => {
     ).toBe(true);
     expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
       manifest.sidecarRuntimes,
+    );
+  });
+
+  it.each(["prepare-qualified-payload", "close-generation", "finalize"])(
+    "rejects %s when verification does not bind the exact promoted inventory",
+    async (command) => {
+      const fixture = windowsPrepareStage();
+      const input = JSON.parse(readFileSync(fixture.verificationInputPath, "utf8"));
+      input.peInventorySha256 = "f".repeat(64);
+      writeFileSync(fixture.verificationInputPath, JSON.stringify(input));
+      const before = readFileSync(fixture.manifestPath);
+
+      await expect(
+        main([
+          command,
+          "--stage-root",
+          fixture.stage,
+          "--expected-inventory",
+          fixture.inventoryPath,
+          "--verification-input",
+          fixture.verificationInputPath,
+          "--generation-id",
+          "a".repeat(64),
+          "--launcher-catalog",
+          join(fixture.stage, "launcher-catalog.txt"),
+          "--generation-output",
+          join(fixture.stage, "generation.txt"),
+        ]),
+      ).rejects.toThrow(/does not bind the exact PE inventory document/u);
+      expect(readFileSync(fixture.manifestPath)).toEqual(before);
+    },
+  );
+
+  it("verifies KHT1 generation bytes, the signed root launcher, and root setup binding", async () => {
+    const stage = root();
+    const stagingRoot = join(stage, "payload", "Keiko", ".portable", "generation-staging");
+    write(join(stagingRoot, "app", "package.json"), '{"name":"fixture"}\n');
+    write(join(stagingRoot, "runtime", "node", "NOTICE"), "node fixture\n");
+    const generationId = await closeWindowsGenerationDirectory(stage);
+    const launcherPath = join(stage, "payload", "Keiko", "Keiko.exe");
+    write(launcherPath, portableExecutable(1));
+    const windowsGeneration = {
+      schemaVersion: 1,
+      resourceRoot: `.portable/generations/${generationId}`,
+      treeHashSchema: "KHT1",
+      treeSha256: generationId,
+      launcherPath: "Keiko.exe",
+      launcherSha256: sha256(readFileSync(launcherPath)),
+    };
+    // Derived from the real root manifest, never a copied literal: the producer under test
+    // (stage-portable-runtime.mjs `stageSetupManifest`) writes the setup manifest from
+    // rootPackage.name/version, so a copied pair silently breaks on every version bump.
+    const rootManifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+    );
+    const manifest = {
+      schemaVersion: 2,
+      product: { packageName: rootManifest.name, packageVersion: rootManifest.version },
+      release: { stable: true },
+      windowsGeneration,
+    };
+    stageWindowsPortableRootFiles(join(stage, "payload", "Keiko"), windowsGeneration);
+    write(join(stage, "manifest", "portable-manifest.json"), Buffer.from(JSON.stringify(manifest)));
+
+    await expect(verifyClosedWindowsGeneration(stage, manifest)).resolves.toBeUndefined();
+    await expect(main(["verify-generation", "--stage-root", stage])).resolves.toBeUndefined();
+
+    write(
+      join(
+        stage,
+        "payload",
+        "Keiko",
+        ".portable",
+        "generations",
+        generationId,
+        "app",
+        "package.json",
+      ),
+      "non-PE mutation\n",
+    );
+    await expect(verifyClosedWindowsGeneration(stage, manifest)).rejects.toThrow(
+      /generation digest mismatch/u,
+    );
+
+    write(
+      join(
+        stage,
+        "payload",
+        "Keiko",
+        ".portable",
+        "generations",
+        generationId,
+        "app",
+        "package.json",
+      ),
+      '{"name":"fixture"}\n',
+    );
+    write(launcherPath, portableExecutable(2));
+    await expect(verifyClosedWindowsGeneration(stage, manifest)).rejects.toThrow(
+      /launcher digest/u,
+    );
+
+    write(launcherPath, portableExecutable(1));
+    const setupPath = join(stage, "payload", "Keiko", ".portable", "setup-manifest.json");
+    const setup = JSON.parse(readFileSync(setupPath, "utf8"));
+    setup.windowsGeneration.launcherSha256 = "e".repeat(64);
+    writeFileSync(setupPath, JSON.stringify(setup));
+    await expect(verifyClosedWindowsGeneration(stage, manifest)).rejects.toThrow(
+      /setup manifest does not match/u,
     );
   });
 
@@ -892,5 +1283,63 @@ describe("Windows portable PE signing inventory", () => {
     ).rejects.toThrow(/verification input contains unsupported keys/u);
 
     expect(paths.map((path) => readFileSync(path))).toEqual(before);
+  });
+});
+
+// KEIKO-0658: inventoryCommand must reject a manifest whose sidecarRuntimes list names an
+// executablePath that the PE inventory did not observe. Without this cross-check, a
+// hand-authored manifest that referenced a sidecar the payload does not carry could be signed
+// and shipped downstream. The regression is a minimal manifest that names one present sidecar
+// (must not fail) and one absent sidecar (must fail with a message naming the offender).
+import {
+  describe as _keiko0658Describe,
+  expect as _keiko0658Expect,
+  it as _keiko0658It,
+} from "vitest";
+_keiko0658Describe("windows-portable-signing inventory cross-check (KEIKO-0658)", () => {
+  _keiko0658It("rejects a manifest naming a sidecar the PE inventory does not carry", async () => {
+    const stage = root();
+    const payload = join(stage, "payload", "Keiko");
+    write(join(payload, "Keiko.exe"), portableExecutable(1));
+    write(join(payload, "runtime", "node", "node.exe"), portableExecutable(2));
+    write(
+      join(payload, "runtime", "native", "keiko-secure-workspace-read.exe"),
+      portableExecutable(5),
+    );
+    write(
+      join(payload, "runtime", "native", "keiko-runtime-supervisor.exe"),
+      portableExecutable(6),
+    );
+    write(
+      join(stage, "manifest", "portable-manifest.json"),
+      Buffer.from(
+        JSON.stringify({
+          sidecarRuntimes: [
+            {
+              name: "keiko-secure-workspace-read",
+              executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+            },
+            {
+              name: "keiko-does-not-exist",
+              executablePath: "runtime/native/keiko-does-not-exist.exe",
+            },
+          ],
+        }),
+        "utf8",
+      ),
+    );
+    const inventoryPath = join(stage, "inventory.json");
+    const catalogPath = join(stage, "catalog.txt");
+    await _keiko0658Expect(
+      main([
+        "inventory",
+        "--stage-root",
+        stage,
+        "--inventory",
+        inventoryPath,
+        "--catalog",
+        catalogPath,
+      ]),
+    ).rejects.toThrow(/keiko-does-not-exist/);
   });
 });

@@ -1,0 +1,25 @@
+/* The notice a chat window shows while the conversation the person chose for a redacted snapshot is
+   still a choice: the design system's full-width info banner (c-banner--info) at the top of the
+   window, with its two actions. */
+.cmpNotice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 11px;
+  padding: 11px 15px;
+  border-bottom: 1px solid color-mix(in oklch, var(--feedback-info) 42%, var(--border-default));
+  background: color-mix(in oklch, var(--feedback-info) 10%, var(--surface-primary));
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.cmpNoticeText {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.cmpNoticeActions {
+  display: flex;
+  gap: 8px;
+}

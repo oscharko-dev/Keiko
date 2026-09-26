@@ -140,7 +140,9 @@ describe("ForgetConfirmDialog — interaction", () => {
     await waitFor(() => {
       expect(onComplete).toHaveBeenCalledOnce();
     });
-    expect(forgetImpl).toHaveBeenCalledWith("mem-forget-1", expect.any(String));
+    // KEIKO-0563: forgetMemory's dead `_reason` parameter was removed — the dialog now calls it
+    // with only the id, not a second reason-string argument the server never read.
+    expect(forgetImpl).toHaveBeenCalledExactlyOnceWith("mem-forget-1");
   });
 
   it("calls deleteMemoryImpl and then onComplete in delete mode", async () => {
@@ -162,7 +164,9 @@ describe("ForgetConfirmDialog — interaction", () => {
     await waitFor(() => {
       expect(onComplete).toHaveBeenCalledOnce();
     });
-    expect(deleteImpl).toHaveBeenCalledWith("mem-forget-1", expect.any(String));
+    // KEIKO-0563: deleteMemory's dead `_reason` parameter was removed — the dialog now calls it
+    // with only the id, not a second reason-string argument the server never read.
+    expect(deleteImpl).toHaveBeenCalledExactlyOnceWith("mem-forget-1");
   });
 
   it("shows error alert when the destructive action rejects", async () => {

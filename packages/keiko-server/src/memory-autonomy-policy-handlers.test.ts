@@ -10,6 +10,7 @@ import { createInMemoryUiStore } from "./store/index.js";
 
 function context(body = ""): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(body)]) as RouteContext["req"],
     res: {} as RouteContext["res"],
     params: {},
@@ -140,6 +141,7 @@ describe("memory autonomy policy routes", () => {
     const handlerDeps = deps();
     const req = new Readable({ read: (): void => undefined });
     const ctx: RouteContext = {
+      correlationId: undefined,
       req: req as RouteContext["req"],
       res: {} as RouteContext["res"],
       params: {},

@@ -47,8 +47,11 @@ surface to it. Confirmed by reading the current code:
 
 The decision this ADR makes: introduce ONE durable active-workspace pointer, the
 read/switch/lifecycle BFF routes around it, and a single UI choke point that
-retargets all bound surfaces atomically — strictly **consuming** the #470 and
-#1491 governed routes, never re-implementing them.
+retargets task-bound surfaces atomically — strictly **consuming** the #470 and
+#1491 governed routes, never re-implementing them. Repository control remains a
+separate projection: the ordinary Git window is the selected repository's Git
+administrator, while task-workspace roots are used only for the run/editor/review
+surfaces that are explicitly about the accepted task worktree.
 
 Forces:
 
@@ -59,9 +62,11 @@ Forces:
 - **No parallel subsystem (ADR-0088 AC4).** `WorkspaceBinding` and the 8 surfaces
   already exist; adding a `keiko-contracts` change or a second project-context
   store would violate the no-duplicate-subsystem rule.
-- **Atomicity / no mixed context (#446 AC2, Stop Condition).** After a switch, no
-  surface may remain pointed at the previous workspace; the editor must not keep a
-  stale Monaco model.
+- **Atomicity / no mixed task context (#446 AC2, Stop Condition).** After a switch,
+  no task-bound surface may remain pointed at the previous workspace; the editor
+  must not keep a stale Monaco model. Repository Git controls keep the repository
+  root by design, so they do not show an internal task branch as the repository's
+  current branch.
 - **Package boundaries (ADR-0019).** `keiko-server` task-workspace modules may
   import contracts/security/workspace/tools/evidence but never `keiko-ui`;
   `keiko-ui` may **type-import** `@oscharko-dev/keiko-contracts` only (rule 8) and
@@ -71,7 +76,7 @@ Forces:
 
 We will add a **server-persisted singleton active-workspace pointer**, derive the
 `WorkspaceBinding` from the active `WorkspaceInstance`, expose read/switch/clear
-plus pause/resume/handoff lifecycle routes, and retarget all bound UI surfaces
+plus pause/resume/handoff lifecycle routes, and retarget task-bound UI surfaces
 through **one** choke point in `WindowRenderContext`. No `keiko-contracts` change;
 `KEIKO_CONTRACTS_VERSION` is untouched.
 
@@ -102,15 +107,26 @@ through `deps.redactor`; all errors map via `TaskWorkspaceError` + redaction; al
 reuse `resolveRoot`, `readJsonObject`, `boundedString`, `runHandler`, `redacted`,
 and `mapError` already in that file.
 
-**D4 — One UI choke point.** Add `activeRoot: string | null` and
+**D4 — One UI choke point, two projections.** Add `activeRoot: string | null` and
 `activeBinding: WorkspaceBinding | null` to `WindowRenderContext`. In
-`widgets/index.tsx`, every bound-surface root resolution **prefers
-`ctx.activeRoot` when a workspace is active**, overriding per-window `cfg` and
-`linkedRoot`; it falls back to the existing `cfg`/`linkedRoot` chain **only** in
-unbound mode. Because `activeRoot` lives on the shared render context, a switch
-re-renders every widget atomically. The editor widget is **keyed on
-`activeRoot`** so Monaco remounts on switch and no stale model/document survives
-(AC4 + Stop Condition).
+`widgets/index.tsx`, task-bound root resolution **prefers `ctx.activeRoot` when a
+workspace is active**, overriding per-window `cfg` and `linkedRoot`; it falls back
+to the existing `cfg`/`linkedRoot` chain **only** in unbound mode. The ordinary Git
+window is the repository-control exception: a concrete `projectPath`/`workspaceRoot`
+or the global selected repository root is repository truth for that window, for
+any repository, and `ctx.activeRoot` remains an internal task-worktree detail.
+Repository Files/Editor windows opened from Git carry `rootBinding:
+"coding-repository"` and preserve the same configured repository root. Legacy
+repository windows that already persisted a `.keiko/.../task-workspaces/...`
+`resolvedRoot` are repaired back to their configured repository root before they
+render or produce Chat connected scopes; they must not look like the main
+repository while internally operating on a managed task worktree. Task-artifact
+review/delivery windows that are explicitly opened with task-workspace binding
+still use `ctx.activeRoot`. Because
+`activeRoot` lives on the shared render context, a switch re-renders every
+task-bound widget atomically. The editor widget is **keyed on `activeRoot`** so
+Monaco remounts on switch and no stale model/document survives (AC4 + Stop
+Condition).
 
 **D5 — `TaskWorkspaceSwitcher` in the Header strip.** Shows task identity, branch,
 base branch, managed worktree path, health badge, dirty badge (`driftMarkers`
@@ -130,13 +146,13 @@ every need. `keiko-contracts` stays a leaf with no new edges;
 
 | Issue #446 AC / Stop Condition | Design mechanism |
 | --- | --- |
-| AC1 — all bound surfaces target the active workspace consistently | D1 singleton pointer → D4 single `ctx.activeRoot` choke point; `boundSurfaces = TASK_WORKSPACE_SURFACES` (all 8) so every surface is in scope. |
-| AC2 — switching updates all surfaces with no mixed-context leakage | D2 atomic `setActive` (one pointer write) → D4 single context value re-renders all widgets in one pass; D4 editor remount key drops stale Monaco state. |
-| AC3 — Git Delivery still runs only through #470 governed preview/policy/approval/evidence, scoped to active root | D4 retargets the `projectId`/`projectPath` the existing `GovernedGitFlowCard`/`GovernedPullRequestCard`/`GovernedMergeCard` already send to the unchanged #470 routes. No #470 route, policy, or evidence path is touched. |
+| AC1 — all task-bound surfaces target the active workspace consistently | D1 singleton pointer → D4 single `ctx.activeRoot` choke point; `boundSurfaces = TASK_WORKSPACE_SURFACES` remain task-workspace scoped, while explicit repository Git uses the repository projection. |
+| AC2 — switching updates all task-bound surfaces with no mixed-context leakage | D2 atomic `setActive` (one pointer write) → D4 single context value re-renders task-bound widgets in one pass; D4 editor remount key drops stale Monaco state. |
+| AC3 — Git Delivery still runs only through #470 governed preview/policy/approval/evidence, with the correct root projection | D4 keeps normal Git administration on the repository root and task-artifact review/delivery on the task-workspace root. Both continue to call the unchanged #470 routes; no #470 route, policy, or evidence path is touched. |
 | AC4 — editor/runtime still enforce #1491 document/command/output/containment safeguards, scoped to active root | D4 retargets the `root`/`projectPath` the existing #1491 editor/runtime/command/container widgets already send to the unchanged #1491 routes; editor remount key prevents stale documents. |
 | AC5 — UI makes active task, branch, path, health, dirty, lock visible | D5 `TaskWorkspaceSwitcher` renders all six from the active `WorkspaceInstance` (dirty = `driftMarkers.includes("uncommitted-changes")`). |
 | AC6 — no degraded responsiveness / confusing transient mixed states | D4 single synchronous context swap (no per-surface async fan-out); D5 `switching` flag drives `aria-busy`/skeleton on the switcher only; widgets re-render once. |
-| Stop Condition — no surface remains pointed at the previous workspace; no stale editor model | D4 `ctx.activeRoot` override is unconditional while active (per-window `cfg` cannot win) + editor remount key. |
+| Stop Condition — no task-bound surface remains pointed at the previous workspace; no stale editor model | D4 `ctx.activeRoot` override is unconditional for task-bound surfaces while active (per-window `cfg` cannot win) + editor remount key. |
 
 ## Consequences
 
@@ -145,7 +161,8 @@ every need. `keiko-contracts` stays a leaf with no new edges;
 - One source of truth, one choke point: the system has fewer paths and a switch is
   one pointer write + one context re-render.
 - Zero contract churn and zero new package edges; the binding is derived, so the
-  `activeRoot === gitDeliveryRoot === editorProjectRoot` invariant cannot drift.
+  task-workspace `activeRoot === gitDeliveryRoot === editorProjectRoot` invariant
+  cannot drift, while repository Git remains anchored to the repository root.
 - #470 and #1491 are consumed unchanged — their governance is structurally
   preserved because this ADR adds no route into either subsystem.
 - Reversible: deleting the V8 table + the choke-point override returns the UI to
@@ -154,10 +171,12 @@ every need. `keiko-contracts` stays a leaf with no new edges;
 
 ### Negative
 
-- The choke-point override means a per-window `cfg.root` is **ignored** while a
-  workspace is active. This is intended (it is the mechanism), but it changes the
-  current "each window owns its root" mental model; documented in D4 and surfaced
-  by the switcher so the active root is always visible.
+- The choke-point override means a task-bound per-window `cfg.root` is **ignored**
+  while a workspace is active. This is intended (it is the mechanism), but it
+  changes the current "each window owns its root" mental model; documented in D4
+  and surfaced by the switcher so the active root is always visible. Explicit
+  repository Git windows are not task-bound and therefore keep their configured
+  repository root.
 - The editor remount-on-switch discards unsaved in-editor state on switch. This is
   the correct safety behavior (no stale model), but implementers must ensure the
   existing #1491 dirty-buffer/hot-exit path (#1376) still fires before the
@@ -381,7 +400,7 @@ Reuse `requireService`/`unavailable` pattern but gated on a new optional
 
 | Method | URL pattern | Handler | Request body | 200 body | Notes |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/api/task-workspaces?root=<repoRoot>` | `handleListTaskWorkspaces` | — | `{ instances: WorkspaceInstance[] }` | `resolveRoot(deps.store, root, deps.redactor)` then `lifecycle.list(realRoot)`. Read-only. Matches the **collection** path with a `root` query, distinct from the existing `GET /api/task-workspaces/:workspaceId`. |
+| GET | `/api/task-workspaces?root=<repoRoot>` | `handleListTaskWorkspaces` | — | `{ instances: WorkspaceInstance[] }` | `resolveRoot(deps.store, root, deps.redactor)` then `lifecycle.list(realRoot)`. Read-only. Matches the **collection** path with a `root` query, distinct from the existing `GET /api/task-workspaces/:workspaceId`. Without a `root` (absent or blank) the handler answers `lifecycle.listAll()` — every managed workspace across repositories, the inventory the switcher needs because the active pointer is global (2026-09-03). |
 | GET | `/api/task-workspaces/active` | `handleGetActiveTaskWorkspace` | — | `{ active: ActiveWorkspaceView \| null }` | `lifecycle.getActive() ?? null`. Read-only. MUST be registered **before** `GET /api/task-workspaces/:workspaceId` so the literal `active` wins over `:workspaceId`. |
 | POST | `/api/task-workspaces/active` | `handleSetActiveTaskWorkspace` | `{ workspaceId, requestedBy, acquireLock? }` | `{ instance, binding }` | CSRF-gated. `boundedString` each field; `acquireLock = body.acquireLock === true`. Calls `lifecycle.setActive`. |
 | DELETE | `/api/task-workspaces/active` | `handleClearActiveTaskWorkspace` | — | `{ active: null }` | CSRF-gated. `lifecycle.clearActive()`. |
@@ -392,7 +411,7 @@ Reuse `requireService`/`unavailable` pattern but gated on a new optional
 Route registration order in `packages/keiko-server/src/routes.ts` (literal-before-param):
 
 ```
-GET    /api/task-workspaces                       (list; reads ?root)
+GET    /api/task-workspaces                       (list; ?root scopes, no root lists all)
 GET    /api/task-workspaces/active                (must precede :workspaceId)
 POST   /api/task-workspaces/active
 DELETE /api/task-workspaces/active
@@ -522,21 +541,31 @@ The site that constructs `WindowRenderContext` (the desktop workspace renderer)
 reads them from `useOptionalActiveWorkspace()` and passes them through.
 
 **`widgets/index.tsx` override rule** — introduce one shared helper and use it in
-every **bound-surface** widget renderer:
+every **task-bound-surface** widget renderer:
 
 ```ts
-// When a workspace is active, the active root OVERRIDES per-window cfg/linkedRoot for bound surfaces.
+// When a workspace is active, the active root OVERRIDES per-window cfg/linkedRoot for
+// task-bound surfaces.
 // In unbound mode, fall back to the existing chain unchanged.
 function resolveBoundRoot(ctx: WindowRenderContext, cfgRoot: string | undefined): string | undefined {
-  return ctx.activeRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
+  return ctx.activeRoot ?? cfgRoot ?? ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
 }
 ```
 
-Apply to: `files`, `editor`, `terminal`, `commands`, `runtime`, `container`,
-`governedGit`, `governedPullRequest`, `governedMerge`, `browser`/`review` (where a
-root is meaningful). The `chat` surface keeps `session.activeProject` as today but
-reads `ctx.activeRoot` for any root-scoped child. The **editor** renderer
-additionally sets a remount key so a switch drops the Monaco model:
+Apply to task-bound `files`, `editor`, `terminal`, `commands`, `runtime`,
+`container`, `governedPullRequest`, `governedMerge`, `browser`/`review` (where a
+root is meaningful). Ordinary `governedGit` is repository control and never
+borrows the internal active task-worktree root. It resolves to its concrete
+`projectPath`/`workspaceRoot` or to the global selected repository root; when
+neither exists it remains unbound instead of inventing a repository. That is the
+single repository truth for any selected repository. Repository Files/Editor
+windows opened from Git carry
+`rootBinding: "coding-repository"` and resolve to the configured repository root
+as well. Legacy repository windows with a managed-worktree `resolvedRoot` are
+repaired to that same repository root before producing Chat connected scopes.
+The `chat` surface keeps `session.activeProject` as today but reads
+`ctx.activeRoot` for any root-scoped child. The **editor** renderer additionally
+sets a remount key so a switch drops the Monaco model:
 
 ```tsx
 const boundRoot = resolveBoundRoot(ctx, str(cfg, "root"));
@@ -645,6 +674,9 @@ implementation team rather than silently resolved:
    with the existing `GET /api/task-workspaces/:workspaceId`. Implementers MUST
    register the literal/collection routes (`?root`, `/active`) so they resolve
    before the `:workspaceId` param route; the route table in (d) fixes the order.
+   The same collection path without a `root` query lists every managed workspace
+   (`lifecycle.listAll()`), because the single global active pointer can name a
+   workspace of any repository and the switcher must be able to show it.
 4. **Foreign-key cascade.** The pointer→instance `ON DELETE CASCADE` only fires
    when `PRAGMA foreign_keys = ON` for the handle. If the shared handle does not
    enable it, the lifecycle service must clear the pointer explicitly whenever it

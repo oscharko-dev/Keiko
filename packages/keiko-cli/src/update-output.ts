@@ -119,7 +119,7 @@ export function renderUpdateStatus(input: {
   ];
 }
 
-function isTerminal(session: UpdateSession): boolean {
+export function isTerminalUpdateSession(session: UpdateSession): boolean {
   return (
     session.phase === "restart-required" ||
     session.phase === "succeeded" ||
@@ -132,7 +132,7 @@ export function renderApplyTerminal(
   session: UpdateSession | undefined,
   status?: UpdateSessionStatus,
 ): readonly string[] {
-  if (session === undefined || !isTerminal(session)) {
+  if (session === undefined || !isTerminalUpdateSession(session)) {
     return ["Update apply timed out before a terminal session state was observed."];
   }
   if (session.phase === "restart-required" || session.phase === "succeeded") {

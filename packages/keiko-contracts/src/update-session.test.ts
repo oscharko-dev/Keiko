@@ -18,12 +18,19 @@ import {
   type UpdatePortableInstallSummary,
   type UpdatePortableSidecarSummary,
   type UpdatePortableStagingSummary,
+  validTargetVersion,
 } from "./update-session.js";
 
 describe("update session portable contract", () => {
   it("pins portable install-mode vocabulary", () => {
-    expect(UPDATE_PORTABLE_TARGETS).toEqual(["windows-x64", "macos-arm64", "macos-x64"]);
+    expect(UPDATE_PORTABLE_TARGETS).toEqual([
+      "linux-x64",
+      "windows-x64",
+      "macos-arm64",
+      "macos-x64",
+    ]);
     expect(UPDATE_PORTABLE_TARGET_ASSET_NAMES).toEqual({
+      "linux-x64": "keiko-linux-x64.zip",
       "windows-x64": "keiko-windows-x64.zip",
       "macos-arm64": "keiko-macos-arm64.zip",
       "macos-x64": "keiko-macos-x64.zip",
@@ -129,8 +136,40 @@ describe("update session portable contract", () => {
     expect(activation).not.toHaveProperty("launcherPath");
   });
 
-  it("keeps session start requests stable-only", () => {
-    expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14" }).ok).toBe(true);
-    expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14-beta.1" }).ok).toBe(false);
+  it("accepts only an opaque server-issued execution claim", () => {
+    const claim = {
+      candidateId: "candidate-1",
+      confirmationDigest: "a".repeat(64),
+      executionToken: "b".repeat(64),
+    };
+    expect(parseUpdateSessionStartRequest(claim)).toEqual({ ok: true, value: claim });
+    expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14" }).ok).toBe(false);
+    expect(
+      parseUpdateSessionStartRequest({ ...claim, executionToken: "caller-controlled" }).ok,
+    ).toBe(false);
+  });
+});
+
+// KEIKO-0326: the target-version shape rule existed as a byte-identical copy in update-session.ts
+// and update-remediation.ts (pattern plus length bound, twice). Two copies drift silently — each
+// keeps validating, just against a different definition of "a valid target version". They are now
+// one exported predicate, and update-remediation.ts's parseTargetVersion calls it.
+describe("target version shape is one shared rule (KEIKO-0326)", () => {
+  it.each(["1.2.3", "0.0.0", "10.20.30"])("accepts %s", (version) => {
+    expect(validTargetVersion(version)).toBe(true);
+  });
+
+  it.each([
+    "1.2",
+    "1.2.3.4",
+    "v1.2.3",
+    "01.2.3",
+    "1.2.3-rc1",
+    "",
+    " 1.2.3",
+    "1.2.3 ",
+    "1".repeat(65),
+  ])("rejects %j", (version) => {
+    expect(validTargetVersion(version)).toBe(false);
   });
 });

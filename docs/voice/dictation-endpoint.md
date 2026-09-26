@@ -54,11 +54,26 @@ endpoint adds no relaxation of the server media-type or CSRF gate.
 | `durationMs` | When present: a positive integer ≤ 120000 (two minutes).                                                                                     | `400 INVALID_DURATION`                        |
 | `language`   | When present: an anchored BCP-47-ish tag, length ≤ 16.                                                                                       | `400 INVALID_LANGUAGE`                        |
 
-The decoded-byte cap is the authoritative bound on transcribable duration: precise server-side
-duration measurement would require decoding the container, which needs an audio-processing
-dependency that the supply-chain policy (ADR-0100 D8) forbids, so the byte cap bounds the maximum
-possible duration regardless of codec and the optional `durationMs` is an additional declared-length
-ceiling.
+The decoded-byte cap (4 MB) is the hard ceiling on transcribable duration regardless of codec: precise
+server-side duration measurement would require decoding the container, which needs an
+audio-processing dependency that the supply-chain policy (ADR-0100 D8) forbids. The optional
+`durationMs` is not forwarded to the speech-to-text provider (KEIKO-0844, #3329); it is validated only
+for shape — a finite positive integer within the two-minute dictation limit.
+
+**History (why there is no size/duration cross-check).** An earlier revision additionally
+cross-validated `durationMs` against `decoded.byteLength`: first with a MIME-tiered bytes-per-millisecond
+ceiling, then (Codex, #3348) with a single 6144 bytes/ms ceiling sized to the densest plausible
+uncompressed stream (192 kHz / 32-bit / 8 channels), claiming it "can no longer reject any real encoder
+output." A repository-owner audit (#2895) disproved that claim: a valid WAVEFORMATEXTENSIBLE PCM stream
+can legitimately exceed it — e.g. 384 kHz / 32-bit / 6 channels is 9216 bytes/ms — so a truthful,
+well-formed clip was still rejected. The cross-check was also **directional**: it only ever rejected a
+decoded size that was too dense for the _declared_ duration, so a caller could evade it trivially by
+declaring a larger `durationMs`, or by omitting the field entirely (always treated as "no claim to
+check"). It rejected only honest callers while admitting every dishonest one, and it carried no
+independent security value — `durationMs` is never forwarded to the provider, and `MAX_AUDIO_BYTES`
+alone already bounds worst-case decoded size (and therefore worst-case work) regardless of what a
+client claims. The cross-check was removed rather than re-tiered again; deriving a real bound would
+require parsing container metadata, which remains out of scope under ADR-0100 D8.
 
 ## 3. Response
 
@@ -90,6 +105,17 @@ operator-safe message — no provider body, URL, path, IP, or credential is ever
 | Audio too large (request or provider-reported)          | `413`  | `PAYLOAD_TOO_LARGE`                                                                                    |
 | Any other provider/transport/egress/TLS failure         | `502`  | `VOICE_PROVIDER_ERROR`                                                                                 |
 | Invalid request field                                   | `400`  | `INVALID_AUDIO` / `UNSUPPORTED_AUDIO_FORMAT` / `INVALID_DURATION` / `INVALID_LANGUAGE` / `BAD_REQUEST` |
+
+Every request-validation rejection from `validateRequest` (`UNSUPPORTED_AUDIO_FORMAT`, `INVALID_AUDIO`,
+`PAYLOAD_TOO_LARGE`, `INVALID_DURATION`, `INVALID_LANGUAGE`) also emits a body-free operator diagnostic
+through the server's existing diagnostic sink (`emitServerDiagnostic`,
+[ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md)) before the
+response is returned: the closed rejection code (the same one the response body already carries), a
+coarse `audioBytesBucket` classification once the audio has been decoded, and the request's correlation
+id (falling back to the sanctioned `unknown-correlation-id` marker when the request carries none) —
+never the audio, its base64 encoding, or the raw declared duration. This lets an operator distinguish a
+dictation request that never reached the provider — and exactly why — from a provider-side failure
+using `server.log` alone (#2895 audit, AGENTS.md §8 Rule 1).
 
 ## 5. Data boundary (no raw audio persistence)
 

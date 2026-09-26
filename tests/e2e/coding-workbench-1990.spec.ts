@@ -6,6 +6,14 @@ test("opens a live Coding Workbench and starts a server-bound run @smoke", async
   const fixture = await installLiveCodingWorkbenchRuntime(page);
   await fixture.open();
 
+  // #3494 moved the session context (task id · branch · health) and the effective-mode fact into
+  // an information popover so the composer stays uncluttered before a task starts.
+  await fixture.openInformation();
+  // #3561 keeps secondary workspace facts in the popover's Details disclosure.
+  await page
+    .getByRole("dialog", { name: "Coding Workbench information" })
+    .getByText("Details", { exact: true })
+    .click();
   await expect(page.getByText("task-2257 · issue/2257-live-runtime · healthy")).toBeVisible();
   // #2386 changed the workbench default from full access to the supervised middle mode. #2644 moved
   // the selector into Settings, so the Workbench now reports the server-confirmed effective mode in
@@ -15,6 +23,7 @@ test("opens a live Coding Workbench and starts a server-bound run @smoke", async
     "supervised-coding",
   );
   await expect(fixture.workbench.locator("[data-mode]")).toContainText("Supervised workspace");
+  await fixture.closeInformation();
   await page.getByLabel("Task instructions").fill("Investigate a failing test");
   await page.getByRole("button", { name: "Start coding run" }).click();
   await expect(fixture.workbench).toHaveAttribute("data-state", "awaiting-approval");

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import type { EditorM7CommandDefinition } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_COMMAND_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import {
-  EDITOR_M7_COMMAND_REGISTRY,
   isWorkspaceDispatchableChord,
   isWorkspaceReservedChord,
   workspaceChordClaimKeys,
   workspaceChordKey,
-  type EditorM7CommandDefinition,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-ui";
 import {
   bindingFromKeyboardEvent,
   bindingToWorkspaceChord,

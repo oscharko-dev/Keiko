@@ -50,6 +50,7 @@ const deps = (): UiHandlerDeps => ({
 });
 
 const ctx = (): RouteContext => ({
+  correlationId: undefined,
   req: {} as RouteContext["req"],
   res: {} as RouteContext["res"],
   params: {},

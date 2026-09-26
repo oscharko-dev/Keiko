@@ -6,19 +6,19 @@
 // `excerpts.length`, and `uncertainty[].kind`; the remaining fields carry deterministic placeholders
 // and never influence a score.
 
-import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  type ConnectedContextPack,
-  type ConnectedFileEntry,
-  type EvidenceAtom,
-  type ExplorationBudget,
-  type ExplorationUsage,
-  type LineRange,
-  type RetrievalQuery,
-  type SelectedScope,
-  type UncertaintyMarker,
-  type UncertaintyMarkerKind,
+import type {
+  ConnectedContextPack,
+  ConnectedFileEntry,
+  EvidenceAtom,
+  ExplorationBudget,
+  ExplorationUsage,
+  LineRange,
+  RetrievalQuery,
+  SelectedScope,
+  UncertaintyMarker,
+  UncertaintyMarkerKind,
 } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 const EVAL_SCOPE: SelectedScope = {
   schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,

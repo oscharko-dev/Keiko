@@ -1,26 +1,35 @@
 import { describe, it, expect } from "vitest";
+
+import { createRequire } from "node:module";
+import { KEIKO_CONTRACTS_VERSION } from "./version.js";
 import {
-  KEIKO_CONTRACTS_VERSION,
   HARNESS_CODES,
   DEFAULT_LIMITS,
   HARNESS_VERSION,
-  EVIDENCE_SCHEMA_VERSION,
-  DEFAULT_RETENTION,
-  DEFAULT_PATCH_LIMITS,
-  DEFAULT_VERIFICATION_LIMITS,
-  EVAL_SCORECARD_SCHEMA_VERSION,
   TERMINAL_STATES,
+  isTerminalHarnessState,
+} from "./harness.js";
+import { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
+import { DEFAULT_PATCH_LIMITS } from "./tools.js";
+import { DEFAULT_VERIFICATION_LIMITS } from "./verification.js";
+import { EVAL_SCORECARD_SCHEMA_VERSION } from "./evaluations.js";
+import {
   WORKFLOW_HANDOFF_SCHEMA_VERSION,
   DEFAULT_PATCH_SCOPE_LIMITS,
   EXPECTED_CHECKS,
   WORKFLOW_KINDS,
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  SELECTED_SCOPE_KINDS,
   isApprovalTokenShape,
   checkPatchAgainstScope,
-  validateSelectedScope,
   validatePatchScope,
   validateWorkflowHandoffRequest,
+} from "./workflow-handoff.js";
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  MAX_OMITTED_CONTEXT_ENTRIES,
+  SELECTED_SCOPE_KINDS,
+  validateSelectedScope,
+} from "./connected-context.js";
+import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   EMBEDDING_VECTOR_METRICS,
   KNOWLEDGE_SOURCE_SCOPE_KINDS,
@@ -29,23 +38,30 @@ import {
   CAPSULE_OUTPUT_MODES,
   CAPSULE_ANSWER_GROUNDING_POLICIES,
   CONNECTOR_NODE_KINDS,
+} from "./local-knowledge.js";
+import {
   DOCUMENT_STATUSES,
   PARSED_UNIT_KINDS,
   PARSER_DIAGNOSTIC_SEVERITIES,
   INDEXING_JOB_STATUSES,
   CAPSULE_REINDEX_MODES,
-  isSafeScopePath,
-  isSafeStorageReference,
+} from "./local-knowledge-records.js";
+import { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
+import {
   isSafeDisplaySummary,
-  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
-  isKnowledgePodEvidenceSafeText,
-  validateKnowledgePodSummary,
   validateEmbeddingModelIdentity,
   validateKnowledgeSourceScope,
   validateKnowledgeCapsule,
   validateCapsuleSet,
   validateCapsuleReindexRequest,
   validateConnectorGraphState,
+} from "./local-knowledge-validation.js";
+import {
+  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
+} from "./local-knowledge-pods.js";
+import {
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
   KNOWLEDGE_CAPSULE_DDL,
   KNOWLEDGE_CAPSULE_INDEXES,
@@ -53,19 +69,22 @@ import {
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_INDEX_NAMES,
   DELETE_CAPSULE_SQL,
+} from "./local-knowledge-schema.js";
+import {
   INFILLING_ALIGNMENTS,
   modelSupportsInfilling,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
-  validateCapsuleRowShape,
-  redactPathInDiagnostic,
-  normalizePdfCitationPreviewMarkerIndex,
   assertValidGatewaySamplingParameters,
   isValidGatewaySamplingParameters,
   validateGatewaySamplingParameters,
-  MAX_ATTACHMENT_MIME_BYTES,
-  normalizeAttachmentMime,
-} from "./index.js";
+} from "./gateway.js";
+import {
+  validateCapsuleRowShape,
+  redactPathInDiagnostic,
+} from "./local-knowledge-schema-validation.js";
+import { normalizePdfCitationPreviewMarkerIndex } from "./local-knowledge-preview.js";
+import { MAX_ATTACHMENT_MIME_BYTES, normalizeAttachmentMime } from "./bff-wire.js";
 import type {
   ConnectedContextPack,
   ToolPort,
@@ -148,29 +167,36 @@ import type {
   GitDeliveryExpectedBlocker,
   GitDeliveryActionSheetRequest,
   GitDeliveryWorktreeSnapshot,
+  GitDeliveryBranchSwitchInputs,
 } from "./index.js";
 import {
   GIT_DELIVERY_SCHEMA_VERSION,
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
   GIT_DELIVERY_ACTION_KINDS,
   GIT_DELIVERY_RISK_CLASSES,
   GIT_DELIVERY_RISK_CLASS_SEVERITY,
   GIT_DELIVERY_ACTION_RISK_DEFAULTS,
   GIT_DELIVERY_BLOCK_REASONS,
   GIT_DELIVERY_PROVIDER_CAPABILITIES,
-  GIT_DELIVERY_RULE_DECISIONS,
-  GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
-  GIT_DELIVERY_PULL_REQUEST_STATUSES,
   GIT_DELIVERY_BRANCH_MATCH_KINDS,
   GIT_DELIVERY_EXECUTION_ERROR_CODES,
   GIT_DELIVERY_EXECUTION_OUTCOMES,
   GIT_DELIVERY_MERGE_BLOCK_REASONS,
   isGitDeliveryActionKind,
-  isGitDeliveryRemoteTargetPolicy,
   gitDeliveryDefaultRiskClass,
-  evaluateGitPolicy,
   parseGitDeliveryActionEnvelope,
+} from "./git-delivery.js";
+import {
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  GIT_DELIVERY_RULE_DECISIONS,
+  evaluateGitPolicy,
+} from "./git-delivery-policy.js";
+import {
+  GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
+  GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
+  GIT_DELIVERY_PULL_REQUEST_STATUSES,
+  isGitDeliveryRemoteTargetPolicy,
+} from "./git-delivery-provider.js";
+import {
   GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION,
   GIT_DELIVERY_ACTION_SHEET_STATES,
   GIT_DELIVERY_APPROVAL_NECESSITIES,
@@ -181,7 +207,13 @@ import {
   gitDeliverySuggestedRecoveryStrategy,
   GIT_DELIVERY_POLICY_DECISION_OUTCOMES,
   isGitDeliveryPolicyDecisionOutcome,
-} from "./index.js";
+} from "./git-delivery-action-sheet.js";
+
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 describe("keiko-contracts package surface", () => {
   it("exports governed attachment MIME normalization through the package entrypoint", () => {
@@ -189,8 +221,8 @@ describe("keiko-contracts package surface", () => {
     expect(normalizeAttachmentMime(" IMAGE/PNG ; charset=binary ")).toBe("image/png");
   });
 
-  it("exposes the version constant pinned at 0.2.15", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.2.15");
+  it("exposes the version constant pinned at the package version", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe(packageVersion);
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -258,8 +290,11 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("TERMINAL_STATES contains 'completed' and 'failed'", () => {
-    expect(TERMINAL_STATES.has("completed")).toBe(true);
-    expect(TERMINAL_STATES.has("failed")).toBe(true);
+    expect(TERMINAL_STATES).toContain("completed");
+    expect(TERMINAL_STATES).toContain("failed");
+    expect(isTerminalHarnessState("completed")).toBe(true);
+    expect(isTerminalHarnessState("failed")).toBe(true);
+    expect(isTerminalHarnessState("planning")).toBe(false);
   });
 
   it("each new type-only export added by #162 is reachable by name at compile time", () => {
@@ -274,7 +309,7 @@ describe("keiko-contracts package surface", () => {
     expect(pin<SideFileWriteResult>()).toBeUndefined();
   });
 
-  it("workflow-handoff value re-exports are reachable through the barrel (#186)", () => {
+  it("workflow-handoff values remain available at their declared public surface (#186)", () => {
     expect(WORKFLOW_HANDOFF_SCHEMA_VERSION).toBe("1");
     expect(DEFAULT_PATCH_SCOPE_LIMITS.maxFileCount).toBeGreaterThan(0);
     expect(EXPECTED_CHECKS).toContain("verify");
@@ -285,7 +320,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof checkPatchAgainstScope).toBe("function");
   });
 
-  it("workflow-handoff type re-exports are reachable through the barrel (#186)", () => {
+  it("workflow-handoff types remain available at their declared public surface (#186)", () => {
     // Phantom generic keeps verbatimModuleSyntax happy without producing runtime values; if a
     // future refactor drops one of the names from the package surface, this test stops
     // compiling — the same guard pattern used for the #162 tool ports above.
@@ -301,7 +336,7 @@ describe("keiko-contracts package surface", () => {
     expect(pin<ExpectedCheck>()).toBeUndefined();
   });
 
-  it("FIM completion value re-exports are reachable through the barrel (#1210)", () => {
+  it("FIM completion values remain available at their declared public surface (#1210)", () => {
     const fastAligned: ModelCapability = {
       id: "fast-instruct",
       kind: "chat",
@@ -334,7 +369,7 @@ describe("keiko-contracts package surface", () => {
     expect(isAsYouTypeCompletionModel(fastAligned)).toBe(true);
   });
 
-  it("FIM completion type re-exports are reachable through the barrel (#1210)", () => {
+  it("FIM completion types remain available at their declared public surface (#1210)", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<InfillingAlignment>();
     pin<CompletionInteractionMode>();
@@ -342,7 +377,7 @@ describe("keiko-contracts package surface", () => {
     expect(pin<CompletionModelSelection>()).toBeUndefined();
   });
 
-  it("local-knowledge value re-exports are reachable through the barrel (#191)", () => {
+  it("local-knowledge values remain available at their declared public surface (#191)", () => {
     expect(LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("1");
     expect(EMBEDDING_VECTOR_METRICS).toContain("cosine");
     expect(KNOWLEDGE_SOURCE_SCOPE_KINDS).toContain("folder");
@@ -384,7 +419,7 @@ describe("keiko-contracts package surface", () => {
     expect(normalizePdfCitationPreviewMarkerIndex(0)).toBeUndefined();
   });
 
-  it("local-knowledge type re-exports are reachable through the barrel (#191)", () => {
+  it("local-knowledge types remain available at their declared public surface (#191)", () => {
     // Phantom generic pins each new local-knowledge type onto the barrel surface; a future
     // refactor that drops one of these names fails this test at compile time. See #186 above
     // for the same pattern. The lineage pins below assert KnowledgeCapsuleId, KnowledgeSourceId,
@@ -427,8 +462,8 @@ describe("keiko-contracts package surface", () => {
     expect(pin<LocalKnowledgeValidationFail>()).toBeUndefined();
   });
 
-  it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(32);
+  it("knowledge-capsule schema values remain available at their declared public surface (#265)", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
@@ -449,7 +484,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof redactPathInDiagnostic).toBe("function");
   });
 
-  it("knowledge-capsule schema type re-exports are reachable through the barrel (#265)", () => {
+  it("knowledge-capsule schema types remain available at their declared public surface (#265)", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<KnowledgeCapsuleMigration>();
     pin<CapsuleRowShape>();
@@ -475,8 +510,8 @@ describe("keiko-contracts package surface", () => {
     pin<EvidenceConnectedContextUncertainty>();
   });
 
-  it("memory contract value re-exports are reachable through the barrel (#205)", async () => {
-    const mod = await import("./index.js");
+  it("memory contract values remain available at their declared public surface (#205)", async () => {
+    const mod = await import("./memory.js");
     expect(mod.MEMORY_SCHEMA_VERSION).toBe("1");
     expect(mod.MEMORY_SCOPE_KINDS).toContain("user");
     expect(mod.MEMORY_SCOPE_KINDS).toContain("global");
@@ -501,11 +536,12 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.isScopeReachable).toBe("function");
     expect(typeof mod.assertNeverMemoryType).toBe("function");
     expect(typeof mod.looksLikeSecretShape).toBe("function");
+    expect(typeof mod.hasPaymentCardPanShape).toBe("function");
     expect(typeof mod.hasStaleModelMetadata).toBe("function");
   });
 
-  it("memory contract type re-exports are reachable through the barrel (#205)", async () => {
-    type Mod = typeof import("./index.js");
+  it("memory contract types remain available at their declared public surface (#205)", async () => {
+    type Mod = typeof import("./memory.js");
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<Mod["MEMORY_SCOPE_KINDS"]>();
     // Phantom imports to pin the type-only surface added by #205. A future refactor that
@@ -557,14 +593,14 @@ describe("keiko-contracts package surface", () => {
     await expect(import("./index.js")).resolves.toBeDefined();
   });
 
-  it("memory subpath barrel is importable as @oscharko-dev/keiko-contracts/memory (#205)", async () => {
-    const subpath = await import("./memory-barrel.js");
+  it("memory subpath is importable as @oscharko-dev/keiko-contracts/memory (#205)", async () => {
+    const subpath = await import("./memory.js");
     expect(subpath.MEMORY_SCHEMA_VERSION).toBe("1");
     expect(typeof subpath.validateMemoryRecord).toBe("function");
     expect(typeof subpath.isScopeReachable).toBe("function");
   });
 
-  it("memory workflow port re-exports are reachable through the barrel (#213)", async () => {
+  it("memory workflow-port contracts remain available at their declared public surface (#213)", async () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _MemoryWorkflowPort = import("./index.js").MemoryWorkflowPort;
     type _MemoryWorkflowContext = import("./index.js").MemoryWorkflowContext;
@@ -589,8 +625,8 @@ describe("keiko-contracts package surface", () => {
     expect(Object.keys(subpath)).toHaveLength(0);
   });
 
-  it("memory audit event surface re-exports are reachable through the barrel (#214)", async () => {
-    const mod = await import("./index.js");
+  it("memory audit-event contracts remain available at their declared public surface (#214)", async () => {
+    const mod = await import("./memory.js");
     expect(mod.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
     expect(mod.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:proposed");
@@ -621,9 +657,11 @@ describe("keiko-contracts package surface", () => {
     expect(subpath.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
   });
 
-  it("connected-context barrel exports are reachable through the root surface (#178)", () => {
+  it("connected-context contracts remain available at their declared public surface (#178)", () => {
     expect(CONNECTED_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(SELECTED_SCOPE_KINDS).toContain("files");
+    // KEIKO-0849: the pack.omitted quadratic-scan cap is part of the public surface too.
+    expect(MAX_OMITTED_CONTEXT_ENTRIES).toBeGreaterThan(0);
     const scope: SelectedScope = {
       schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
       scopeId: "scope-1",
@@ -638,8 +676,11 @@ describe("keiko-contracts package surface", () => {
     pin<ConnectedContextPack>();
   });
 
-  it("editor-agent contract value re-exports are reachable through the barrel (#1391)", async () => {
-    const mod = await import("./index.js");
+  it("editor-agent values remain available at their declared public surface (#1391)", async () => {
+    const mod = {
+      ...(await import("./editor-agent.js")),
+      ...(await import("./editor-agent-governance.js")),
+    };
     // Compatibility pin for the schema version constant: the public agent-editor contract is v1.
     expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
     expect(mod.EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS).toBe(128);
@@ -672,7 +713,9 @@ describe("keiko-contracts package surface", () => {
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual([
       "CANCELLED",
+      "DUPLICATE_ACTION",
       "LIMIT_EXCEEDED",
+      "MUTATION_IN_FLIGHT",
       "PROVIDER_UNAVAILABLE",
       "QUEUE_FULL",
       "TIMED_OUT",
@@ -714,7 +757,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
   });
 
-  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", async () => {
+  it("editor-agent types remain available at their declared public surface (#1391)", async () => {
     // Phantom generics pin the public contract types onto the barrel surface; a future refactor that
     // drops one of these names stops this test compiling (same guard pattern as #186/#205 above).
     const pin = <T>(_value?: T): T | undefined => undefined;
@@ -768,8 +811,8 @@ describe("keiko-contracts package surface", () => {
     await expect(import("./index.js")).resolves.toBeDefined();
   });
 
-  it("coding workbench mode-policy contracts are reachable through the barrel (#2091)", async () => {
-    const mod = await import("./index.js");
+  it("coding-workbench mode-policy contracts remain available at their declared public surface (#2091)", async () => {
+    const mod = await import("./coding-workbench.js");
     expect(mod.CODING_WORKBENCH_POLICY_EFFECTS).toEqual(["allowed", "approval-required", "denied"]);
     expect(mod.CODING_WORKBENCH_POLICY_RESOURCE_SCOPES).toEqual([
       "workspace-contained",
@@ -791,8 +834,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodingWorkbenchModeEffectMatrix>();
   });
 
-  it("code task acceptance contracts are reachable through the barrel (#2385)", async () => {
-    const mod = await import("./index.js");
+  it("code-task acceptance contracts remain available at their declared public surface (#2385)", async () => {
+    const mod = await import("./code-task-acceptance.js");
     expect(mod.CODE_TASK_ACCEPTANCE_SCHEMA_VERSION).toBe(1);
     expect(mod.CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND).toBe("code-task-acceptance-contribution");
     expect(mod.CODE_TASK_EVIDENCE_CLASSES).toHaveLength(5);
@@ -808,6 +851,11 @@ describe("keiko-contracts package surface", () => {
     expect(mod.isCodeTaskIsoInstant("2026-07-16T12:00:00Z")).toBe(true);
     expect(mod.isCodeTaskRepoRelativePath("packages/keiko-contracts/src/index.ts")).toBe(true);
     expect(mod.isCodeTaskContentFreeNote("bounded note")).toBe(true);
+    expect(mod.CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND).toBe(
+      "code-task-qualification-flow-evidence",
+    );
+    expect(mod.CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS).toHaveLength(10);
+    expect(mod.validateCodeTaskQualificationFlowArtifact({}).ok).toBe(false);
 
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<import("./index.js").CodeTaskAcceptanceContributionV1>();
@@ -826,10 +874,24 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodeTaskGitTreeSha>();
     pin<import("./index.js").CodeTaskSha256Digest>();
     pin<import("./index.js").CodeTaskIsoInstant>();
+    pin<import("./index.js").CodeTaskQualificationAuthorityObservationV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowArtifactV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowBindingV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowStageEvidenceV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowSpendV1>();
+    pin<import("./index.js").CodeTaskQualificationFlowTransition>();
+    pin<import("./index.js").CodeTaskQualificationFlowV1>();
+    pin<import("./index.js").CodeTaskQualificationRequiredChecksV1>();
+    pin<import("./index.js").CodeTaskQualificationRubricReview>();
+    pin<import("./index.js").CodeTaskQualificationRubricReviewV1>();
+    pin<import("./index.js").CodeTaskQualificationStageReceiptV1>();
   });
 
-  it("code task governance contracts are reachable through the barrel (#2386)", async () => {
-    const mod = await import("./index.js");
+  it("code-task governance contracts remain available at their declared public surface (#2386)", async () => {
+    const mod = {
+      ...(await import("./code-task-governance.js")),
+      ...(await import("./code-task-run-control.js")),
+    };
     expect(mod.CODE_TASK_GOVERNANCE_SCHEMA_VERSION).toBe(1);
     expect(mod.CODE_TASK_GRANT_SCOPES).toEqual(["once", "task"]);
     expect(mod.GOVERNED_ACTION_KIND).toBe("governed-action");
@@ -876,22 +938,25 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").RuntimeGovernanceLifecycleEventV1>();
   });
 
-  it("governed Git delivery contracts are reachable through the barrel (#471)", () => {
+  it("governed Git-delivery contracts remain available at their declared public surface (#471)", () => {
     // Schema versions.
     expect(GIT_DELIVERY_SCHEMA_VERSION).toBe("1");
     expect(GIT_DELIVERY_POLICY_SCHEMA_VERSION).toBe("1");
     expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
 
     // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
-    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    // #3389 (epic #3384 correction 7): 11 -> 13 with "pr-description-apply" (#3399) and
+    // "pr-mark-ready"; the same pin lives in git-delivery.test.ts and moves together with this one.
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(13);
     expect(GIT_DELIVERY_RISK_CLASSES).toHaveLength(4);
-    expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(6);
+    // Includes the server-owned continuity guard's typed authority-denied audit outcome.
+    expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(9);
     expect(GIT_DELIVERY_PROVIDER_CAPABILITIES).toHaveLength(5);
     expect(GIT_DELIVERY_RULE_DECISIONS).toHaveLength(4);
     expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES).toHaveLength(4);
     expect(GIT_DELIVERY_PULL_REQUEST_STATUSES).toHaveLength(3);
     expect(GIT_DELIVERY_BRANCH_MATCH_KINDS).toHaveLength(2);
-    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES).toHaveLength(6);
+    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES).toHaveLength(7);
     expect(GIT_DELIVERY_EXECUTION_OUTCOMES).toHaveLength(4);
     expect(GIT_DELIVERY_MERGE_BLOCK_REASONS).toHaveLength(6);
 
@@ -911,7 +976,9 @@ describe("keiko-contracts package surface", () => {
     expect(gitDeliveryDefaultRiskClass("unknown-future-kind")).toBe("recovery-or-rewrite");
     expect(isGitDeliveryActionKind("commit")).toBe(true);
 
-    // Type pins (compile-time reachability).
+    // Type pins (compile-time reachability). GitDeliveryBranchSwitchInputs was the only per-kind
+    // input interface missing from the public barrel (KEIKO-0654); adding it here fails the
+    // typecheck if the barrel re-export is ever dropped again.
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<GitDeliveryActionEnvelope>();
     pin<GitDeliveryResolvedInputs>();
@@ -920,15 +987,16 @@ describe("keiko-contracts package surface", () => {
     pin<GitDeliveryBranchProtection>();
     pin<GitDeliveryMergeReadiness>();
     pin<GitDeliveryPullRequestState>();
+    pin<GitDeliveryBranchSwitchInputs>();
   });
 
-  it("governed Git action-sheet contracts are reachable through the barrel (#473)", () => {
+  it("governed Git action-sheet contracts remain available at their declared public surface (#473)", () => {
     expect(GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(GIT_DELIVERY_ACTION_SHEET_STATES).toHaveLength(3);
     expect(GIT_DELIVERY_APPROVAL_NECESSITIES).toHaveLength(3);
     expect(GIT_DELIVERY_BLOCKED_CAUSES).toHaveLength(3);
-    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS).toHaveLength(9);
+    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS).toHaveLength(10);
 
     expect(typeof isGitDeliveryActionSheet).toBe("function");
     expect(typeof buildGitDeliveryActionSheet).toBe("function");
@@ -965,13 +1033,14 @@ describe("keiko-contracts package surface", () => {
     pin<GitDeliveryWorktreeSnapshot>();
   });
 
-  it("governed GitHub pull request contracts are reachable through the barrel (#477)", async () => {
-    const m = await import("./index.js");
+  it("governed GitHub pull-request contracts remain available at their declared public surface (#477)", async () => {
+    const m = await import("./git-pull-request.js");
     expect(m.GIT_PULL_REQUEST_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(m.GIT_PR_CHANGE_TYPES).toHaveLength(7);
     expect(m.GIT_PR_READINESS_BLOCKER_CODES).toHaveLength(9);
-    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(5);
+    // 6 since KEIKO-0479 added "keep-as-is" for an already-ready PR with nothing outstanding.
+    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(6);
     expect(m.GIT_PR_REJECTION_REASONS).toHaveLength(9);
 
     expect(typeof m.synthesizePullRequestMetadata).toBe("function");
@@ -990,8 +1059,8 @@ describe("keiko-contracts package surface", () => {
     expect(readiness.objectExists).toBe(false);
   });
 
-  it("managed LSP activation contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+  it("managed-LSP activation contracts remain available at their declared public surface (#2271)", async () => {
+    const m = await import("./managed-lsp-activation.js");
     expect(m.MANAGED_LSP_ACTIVATION_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
@@ -1022,8 +1091,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspActivationParseResult<unknown>>();
   });
 
-  it("managed LSP runtime configuration contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+  it("managed-LSP runtime configuration remains available at its declared public surface (#2271)", async () => {
+    const m = await import("./managed-lsp-runtime.js");
     expect(m.MANAGED_LSP_RUNTIME_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_RUNTIME_ID_MAX_CHARS).toBe(128);
     expect(m.MANAGED_LSP_ETAG_MAX_CHARS).toBe(96);
@@ -1086,8 +1155,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspRuntimeParseResult>();
   });
 
-  it("managed LSP capability negotiation contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+  it("managed-LSP capability negotiation remains available at its declared public surface (#2271)", async () => {
+    const m = await import("./managed-lsp-capabilities.js");
     expect(m.MANAGED_LSP_CAPABILITY_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES).toBe(64);
     expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS).toBe(16);
@@ -1119,8 +1188,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspCapabilityParseResult<unknown>>();
   });
 
-  it("managed LSP evidence contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+  it("managed-LSP evidence contracts remain available at their declared public surface (#2271)", async () => {
+    const m = await import("./managed-lsp-evidence.js");
     expect(m.MANAGED_LSP_EVIDENCE_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_EVIDENCE_ACTOR_CLASSES).toEqual([
       "localHuman",
@@ -1157,8 +1226,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspEvidenceParseResult>();
   });
 
-  it("governed debug lifecycle contracts are reachable through the barrel (#2343)", async () => {
-    const m = await import("./index.js");
+  it("governed debug-lifecycle contracts remain available at their declared public surface (#2343)", async () => {
+    const m = await import("./debug/debug-lifecycle.js");
     expect(m.DEBUG_LIFECYCLE_SCHEMA_VERSION).toBe("1");
     expect(typeof m.isDebugLifecycleEvidence).toBe("function");
     const pin = <T>(_value?: T): T | undefined => undefined;
@@ -1170,8 +1239,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").DebugLifecycleEvent>();
   });
 
-  it("governed debug browser contracts are reachable through the barrel (#2345)", async () => {
-    const m = await import("./index.js");
+  it("governed debug-browser contracts remain available at their declared public surface (#2345)", async () => {
+    const m = await import("./dap-debug.js");
     expect(m.DAP_DEBUG_CONTRACT_SCHEMA_VERSION).toBe("1");
     expect(m.DEBUG_SESSION_STATUSES).toContain("revoked");
     expect(m.DEBUG_EVENT_KINDS).toContain("output");
@@ -1208,8 +1277,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EvaluateWatchRequest>();
   });
 
-  it("M7 editor platform contracts are reachable through the barrel (#2317)", async () => {
-    const m = await import("./index.js");
+  it("M7 editor-platform contracts remain available at their declared public surface (#2317)", async () => {
+    const m = await import("./editor-m7.js");
     expect(m.EDITOR_M7_SCHEMA_VERSION).toBe("1");
     expect(m.EDITOR_M7_SETTING_REGISTRY.map((entry) => entry.id)).toContain("fontSize");
     expect(m.EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
@@ -1245,8 +1314,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EditorM7AiActivationSummary>();
   });
 
-  it("HTML manual pod job contracts are reachable + enforced through the barrel (#2063)", async () => {
-    const m = await import("./index.js");
+  it("HTML manual pod-job contracts remain available and fail closed at their public surface (#2063)", async () => {
+    const m = await import("./html-manual-job.js");
     expect(m.HTML_MANUAL_POD_JOB_SCHEMA_VERSION).toBe("1");
     expect(m.HTML_MANUAL_POD_JOB_OPERATIONS).toStrictEqual(["create", "refresh"]);
     expect(m.HTML_MANUAL_POD_JOB_STATES).toContain("running");
@@ -1285,8 +1354,16 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").HtmlManualPodCreateRequest>();
   });
 
-  it("M11 workspace foundation contracts are reachable through the barrel (#2520)", async (): Promise<void> => {
-    const m = await import("./index.js");
+  it("M11 workspace-foundation contracts remain available at their declared public surface (#2520)", async (): Promise<void> => {
+    const m = {
+      ...(await import("./workspace-contract-primitives.js")),
+      ...(await import("./task-workspace.js")),
+      ...(await import("./workspace-trust.js")),
+      ...(await import("./editor-local-history.js")),
+      ...(await import("./workspace-manifest.js")),
+      ...(await import("./editor-m11-settings.js")),
+      ...(await import("./workspace-profile.js")),
+    };
     expect(m.WORKSPACE_CONTRACT_SCHEMA_VERSION).toBe(1);
     expect(m.WORKSPACE_BINDING_V2_SCHEMA_VERSION).toBe("2");
     expect(m.WORKSPACE_TRUST_LEVELS).toEqual(["trusted", "restricted"]);
@@ -1328,8 +1405,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").VersionedWorkspaceBinding>();
   });
 
-  it("the one vector-index port is reachable + fails closed through the barrel (#2556, ADR-0152 D1)", async () => {
-    const m = await import("./index.js");
+  it("the vector-index port remains available and fails closed at its public surface (#2556, ADR-0152 D1)", async () => {
+    const m = await import("./vector-index-port.js");
     expect(m.VECTOR_INDEX_NAMESPACES).toStrictEqual(["knowledge", "memory", "repo"]);
     expect(Object.isFrozen(m.VECTOR_INDEX_NAMESPACES)).toBe(true);
 
@@ -1387,8 +1464,8 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").VectorIndexPort>();
   });
 
-  it("pillar-neutral retrieval context stays body-free through the barrel (#2570, ADR-0152 D6)", async () => {
-    const m = await import("./index.js");
+  it("pillar-neutral retrieval context stays body-free at its public surface (#2570, ADR-0152 D6)", async () => {
+    const m = await import("./retrieval-context.js");
     expect(m.RETRIEVAL_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(m.RETRIEVAL_CONTEXT_PURPOSES.length).toBeGreaterThan(0);
     expect(m.RETRIEVAL_CONTEXT_SOURCE_KINDS.length).toBeGreaterThan(0);

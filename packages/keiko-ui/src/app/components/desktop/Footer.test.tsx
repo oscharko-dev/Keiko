@@ -6,12 +6,15 @@
 
 import type { ComponentProps, ReactNode } from "react";
 import { useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { Footer } from "./Footer";
+import { HEALTH_POLL_INTERVAL_MS } from "./hooks/useBackendHealth";
 import type { AppWindow } from "./windows/types";
 import { fetchHealth } from "@/lib/api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 vi.mock("@/lib/api", () => ({
   fetchHealth: vi.fn(),
@@ -45,12 +48,6 @@ function renderFooter(
       onToggleWindowPalette={vi.fn()}
       onSelectWindow={vi.fn()}
       onCloseWindowPalette={vi.fn()}
-      mode="manual"
-      selectedModel={undefined}
-      projectName="Keiko"
-      branchLabel="main"
-      shellStatusLabel="Ready"
-      evidenceStatusLabel="No review open"
       {...patch}
     />,
   );
@@ -79,21 +76,6 @@ describe("Footer — window status trigger", () => {
     await waitFor(() => {
       expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
     });
-  });
-
-  it("does not render the connected-project indicator", () => {
-    renderFooter({ projectName: "Regulated Workspace" });
-    expect(screen.queryByText("Regulated Workspace")).not.toBeInTheDocument();
-  });
-
-  it("does not render the selected model indicator", () => {
-    renderFooter({ selectedModel: "claude-sonnet-4-6" });
-    expect(screen.queryByText("claude-sonnet-4-6")).not.toBeInTheDocument();
-  });
-
-  it("does not render an explicit no-model-selected state", () => {
-    renderFooter();
-    expect(screen.queryByText("No model selected")).not.toBeInTheDocument();
   });
 
   it("renders the workflow-readiness indicator showing the active window count", () => {
@@ -147,7 +129,7 @@ describe("Footer — window status trigger", () => {
       ],
     });
 
-    expect(screen.getByRole("group", { name: "Open windows" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Open windows" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Restore Chat window - Sprint triage" }),
     ).toBeInTheDocument();
@@ -182,26 +164,6 @@ describe("Footer — window status trigger", () => {
     await user.click(screen.getByRole("button", { name: "Restore Files window - /repo" }));
 
     expect(onSelectWindow).toHaveBeenCalledWith("files-1");
-  });
-
-  it("does not render the review and evidence-access indicator", () => {
-    renderFooter({ evidenceStatusLabel: "Evidence ready" });
-    expect(screen.queryByText("Evidence ready")).not.toBeInTheDocument();
-  });
-
-  it("does not render the shell trust-boundary status indicator", () => {
-    renderFooter({ shellStatusLabel: "Gateway setup required" });
-    expect(screen.queryByText("Gateway setup required")).not.toBeInTheDocument();
-  });
-
-  it("does not render the governance mode pill in manual mode", () => {
-    renderFooter();
-    expect(screen.queryByText(/You · manual/)).not.toBeInTheDocument();
-  });
-
-  it("does not render the governance mode pill in autonomous mode", () => {
-    renderFooter({ mode: "autonomous" });
-    expect(screen.queryByText("Keiko governing")).not.toBeInTheDocument();
   });
 
   it("uses a single semantic footer landmark", () => {
@@ -242,12 +204,6 @@ describe("Footer — window status trigger", () => {
           onToggleWindowPalette={() => setOpen((value) => !value)}
           onSelectWindow={vi.fn()}
           onCloseWindowPalette={() => setOpen(false)}
-          mode="manual"
-          selectedModel={undefined}
-          projectName="Keiko"
-          branchLabel="main"
-          shellStatusLabel="Ready"
-          evidenceStatusLabel="No review open"
           {...props}
         />
       );
@@ -279,5 +235,121 @@ describe("Footer — window status trigger", () => {
       ).not.toBeInTheDocument();
       expect(trigger).toHaveFocus();
     });
+  });
+});
+
+// #3532: the footer surfaces the Activity Log's diagnostic readiness from the same health read that
+// carries the installed version, and keeps it current on an interval.
+describe("Footer — diagnostic readiness", () => {
+  const ready: ActivityLogReadinessSnapshot = {
+    readiness: "ready",
+    reasons: [],
+    writer: "production-file",
+    lostEvents: 0,
+  };
+  const degraded: ActivityLogReadinessSnapshot = {
+    ...ready,
+    readiness: "degraded",
+    reasons: ["level-silent"],
+  };
+
+  // Settles the pending health read (and any interval tick) inside React's act scope.
+  async function advance(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows no indicator while diagnostic evidence is ready", async () => {
+    fetchHealthMock.mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: ready });
+    renderFooter();
+
+    expect(await screen.findByText("Keiko | 1.0.0")).toBeInTheDocument();
+    expect(screen.queryByText(/^Diagnostics /u)).not.toBeInTheDocument();
+  });
+
+  it("names a degraded readiness and its reason", async () => {
+    fetchHealthMock.mockResolvedValueOnce({
+      status: "ok",
+      version: "1.0.0",
+      diagnostics: degraded,
+    });
+    renderFooter();
+
+    expect(await screen.findByText("Diagnostics degraded")).toBeInTheDocument();
+    expect(screen.getByText(/: logging is set to silent\./u)).toBeInTheDocument();
+    expect(screen.getByText("Keiko | 1.0.0")).toBeInTheDocument();
+  });
+
+  it("re-reads health on its interval and follows a readiness transition", async () => {
+    vi.useFakeTimers();
+    fetchHealthMock
+      .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: ready })
+      .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: degraded });
+    renderFooter();
+    await advance(0);
+    expect(screen.getByText("Keiko | 1.0.0")).toBeInTheDocument();
+    expect(screen.queryByText("Diagnostics degraded")).not.toBeInTheDocument();
+
+    await advance(HEALTH_POLL_INTERVAL_MS);
+
+    expect(fetchHealthMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Diagnostics degraded")).toBeInTheDocument();
+  });
+
+  it("drops the indicator it can no longer vouch for when a later read fails", async () => {
+    vi.useFakeTimers();
+    fetchHealthMock
+      .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: degraded })
+      .mockRejectedValueOnce(new Error("offline"));
+    renderFooter();
+    await advance(0);
+    expect(screen.getByText("Diagnostics degraded")).toBeInTheDocument();
+
+    await advance(HEALTH_POLL_INTERVAL_MS);
+
+    expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Diagnostics degraded")).not.toBeInTheDocument();
+  });
+
+  it("reports a failed health read once per failure streak, by class only", async () => {
+    vi.useFakeTimers();
+    const reports: string[] = [];
+    setClientDiagnosticWriter((message) => reports.push(message));
+    try {
+      fetchHealthMock
+        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"))
+        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"))
+        .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: ready })
+        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"));
+      renderFooter();
+      await advance(0);
+      await advance(HEALTH_POLL_INTERVAL_MS);
+      expect(reports).toEqual(["[keiko] health read failed: TypeError"]);
+
+      await advance(HEALTH_POLL_INTERVAL_MS);
+      await advance(HEALTH_POLL_INTERVAL_MS);
+      expect(reports).toEqual([
+        "[keiko] health read failed: TypeError",
+        "[keiko] health read failed: TypeError",
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("stops reading health once the footer unmounts", async () => {
+    vi.useFakeTimers();
+    const { unmount } = renderFooter();
+    await advance(0);
+    unmount();
+
+    await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS * 3);
+
+    expect(fetchHealthMock).toHaveBeenCalledTimes(1);
   });
 });

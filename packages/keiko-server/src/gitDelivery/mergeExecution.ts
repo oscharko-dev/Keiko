@@ -10,42 +10,104 @@
 // deterministically against a fake.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryMergeStrategyHint,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryRiskClass,
+  GitMergeReadinessBlocker,
+  GitMergeReadinessSummary,
+  GitMergeStrategyPolicy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   deriveEligibleMergeStrategies,
-  evaluateGitPolicy,
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   gitMergeBlockerActionHintFor,
   gitMergeReadinessFor,
   gitMergeRecommendationFor,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryMergeStrategyHint,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryRiskClass,
-  type GitMergeReadinessBlocker,
-  type GitMergeReadinessSummary,
-  type GitMergeStrategyPolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-merge";
+import {
+  evaluateGitPolicy,
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_RISK_CLASS_SEVERITY } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   evaluateGitMergeEffectivePolicy,
   runGitMerge,
   type GitMergeAdapter,
   type GitMergeCommand,
+  type GitMergeExecResult,
   type GitMergeLifecycleResult,
   type GitMergeProviderReadiness,
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { describeError } from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
+
+const READINESS_OBSERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.readiness.observed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/mergeExecution.logReadinessObservation",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["observed", "unknown"],
+    },
+    providerError: { type: "boolean", dataClass: "closed-enum", required: true },
+    count: { type: "integer", dataClass: "count", required: true },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    gatewayRequestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-delivery-readiness-provider"],
+  proofIds: ["git.delivery.readiness.observed.emitted-line"],
+  releaseImpact: "patch",
+});
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
-  persistGitDeliveryEvidence,
+  gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
+  logGitDeliveryPreconditionFailure,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // Default trusted merge policy: merge is APPROVAL-GATED — the explicit final, high-risk confirmation a
 // merge requires (AC1). No approval token ⇒ approval-required; every other action kind is fail-closed via
@@ -67,17 +129,50 @@ export interface GitDeliveryMergeSeams {
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly strategyPolicy?: GitMergeStrategyPolicy | undefined;
+  // The request's own activity-log sink, so the default merge adapter's runCommand
+  // termination-evidence callback (see mergeAdapterFor) writes through the SAME sink the caller
+  // logs everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied record.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
+}
+
+function authorityGuardedMergeAdapter(
+  adapter: GitMergeAdapter,
+  beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): GitMergeAdapter {
+  if (beforeRemoteDispatch === undefined) return adapter;
+  return {
+    readMergeReadiness: (request) => adapter.readMergeReadiness(request),
+    mergePullRequest: (request): Promise<GitMergeExecResult> => {
+      if (beforeRemoteDispatch()) return adapter.mergePullRequest(request);
+      // F4: no process is spawned for this attempt — mark it explicitly before returning the
+      // synthetic result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+      logGitDeliveryNoSpawnRefusal(activityLog, "merge", correlationId);
+      return Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 });
+    },
+  };
 }
 
 function mergeAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryMergeSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitMergeAdapter {
   if (seams.mergeAdapterFactory !== undefined) return seams.mergeAdapterFactory(workspace);
-  return createNodeGitMergeAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitMergeAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 // Reads the provider's content-free merge-readiness facts. Never throws: a thrown read becomes a
@@ -87,17 +182,71 @@ export async function readMergeProviderReadiness(
   workspace: WorkspaceInfo,
   seams: GitDeliveryMergeSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<GitMergeProviderReadiness> {
-  const adapter = mergeAdapterFor(workspace, seams, now);
+  let result: GitMergeProviderReadiness;
+  let failure: { readonly error: unknown } | undefined;
   try {
-    return await adapter.readMergeReadiness({
+    const adapter = mergeAdapterFor(workspace, seams, now, correlationId);
+    result = await adapter.readMergeReadiness({
       ownerAndRepo: command.ownerAndRepo,
       prExternalId: command.prExternalId,
       baseBranchName: command.baseBranchName,
     });
-  } catch {
-    return { providerCapableStrategies: [], providerError: true };
+  } catch (error) {
+    failure = { error };
+    result = { providerCapableStrategies: [], providerError: true };
   }
+  logReadinessObservation(seams, result, correlationId, failure);
+  return result;
+}
+
+function logReadinessObservation(
+  seams: GitDeliveryMergeSeams,
+  result: GitMergeProviderReadiness,
+  correlationId: string | undefined,
+  failure: { readonly error: unknown } | undefined,
+): void {
+  const providerFailed = result.providerError === true;
+  let failureFields: Record<string, unknown> = {};
+  if (failure !== undefined) {
+    failureFields = readinessFailureFields(failure.error);
+  } else if (providerFailed) {
+    failureFields = { errorClass: "ProviderReadinessError", code: "provider-error" };
+  }
+  (seams.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      READINESS_OBSERVED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        ...(providerFailed
+          ? {
+              level: "warn",
+              errorKind: failure === undefined ? ("unavailable" as const) : ("internal" as const),
+            }
+          : {}),
+      },
+      {
+        state: result.providerError === true ? "unknown" : "observed",
+        providerError: result.providerError === true,
+        count: result.checks?.total ?? 0,
+        ...failureFields,
+      },
+    ),
+  );
+}
+
+function readinessFailureFields(error: unknown): Record<string, unknown> {
+  const detail = describeError(error);
+  return {
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.gatewayRequestId === undefined ? {} : { gatewayRequestId: detail.gatewayRequestId }),
+    ...(detail.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }),
+    ...(detail.retryAfterMs === undefined ? {} : { retryAfterMs: detail.retryAfterMs }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
 }
 
 /**
@@ -112,11 +261,24 @@ export async function executeGovernedMerge(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryMergeSeams,
+  correlationId?: string,
 ): Promise<GitMergeLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = mergeAdapterFor(workspace, seams, now);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_MERGE_POLICY_PACK };
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    logGitDeliveryPreconditionFailure(activityLog, "merge", error, correlationId);
+    throw error;
+  }
+  const adapter = authorityGuardedMergeAdapter(
+    mergeAdapterFor(workspace, seams, now, correlationId),
+    seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
+  );
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_MERGE_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitMerge(
@@ -131,7 +293,19 @@ export async function executeGovernedMerge(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+  });
   return result;
 }
 
@@ -220,6 +394,9 @@ function deriveMergePreviewParts(
     command.mergeStrategy,
     strategyPolicy,
     provider.providerCapableStrategies,
+    // Same base-branch history rule the gateway applies, so the preview an operator sees and the
+    // execution path agree on which strategies the base can actually accept.
+    { linearHistoryRequired: provider.branchProtection?.linearHistoryRequired ?? false },
   );
   const readiness = gitMergeReadinessFor({
     ...(provider.pullRequest !== undefined ? { pullRequest: provider.pullRequest } : {}),

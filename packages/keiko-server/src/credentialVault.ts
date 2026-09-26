@@ -21,6 +21,12 @@ import {
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+// Type-only: this module is also published under the lightweight `credential-vault` subpath (see
+// package.json) that `keiko repair`/`keiko run` import without the rest of the BFF runtime, so it
+// must never pick up a VALUE import of `process-log-sink.ts`/`observability`. A type import erases
+// at compile time and costs nothing there; the real `processServerLogSink()` call happens only at
+// the full-server composition sites (deps.ts, gateway-setup.ts, credentialPersistence.ts).
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 // Structurally identical to the gateway's ProviderSecretResolver (kept local so keiko-server does not
@@ -58,6 +64,13 @@ export interface OpenCredentialVaultOptions {
   readonly configPath: string;
   readonly env: EnvSource;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
+  /**
+   * Optional activity-log seam (ADR-0019; see `@oscharko-dev/keiko-security/log-port.ts`). Wired
+   * with `processServerLogSink()` at the full-server composition sites only — the `keiko repair`/
+   * `keiko run` CLI paths that import this module through the lightweight `credential-vault`
+   * subpath omit it and stay exactly as silent as before.
+   */
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export function openProviderCredentialVault(options: OpenCredentialVaultOptions): LocalSecretVault {
@@ -69,8 +82,13 @@ export function openProviderCredentialVault(options: OpenCredentialVaultOptions)
     keychainService: CREDENTIALS_KEYCHAIN_SERVICE,
     keyfileName: CREDENTIALS_KEYFILE,
     ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
+    sink: options.securityLogSink,
   });
-  return createLocalSecretVault({ key, storePath: credentialStorePath(options.configPath) });
+  return createLocalSecretVault({
+    key,
+    storePath: credentialStorePath(options.configPath),
+    ...(options.securityLogSink !== undefined ? { sink: options.securityLogSink } : {}),
+  });
 }
 
 // A crypto-free resolver for the gateway/CLI: maps `cred:<modelId>` to its plaintext secret. It is
@@ -148,6 +166,7 @@ export interface SealProviderApiKeysOptions {
   readonly env: EnvSource;
   readonly configPath: string;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export interface SealedProviderApiKeys {
@@ -355,10 +374,9 @@ function persistVaultEntries(
   entries: ReadonlyMap<string, string>,
 ): void {
   if (entries.size === 0) return;
-  const vault = openProviderCredentialVault(options);
-  for (const [reference, secret] of entries) {
-    vault.set(reference, secret);
-  }
+  // Merge, never replaceAll: untouched vault entries must survive an unrelated re-seal. One
+  // setMany commit, not a set() per credential — each set() rewrites the whole vault file (#3346).
+  openProviderCredentialVault(options).setMany(entries);
 }
 
 export function pruneProviderCredentialVault(
@@ -369,11 +387,7 @@ export function pruneProviderCredentialVault(
   if (!existsSync(storePath)) return;
   const active = new Set(activeSecretRefs);
   const vault = openProviderCredentialVault(options);
-  for (const reference of vault.list()) {
-    if (!active.has(reference)) {
-      vault.delete(reference);
-    }
-  }
+  vault.deleteMany(vault.list().filter((reference) => !active.has(reference)));
 }
 
 export function sealProviderApiKeys(options: SealProviderApiKeysOptions): readonly unknown[] {

@@ -226,6 +226,41 @@ describe("validateShapedCommandObservation", () => {
     ).toBe(false);
   });
 
+  // KEIKO-0465: the aggregate summed the PRODUCER-DECLARED `bytes` field and never measured `text`,
+  // so an entry declaring `bytes: 0` alongside a multi-megabyte body satisfied a 4 KiB cap whose
+  // whole purpose is to keep this lane bounded.
+  it("measures excerpt text rather than trusting the declared byte count", () => {
+    expect(
+      validateShapedCommandObservation({
+        ...happyCommand(),
+        excerpts: [
+          { stream: "stdout", bytes: 0, text: "x".repeat(MAX_OBSERVATION_EXCERPT_BYTES + 1) },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects an excerpt whose declared bytes disagree with its measured text", () => {
+    expect(
+      validateShapedCommandObservation({
+        ...happyCommand(),
+        excerpts: [{ stream: "stdout", bytes: 5, text: "hello world" }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("counts multi-byte excerpt text in UTF-8 bytes, not UTF-16 code units", () => {
+    // 3 bytes per character in UTF-8, 1 UTF-16 code unit each.
+    const characters = Math.floor(MAX_OBSERVATION_EXCERPT_BYTES / 3) + 1;
+    const text = "\u4e2d".repeat(characters);
+    expect(
+      validateShapedCommandObservation({
+        ...happyCommand(),
+        excerpts: [{ stream: "stdout", bytes: text.length * 3, text }],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects an invalid injectionSignalCount", () => {
     expect(
       validateShapedCommandObservation({ ...happyCommand(), injectionSignalCount: -1 }).ok,
@@ -318,6 +353,22 @@ describe("validateShapedSearchObservation", () => {
 
   it("rejects a wrong kind", () => {
     expect(validateShapedSearchObservation({ ...happySearch(), kind: "command" }).ok).toBe(false);
+  });
+
+  // KEIKO-0465: the cap is declared in BYTES but was enforced against String.length, which counts
+  // UTF-16 code units — so a query of 3-byte BMP characters could carry roughly 3x the cap.
+  it("bounds the query in UTF-8 bytes, not UTF-16 code units", () => {
+    const characters = Math.floor(MAX_OBSERVATION_QUERY_BYTES / 3) + 1;
+    expect(
+      validateShapedSearchObservation({
+        ...happySearch(),
+        query: "\u4e2d".repeat(characters),
+      }).ok,
+    ).toBe(false);
+    // A query that is under the cap in both measures still passes.
+    expect(
+      validateShapedSearchObservation({ ...happySearch(), query: "\u4e2d".repeat(10) }).ok,
+    ).toBe(true);
   });
 
   it("rejects a query over the byte cap", () => {

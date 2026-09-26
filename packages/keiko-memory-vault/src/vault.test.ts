@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -21,9 +30,15 @@ import {
   MemoryStorageError,
   MemoryStoragePreconditionError,
   MemoryStorageValidationError,
+  type MemoryContentCipher,
   type MemoryEvent,
   type MemoryVaultStore,
 } from "./index.js";
+import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // Deterministic injected key so the vault tests never touch the OS keychain or write a keyfile,
 // and so encrypted-at-rest reads are reproducible across the suite (ADR-0035).
@@ -38,7 +53,9 @@ afterEach(() => {
 });
 
 function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-mem-vault-"));
+  // Realpath the tmpdir to avoid tripping the (correct) walk-every-ancestor symlink guard on
+  // macOS, where /var (and /tmp) are legitimate system-level symlinks. On Linux this is a no-op.
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-vault-"));
   cleanups.push(dir);
   return dir;
 }
@@ -199,6 +216,29 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     v.close();
   });
 
+  it("emits a transactional body-free pre-image with each committed update", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const v = openVault(dir, events);
+    const memory = makeMemory({
+      id: "m-update-preimage" as MemoryId,
+      status: "proposed",
+      pinned: true,
+    });
+    v.insertMemory(memory);
+    events.length = 0;
+
+    v.updateMemory(memory.id, { status: "accepted", pinned: false }, memory.updatedAt + 1);
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "memory:updated",
+        previous: { id: memory.id, status: "proposed", pinned: true },
+      }),
+    ]);
+    v.close();
+  });
+
   it("AC18: does NOT emit on validation failure (no SQL touched, no event fired)", () => {
     const dir = freshDir();
     const events: MemoryEvent[] = [];
@@ -314,6 +354,86 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     expect(v.getMemory("m1" as MemoryId)).toBeDefined();
     expect(v.listTombstonesByScope({ kind: "user", userId: "u-1" as UserId })).toEqual([]);
     expect(events).toEqual([]);
+    v.close();
+  });
+
+  // Regression pin (audit KEIKO-0221): the FK ON DELETE CASCADE guarantee on memory_edges,
+  // memory_embeddings, and memory_access is already pinned at the SQL-module level in
+  // embeddings.test.ts:208 and edges.test.ts:138 by directly issuing DELETE FROM memories WHERE ...
+  // Those tests bypass the public vault.deleteMemory() API, so a future orchestration-layer change
+  // could silently reintroduce orphaned rows without any existing test failing. This test drives
+  // the whole insert-plus-links-plus-delete-plus-re-query cycle through the public MemoryVaultStore
+  // API for both tombstone modes.
+  it("public-API deleteMemory (tombstone:true) leaves no orphaned edge/embedding/access row", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+    v.insertEdge({
+      id: "e1" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "m1" as MemoryId,
+      toMemoryId: "m2" as MemoryId,
+      kind: "related",
+      createdAt: 1_700_000_000_500,
+    });
+    v.upsertEmbedding("m1" as MemoryId, {
+      provider: "p",
+      modelId: "m",
+      metric: "cosine",
+      vector: new Float32Array([1, 0]),
+    });
+    v.recordAccess(["m1" as MemoryId], 1_700_000_000_800);
+    expect(v.getEmbedding("m1" as MemoryId)).toBeDefined();
+    expect(v.listOutgoingEdges("m1" as MemoryId)).toHaveLength(1);
+    expect(v.listIncomingEdges("m2" as MemoryId)).toHaveLength(1);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toBeDefined();
+
+    v.deleteMemory("m1" as MemoryId, {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "test",
+      nowMs: 1_700_000_001_000,
+    });
+
+    expect(v.getEmbedding("m1" as MemoryId)).toBeUndefined();
+    expect(v.listOutgoingEdges("m1" as MemoryId)).toEqual([]);
+    expect(v.listIncomingEdges("m2" as MemoryId)).toEqual([]);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toBeUndefined();
+    v.close();
+  });
+
+  it("public-API deleteMemory (tombstone:false) leaves no orphaned edge/embedding/access row", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+    v.insertEdge({
+      id: "e1" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "m1" as MemoryId,
+      toMemoryId: "m2" as MemoryId,
+      kind: "related",
+      createdAt: 1_700_000_000_500,
+    });
+    v.upsertEmbedding("m1" as MemoryId, {
+      provider: "p",
+      modelId: "m",
+      metric: "cosine",
+      vector: new Float32Array([1, 0]),
+    });
+    v.recordAccess(["m1" as MemoryId], 1_700_000_000_800);
+
+    v.deleteMemory("m1" as MemoryId, {
+      tombstone: false,
+      forgetterSurface: "test",
+      nowMs: 1_700_000_001_000,
+    });
+
+    expect(v.getEmbedding("m1" as MemoryId)).toBeUndefined();
+    expect(v.listOutgoingEdges("m1" as MemoryId)).toEqual([]);
+    expect(v.listIncomingEdges("m2" as MemoryId)).toEqual([]);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toBeUndefined();
     v.close();
   });
 });
@@ -876,6 +996,26 @@ describe("list filters", () => {
     ).toEqual(["m2"]);
     v.close();
   });
+
+  it("rejects offset without limit instead of silently discarding the offset (KEIKO-0792)", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId, createdAt: 100, updatedAt: 100 }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId, createdAt: 200, updatedAt: 200 }));
+    v.insertMemory(makeMemory({ id: "m3" as MemoryId, createdAt: 300, updatedAt: 300 }));
+
+    expect(() => v.listMemoriesByScope(userScope, { offset: 1 })).toThrow(
+      MemoryStorageValidationError,
+    );
+    expect(() => v.listMemoriesAcrossScopes([userScope], { offset: 1 })).toThrow(
+      MemoryStorageValidationError,
+    );
+    expect(() => v.listMemoryMetadataByScope(userScope, { offset: 1 })).toThrow(
+      MemoryStorageValidationError,
+    );
+    v.close();
+  });
 });
 
 describe("update + delete error paths", () => {
@@ -945,6 +1085,36 @@ describe("update + delete error paths", () => {
     v.close();
   });
 
+  // Regression pin (audit KEIKO-0442): a batch containing a duplicate id must succeed and delete
+  // each distinct id exactly once, not roll back the entire batch with a not-found error triggered
+  // by the second occurrence's already-deleted row.
+  it("dedupes duplicate ids within a single deleteMemories batch (last-wins)", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+
+    const results = v.deleteMemories([
+      {
+        id: "m1" as MemoryId,
+        options: { tombstone: false, forgetterSurface: "test", nowMs: 1_700_000_001_000 },
+      },
+      {
+        id: "m2" as MemoryId,
+        options: { tombstone: false, forgetterSurface: "test", nowMs: 1_700_000_001_000 },
+      },
+      {
+        id: "m1" as MemoryId,
+        options: { tombstone: false, forgetterSurface: "test", nowMs: 1_700_000_002_000 },
+      },
+    ]);
+
+    expect(results.map((r) => r.memoryId)).toEqual(["m1", "m2"]);
+    expect(v.getMemory("m1" as MemoryId)).toBeUndefined();
+    expect(v.getMemory("m2" as MemoryId)).toBeUndefined();
+    v.close();
+  });
+
   it("throws not-found on upsertEmbedding for a missing memory", () => {
     const dir = freshDir();
     const v = openVault(dir);
@@ -1009,5 +1179,221 @@ describe("project scope round-trips through list", () => {
       v.listMemoriesByScope({ kind: "project", projectId: "p-1" as ProjectId }).map((m) => m.id),
     ).toEqual(["mp"]);
     v.close();
+  });
+});
+
+// PR-review follow-up (Codex threads 3769711634 + 3769903807 + 3770110875 + 3770211415):
+// exhaustive coverage for the --force reembed atomic swap's precondition checks. Each pin
+// exercises one drift mode (insert / update / delete / memory-body mutation) against the
+// concurrent-write detection inside replaceAllEmbeddings.
+describe("replaceAllEmbeddings concurrent-write detection", () => {
+  const EMBEDDING = {
+    provider: "openai",
+    modelId: "text-embedding-3-large",
+    metric: "cosine" as const,
+    vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+  };
+
+  it("rejects when a concurrent INSERT lands between snapshot and swap", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const a = v.insertMemory(makeMemory({ id: "a" as MemoryId }));
+    v.upsertEmbedding(a.id, EMBEDDING);
+    const snapshot = v.snapshotEmbeddedMemoryIds();
+    // Simulate concurrent writer inserting a new embedded row after the CLI snapshotted.
+    const late = v.insertMemory(makeMemory({ id: "late" as MemoryId }));
+    v.upsertEmbedding(late.id, EMBEDDING);
+    expect(() => {
+      v.replaceAllEmbeddings([{ memoryId: a.id, input: EMBEDDING }], snapshot);
+    }).toThrow(MemoryStorageError);
+    // Both rows still exist — the swap rolled back before the delete.
+    expect(v.getEmbedding(a.id)).toBeDefined();
+    expect(v.getEmbedding(late.id)).toBeDefined();
+    v.close();
+  });
+
+  it("rejects when a concurrent UPDATE bumps an embedding's created_at", () => {
+    const dir = freshDir();
+    const nowSeq = { value: 1_700_000_000_000 };
+    const v = openVault(dir, [], nowSeq);
+    const a = v.insertMemory(makeMemory({ id: "a" as MemoryId }));
+    v.upsertEmbedding(a.id, EMBEDDING);
+    const snapshot = v.snapshotEmbeddedMemoryIds();
+    // Advance the clock and re-upsert so the row gains a new created_at that will not match
+    // the snapshot value the CLI captured.
+    nowSeq.value += 1_000;
+    v.upsertEmbedding(a.id, EMBEDDING);
+    expect(() => {
+      v.replaceAllEmbeddings([{ memoryId: a.id, input: EMBEDDING }], snapshot);
+    }).toThrow(MemoryStorageError);
+    v.close();
+  });
+
+  it("rejects when a concurrent DELETE removes a snapshotted embedding row", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const a = v.insertMemory(makeMemory({ id: "a" as MemoryId }));
+    const b = v.insertMemory(makeMemory({ id: "b" as MemoryId }));
+    v.upsertEmbedding(a.id, EMBEDDING);
+    v.upsertEmbedding(b.id, EMBEDDING);
+    const snapshot = v.snapshotEmbeddedMemoryIds();
+    // Concurrent delete on b's embedding; the snapshot still contains b but the current
+    // table doesn't. The swap must refuse rather than recreate b's stale vector.
+    v.deleteEmbedding(b.id);
+    expect(() => {
+      v.replaceAllEmbeddings(
+        [
+          { memoryId: a.id, input: EMBEDDING },
+          { memoryId: b.id, input: EMBEDDING },
+        ],
+        snapshot,
+      );
+    }).toThrow(MemoryStorageError);
+    v.close();
+  });
+
+  it("rejects when a memory's body was edited between staging and swap", () => {
+    const dir = freshDir();
+    const nowSeq = { value: 1_700_000_000_000 };
+    const v = openVault(dir, [], nowSeq);
+    const a = v.insertMemory(makeMemory({ id: "a" as MemoryId, body: "old body" }));
+    v.upsertEmbedding(a.id, EMBEDDING);
+    const snapshot = v.snapshotEmbeddedMemoryIds();
+    const memoryVersions = new Map<MemoryId, number>([[a.id, a.updatedAt]]);
+    // Concurrent body edit stamps a fresh memories.updated_at, which the swap-time check
+    // detects even though the embedding row itself is unchanged.
+    nowSeq.value += 1_000;
+    v.updateMemory(a.id, { body: "new body" }, nowSeq.value);
+    expect(() => {
+      v.replaceAllEmbeddings([{ memoryId: a.id, input: EMBEDDING }], snapshot, memoryVersions);
+    }).toThrow(MemoryStorageError);
+    v.close();
+  });
+
+  it("validates every pair through gateEmbeddingInput before touching the vector space", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const a = v.insertMemory(makeMemory({ id: "a" as MemoryId }));
+    v.upsertEmbedding(a.id, EMBEDDING);
+    // Vector with 0 dims is rejected by gateEmbeddingInput; the bulk swap must apply the
+    // same gate rather than silently persisting a malformed row.
+    const bad = { ...EMBEDDING, vector: new Float32Array(0) };
+    expect(() => {
+      v.replaceAllEmbeddings([{ memoryId: a.id, input: bad }]);
+    }).toThrow(MemoryStorageValidationError);
+    // Prior vector space untouched.
+    expect(Array.from(v.getEmbedding(a.id)?.vector ?? [])).toEqual(Array.from(EMBEDDING.vector));
+    v.close();
+  });
+});
+
+// w4a-memory-vault-fingerprint (epic #3233 §8, g18): `resolveVaultKey` returns `{ key, source }`
+// but createMemoryVault used to destructure only `{ key }`, discarding `source` entirely — the
+// key-resolution tier an operator needs to tell "opened via KEIKO_MEMORY_KEY" from "fell through
+// to the weaker keyfile tier" was computed and then thrown away.
+describe("activity-log seam: memory-vault.store.opened retains the key-resolution tier", () => {
+  function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogEvent[] } {
+    const events: MemoryVaultLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  // RED (before fix): createMemoryVault had no `logSink` option and `resolveCipher` returned only
+  // the cipher, so this event did not exist at all.
+  it('emits exactly one event carrying keySource:"env" when KEIKO_MEMORY_KEY resolves the key', () => {
+    const dir = freshDir();
+    const { sink, events } = recordingSink();
+    const key = randomBytes(32);
+
+    const v = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir, KEIKO_MEMORY_KEY: key.toString("base64") },
+      logSink: sink,
+    });
+
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ category: "memory", op: "memory-vault.store.opened" });
+    expect(opened[0]?.extra).toEqual({
+      completeness: "complete",
+      keySource: "env",
+      loss: "none",
+    });
+    expect(typeof opened[0]?.durationMs).toBe("number");
+    const persisted = expectActivityLogProof(
+      "memory-vault.store.opened.key-source",
+      formatActivityLogProofLine(opened[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ keySource: "env" });
+    v.close();
+  });
+
+  // A test-injected vaultKey/cipher never touches resolveVaultKey at all, so there is no tier to
+  // report — the event still fires (the vault still opened), but without a keySource field.
+  it("omits keySource from the event when a vaultKey/cipher test seam bypassed key resolution", () => {
+    const dir = freshDir();
+    const { sink, events } = recordingSink();
+
+    const v = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: Buffer.alloc(32, 7),
+      logSink: sink,
+    });
+
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.extra).toEqual({ completeness: "complete", loss: "none" });
+    v.close();
+  });
+
+  it("never throws when no logSink is supplied (fully backward-compatible)", () => {
+    const dir = freshDir();
+    expect(() => {
+      const v = createMemoryVault({
+        memoryDir: dir,
+        env: { KEIKO_MEMORY_DIR: dir },
+        vaultKey: Buffer.alloc(32, 7),
+      });
+      v.close();
+    }).not.toThrow();
+  });
+
+  // Finding: store-open ordering. `createMemoryVault` used to emit `memory-vault.store.opened`
+  // right after `openMemoryDatabase`, BEFORE `resolveBodySuppressionKey` ran. A cipher that fails
+  // on its very first `sealString` call (the fresh-vault path, which mints and persists a new
+  // body-suppression HMAC key) makes `createMemoryVault` throw, but the previous ordering had
+  // already reported the open as successful by then. RED (before fix): this test's second
+  // assertion fails because `opened` has length 1, not 0.
+  it("emits no store-opened event when initialization fails after the store is opened", () => {
+    const dir = freshDir();
+    const { sink, events } = recordingSink();
+    const throwingCipher: MemoryContentCipher = {
+      sealString: (): string => {
+        throw new Error("cipher unavailable");
+      },
+      openString: (envelope: string): string => envelope,
+      sealBytes: (buf: Buffer): Buffer => buf,
+      openBytes: (envelope: Buffer): Buffer => envelope,
+      isSealed: (): boolean => false,
+    };
+
+    expect(() => {
+      createMemoryVault({
+        memoryDir: dir,
+        env: { KEIKO_MEMORY_DIR: dir },
+        cipher: throwingCipher,
+        logSink: sink,
+      });
+    }).toThrow();
+
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened).toHaveLength(0);
   });
 });

@@ -1,15 +1,17 @@
+import type {
+  EditorM11ProfileMutation,
+  EditorM11ProfileMutationAction,
+  EditorM11ProfileMutationResult,
+  EditorM7SettingId,
+  WorkspaceProfileImportApply,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  isAssignableWorkspaceProfileDisplayName,
-  isWorkspaceProfileRef,
   parseEditorM7SettingPatch,
-  type EditorM11ProfileMutation,
-  type EditorM11ProfileMutationAction,
-  type EditorM11ProfileMutationResult,
-  type EditorM7SettingId,
-  type WorkspaceProfileImportApply,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { isAssignableWorkspaceProfileDisplayName } from "@oscharko-dev/keiko-contracts/runtime/workspace-profile";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";

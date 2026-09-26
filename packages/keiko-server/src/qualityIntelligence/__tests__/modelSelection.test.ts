@@ -287,6 +287,84 @@ describe("Quality Intelligence model policy defaults", () => {
       },
     });
   });
+
+  // GEN-GATE-DISCOVERY-001: contextWindow===0 is a runtime-discovered placeholder, not a real
+  // "smallest" capacity. It must compare EQUAL to any other value on this tie-break term so an
+  // unenriched capability is not silently deprioritised below any nonzero declared window.
+  // parseGatewayConfig fails-closed on chat capabilities with contextWindow<=0 (audit KEIKO-0520),
+  // so these cases construct a GatewayConfig directly with an unenriched capability injected via
+  // the config.capabilities lookup path — the same surface a discovery/runtime injection would
+  // reach in production. The sort semantics under test live in modelSelection.ts, not in parse.
+  function configWithCapabilities(
+    modelIds: readonly string[],
+    capabilities: readonly ModelCapability[],
+  ): ReturnType<typeof parseGatewayConfig> {
+    return {
+      providers: modelIds.map((id) => ({
+        modelId: id,
+        baseUrl: "https://fake.example.com/v1",
+        apiKey: "fake-key",
+      })),
+      circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      capabilities,
+    } as unknown as ReturnType<typeof parseGatewayConfig>;
+  }
+
+  // KEIKO-0501 (PR-review follow-up): the original fix treated 0 as equal to every value on
+  // this term, which produced a non-transitive comparator (0 == 4K, 0 == 128K, 4K < 128K).
+  // The corrected total ordering PARTITIONS placeholders (contextWindow===0) behind every
+  // known-capacity capability — a runtime-discovered/unenriched model still loses to a
+  // model that DECLARES a real window, but the two are ordered consistently rather than
+  // cyclically. The tests now assert the transitive form.
+  it("prefers a known contextWindow over a placeholder on the generation tie-break", () => {
+    const deps = depsWith(
+      configWithCapabilities(
+        ["a-unenriched", "b-large"],
+        [
+          capability("a-unenriched", { contextWindow: 0 }),
+          capability("b-large", { contextWindow: 128_000 }),
+        ],
+      ),
+    );
+
+    expect(recommendQiModelPolicy(deps).testDesignModelId).toBe("b-large");
+  });
+
+  it("prefers a known contextWindow over a placeholder on the judge tie-break", () => {
+    const deps = depsWith(
+      configWithCapabilities(
+        ["gen-cheap", "judge-unenriched", "judge-large"],
+        [
+          // Force judge selection to differ from generation by making generation the cheapest/
+          // fastest option and letting compareJudgeDefault break the tie on the contextWindow term.
+          capability("gen-cheap", {
+            contextWindow: 200_000,
+            costClass: "low",
+            latencyClass: "fast",
+          }),
+          capability("judge-unenriched", { contextWindow: 0 }),
+          capability("judge-large", { contextWindow: 128_000 }),
+        ],
+      ),
+    );
+
+    // Generation picks the cheapest/fastest ("gen-cheap"); judge avoids the generation model
+    // and falls back to compareJudgeDefault, where the known 128K window beats the placeholder.
+    expect(recommendQiModelPolicy(deps).judgeModelId).toBe("judge-large");
+  });
+
+  it("orders two placeholders by their original list index (stable within the partition)", () => {
+    const deps = depsWith(
+      configWithCapabilities(
+        ["a-unenriched", "b-unenriched"],
+        [
+          capability("a-unenriched", { contextWindow: 0 }),
+          capability("b-unenriched", { contextWindow: 0 }),
+        ],
+      ),
+    );
+    expect(recommendQiModelPolicy(deps).testDesignModelId).toBe("a-unenriched");
+  });
 });
 
 // Issue #810: multimodal selection routes a vision stage to a configured image-input model BY

@@ -50,6 +50,7 @@ function makeModelCapability(overrides: Partial<ModelCapability> = {}): ModelCap
   return {
     id: "model-image",
     kind: "chat",
+    conversationReady: true,
     contextWindow: 128_000,
     maxOutputTokens: 4096,
     toolCalling: true,

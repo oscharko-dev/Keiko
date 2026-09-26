@@ -15,35 +15,27 @@ import {
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
 import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
-import type { CliIo } from "./runner.js";
+import { makeCapturedIo } from "./test-support/cli-io.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 
-interface Captured {
-  readonly io: CliIo;
-  readonly out: () => string;
-  readonly err: () => string;
-}
+// #2906 round 3 (comment 3865329066): reuses the shared fixture instead of a byte-identical
+// local copy (aliased, not just re-exported, so every existing makeIo() call site keeps
+// working unchanged).
+const makeIo = makeCapturedIo;
 
-function makeIo(): Captured {
-  const outChunks: string[] = [];
-  const errChunks: string[] = [];
-  return {
-    io: {
-      out: (text: string): void => {
-        outChunks.push(text);
-      },
-      err: (text: string): void => {
-        errChunks.push(text);
-      },
-    },
-    out: (): string => outChunks.join(""),
-    err: (): string => errChunks.join(""),
-  };
+function extraOf(event: SecurityLogEvent | undefined): Readonly<Record<string, unknown>> {
+  return event?.extra ?? {};
 }
 
 const tempRoots: string[] = [];
@@ -85,12 +77,20 @@ afterEach(() => {
   }
 });
 
+const STOP_LAUNCH_ID = "ab".repeat(16);
+
 function seedState(root: string, pid = "2147483646"): string {
   const stateDir = join(root, ".keiko");
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, "ui.pid"), `${pid}\n`, "utf8");
+  writeFileSync(join(stateDir, "ui.pid"), `${pid}\n${STOP_LAUNCH_ID}\n`, "utf8");
   writeFileSync(join(stateDir, "ui.log"), "log line\n", "utf8");
   return stateDir;
+}
+
+function verifiedStopIdentity(): {
+  readonly verifyLaunchIdentity: (pid: number, launchId: string) => boolean;
+} {
+  return { verifyLaunchIdentity: () => true };
 }
 
 function seedPackageJson(root: string, extra: Record<string, string> = {}): string {
@@ -185,7 +185,7 @@ async function installPortableWindows(
   const source = join(root, "portable-bootstrap");
   const env = windowsPortableEnv(home);
   const managedRoot = options.managedRoot ?? join(env.LOCALAPPDATA, "Programs", "Keiko");
-  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
+  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
   writePortableWindowsFixture(source);
   const c = makeIo();
   const code = await runPortableCli(
@@ -292,32 +292,77 @@ function tamperPortableRecordToRepoRoot(
 }
 
 describe("runUninstallCli — usage", () => {
-  it("prints help and exits 0", () => {
+  it("prints help and exits 0", async () => {
     const c = makeIo();
-    expect(runUninstallCli(["--help"], c.io, {})).toBe(0);
+    await expect(runUninstallCli(["--help"], c.io, {})).resolves.toBe(0);
     expect(c.out()).toContain("keiko uninstall");
   });
 
-  it("rejects an unknown flag with exit 2", () => {
+  it("rejects an unknown flag with exit 2", async () => {
     const c = makeIo();
-    expect(runUninstallCli(["--bogus"], c.io, {})).toBe(2);
+    await expect(runUninstallCli(["--bogus"], c.io, {})).resolves.toBe(2);
     expect(c.err()).toContain("Usage:");
   });
 
-  it("rejects a valued flag missing its value with exit 2", () => {
+  it("rejects a valued flag missing its value with exit 2", async () => {
     const c = makeIo();
-    expect(runUninstallCli(["--state-dir"], c.io, {})).toBe(2);
+    await expect(runUninstallCli(["--state-dir"], c.io, {})).resolves.toBe(2);
   });
 });
 
 describe("runUninstallCli — dry run", () => {
-  it("reports would-remove without changing anything", () => {
+  it("records the governed preview externally without mutating selected state", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    seedPackageJson(root, {});
+    const c = makeIo();
+    const activityStateDir = join(root, "control-state");
+    const events: SecurityLogEvent[] = [];
+    const sinkRoots: string[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+
+    await expect(
+      runUninstallCli(
+        ["--dry-run"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir,
+          securityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(new Set(sinkRoots)).toEqual(new Set([activityStateDir]));
+    expect(events.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "cli.uninstall.started",
+      "cli.uninstall.completed",
+    ]);
+    expect(
+      events
+        .filter(({ op }) => op.startsWith("cli.uninstall."))
+        .every((event) => activityLogEventRegistration(event) !== undefined),
+    ).toBe(true);
+    expect(new Set(events.map(({ correlationId: id }) => id))).toEqual(new Set([correlationId]));
+    expect(extraOf(events[2])).toMatchObject({ dryRun: true, stateDisposition: "would-remove" });
+    expect(existsSync(join(stateDir, "logs"))).toBe(false);
+  });
+
+  it("reports would-remove without changing anything", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
     const pkg = seedPackageJson(root, { custom: "echo hi" });
     const c = makeIo();
     const deps: UninstallCliDeps = { cwd: root, homedir: () => root };
-    expect(runUninstallCli(["--dry-run"], c.io, {}, deps)).toBe(0);
+    await expect(runUninstallCli(["--dry-run"], c.io, {}, deps)).resolves.toBe(0);
     expect(c.out()).toContain("would-remove");
     expect(c.out()).toContain("To remove the package itself");
     // Nothing actually removed.
@@ -327,13 +372,215 @@ describe("runUninstallCli — dry run", () => {
 });
 
 describe("runUninstallCli — apply", () => {
-  it("removes state, keiko scripts (keeping custom), and prints guidance", () => {
+  it("records normalization only for a state-preserving launcher operation", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    const activityStateDir = join(root, "control-state");
+    const c = makeIo();
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+
+    await expect(
+      runUninstallCli(
+        ["--launchers"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir,
+          securityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(new Set(sinkRoots)).toEqual(new Set([activityStateDir]));
+    expect(existsSync(join(stateDir, "logs"))).toBe(false);
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({ op: "cli.install-layout.normalized", correlationId });
+    expect(events[1]).toMatchObject({ op: "cli.uninstall.started", correlationId });
+    expect(extraOf(events[1]).targetSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(events[2]).toMatchObject({ op: "cli.uninstall.completed", correlationId });
+    expect(extraOf(events[2]).stateDisposition).toBe("not-selected");
+  });
+
+  it("distinguishes uninstall targets by hash without persisting either path", async () => {
+    const root = makeRoot();
+    const firstStateDir = join(root, "first-state");
+    const secondStateDir = join(root, "second-state");
+    const events: SecurityLogEvent[] = [];
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      activityStateDir: join(root, "control-state"),
+      securityLogSinkFactory: () => ({
+        write: (event): void => void events.push(event),
+      }),
+    };
+
+    await expect(
+      runUninstallCli(["--launchers", "--state-dir", firstStateDir], makeIo().io, {}, deps),
+    ).resolves.toBe(0);
+    await expect(
+      runUninstallCli(["--launchers", "--state-dir", secondStateDir], makeIo().io, {}, deps),
+    ).resolves.toBe(0);
+    const targetHashes = events
+      .filter(({ op }) => op === "cli.uninstall.started")
+      .map((event) => extraOf(event).targetSha256);
+    expect(targetHashes).toHaveLength(2);
+    expect(new Set(targetHashes).size).toBe(2);
+    expect(JSON.stringify(events)).not.toContain(firstStateDir);
+    expect(JSON.stringify(events)).not.toContain(secondStateDir);
+  });
+
+  it("persists full-uninstall evidence outside the state it removes", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    const activityStateDir = join(root, "control-state");
+    seedPackageJson(root);
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+
+    await expect(
+      runUninstallCli(
+        [],
+        makeIo().io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir,
+          securityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(new Set(sinkRoots)).toEqual(new Set([activityStateDir]));
+    expect(events.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "cli.uninstall.started",
+      "cli.uninstall.completed",
+    ]);
+    expect(new Set(events.map(({ correlationId }) => correlationId))).toEqual(
+      new Set(["00000000-0000-4000-8000-000000000001"]),
+    );
+    expect(extraOf(events[2])).toMatchObject({ stateDisposition: "removed", retainedCount: 0 });
+    expect(extraOf(events[2]).targetSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("refuses without opening a sink when state contains the control root", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(
+        ["--state"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir: stateDir,
+          securityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).resolves.toBe(1);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(c.err()).toContain("overlaps the selected state tree");
+    expect(sinkRoots).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("refuses before opening a control sink that contains the selected state tree", async () => {
+    const root = makeRoot();
+    const activityStateDir = join(root, "control-state");
+    const stateDir = join(activityStateDir, ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+
+    await expect(
+      runUninstallCli(
+        ["--state", "--state-dir", stateDir],
+        makeIo().io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir,
+          securityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).resolves.toBe(1);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(sinkRoots).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("retries a transient open failure only at the established control log", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    const activityStateDir = join(root, "control-state");
+    const events: SecurityLogEvent[] = [];
+    const layoutEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+    let openAttempts = 0;
+
+    await expect(
+      runUninstallCli(["--state"], makeIo().io, layoutEnv, {
+        cwd: root,
+        homedir: () => root,
+        activityStateDir,
+        securityLogSinkFactory: (sinkRoot) => {
+          expect(sinkRoot).toBe(activityStateDir);
+          openAttempts += 1;
+          if (openAttempts === 1) throw new Error("primary unavailable");
+          return { write: (event): void => void events.push(event) };
+        },
+      }),
+    ).resolves.toBe(1);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(openAttempts).toBe(2);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ op: "cli.uninstall.failed", errorKind: "internal" });
+    expect(extraOf(events[0]).reason).toBe("activity-log-open-failed");
+    expect(extraOf(events[0]).failureKind).toBe("Error");
+  });
+
+  it("removes state, keiko scripts (keeping custom), and prints guidance", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
     const pkg = seedPackageJson(root, { custom: "echo hi" });
     const c = makeIo();
     const deps: UninstallCliDeps = { cwd: root, homedir: () => root };
-    expect(runUninstallCli([], c.io, {}, deps)).toBe(0);
+    await expect(runUninstallCli([], c.io, {}, deps)).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(false);
     const scripts = readScripts(pkg);
     expect(scripts["keiko:start"]).toBeUndefined();
@@ -341,74 +588,220 @@ describe("runUninstallCli — apply", () => {
     expect(scripts.custom).toBe("echo hi");
   });
 
-  it("with --scripts only, leaves the state directory untouched", () => {
+  it("with --scripts only, logs the removal and leaves the state directory untouched", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
     const pkg = seedPackageJson(root);
     const c = makeIo();
-    expect(runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    const activityStateDir = join(root, "control-state");
+    const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    await expect(
+      runUninstallCli(
+        ["--scripts"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir,
+          securityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(events.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "cli.uninstall.started",
+      "cli.uninstall.completed",
+    ]);
+    expect(new Set(events.map(({ correlationId: id }) => id))).toEqual(new Set([correlationId]));
+    expect(events[2]?.extra).toEqual(
+      expect.objectContaining({ stateDisposition: "not-selected", scriptCount: 2 }),
+    );
     expect(existsSync(stateDir)).toBe(true);
+    expect(existsSync(join(stateDir, "logs"))).toBe(false);
     expect(readScripts(pkg)["keiko:start"]).toBeUndefined();
   });
 
-  it("with --state only, leaves package.json scripts untouched", () => {
+  it("with --state only, leaves package.json scripts untouched", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
     const pkg = seedPackageJson(root);
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(false);
     expect(readScripts(pkg)["keiko:start"]).toBe(KEIKO_START_SCRIPT);
   });
 
-  it("keeps a customized keiko:start script", () => {
+  it("keeps a customized keiko:start script", async () => {
     const root = makeRoot();
     const pkg = seedPackageJson(root, { "keiko:start": "my custom start" });
     const c = makeIo();
-    expect(runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(readScripts(pkg)["keiko:start"]).toBe("my custom start");
     expect(c.out()).toContain("kept: keiko:start");
   });
 
-  it("keeps the state directory when it holds non-Keiko files", () => {
+  it("keeps the state directory when it holds non-Keiko files", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
     writeFileSync(join(stateDir, "user-notes.txt"), "keep me\n", "utf8");
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(true);
     expect(existsSync(join(stateDir, "user-notes.txt"))).toBe(true);
     expect(existsSync(join(stateDir, "ui.pid"))).toBe(false);
     expect(c.out()).toContain("non-Keiko entr");
   });
 
-  it("sweeps leftover launcher temp dirs", () => {
+  it("sweeps leftover launcher temp dirs that carry the ownership marker", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
-    mkdirSync(join(stateDir, ".launcher-state-abc123"), { recursive: true });
+    const staleTmp = join(stateDir, ".launcher-state-abc123");
+    mkdirSync(staleTmp, { recursive: true });
+    // The classifier requires the ownership marker before treating a shape-matching directory
+    // as launcher-owned (Codex thread 3770922333). Without it a customer-created directory
+    // with the same prefix + 6-alphanum suffix would be swept — regression pin above.
+    writeFileSync(join(staleTmp, ".keiko-owned"), "", "utf8");
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("leaves a customer directory whose name matches the launcher tmp shape untouched", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    // Same prefix + 6-alphanum suffix a customer might create by hand; NO ownership marker
+    // inside. The classifier must NOT treat this as launcher-owned or `keiko uninstall --state`
+    // recursively deletes user data.
+    const customerDir = join(stateDir, ".launcher-state-cust01");
+    mkdirSync(customerDir, { recursive: true });
+    writeFileSync(join(customerDir, "user-notes.txt"), "keep me\n", "utf8");
+    const c = makeIo();
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(existsSync(customerDir)).toBe(true);
+    expect(existsSync(join(customerDir, "user-notes.txt"))).toBe(true);
   });
 });
 
 describe("runUninstallCli — scripts edge cases", () => {
-  it("reports a missing package.json without failing", () => {
+  it("reports a missing package.json without failing", async () => {
     const root = makeRoot();
     const c = makeIo();
-    expect(runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(c.out()).toContain("package.json not found");
   });
 
-  it("skips an invalid package.json with a stderr note", () => {
+  it("fails with structured evidence when package.json is invalid", async () => {
     const root = makeRoot();
     writeFileSync(join(root, "package.json"), "{not json", "utf8");
     const c = makeIo();
-    expect(runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    const events: SecurityLogEvent[] = [];
+    await expect(
+      runUninstallCli(
+        ["--scripts"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir: join(root, "control-state"),
+          securityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+        },
+      ),
+    ).resolves.toBe(1);
     expect(c.err()).toContain("not valid JSON");
+    expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
+    expect(events[1]).toMatchObject({ errorKind: "internal" });
+    expect(extraOf(events[1]).reason).toBe("package-parse-failed");
+    expect(extraOf(events[1]).failureKind).toBe("UninstallPackageParseError");
   });
 
-  it("reports when there are no keiko scripts to remove", () => {
+  it("validates scripts before a forced stop or launcher removal", async () => {
+    const root = makeRoot();
+    const { stateDir, shortcut } = installLauncher(root);
+    writeFileSync(join(stateDir, "ui.pid"), `555\n${STOP_LAUNCH_ID}\n`, "utf8");
+    writeFileSync(join(root, "package.json"), "{not json", "utf8");
+    let livenessChecks = 0;
+    let killCalls = 0;
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(
+        ["--state", "--launchers", "--scripts", "--force"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          isProcessAlive: () => {
+            livenessChecks += 1;
+            return true;
+          },
+          killProcess: () => {
+            killCalls += 1;
+          },
+          ...verifiedStopIdentity(),
+        },
+      ),
+    ).resolves.toBe(1);
+
+    expect(c.err()).toContain("not valid JSON");
+    expect(livenessChecks).toBe(0);
+    expect(killCalls).toBe(0);
+    expect(existsSync(shortcut)).toBe(true);
+    expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
+  });
+
+  it("fails with structured evidence when package.json cannot be read", async () => {
+    const root = makeRoot();
+    const packageDirectory = join(root, "package-directory");
+    mkdirSync(packageDirectory);
+    const c = makeIo();
+    const events: SecurityLogEvent[] = [];
+
+    await expect(
+      runUninstallCli(
+        ["--scripts", "--package", packageDirectory],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir: join(root, "control-state"),
+          securityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+        },
+      ),
+    ).resolves.toBe(1);
+    expect(c.err()).toContain("not readable");
+    expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
+    expect(events[1]).toMatchObject({ errorKind: "internal" });
+    expect(extraOf(events[1]).reason).toBe("package-read-failed");
+    expect(extraOf(events[1]).failureKind).toBe("UninstallPackageReadError");
+  });
+
+  it("reports when there are no keiko scripts to remove", async () => {
     const root = makeRoot();
     writeFileSync(
       join(root, "package.json"),
@@ -416,115 +809,315 @@ describe("runUninstallCli — scripts edge cases", () => {
       "utf8",
     );
     const c = makeIo();
-    expect(runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(c.out()).toContain("no keiko:start / keiko:stop scripts");
   });
 
-  it("exits 1 gracefully when package.json cannot be written", (ctx) => {
+  // KEIKO-0752: previously the writer hardcoded `null, 2` and reformatted a four-space
+  // (or tab-indented) package.json whole, even though uninstall's own scope is only the
+  // two `keiko:*` scripts. Detect the raw file's indentation before serializing so the
+  // surviving lines keep their original indent.
+  it("preserves package.json indentation when removing keiko scripts", async () => {
+    const root = makeRoot();
+    const path = join(root, "package.json");
+    const original = {
+      name: "keiko-consumer",
+      scripts: {
+        "keiko:start": KEIKO_START_SCRIPT,
+        "keiko:stop": KEIKO_STOP_SCRIPT,
+        "build:app": "tsc -b",
+      },
+    };
+    // Four-space indented input with an LF trailing newline.
+    writeFileSync(path, `${JSON.stringify(original, null, 4)}\n`, "utf8");
+
+    const c = makeIo();
+    const code = await runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root });
+    expect(code).toBe(0);
+
+    const rewritten = readFileSync(path, "utf8");
+    // The surviving script line must still be four-space indented, not two.
+    expect(rewritten).toContain('    "build:app": "tsc -b"');
+    // The Keiko scripts are gone.
+    expect(rewritten).not.toContain("keiko:start");
+    expect(rewritten).not.toContain("keiko:stop");
+    // Trailing newline is preserved.
+    expect(rewritten.endsWith("\n")).toBe(true);
+  });
+
+  // #2906 round 3 (comment 3865273714): removeScriptsStep now reuses init.ts's temp-file-plus-
+  // rename writer, which replaces the target via renameSync — that only needs WRITE permission
+  // on the containing DIRECTORY, not on the target file itself (a read-only package.json no
+  // longer blocks the write the way a direct writeFileSync did). Deny write on the directory
+  // instead, so mkdtempSync itself fails before any content is touched — proving both that the
+  // command still fails closed AND that a write/rename failure never corrupts the original file.
+  it("exits 1 gracefully and leaves the original package.json intact when the write cannot complete", async (ctx) => {
     // Skip where the read-only bit does not block the owner (Windows, or running as root).
     if (process.platform === "win32") ctx.skip();
     if (typeof process.getuid === "function" && process.getuid() === 0) return;
     const root = makeRoot();
     const pkg = seedPackageJson(root);
-    chmodSync(pkg, 0o444);
+    const original = readFileSync(pkg, "utf8");
+    chmodSync(root, 0o555);
     const c = makeIo();
-    const code = runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root });
-    chmodSync(pkg, 0o644); // restore so afterEach cleanup can remove it
+    const code = await runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root });
+    chmodSync(root, 0o755); // restore so afterEach cleanup can remove it
     expect(code).toBe(1);
     expect(c.err()).toContain("keiko uninstall:");
+    expect(c.out()).not.toContain("removed: package.json script");
+    // The original manifest — including the keiko:start/stop scripts the (failed) removal was
+    // supposed to prune — survives byte-for-byte.
+    expect(readFileSync(pkg, "utf8")).toBe(original);
   });
 
-  it("honors a custom --package path", () => {
+  it("honors a custom --package path", async () => {
     const root = makeRoot();
     const nested = join(root, "nested");
     mkdirSync(nested, { recursive: true });
     const pkg = seedPackageJson(nested);
     const c = makeIo();
-    expect(
+    await expect(
       runUninstallCli(
         ["--scripts", "--package", "nested/package.json"],
         c.io,
         {},
         { cwd: root, homedir: () => root },
       ),
-    ).toBe(0);
+    ).resolves.toBe(0);
     expect(readScripts(pkg)["keiko:start"]).toBeUndefined();
   });
 });
 
 describe("runUninstallCli — state directory edge cases", () => {
-  it("reports an absent state directory", () => {
+  it("reports an absent state directory", async () => {
     const root = makeRoot();
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(c.out()).toContain("not found (nothing to remove)");
   });
 
-  it("honors a custom --state-dir", () => {
+  it("honors a custom --state-dir", async () => {
     const root = makeRoot();
     const custom = join(root, "custom-state");
     mkdirSync(custom, { recursive: true });
     writeFileSync(join(custom, "ui.log"), "x\n", "utf8");
     const c = makeIo();
-    expect(
+    await expect(
       runUninstallCli(
         ["--state", "--state-dir", "custom-state"],
         c.io,
         {},
         { cwd: root, homedir: () => root },
       ),
-    ).toBe(0);
+    ).resolves.toBe(0);
     expect(existsSync(custom)).toBe(false);
   });
 
-  it("resolves the state directory from KEIKO_STATE_DIR", () => {
+  it("resolves the state directory from KEIKO_STATE_DIR", async () => {
     const root = makeRoot();
     const envDir = join(root, "env-state");
     mkdirSync(envDir, { recursive: true });
     writeFileSync(join(envDir, "ui.log"), "x\n", "utf8");
     const c = makeIo();
-    expect(
+    await expect(
       runUninstallCli(
         ["--state"],
         c.io,
         { KEIKO_STATE_DIR: envDir },
         { cwd: root, homedir: () => root },
       ),
-    ).toBe(0);
+    ).resolves.toBe(0);
     expect(existsSync(envDir)).toBe(false);
   });
 });
 
 describe("runUninstallCli — running server guard", () => {
-  it("refuses to remove state while the UI is running", () => {
+  it("refuses to remove state while the UI is running", async () => {
     const root = makeRoot();
     const stateDir = seedState(root, "555");
     const c = makeIo();
     const deps: UninstallCliDeps = { cwd: root, homedir: () => root, isProcessAlive: () => true };
-    expect(runUninstallCli(["--state"], c.io, {}, deps)).toBe(1);
+    await expect(runUninstallCli(["--state"], c.io, {}, deps)).resolves.toBe(1);
     expect(c.err()).toContain("is running");
     expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
   });
 
-  it("stops the running UI with --force and removes state", () => {
+  it("stops the running UI with --force and removes state when the process exits promptly", async () => {
+    // #KEIKO-0422: pre-fix this test used `isProcessAlive: () => true` throughout —
+    // it expected state removal to succeed even though the fake process never
+    // reported as exited, which is precisely the race the finding fixes. Split into
+    // the "process exits promptly" branch (here) and the "process never exits"
+    // branch (`waits for the UI to exit before removing state`, below).
     const root = makeRoot();
     const stateDir = seedState(root, "555");
     const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    let aliveCalls = 0;
     const deps: UninstallCliDeps = {
       cwd: root,
       homedir: () => root,
-      isProcessAlive: () => true,
+      // Model a SIGTERM-responsive UI: alive at probe time, dead by the first
+      // post-SIGTERM liveness poll.
+      isProcessAlive: () => {
+        aliveCalls += 1;
+        return aliveCalls === 1;
+      },
       killProcess: (pid, signal) => {
         killed.push([pid, signal]);
       },
+      sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
-    expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).toBe(0);
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
     expect(killed).toEqual([[555, "SIGTERM"]]);
     expect(existsSync(stateDir)).toBe(false);
   });
 
-  it("with --force --dry-run reports would-stop and does not kill", () => {
+  it("persists forced-stop evidence outside state that the uninstall removes", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const activityStateDir = join(root, "control-state");
+    let aliveCalls = 0;
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      activityStateDir,
+      isProcessAlive: () => {
+        aliveCalls += 1;
+        return aliveCalls === 1;
+      },
+      killProcess: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      securityLogSinkFactory: (sinkRoot) => {
+        sinkRoots.push(sinkRoot);
+        return { write: (event): void => void events.push(event) };
+      },
+      ...verifiedStopIdentity(),
+    };
+    const layoutEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+    const correlationId = layoutEnv[INSTALL_LAYOUT_CORRELATION_ID_ENV];
+
+    await expect(
+      runUninstallCli(["--state", "--force"], makeIo().io, layoutEnv, deps),
+    ).resolves.toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+    expect(new Set(sinkRoots)).toEqual(new Set([activityStateDir]));
+    expect(events.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "cli.uninstall.started",
+      "cli.lifecycle.stop-requested",
+      "cli.uninstall.completed",
+    ]);
+    expect(new Set(events.map(({ correlationId }) => correlationId))).toEqual(
+      new Set([correlationId]),
+    );
+    expect(events[1]?.extra?.targetSha256).toBe(events[3]?.extra?.targetSha256);
+  });
+
+  it("binds launchId from the same pid record classifyPid read", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const seen: string[] = [];
+    const pidPath = join(stateDir, "ui.pid");
+    const killProcess = vi.fn();
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      isProcessAlive: () => {
+        rmSync(pidPath, { force: true });
+        writeFileSync(pidPath, `555\n${"cd".repeat(16)}\n`, "utf8");
+        return true;
+      },
+      killProcess,
+      verifyLaunchIdentity: (_pid, launchId) => {
+        seen.push(launchId);
+        return false;
+      },
+      sleep: () => Promise.resolve(),
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    expect(seen).toEqual([STOP_LAUNCH_ID]);
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("with --force on Windows writes ui.shutdown instead of SIGTERM", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    let probe = true;
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      platform: () => "win32",
+      isProcessAlive: () => {
+        if (probe) {
+          probe = false;
+          return true;
+        }
+        expect(readFileSync(join(stateDir, "ui.shutdown"), "utf8")).toBe(
+          `555\n${STOP_LAUNCH_ID}\n`,
+        );
+        return false;
+      },
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      killWindowsTree,
+      sleep: () => Promise.resolve(),
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
+    expect(killed).toEqual([]);
+    expect(killWindowsTree).not.toHaveBeenCalled();
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("with --force on Windows escalates to tree-kill when the process survives the grace window", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
+    const killWindowsTree = vi.fn(() => "failed" as const);
+    let now = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      now += 500;
+      return now;
+    });
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      platform: () => "win32",
+      isProcessAlive: () => true,
+      killProcess: (pid, signal) => {
+        killed.push([pid, signal]);
+      },
+      killWindowsTree,
+      sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
+    };
+    const c = makeIo();
+    try {
+      await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).toHaveBeenCalledTimes(1);
+    expect(killed).toEqual([[555, "SIGKILL"]]);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(c.err()).toContain("did not stop within the wait budget");
+  });
+
+  it("with --force --dry-run reports would-stop and does not kill", async () => {
     const root = makeRoot();
     seedState(root, "555");
     let killCount = 0;
@@ -537,28 +1130,88 @@ describe("runUninstallCli — running server guard", () => {
       },
     };
     const c = makeIo();
-    expect(runUninstallCli(["--state", "--force", "--dry-run"], c.io, {}, deps)).toBe(0);
+    await expect(
+      runUninstallCli(["--state", "--force", "--dry-run"], c.io, {}, deps),
+    ).resolves.toBe(0);
     expect(c.out()).toContain("would-stop");
     expect(killCount).toBe(0);
   });
 
-  it("swallows a kill error when the process already exited", () => {
+  it("swallows a kill error when the process already exited", async () => {
+    // The kill throwing ESRCH means the process is already dead. Model that by
+    // returning "alive" at probe time and "dead" once the post-SIGTERM poll runs
+    // (matching the OLD test's intent: state removal succeeds).
     const root = makeRoot();
     const stateDir = seedState(root, "555");
+    let aliveCalls = 0;
     const deps: UninstallCliDeps = {
       cwd: root,
       homedir: () => root,
-      isProcessAlive: () => true,
+      isProcessAlive: () => {
+        aliveCalls += 1;
+        return aliveCalls === 1;
+      },
       killProcess: () => {
         throw new Error("ESRCH");
       },
+      sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
     };
     const c = makeIo();
-    expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).toBe(0);
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(false);
   });
 
-  it("does not invoke the running-server guard when state is out of scope", () => {
+  it("waits for the UI to exit before removing state and refuses when the process never exits", async () => {
+    // #KEIKO-0422 must-fail-before-fix: with `isProcessAlive: () => true` forever
+    // and a no-op `killProcess`, `runUninstallCli(["--state", "--force"], ...)`
+    // used to remove state anyway — SIGTERM was treated as synchronous and the
+    // uninstaller unlinked live state under a still-writing UI. After the fix,
+    // ensureServerStoppable polls for the process to exit (100ms interval, 10s
+    // budget) and refuses when the budget is exhausted; nothing under stateDir is
+    // unlinked and the exit code is 1.
+    //
+    // Drive Date.now via a spy that advances by 500ms per call so the 10s wait
+    // budget is exhausted in ~20 loop iterations without spinning a real 10s.
+    const { vi } = await import("vitest");
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    const uiPid = join(stateDir, "ui.pid");
+    const uiLog = join(stateDir, "ui.log");
+    let killCount = 0;
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      isProcessAlive: () => true, // never reports as exited
+      killProcess: () => {
+        killCount += 1;
+      },
+      sleep: () => Promise.resolve(),
+      ...verifiedStopIdentity(),
+    };
+    const c = makeIo();
+    let now = 0;
+    // uninstall.waitForProcessExit uses performance.now for its 10-second budget
+    // (Codex thread 3771011316); mock it so the deadline exhausts deterministically
+    // instead of spinning against real elapsed time.
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      now += 500;
+      return now;
+    });
+    try {
+      await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killCount).toBe(1); // SIGTERM was sent
+    expect(existsSync(stateDir)).toBe(true);
+    expect(existsSync(uiPid)).toBe(true);
+    expect(existsSync(uiLog)).toBe(true);
+    expect(c.err()).toContain("did not stop within the wait budget");
+    expect(c.err()).toContain("state was not removed");
+  });
+
+  it("does not invoke the running-server guard when state is out of scope", async () => {
     const root = makeRoot();
     seedPackageJson(root);
     seedState(root, "555");
@@ -572,46 +1225,93 @@ describe("runUninstallCli — running server guard", () => {
       },
     };
     const c = makeIo();
-    expect(runUninstallCli(["--scripts"], c.io, {}, deps)).toBe(0);
+    await expect(runUninstallCli(["--scripts"], c.io, {}, deps)).resolves.toBe(0);
     expect(killCount).toBe(0);
+  });
+
+  // #2906 round 3 (comment 3865273699): classifyPid (via state-paths.ts::readPidFile) used to
+  // follow a symlinked ui.pid through plain existsSync/readFileSync -- only lifecycle.ts's own
+  // start/stop/status/restart went through the descriptor-safe reader. A symlinked ui.pid
+  // pointing at a decoy file naming a real, unrelated pid would make `uninstall --force` signal
+  // THAT pid instead of refusing the file outright. Deterministic: a pre-planted symlink is
+  // followed regardless of timing, so this needs no real race.
+  it("refuses a symlinked ui.pid instead of signalling its target (shared reader hardening)", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "ui.log"), "log line\n", "utf8");
+    const decoyPidFile = join(root, "decoy-target.pid");
+    writeFileSync(decoyPidFile, "999999\n", "utf8");
+    symlinkSync(decoyPidFile, join(stateDir, "ui.pid"));
+    const killed: number[] = [];
+    let aliveCalls = 0;
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      // Alive on any probe — if the symlink were ever followed, classifyPid would report
+      // "running" and ensureServerStoppable would signal the decoy's pid.
+      isProcessAlive: () => {
+        aliveCalls += 1;
+        return true;
+      },
+      killProcess: (pid) => {
+        killed.push(pid);
+      },
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
+    // The symlink must never be followed: classifyPid reports "absent" for an unreadable/refused
+    // pid file, so ensureServerStoppable finds nothing to stop and never signals anything.
+    expect(killed).toEqual([]);
+    expect(aliveCalls).toBe(0);
+    expect(readFileSync(decoyPidFile, "utf8")).toBe("999999\n");
   });
 });
 
 describe("runUninstallCli — launcher integration", () => {
-  it("removes a recorded launcher shortcut", () => {
+  it("removes a recorded launcher shortcut", async () => {
     const root = makeRoot();
     const { shortcut } = installLauncher(root);
     expect(existsSync(shortcut)).toBe(true);
     const c = makeIo();
-    expect(runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(shortcut)).toBe(false);
   });
 
-  it("refuses to delete a modified shortcut and exits 1", () => {
+  it("refuses to delete a modified shortcut and exits 1", async () => {
     const root = makeRoot();
     const { shortcut } = installLauncher(root);
     writeFileSync(shortcut, "tampered content\n", "utf8");
     const c = makeIo();
-    expect(runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root })).toBe(1);
+    await expect(
+      runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(1);
     expect(existsSync(shortcut)).toBe(true);
     expect(c.err()).toContain("refusing");
   });
 
-  it("reports nothing to remove when no shortcuts are recorded", () => {
+  it("reports nothing to remove when no shortcuts are recorded", async () => {
     const root = makeRoot();
     const c = makeIo();
-    expect(runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(c.out()).toContain("nothing to remove");
   });
 
-  it("surfaces a LauncherError (symlinked state file) as exit 1", () => {
+  it("surfaces a LauncherError (symlinked state file) as exit 1", async () => {
     const root = makeRoot();
     installLauncher(root);
     const stateFile = join(root, ".keiko", "launcher-state.json");
     rmSync(stateFile, { force: true });
     symlinkSync(join(root, "elsewhere.json"), stateFile);
     const c = makeIo();
-    expect(runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root })).toBe(1);
+    await expect(
+      runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(1);
     expect(c.err()).toContain("symlink");
   });
 });
@@ -622,7 +1322,9 @@ describe("runUninstallCli — portable managed install", () => {
     const { home, managedRoot, shortcut, env } = await installPortableWindows(root);
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
     expect(existsSync(managedRoot)).toBe(false);
     expect(existsSync(shortcut)).toBe(false);
     expect(existsSync(join(root, ".keiko"))).toBe(false);
@@ -634,7 +1336,9 @@ describe("runUninstallCli — portable managed install", () => {
     writeFileSync(shortcut, "tampered content\r\n", "utf8");
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(1);
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(1);
     expect(existsSync(managedRoot)).toBe(true);
     expect(existsSync(shortcut)).toBe(true);
     expect(c.err()).toContain("portable registration refused unknown artifact");
@@ -648,7 +1352,9 @@ describe("runUninstallCli — portable managed install", () => {
     symlinkSync(join(root, "outside.txt"), join(managedRoot, "app", "rogue-link"));
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(1);
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(1);
     expect(existsSync(managedRoot)).toBe(true);
     expect(existsSync(shortcut)).toBe(true);
     expect(existsSync(join(root, ".keiko", "portable-install-state.json"))).toBe(true);
@@ -661,7 +1367,9 @@ describe("runUninstallCli — portable managed install", () => {
     writeFileSync(join(managedRoot, "app", "rogue.txt"), "rogue\n", "utf8");
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(1);
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(1);
     expect(existsSync(managedRoot)).toBe(true);
     expect(existsSync(shortcut)).toBe(true);
     expect(c.err()).toContain("app/rogue.txt");
@@ -678,7 +1386,9 @@ describe("runUninstallCli — portable managed install", () => {
     rmSync(shortcut, { force: true });
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
     expect(existsSync(managedRoot)).toBe(false);
     expect(existsSync(join(root, ".keiko"))).toBe(false);
   });
@@ -688,7 +1398,9 @@ describe("runUninstallCli — portable managed install", () => {
     const { home, managedRoot } = await installPortableMacCustom(root);
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => home })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(0);
     expect(existsSync(managedRoot)).toBe(false);
     expect(existsSync(join(root, ".keiko"))).toBe(false);
   });
@@ -704,7 +1416,9 @@ describe("runUninstallCli — portable managed install", () => {
     const invalidRoot = tamperPortableRecordToRepoRoot(managedRoot, shortcut, join(root, ".keiko"));
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(1);
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(1);
     expect(existsSync(invalidRoot)).toBe(true);
     expect(existsSync(managedRoot)).toBe(true);
     expect(existsSync(join(root, ".keiko", "portable-install-state.json"))).toBe(true);
@@ -718,13 +1432,15 @@ describe("runUninstallCli — portable managed install", () => {
     const programsDir = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs");
     const outsidePrograms = join(root, "outside-programs");
     mkdirSync(outsidePrograms, { recursive: true });
-    const outsideShortcut = join(outsidePrograms, "Keiko.bat");
+    const outsideShortcut = join(outsidePrograms, "Keiko.lnk");
     writeFileSync(outsideShortcut, readFileSync(shortcut, "utf8"), "utf8");
     rmSync(programsDir, { recursive: true, force: true });
     symlinkSync(outsidePrograms, programsDir, "dir");
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(1);
+    await expect(
+      runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home }),
+    ).resolves.toBe(1);
     expect(existsSync(managedRoot)).toBe(true);
     expect(readFileSync(outsideShortcut, "utf8")).toContain("Keiko.exe");
     expect(c.err()).toContain("portable registration refused symlinked ancestor");
@@ -776,15 +1492,17 @@ function seedFullState(root: string, pid = "2147483646"): string {
 }
 
 describe("runUninstallCli — runtime state manifest", () => {
-  it("removes every Keiko-owned sensitive artifact and then the state dir", () => {
+  it("removes every Keiko-owned sensitive artifact and then the state dir", async () => {
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(false);
   });
 
-  it("removes Atlassian credential artifacts from the default UI data directory", () => {
+  it("removes Atlassian credential artifacts from the default UI data directory", async () => {
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const vault = join(
@@ -794,18 +1512,20 @@ describe("runUninstallCli — runtime state manifest", () => {
     );
     const c = makeIo();
 
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(vault)).toBe(false);
     expect(c.out()).toContain(`removed: ${vault}`);
   });
 
-  it("with --state --dry-run lists the sensitive artifacts without removing them", () => {
+  it("with --state --dry-run lists the sensitive artifacts without removing them", async () => {
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const c = makeIo();
-    expect(
+    await expect(
       runUninstallCli(["--state", "--dry-run"], c.io, {}, { cwd: root, homedir: () => root }),
-    ).toBe(0);
+    ).resolves.toBe(0);
     const out = c.out();
     expect(out).toContain(join(stateDir, "keiko-ui.db"));
     expect(out).toContain(join(stateDir, "memory", "keiko-memory.db"));
@@ -823,11 +1543,13 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(existsSync(stateDir)).toBe(true);
   });
 
-  it("removes WAL/SHM and quarantine sidecars alongside every database", () => {
+  it("removes WAL/SHM and quarantine sidecars alongside every database", async () => {
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     for (const rel of [
       "keiko-ui.db-wal",
       "keiko-ui.db-shm",
@@ -841,21 +1563,65 @@ describe("runUninstallCli — runtime state manifest", () => {
     }
   });
 
-  it("keeps a customer file and the state dir, but still removes Keiko artifacts", () => {
+  it("keeps a customer file and the state dir, but still removes Keiko artifacts", async () => {
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const userFile = join(stateDir, "user-notes.txt");
     writeFileSync(userFile, "keep me\n", "utf8");
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    const events: SecurityLogEvent[] = [];
+    await expect(
+      runUninstallCli(
+        ["--state"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir: join(root, "control-state"),
+          securityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+        },
+      ),
+    ).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(true);
     expect(existsSync(userFile)).toBe(true);
     expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(false);
     expect(existsSync(join(stateDir, "credentials", "provider-credentials.vault"))).toBe(false);
     expect(c.out()).toContain("non-Keiko entr");
+    expect(events.at(-1)).toMatchObject({ op: "cli.uninstall.completed" });
+    expect(extraOf(events.at(-1))).toMatchObject({
+      stateDisposition: "retained",
+      retainedCount: 1,
+    });
   });
 
-  it("refuses to follow a symlink and keeps the state dir", (ctx) => {
+  // #3531: `--state` removes the rebuildable segment manifests and retains an operator file there.
+  it("removes segment manifests with the state and retains a foreign file beside them", async () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const manifests = join(stateDir, "activity-log-manifests");
+    mkdirSync(manifests, { recursive: true, mode: 0o700 });
+    const manifest = join(manifests, "manifest-20260918T100000000Z-4242-a1b2c3d4-000001.json");
+    const foreign = join(manifests, "operator-notes.txt");
+    writeFileSync(manifest, "{}\n", { encoding: "utf8", mode: 0o600 });
+    writeFileSync(foreign, "keep me\n", "utf8");
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(existsSync(manifest)).toBe(false);
+    expect(existsSync(foreign)).toBe(true);
+    rmSync(foreign);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("refuses to follow a symlink and keeps the state dir", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = seedFullState(root);
@@ -863,14 +1629,16 @@ describe("runUninstallCli — runtime state manifest", () => {
     writeFileSync(outsideTarget, "do not delete\n", "utf8");
     symlinkSync(outsideTarget, join(stateDir, "evil-link"));
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(outsideTarget)).toBe(true); // never followed
     expect(existsSync(join(stateDir, "evil-link"))).toBe(true); // left in place
     expect(existsSync(stateDir)).toBe(true);
     expect(c.out()).toContain("symlink — not followed");
   });
 
-  it("refuses a symlinked state root without deleting the target tree", (ctx) => {
+  it("refuses a symlinked state root without deleting the target tree", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const target = join(root, "outside-state");
@@ -879,23 +1647,52 @@ describe("runUninstallCli — runtime state manifest", () => {
     symlinkSync(target, join(root, ".keiko"), "dir");
 
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(1);
+    const activityStateDir = join(root, "control-state");
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+    await expect(
+      runUninstallCli(
+        ["--state"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir,
+          securityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).resolves.toBe(1);
     expect(c.err()).toContain("refusing to use symlinked state directory");
     expect(existsSync(join(target, "keiko-ui.db"))).toBe(true);
     expect(existsSync(join(root, ".keiko"))).toBe(true);
+    expect(new Set(sinkRoots)).toEqual(new Set([activityStateDir]));
+    expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
+    expect(events[1]).toEqual(
+      expect.objectContaining({
+        errorKind: "internal",
+      }),
+    );
+    expect(extraOf(events[1]).reason).toBe("preflight-refused");
+    expect(extraOf(events[1]).failureKind).toBe("UninstallPreflightError");
   });
 
-  it("refuses a non-directory state root without crashing", () => {
+  it("refuses a non-directory state root without crashing", async () => {
     const root = makeRoot();
     writeFileSync(join(root, ".keiko"), "not a directory", "utf8");
 
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(1);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(1);
     expect(c.err()).toContain("refusing to use non-directory state path");
     expect(existsSync(join(root, ".keiko"))).toBe(true);
   });
 
-  it("keeps customer lookalikes in known state subdirectories", () => {
+  it("keeps customer lookalikes in known state subdirectories", async () => {
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const kept = [
@@ -915,7 +1712,9 @@ describe("runUninstallCli — runtime state manifest", () => {
     mkdirSync(join(stateDir, "local-knowledge", "notes"), { recursive: true });
 
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(true);
     for (const rel of kept) expect(existsSync(join(stateDir, rel))).toBe(true);
     expect(existsSync(join(stateDir, "local-knowledge", "notes"))).toBe(true);
@@ -924,7 +1723,7 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(c.out()).toContain("not a recognized Keiko artifact");
   });
 
-  it("keeps an owned-looking hardlink and reports why the state dir remains", (ctx) => {
+  it("keeps an owned-looking hardlink and reports why the state dir remains", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = seedFullState(root);
@@ -934,7 +1733,9 @@ describe("runUninstallCli — runtime state manifest", () => {
     linkSync(outsideDb, join(stateDir, "keiko-ui.db"));
 
     const c = makeIo();
-    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
     expect(existsSync(outsideDb)).toBe(true);
     expect(existsSync(join(stateDir, "keiko-ui.db"))).toBe(true);
     expect(c.out()).toContain("hardlink — not modified or removed");
@@ -942,11 +1743,13 @@ describe("runUninstallCli — runtime state manifest", () => {
 });
 
 describe("runUninstallCli — package guidance", () => {
-  it("lists the local uninstall command first when a local install exists", () => {
+  it("lists the local uninstall command first when a local install exists", async () => {
     const root = makeRoot();
     mkdirSync(join(root, "node_modules", "@oscharko-dev", "keiko"), { recursive: true });
     const c = makeIo();
-    expect(runUninstallCli([], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(runUninstallCli([], c.io, {}, { cwd: root, homedir: () => root })).resolves.toBe(
+      0,
+    );
     const out = c.out();
     const localIdx = out.indexOf("local install in this project");
     const globalIdx = out.indexOf("if also installed globally");
@@ -954,10 +1757,12 @@ describe("runUninstallCli — package guidance", () => {
     expect(localIdx).toBeLessThan(globalIdx);
   });
 
-  it("lists the global uninstall command first when no local install exists", () => {
+  it("lists the global uninstall command first when no local install exists", async () => {
     const root = makeRoot();
     const c = makeIo();
-    expect(runUninstallCli([], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    await expect(runUninstallCli([], c.io, {}, { cwd: root, homedir: () => root })).resolves.toBe(
+      0,
+    );
     expect(c.out()).toContain("npm uninstall -g @oscharko-dev/keiko     (global install)");
   });
 });

@@ -89,19 +89,56 @@ function normaliseLatencyMs(latencyMs: number): number {
   return Math.max(0, Math.round(latencyMs));
 }
 
+/**
+ * Retained-sample bound for the latency window backing p50/p95 (KEIKO-0709).
+ *
+ * A telemetry accumulator can live for the whole editor session and record on nearly every
+ * keystroke, so the sample array previously grew without limit and was fully re-sorted per call —
+ * a growing cost on a per-keystroke path already gated by a strict budget (ADR-0042 D3.6/D5).
+ * The bounded window drops the oldest sample once it fills, and the reducer keeps the retained
+ * window in *insertion order* so a stale spike is evicted rather than pinned at the sorted tail.
+ * 200 samples is small enough that a per-call sort is cheap and large enough that nearest-rank
+ * p95 is not itself dominated by rounding.
+ */
+export const INLINE_COMPLETION_LATENCY_WINDOW = 200;
+
+function appendWithEviction(
+  latenciesMs: readonly number[],
+  value: number,
+  bound: number,
+): readonly number[] {
+  // Insertion-order FIFO: append the newest sample, drop the oldest once the window overflows.
+  // Keeping insertion order (rather than sort order) is what lets an old spike leave the aggregate
+  // when it slides out of the window; a sort-order eviction would silently pin the highest value
+  // forever, defeating the point of a bounded window.
+  if (latenciesMs.length < bound) {
+    return [...latenciesMs, value];
+  }
+  return [...latenciesMs.slice(1), value];
+}
+
 export function inlineCompletionTelemetryLatencyReducer(
   state: InlineCompletionTelemetrySnapshot,
   latenciesMs: readonly number[],
   latencyMs: number,
 ): { readonly state: InlineCompletionTelemetrySnapshot; readonly latenciesMs: readonly number[] } {
-  const nextLatencies = [...latenciesMs, normaliseLatencyMs(latencyMs)].sort((a, b) => a - b);
+  const nextLatencies = appendWithEviction(
+    latenciesMs,
+    normaliseLatencyMs(latencyMs),
+    INLINE_COMPLETION_LATENCY_WINDOW,
+  );
+  // A per-call sort over the bounded window (at most INLINE_COMPLETION_LATENCY_WINDOW items) is
+  // cheap and, unlike the unbounded prior implementation, has an O(1) upper bound per call.
+  const sorted = [...nextLatencies].sort((a, b) => a - b);
   return {
     latenciesMs: nextLatencies,
     state: {
       ...state,
-      requestCount: nextLatencies.length,
-      requestLatencyMsP50: nearestRank(nextLatencies, 0.5),
-      requestLatencyMsP95: nearestRank(nextLatencies, 0.95),
+      // KEIKO-0709: requestCount must remain the true monotonic total of every recordLatency call,
+      // independent of the bounded sample window's current length.
+      requestCount: state.requestCount + 1,
+      requestLatencyMsP50: nearestRank(sorted, 0.5),
+      requestLatencyMsP95: nearestRank(sorted, 0.95),
     },
   };
 }

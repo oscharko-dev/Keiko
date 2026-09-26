@@ -16,7 +16,7 @@ import type {
 import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 
 import { createCapsuleSet } from "../capsule-set-lifecycle.js";

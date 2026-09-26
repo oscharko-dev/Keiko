@@ -15,9 +15,13 @@ import {
   defaultGitNetworkProcessRunner,
   isSafeGitPositional,
   type GitProcessResult,
+  type GitProcessRunner,
   type GitRemoteFailureReason,
 } from "@oscharko-dev/keiko-git";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import type { ServerLogSink } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -55,11 +59,41 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+// KEIKO-0341: distinguishable typed errors so createCloneRepositoryHandler can map
+// each parse/validation failure to its own operator-visible message instead of the
+// pre-fix single "The clone request is invalid." for all of malformed-JSON,
+// wrong-shape, missing-field, and wrong-type.
+class MalformedJsonBodyError extends Error {
+  constructor() {
+    super("Request body is not valid JSON.");
+  }
+}
+class NotAnObjectBodyError extends Error {
+  constructor() {
+    super("Request body must be a JSON object.");
+  }
+}
+class MissingFieldError extends Error {
+  constructor(readonly field: string) {
+    super(`${field} is required.`);
+  }
+}
+class InvalidFieldTypeError extends Error {
+  constructor(readonly field: string) {
+    super(`${field} must be a string.`);
+  }
+}
+
 async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
   const raw = await readBody(req);
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new MalformedJsonBodyError();
+  }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Expected JSON object");
+    throw new NotAnObjectBodyError();
   }
   return parsed as Record<string, unknown>;
 }
@@ -67,14 +101,14 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
 function optionalString(body: Record<string, unknown>, key: string): string | undefined {
   const value = body[key];
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new Error(`${key} must be a string`);
+  if (typeof value !== "string") throw new InvalidFieldTypeError(key);
   const trimmed = value.trim();
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
 function requireString(body: Record<string, unknown>, key: string): string {
   const value = optionalString(body, key);
-  if (value === undefined) throw new Error(`${key} is required`);
+  if (value === undefined) throw new MissingFieldError(key);
   return value;
 }
 
@@ -228,9 +262,15 @@ async function assertDestination(candidate: string): Promise<RouteResult | strin
   return normalized;
 }
 
-type CloneRepositoryRunner = (
+// `runner` is the OBSERVED network runner the handler builds per request (see
+// createCloneRepositoryHandler). Passing it in rather than reaching for
+// `defaultGitNetworkProcessRunner` here is what puts a failed clone — and, defence in depth, a
+// spawn-boundary refusal — into the activity log under the request's own correlation id; the
+// existing two-parameter test seams stay assignable because they simply ignore it.
+export type CloneRepositoryRunner = (
   repositoryUrl: string,
   destinationPath: string,
+  runner: GitProcessRunner,
 ) => Promise<RouteResult | null>;
 
 // Clone goes through the shared hardened runner (single spawn path, byte cap, timeout with
@@ -238,6 +278,7 @@ type CloneRepositoryRunner = (
 const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
   repositoryUrl: string,
   destinationPath: string,
+  runner: GitProcessRunner,
 ): Promise<RouteResult | null> {
   // Fail closed at the spawn boundary: neither positional may be option-like, so a hostile URL or
   // destination can never be re-read by git as `--upload-pack`/`--exec`/… even though `--` already
@@ -250,10 +291,11 @@ const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
   if (!isSafeGitPositional(repositoryUrl) || !isSafeGitPositional(destinationPath)) {
     return invalid("The repository URL and destination must be non-empty.");
   }
-  const result = await defaultGitNetworkProcessRunner(
-    ["clone", "--", repositoryUrl, destinationPath],
-    { cwd: dirname(destinationPath), maxBytes: MAX_OUTPUT_BYTES, timeoutMs: CLONE_TIMEOUT_MS },
-  );
+  const result = await runner(["clone", "--", repositoryUrl, destinationPath], {
+    cwd: dirname(destinationPath),
+    maxBytes: MAX_OUTPUT_BYTES,
+    timeoutMs: CLONE_TIMEOUT_MS,
+  });
   return classifyCloneOutcome(result);
 };
 
@@ -280,6 +322,14 @@ const CLONE_FAILURE: Readonly<Record<Exclude<GitRemoteFailureReason, "none">, Cl
       status: 504,
       code: "GIT_CLONE_TIMEOUT",
       message: "Repository clone did not finish within the bounded execution window.",
+    },
+    cancelled: {
+      // The bounded caller aborted the clone (usually because the originating request
+      // disconnected). Not a byte-cap event and not a timeout — reported as a request-scope
+      // cancellation so operators do not misdiagnose it as an output-cap failure.
+      status: 499,
+      code: "GIT_CLONE_CANCELLED",
+      message: "Repository clone was cancelled before it finished.",
     },
     "output-truncated": {
       status: 409,
@@ -341,8 +391,43 @@ export function classifyCloneOutcome(result: GitProcessResult): RouteResult | nu
   return { status: failure.status, body: errorBody(failure.code, failure.message) };
 }
 
+// KEIKO-0341: map each typed body-validation error to its own distinguishable
+// 400-response, so an operator debugging a failed clone can tell "malformed JSON"
+// from "missing repositoryUrl" from "wrong shape" without the correlation id.
+function bodyValidationErrorResponse(error: unknown): RouteResult | undefined {
+  if (
+    error instanceof MalformedJsonBodyError ||
+    error instanceof NotAnObjectBodyError ||
+    error instanceof MissingFieldError ||
+    error instanceof InvalidFieldTypeError
+  ) {
+    return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+  }
+  return undefined;
+}
+
+function handleCloneError(ctx: RouteContext, deps: UiHandlerDeps, error: unknown): RouteResult {
+  if (error instanceof BodyTooLargeError) {
+    return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body is too large.") };
+  }
+  if (error instanceof UiStoreError) {
+    return {
+      status: error.status,
+      body: errorBody(error.code, redactedErrorMessage(error.message, deps)),
+    };
+  }
+  const typed = bodyValidationErrorResponse(error);
+  if (typed !== undefined) return typed;
+  const correlationId = reportCloneFailure(ctx, deps, error);
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "The clone request is invalid.", correlationId),
+  };
+}
+
 export function createCloneRepositoryHandler(
   cloneRunner: CloneRepositoryRunner = cloneRepository,
+  activityLog: ServerLogSink = processServerLogSink(),
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
   return async (ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> => {
     try {
@@ -358,7 +443,11 @@ export function createCloneRepositoryHandler(
       const destination = await assertDestination(destinationInput);
       if (typeof destination !== "string") return destination;
       assertUiDbOutsideProject(deps.uiDbPath, destination);
-      const cloneResult = await cloneRunner(repositoryUrl, destination);
+      const cloneResult = await cloneRunner(
+        repositoryUrl,
+        destination,
+        observedGitRunner(defaultGitNetworkProcessRunner, activityLog, ctx.correlationId),
+      );
       if (cloneResult !== null) return cloneResult;
       const normalizedPath = validateProjectPath(destination, { mustExist: true });
       // Registration owns the paired project + single-root manifest transaction. Only after that
@@ -369,20 +458,7 @@ export function createCloneRepositoryHandler(
         body: { project: projectWithWorkspaceAvailability(deps.store, project) },
       };
     } catch (error) {
-      if (error instanceof BodyTooLargeError) {
-        return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body is too large.") };
-      }
-      if (error instanceof UiStoreError) {
-        return {
-          status: error.status,
-          body: errorBody(error.code, redactedErrorMessage(error.message, deps)),
-        };
-      }
-      const correlationId = reportCloneFailure(ctx, deps, error);
-      return {
-        status: 400,
-        body: errorBody("BAD_REQUEST", "The clone request is invalid.", correlationId),
-      };
+      return handleCloneError(ctx, deps, error);
     }
   };
 }

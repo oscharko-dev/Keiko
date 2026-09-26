@@ -11,16 +11,18 @@
 // the /api/browser/* routes use. Nothing is crawled, captured, indexed, persisted, or sent to a model.
 
 import type { IncomingMessage } from "node:http";
+import type {
+  DocumentationNavigationReason,
+  DocumentationTargetClass,
+  DocumentationTargetClassificationOk,
+} from "@oscharko-dev/keiko-contracts";
 import {
   buildDocumentationNavigationResult,
   classifyDocumentationTarget,
   mapBrowserErrorToDocumentationReason,
   parseDocumentationNavigationRequest,
   resolveDocumentationNavigationReason,
-  type DocumentationNavigationReason,
-  type DocumentationTargetClass,
-  type DocumentationTargetClassificationOk,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
 import { BrowserToolError } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";

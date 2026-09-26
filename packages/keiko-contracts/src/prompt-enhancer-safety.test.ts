@@ -4,22 +4,27 @@
 // and the wire validator's cross-field invariants.
 
 import { describe, it, expect } from "vitest";
+import type {
+  EnhancedPrompt,
+  PromptSafetyAssessment,
+  PromptSafetyFinding,
+  PromptTaskAnalysis,
+} from "./index.js";
 import {
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
+} from "./prompt-enhancer.js";
+import {
   assessEnhancedPromptStructuralSafety,
   collectProhibitedPromptTextFindings,
   leastPrivilegeForAnalysis,
+  BASELINE_LEAST_PRIVILEGE,
   requiresHumanReviewForAnalysis,
   summarizePromptSafety,
   validatePromptSafetyAssessment,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_SAFETY_VIOLATION_DETAILS,
-  type EnhancedPrompt,
-  type PromptSafetyAssessment,
-  type PromptSafetyFinding,
-  type PromptTaskAnalysis,
-} from "./index.js";
+} from "./prompt-enhancer-safety.js";
 
 // The actual safeguard strings the gateway generator emits, so the concept predicates are exercised
 // against production wording rather than a synthetic stand-in.
@@ -33,6 +38,13 @@ const HUMAN_APPROVAL_RULE =
   "Any action with side effects — running tools, writing files, making network calls, or other irreversible changes — requires explicit human approval first; never self-authorize.";
 const LEAST_PRIVILEGE_CONSTRAINT =
   "Do not assume authority to run tools, write files, or make external calls without explicit approval.";
+// KEIKO-0770 consolidated this string into the single producer constant
+// `OUTPUT_CONTROLLABILITY_CRITERION` exported from keiko-model-gateway's promptEnhancer/critic.
+// This copy survives here because keiko-contracts is the leaf package (ADR-0019) and cannot
+// import from keiko-model-gateway -- the direction is one-way inward. The producer-derived
+// regression pin lives in packages/keiko-evaluations/src/promptEnhancer/scorer-constants.test.ts
+// (which CAN import both), so a wording change is still caught in one place. Keep this literal in
+// sync with the producer constant.
 const OUTPUT_CONFORMANCE =
   "Output controllability: the response conforms exactly to the required format.";
 
@@ -496,6 +508,20 @@ describe("validatePromptSafetyAssessment", () => {
       decision: "requires-human-review",
       verificationStatus: "passed-with-review",
       requiresHumanReview: false,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an assessment that carries require-human-approval while requiresHumanReview is false (KEIKO-0732)", () => {
+    // The converse of "rejects a human-review assessment missing the require-human-approval
+    // constraint" above: leastPrivilegeForAnalysis (the sole honest producer) never emits this
+    // combination, but the validator must still reject it if a wire payload claims it. Only
+    // leastPrivilege is overridden -- requiresHumanReview and decision stay at validAssessment()'s
+    // baseline (false / "accepted") so this exercises exactly the new converse branch and nothing
+    // else in validateHumanReviewConstraint.
+    const result = validatePromptSafetyAssessment({
+      ...validAssessment(),
+      leastPrivilege: [...BASELINE_LEAST_PRIVILEGE, "require-human-approval"],
     });
     expect(result.ok).toBe(false);
   });

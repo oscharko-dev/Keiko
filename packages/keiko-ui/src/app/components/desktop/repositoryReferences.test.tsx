@@ -15,8 +15,10 @@
 // the file history / PR description for the measurements); a test that only clears its budget by a
 // few percent proves nothing (a prior revision of these tests had exactly that problem).
 
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  RepositoryReferenceInline,
   normalizeReferencePath,
   parseExactRepositoryReference,
   repositoryReferenceTextParts,
@@ -174,5 +176,63 @@ describe("normalizeReferencePath (S8786 regression)", () => {
     expect(normalizeReferencePath("\\src\\a.ts\\")).toBe("src/a.ts");
     expect(normalizeReferencePath("/src/a.ts")).toBe("src/a.ts");
     expect(normalizeReferencePath("src/a.ts")).toBe("src/a.ts");
+  });
+});
+
+// The "opened" confirmation returns to idle after 1.8 s. That timer used to be left pending on
+// unmount: a test file finishing inside the delay let it fire after jsdom was torn down, React threw
+// "window is not defined", and the required keiko-ui coverage job went red on #3573 — a pull request
+// that had not touched this file.
+describe("RepositoryReferenceInline opened-confirmation timer", () => {
+  const reference = parseExactRepositoryReference("src/app.ts:12");
+  const roots = [{ root: "/work/repo", label: "repo" }];
+  const opened = (): { readonly ok: true; readonly windowId: string } => ({
+    ok: true,
+    windowId: "editor-1",
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderOpened(): ReturnType<typeof render> {
+    if (reference === null) throw new Error("expected a parsable repository reference");
+    const view = render(
+      <RepositoryReferenceInline reference={reference} roots={roots} openReference={opened} />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByRole("button")).toHaveAttribute("data-state", "opened");
+    return view;
+  }
+
+  it("leaves no pending timer behind when it unmounts inside the confirmation delay", () => {
+    const view = renderOpened();
+    expect(vi.getTimerCount()).toBe(1);
+
+    view.unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("replaces the pending timer instead of stacking one per activation", () => {
+    renderOpened();
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("still returns to idle once the confirmation delay has passed", () => {
+    renderOpened();
+
+    act(() => {
+      vi.advanceTimersByTime(1_800);
+    });
+
+    expect(screen.getByRole("button")).toHaveAttribute("data-state", "idle");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -52,7 +52,7 @@ import {
   patchRelationship,
   RelationshipApiError,
 } from "../../../../relationships/api";
-import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 
 const mockGetRelationship = vi.mocked(getRelationship);
 const mockGetExplain = vi.mocked(getExplain);
@@ -265,6 +265,32 @@ describe("RelationshipInspectorPanel", () => {
         expect(container.querySelector('[data-activity-state="high-throughput"]')).not.toBeNull();
       });
       expect(screen.getByText("High throughput (61)")).toBeDefined();
+    });
+
+    // KEIKO-0665: an id absent from activityMap used to always resolve through
+    // lifecycleToActivity with no way to tell "never reported" apart from "evicted for
+    // capacity" — this pins the visible, distinguishable "tracking limit reached" state
+    // (RelationshipInspectorPanel's own duplicate inline fallback, kept consistent with
+    // RelationshipListPanel's).
+    it("renders a distinguishable tracking-limit-reached state for an evicted id", async () => {
+      mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle: "active" });
+      mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
+      renderInspector("rel-abc", { evictedIds: new Set(["rel-abc"]) });
+
+      await waitFor(() => {
+        expect(screen.getByText(/tracking limit reached/i)).toBeInTheDocument();
+      });
+    });
+
+    it("does not render the tracking-limit-reached state for an id simply never reported", async () => {
+      mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle: "active" });
+      mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
+      renderInspector("rel-abc", { evictedIds: new Set<string>() });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/reads context/i)).toBeDefined();
+      });
+      expect(screen.queryByText(/tracking limit reached/i)).not.toBeInTheDocument();
     });
 
     // uiux-fix F025: "View Evidence" must NOT navigate — the app has no /evidence route (the old

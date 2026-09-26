@@ -19,7 +19,8 @@ import type {
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-harness";
 import type { RunOutcome } from "@oscharko-dev/keiko-harness";
 import { summarizeForAudit } from "@oscharko-dev/keiko-verification";
-import { HARNESS_CODES, type VerificationReport } from "@oscharko-dev/keiko-contracts";
+import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
+import { HARNESS_CODES } from "@oscharko-dev/keiko-contracts/runtime/harness";
 
 export const EDITOR_VERIFICATION_RUN_EVIDENCE_KIND = "editor-verification-run" as const;
 

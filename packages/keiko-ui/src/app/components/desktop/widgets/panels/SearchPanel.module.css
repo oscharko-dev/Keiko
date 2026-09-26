@@ -21,14 +21,14 @@
 .modeGroup {
   display: inline-flex;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-default);
   border-radius: 7px;
   background: var(--card-2);
 }
 
 .modeButton {
   border: 0;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--border-default);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -78,7 +78,7 @@
 
 .globInput {
   width: 100%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-default);
   border-radius: 7px;
   background: var(--card-2);
   color: var(--fg);
@@ -88,7 +88,7 @@
 }
 
 .status {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
   color: var(--fg-muted);
   font-size: 12px;
   line-height: 1.35;
@@ -110,13 +110,13 @@
 }
 
 .fileGroup {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   background: var(--card);
 }
 
 .fileHeader {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-default);
   color: var(--fg);
   font-size: 12px;
   padding: 8px 10px;
@@ -148,7 +148,7 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-default);
   background: transparent;
   color: var(--fg);
   cursor: pointer;
@@ -193,6 +193,6 @@
   flex: 1;
   flex-direction: column;
   gap: 8px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-default);
   padding: 10px;
 }

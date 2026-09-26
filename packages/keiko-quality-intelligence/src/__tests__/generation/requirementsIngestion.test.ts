@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 // Import the module under test via its relative source path (not the package barrel) so the coverage
 // instrumenter credits src/generation/requirementsIngestion.ts — matching every other keiko-quality-
 // intelligence test. Importing via `@oscharko-dev/keiko-quality-intelligence` resolves to the compiled

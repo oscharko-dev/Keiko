@@ -25,4 +25,14 @@ describe("ManagedTaskWorkspaceUnavailable", () => {
     expect(screen.queryByRole("button", { name: "editor.taskWorkspaceAccess.retry" })).toBeNull();
     expect(screen.getByText("editor.taskWorkspaceAccess.checking")).toBeInTheDocument();
   });
+
+  it("names an unpaired browser session and does not offer an ineffective retry", () => {
+    render(<ManagedTaskWorkspaceUnavailable access="unpaired" onRetry={vi.fn()} />);
+
+    expect(screen.getByRole("note")).toHaveAccessibleName(
+      "editor.taskWorkspaceAccess.unpairedTitle",
+    );
+    expect(screen.getByText("editor.taskWorkspaceAccess.unpairedDescription")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
 });

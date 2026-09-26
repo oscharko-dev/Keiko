@@ -1,17 +1,24 @@
+import { draftPendingApprovalReview } from "./productionDraftDeliveryRuntime.js";
 import { createHash } from "node:crypto";
+import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 
 import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
+  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   decideCodingWorkbenchActionForMode,
   isCodingWorkbenchModeWidening,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   validateCodingWorkbenchPermissionRequest,
-  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   validateCodingWorkbenchRuntimeEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,
@@ -37,21 +44,22 @@ import {
   type PortableSidecarAvailabilityInput,
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
-import {
-  inspectStagedSidecarPayload,
-  type PortableSidecarDiskEvidence,
-} from "../update-portable-sidecar-staging-verification.js";
+import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
   decideSupervisedVerificationCommand,
+  resolveEditTargetRealPath,
   type SupervisedCodingDecision,
+  type SupervisedCodingFileEditRequest,
 } from "./supervisedCodingPolicy.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
   supervisedCodingApprovalScopeDigest,
+  supervisedCodingTaskScopeDigest,
   type SupervisedCodingApprovalBinding,
   type SupervisedCodingApprovalBindingOnce,
+  type SupervisedCodingApprovalBindingTask,
   type SupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalStore,
   type SupervisedCodingConsumedApproval,
@@ -62,9 +70,13 @@ import {
   type SidecarHealthEvent,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
-import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
+import {
+  codingToolVerificationApprovalTargetId,
+  type CodingToolApprovalBridge,
+} from "./codingToolApprovalBridge.js";
 import {
   contentFreeErrorClass,
+  describeError,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
@@ -86,6 +98,7 @@ import {
   type CodingRuntimeStderrDrainer,
   type CodingRuntimeStderrSummary,
 } from "./codingRuntimeProcessIo.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -95,7 +108,15 @@ export type CodingRuntimeFailureCode =
   | "env-secret-denied"
   | "egress-unqualified"
   | "executable-tree-digest-mismatch"
+  // The gateway challenge failed: the route refused the challenge request, it never arrived, or a
+  // challenge precondition was missing (#3603). Not a protocol schema mismatch.
+  | "gateway-challenge-failed"
   | "gateway-non-loopback"
+  // #3565: launch-resolution refusals that used to be bare Errors (see launchFailure.ts).
+  | "host-unavailable"
+  | "model-unavailable"
+  | "repository-unavailable"
+  | "workspace-unqualified"
   | "payload-missing"
   | "platform-unsupported"
   | "protocol-schema-mismatch"
@@ -115,7 +136,9 @@ export type CodingRuntimeFailureCode =
   | "signature-unverified"
   | "spawn-failed"
   | "start-aborted"
-  | "start-timeout";
+  | "start-timeout"
+  // The admitted managed workspace root no longer re-proves at the spawn boundary (#3347 owner P1).
+  | "workspace-root-denied";
 
 export type CodingRuntimeStatus =
   "ready" | "recovery-required" | "restart-denied" | "starting" | "stopped" | "stopping";
@@ -201,7 +224,10 @@ export type CodingRuntimePauseResult =
   | {
       readonly ok: false;
       readonly failureCode:
-        "authority-expired" | "authority-resolution-failed" | "runtime-run-mismatch";
+        | "authority-expired"
+        | "authority-resolution-failed"
+        | "runtime-run-mismatch"
+        | "runtime-stopped";
       readonly retryable: false;
     };
 
@@ -212,6 +238,12 @@ export interface CodingRuntimeApprovalIssueRequest {
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly approvedByUserId: string;
   readonly ttlMs?: number | undefined;
+  /** A reusable grant is limited to routine contained edits and verification commands. */
+  readonly grantScope?: "once" | "task" | undefined;
+  /** Stable server-approved command identity for a reusable verification grant. */
+  readonly commandTemplateId?: string | undefined;
+  /** Server-classified argument shapes for a reusable verification grant. */
+  readonly safeArgumentClasses?: readonly string[] | undefined;
   /**
    * The runtime revision the operator's decision was bound to (#2387). Informational for
    * downstream governed-action projections; deliberately NOT part of the approval scope digest,
@@ -249,6 +281,7 @@ export interface CodingRuntimeManagerDeps {
   readonly codexLifecycleAdapter?: CodexLifecycleAdapter | undefined;
   /** Existing, server-owned local-secret root; Codex state is derived beneath it per run. */
   readonly codexLocalSecretRoot?: string | undefined;
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /**
    * Server-side egress verifier. Its receipt attests to network enforcement; environment
    * projection is configuration only and is never treated as confinement.
@@ -316,6 +349,23 @@ export interface OpenCodeLifecycleAdapter {
 /**
  * Server-private lifecycle boundary for a reviewed Codex app-server composition.
  * It receives an already supervisor-owned process tree; it cannot spawn or kill one.
+ *
+ * As of 2026-08-28, no production implementation of this interface is wired into
+ * `deps.ts` (`grep -c codexLifecycleAdapter` returns 0). A composition-level
+ * factory already exists — `createCodexRuntimeComposition` in
+ * `codexRuntimeComposition.ts` builds a full `CodexLifecycleAdapter` and is
+ * unit-tested — but nothing constructs it in production: there is no Codex
+ * counterpart to `productionOpenCodeBackend.ts` calling
+ * `createOpenCodeRuntimeComposition`, nor to `resolveProductionOpenCodeActivation`
+ * wired into `deps.ts` for OpenCode. This is intentional: Codex subscription
+ * activation is deferred for this release per
+ * `docs/adr/ADR-0163-self-contained-release-qualified-coding-runtime.md` D6, and
+ * `startAfterPreflight` correctly fails closed with `"redistribution-unapproved"`
+ * when `codexLifecycleAdapter` is undefined. This interface and
+ * `codexRuntimeComposition.ts` (which has no production importer) are a
+ * deliberate composition seam, not dead code — do not delete either. Before
+ * Codex activation ever ships, see #3316 (KEIKO-0602, KEIKO-0671) for the
+ * production wiring and `prepare()` sandbox/approval-policy prerequisites.
  */
 export interface CodexLifecycleAdapter {
   qualify(request: CodexLifecycleCheckRequest): Promise<CodexLifecycleCheckResult>;
@@ -383,6 +433,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   readonly codexLocalSecretRoot: string | undefined;
+  readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly qualifyCodexEgress:
     ((request: CodingRuntimeLaunchRequest) => ReviewedCodexEgressPolicy | undefined) | undefined;
   readonly portableRuntimeResolver:
@@ -416,6 +467,18 @@ function mostSevereTerminalStatus(
   if (current === "failed" || requested === "failed") return "failed";
   if (current === "cancelled" || requested === "cancelled") return "cancelled";
   return "succeeded";
+}
+
+// #3099 R8 P2 (+ R9 S3358 refactor): merges an exit-derived status with the client's requested
+// terminal status so an explicit client "failed" folded onto a crash teardown remains
+// authoritative. "signalled" (code=null) stays "signalled" unless the client requested "failed"
+// — cancelled is not more severe than a real signal exit.
+function mergedExitStatus(
+  exitStatus: CodingRuntimeRunResult["status"],
+  requested: CodingRuntimeTerminalStatus,
+): CodingRuntimeRunResult["status"] {
+  if (exitStatus !== "signalled") return mostSevereTerminalStatus(exitStatus, requested);
+  return requested === "failed" ? "failed" : "signalled";
 }
 
 export interface CodingRuntimeManager {
@@ -470,9 +533,11 @@ interface ActiveRuntime {
   readonly tree: RuntimeProcessTree;
   readonly shutdownTimeoutMs: number;
   readonly approvalStore: SupervisedCodingApprovalStore;
+  readonly issuedTaskApprovalMetadata: Map<string, IssuedTaskApprovalMetadata>;
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
+  readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   startupOutput: OpenCodeStartupMailbox | undefined;
@@ -493,9 +558,30 @@ interface ActiveRuntime {
   stopPromise: Promise<CodingRuntimeStopResult> | undefined;
   stopResultStatus: CodingRuntimeTerminalStatus;
   stopRequested: boolean;
+  /**
+   * Set synchronously by the FIRST teardown initiator (stop/takeover/reconcile OR handleExit) so
+   * a concurrent second caller short-circuits instead of firing revokeAndTerminate / reapTree
+   * a second time on the same ActiveRuntime. `stopPromise` alone dedupes only stop-vs-stop; a
+   * crash-initiated teardown (handleExit → finalizeUnexpectedExit) previously did not set it,
+   * so a client stop() racing an in-flight crash reap could enter the supervisor concurrently.
+   * KEIKO-0402.
+   */
+  tearingDown: boolean;
+  /**
+   * Dedicated in-flight-reconcile promise. #3099 R4 P1: `tearingDown` alone cannot serialize
+   * reconcile-vs-reconcile in the recovery-required state (both callers must be admitted, but
+   * both must NOT enter `supervisor.reconcile` on the same tree). Both callers await this
+   * shared promise instead of racing.
+   */
+  reconcilePromise: Promise<CodingRuntimeStopResult> | undefined;
   paused: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
+}
+
+interface IssuedTaskApprovalMetadata {
+  readonly commandTemplateId: string;
+  readonly safeArgumentClasses: readonly string[];
 }
 
 interface SupervisedRuntimeEvidenceContext {
@@ -514,7 +600,8 @@ interface SupervisedRuntimeEvidenceContext {
  * never claims platform signature or supervisor qualification, so re-asserting them would refuse
  * an honestly weaker record. Absent markers fail closed to the release-qualified policy.
  */
-type PortableRuntimeAdmissionPolicy = "release-qualified" | "functional-dev-lane";
+type PortableRuntimeAdmissionPolicy =
+  "release-qualified" | "functional-dev-lane" | "functional-evaluation-lane";
 
 interface ResolvedPortableRuntime {
   readonly verification: PortableSidecarRuntimeVerification;
@@ -545,7 +632,6 @@ const FIXED_OPENCODE_ARGS = Object.freeze([
   "127.0.0.1",
   "--port",
   "0",
-  "--no-mdns",
 ] as const);
 const FIXED_CODEX_ARGS = Object.freeze([] as const);
 const CODEX_STATE_DIRECTORY = "coding-runtime/codex";
@@ -612,6 +698,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
     codexLifecycleAdapter: deps.codexLifecycleAdapter,
     codexLocalSecretRoot: deps.codexLocalSecretRoot,
+    resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
     qualifyCodexEgress: deps.qualifyCodexEgress,
     portableRuntimeResolver: deps.portableRuntimeResolver,
     revokeRuntime: deps.revokeRuntime,
@@ -715,7 +802,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       });
     }
     active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, resultStatus);
+    // KEIKO-0402 (and #3099 P1 follow-up): both stop() and handleExit() write `stopPromise`
+    // exactly once, so the second entry point AWAITS the real teardown result instead of
+    // synthesizing a success while the crash-triggered `finalizeUnexpectedExit` is still trying
+    // to reap the process tree. Without this, the orchestrator's caller received `ok:true` while
+    // the tree could still fail its reap, clearing the active slot and admitting a new runtime
+    // over a live one.
     if (active.stopPromise !== undefined) return active.stopPromise;
+    active.tearingDown = true;
     const stopping = this.stopActive(active);
     active.stopPromise = stopping;
     return stopping;
@@ -757,6 +851,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    // Regression: KEIKO-0386. A resume racing an in-flight crash/handleExit teardown reported
+    // ok:true with paused:false while `active.status` was already "stopping" and `stopRequested`
+    // was true — issueApproval already guards against that same race at line ~808; resume/pause
+    // must apply the same guard so the operator never sees a "resumed" runtime that is halfway
+    // through disposal.
+    if (active.stopRequested || active.status !== "ready") {
+      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+    }
     if (
       requestedMode !== undefined &&
       isCodingWorkbenchModeWidening(active.effectiveMode, requestedMode)
@@ -781,35 +883,65 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    // KEIKO-0386: pause() must reject a mid-teardown runtime for the same reason resume() does —
+    // an ok:true pause on a stopping/stopped/recovery-required active reports state the manager
+    // will never honour.
+    if (active.stopRequested || active.status !== "ready") {
+      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+    }
     active.paused = paused;
     return { ok: true, paused };
   }
 
-  public async reconcile(runId: string): Promise<CodingRuntimeStopResult> {
+  public reconcile(runId: string): Promise<CodingRuntimeStopResult> {
     const active = this.active;
-    if (active === undefined) return { ok: true, status: "stopped" };
+    if (active === undefined) return Promise.resolve({ ok: true, status: "stopped" });
     if (active.context.runId !== runId) {
-      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+      return Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false });
     }
-    if (!active.shutdownBarrierComplete) {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    // KEIKO-0402 + #3099 R4/R6 P1: reconcile is the sanctioned second-chance path (after a
+    // prior teardown returned reap-unproven). Precedence rules:
+    //   1. Another reconcile is already in flight → fold onto it (per-tree serialization).
+    //   2. A stop/handleExit teardown is in flight AND we are not yet recovery-required → await
+    //      its REAL result (not a synthesized ok:true). The teardown may still enter
+    //      recovery-required, and the operator MUST see that.
+    //   3. Otherwise, start a fresh reconcile against the tree.
+    if (active.reconcilePromise !== undefined) return active.reconcilePromise;
+    if (active.stopPromise !== undefined && active.status !== "recovery-required") {
+      return active.stopPromise;
     }
-    const result = await this.deps.supervisor.reconcile(active.tree);
-    if (result.status !== "reaped") {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    active.tearingDown = true;
+    const reconciling = this.runReconcile(active);
+    active.reconcilePromise = reconciling;
+    return reconciling;
+  }
+
+  private async runReconcile(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
+    try {
+      if (!active.shutdownBarrierComplete) {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      const result = await this.deps.supervisor.reconcile(active.tree);
+      if (result.status !== "reaped") {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      if (!(await this.disposeAndReleaseAfterReap(active, result.receipt))) {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      active.status = "stopped";
+      this.active = undefined;
+      this.emit(
+        runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
+      );
+      return { ok: true, status: "stopped" };
+    } finally {
+      // Once this teardown attempt has published its result, allow a subsequent operator-driven
+      // reconcile to try again if the runtime is back in recovery-required.
+      active.reconcilePromise = undefined;
     }
-    if (!(await this.disposeAndReleaseAfterReap(active, result.receipt))) {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
-    }
-    active.status = "stopped";
-    this.active = undefined;
-    this.emit(
-      runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
-    );
-    return { ok: true, status: "stopped" };
   }
 
   public issueApproval(
@@ -822,21 +954,54 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active.stopRequested || active.paused || active.status !== "ready") {
       return { ok: false, failureCode: "runtime-stopped", retryable: false };
     }
+    if (isOwnedGitApproval(request)) return this.issueCommitApproval(request);
     const binding = approvalBindingForIssue(active, request);
-    const issued = this.deps.approvalStore.issue({
+    const issued = issueSupervisedApproval(
+      this.deps.approvalStore,
       binding,
-      approvedByUserId: request.approvedByUserId,
-      nowMs: this.deps.now(),
-      ttlMs: request.ttlMs,
-    });
-    if (!activateIssuedToolApproval(this.deps.codingToolApprovals, request, issued)) {
-      rollbackIssuedApproval(this.deps.approvalStore, binding, issued);
+      request,
+      this.deps.now(),
+    );
+    if (issued === undefined) {
       return { ok: false, failureCode: "approval-activation-failed", retryable: false };
     }
+    if (!activateIssuedToolApproval(this.deps.codingToolApprovals, request, issued)) {
+      rollbackIssuedApproval(this.deps.approvalStore, binding);
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    }
+    rememberIssuedTaskApproval(active, binding, issued.approval.approvalId);
     return {
       ok: true,
       approval: issued.approval,
       approvalDigest: issued.approvalDigest,
+      expiresAtMs: issued.expiresAtMs,
+    };
+  }
+
+  private issueCommitApproval(
+    request: CodingRuntimeApprovalIssueRequest,
+  ): CodingRuntimeApprovalIssueResult {
+    if (request.grantScope === "task")
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    if (!draftApprovalKindMatches(this.deps.codingToolApprovals, request))
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    const methods = {
+      "git-stage": this.deps.codingToolApprovals?.issueStage,
+      commit: this.deps.codingToolApprovals?.issueCommit,
+      push: this.deps.codingToolApprovals?.issueDelivery,
+      "pull-request": this.deps.codingToolApprovals?.issueDelivery,
+    };
+    const issuer = methods[request.actionKind as keyof typeof methods];
+    const issued = issuer?.(request.runId, request.requestId);
+    if (issued === undefined)
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    return {
+      ok: true,
+      approval: {
+        approvalId: issued.approval.approvalId,
+        approvalToken: issued.approval.approvalToken,
+      },
+      approvalDigest: issued.approvalTokenHash,
       expiresAtMs: issued.expiresAtMs,
     };
   }
@@ -847,8 +1012,25 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
     const active = this.active;
     if (active?.context.runId !== runId) return undefined;
+    const git = this.gitApprovalReview(runId, requestId);
+    if (git !== undefined) return git;
     const review = active.pendingApprovalReview;
     return review?.requestId === requestId ? review : undefined;
+  }
+
+  private gitApprovalReview(
+    runId: string,
+    requestId: string,
+  ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+    const commit = this.deps.codingToolApprovals?.commitService?.review(requestId);
+    if (commit?.binding.runId === runId) return commit.review;
+    const stage = this.deps.codingToolApprovals?.gitService?.review(requestId);
+    if (stage?.runId === runId) return stage.review;
+    return draftPendingApprovalReview(
+      this.deps.codingToolApprovals?.deliveryService,
+      runId,
+      requestId,
+    );
   }
 
   public health(): CodingRuntimeHealthReport {
@@ -884,8 +1066,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (portableAvailability !== undefined) {
       return this.recordLaunchFailure(request, portableAvailability);
     }
+    const proof = proveSpawnWorkspaceRoot(
+      this.deps.resolveWorkspaceRootAccess,
+      request.workspaceRoot,
+    );
+    if (!proof.ok)
+      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, args),
+      supervisorLaunchRequest(request, executablePath, env, args, proof.cwd),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -1000,8 +1188,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (egressPolicy === undefined) {
       return this.recordLaunchFailure(request, failure("egress-unqualified", false));
     }
+    const proof = proveSpawnWorkspaceRoot(
+      this.deps.resolveWorkspaceRootAccess,
+      request.workspaceRoot,
+    );
+    if (!proof.ok)
+      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS, egressPolicy),
+      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS, proof.cwd, egressPolicy),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -1230,6 +1424,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   private handleExit(active: ActiveRuntime, code: number | null): void {
     if (this.active !== active || active.stopRequested || active.status === "stopped") return;
+    // KEIKO-0402: mark the teardown BEFORE any await (finalizeUnexpectedExit) so a client stop()
+    // arriving in the same tick sees the flag and folds onto the same teardown result instead of
+    // re-entering revokeAndTerminate on this same ActiveRuntime.
+    if (active.tearingDown) return;
+    active.tearingDown = true;
     active.stopRequested = true;
     active.status = "stopping";
     active.startupOutput?.close();
@@ -1238,7 +1437,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     // an opaque `runtime-failed` and has nothing to diagnose it with. The code is a bounded number,
     // never content, and rides the redacted channel keyed by the run's correlation id.
     emitRuntimeExitDiagnostic(this.deps.diagnostics, active.context.runId, code, this.deps.now);
-    void this.finalizeUnexpectedExit(active, code);
+    // #3099 P1: publish the result-bearing crash teardown on `stopPromise` so a racing stop() /
+    // takeover() / reconcile() awaits the REAL reap outcome — not a synthesized `{ok:true}` that
+    // would let the orchestrator clear the active slot while the tree is still recovery-required
+    // or reap-unproven.
+    active.stopPromise = this.finalizeUnexpectedExit(active, code);
   }
 
   private captureResult(
@@ -1257,23 +1460,34 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     };
   }
 
-  private async finalizeUnexpectedExit(active: ActiveRuntime, code: number | null): Promise<void> {
+  private async finalizeUnexpectedExit(
+    active: ActiveRuntime,
+    code: number | null,
+  ): Promise<CodingRuntimeStopResult> {
     const receipt = await this.revokeAndTerminate(active);
-    if (this.active !== active) return;
+    if (this.active !== active) return { ok: true, status: "stopped" };
     if (receipt === undefined) {
       await this.enterRecoveryRequired(active);
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
-      return;
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     if (!(await this.disposeAndReleaseAfterReap(active, receipt))) {
       await this.enterRecoveryRequired(active);
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
-      return;
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
-    this.captureResult(active, exitResultStatus(code), boundedExitCode(code));
+    // #3099 R8 P2: when a client stop(runId, "failed") races a crash-triggered teardown, it
+    // folds onto this promise via active.stopPromise (KEIKO-0402), after having merged the
+    // requested "failed" into active.stopResultStatus. An explicit client "failed" must remain
+    // authoritative over the exit-derived status — otherwise a lifecycle failure racing a clean
+    // exit would record the terminal result as "succeeded". A "signalled" exit (code=null)
+    // stays "signalled" unless the client requested something more severe.
+    const status = mergedExitStatus(exitResultStatus(code), active.stopResultStatus);
+    this.captureResult(active, status, boundedExitCode(code));
     active.status = "stopped";
     this.active = undefined;
     this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
+    return { ok: true, status: "stopped" };
   }
 
   private async enterRecoveryRequired(active: ActiveRuntime): Promise<void> {
@@ -1421,6 +1635,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.deps.approvalStore,
       this.deps.now,
       this.deps.nowIso,
+      this.deps.resolveWorkspaceRootAccess,
     );
     this.emit(
       runtimeEvent(active, this.nextSequence(active), "failure-redacted", {
@@ -1458,23 +1673,36 @@ function emitInvalidRuntimeEventDiagnostic(
     operation: "coding-runtime.emit",
     source: "coding-runtime-manager.emit",
     errorClass: "InvalidRuntimeEvent",
-    message: `runtime-event-invalid:${event.kind}`,
+    // Issue #3245: `event.kind` is a bounded closed union, but its members number too many to
+    // enumerate as individual `message` vocabulary entries. `message` stays a fixed condition
+    // label; the specific kind moves to `code` (already documented as "a stable machine-readable
+    // code"), which is exactly the shape this value has.
+    message: "runtime-event-invalid",
+    code: event.kind,
   });
 }
 
+// A runtime exit is observed, not thrown. Its line still carries the Keiko-code frames of the site
+// that observed it (ADR-0173 D3), the frames every thrown failure line carries, so a customer's log
+// names the exit handler of the installed build (#3593).
 function emitRuntimeExitDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   code: number | null,
   now: () => number,
 ): void {
+  const { frames } = describeError(new Error("runtime-exit-observed"));
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date(now()).toISOString(),
     operation: "coding-runtime.exit",
     source: "coding-runtime-manager.exit",
     errorClass: "RuntimeUnexpectedExit",
-    message: `runtime-exit-code:${code === null ? "signal" : String(code)}`,
+    // Issue #3245: the process exit code is unbounded per-invocation data, not a fixed condition
+    // label — moved to `code` (the field this data actually belongs on), `message` stays fixed.
+    message: "runtime-exit-code",
+    code: code === null ? "signal" : String(code),
+    frames,
   });
 }
 
@@ -1490,7 +1718,10 @@ function emitRuntimeStderrSummary(
     operation: "coding-runtime.stderr",
     source: "coding-runtime-manager.stderr",
     errorClass: "RuntimeStderrSummary",
-    message: `runtime-stderr-counts:bytes=${String(summary.bytes)}:lines=${String(summary.lines)}:truncated=${String(summary.truncated)}`,
+    // Issue #3245: bytes/lines/truncated are unbounded per-invocation counts, not a fixed
+    // condition label — moved to `code` as a compact machine-readable string, `message` fixed.
+    message: "runtime-stderr-counts",
+    code: `bytes=${String(summary.bytes)}:lines=${String(summary.lines)}:truncated=${String(summary.truncated)}`,
   });
 }
 
@@ -1557,41 +1788,18 @@ function portableAvailabilityFailure(
 ): FailureResult | undefined {
   if (resolved === undefined) return undefined;
   const disk = inspectStagedSidecarPayload(resolved.resourceRoot, resolved.verification);
-  if (resolved.admission === "functional-dev-lane") {
-    return devLaneLaunchAvailabilityFailure(resolved.verification, disk);
-  }
   const availability = evaluatePortableSidecarAvailability(resolved.verification, {
     target: resolved.target,
+    // Every disk fact is recomputed on every lane, so the discovery-to-launch tamper window stays
+    // fail-closed everywhere. Only the two checks the admitting policy never performed are omitted:
+    // the functional dev lane and the packaged evaluation lane claim no platform signature and no
+    // supervisor qualification, so re-asserting them would refuse an honestly weaker record. An
+    // absent admission marker still takes the full release-qualified re-check.
+    platformAttested:
+      resolved.admission === undefined || resolved.admission === "release-qualified",
     ...disk,
   });
   return availability.available ? undefined : failure(availability.reason, false);
-}
-
-/**
- * Launch gate for dev-lane-admitted records: every disk fact is recomputed (the discovery-to-
- * launch tamper window stays fail-closed) and every stored check the lane's admission actually
- * performs is re-asserted. Signature and supervisor qualification are out of that admission
- * domain — they stay honestly unverified in the record and are never consulted here.
- */
-function devLaneLaunchAvailabilityFailure(
-  verification: PortableSidecarRuntimeVerification,
-  disk: PortableSidecarDiskEvidence,
-): FailureResult | undefined {
-  if (!verification.availability.redistributionApproved) {
-    return failure("redistribution-unapproved", false);
-  }
-  if (!disk.payloadPresent) return failure("payload-missing", false);
-  if (!disk.archiveDigestVerified) return failure("archive-digest-mismatch", false);
-  if (!disk.executableTreeDigestVerified) {
-    return failure("executable-tree-digest-mismatch", false);
-  }
-  if (!verification.availability.runtimeVersionVerified) {
-    return failure("runtime-version-mismatch", false);
-  }
-  if (!verification.availability.protocolSchemaVerified) {
-    return failure("protocol-schema-mismatch", false);
-  }
-  return undefined;
 }
 
 function cancellationFailure(
@@ -1881,7 +2089,10 @@ async function openCodeHandshakeFailure(
     const outcome = await Promise.race([handshake, cancellation]);
     if (outcome.kind === "ok") return undefined;
     if (outcome.kind === "aborted") return failure("start-aborted", true);
-    if (outcome.kind === "timeout") return failure("start-timeout", true);
+    if (outcome.kind === "timeout") {
+      emitOpenCodeHandshakeDiagnostic(diagnostics, request.runId, "timeout", now);
+      return failure("start-timeout", true);
+    }
     emitOpenCodeHandshakeDiagnostic(diagnostics, request.runId, outcome.reason, now);
     return failure(openCodeHandshakeFailureCode(outcome.reason), false);
   } finally {
@@ -1931,12 +2142,12 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
   "preparation-missing",
   "readiness-failed",
   "handshake-rejected",
+  "timeout",
 ]);
 
 function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {
-  return reason === "authenticated-health-version"
-    ? "runtime-version-mismatch"
-    : "protocol-schema-mismatch";
+  if (reason === "authenticated-health-version") return "runtime-version-mismatch";
+  return reason === "gateway-challenge" ? "gateway-challenge-failed" : "protocol-schema-mismatch";
 }
 
 function emitOpenCodeHandshakeDiagnostic(
@@ -1952,7 +2163,11 @@ function emitOpenCodeHandshakeDiagnostic(
     operation: "coding-runtime.handshake",
     source: "coding-runtime-manager.handshake",
     errorClass: "OpenCodeHandshakeFailure",
-    message: `runtime-handshake-phase:${phase}`,
+    // Issue #3245: `phase` is bounded (OPEN_CODE_HANDSHAKE_PHASES) but not narrowed by `.has()`
+    // on a `ReadonlySet<string>`, and enumerating all 16 phases as `message` members would bloat
+    // the vocabulary for one condition — moved to `code`, `message` stays the fixed condition.
+    message: "runtime-handshake-failed",
+    code: phase,
   });
 }
 
@@ -1974,7 +2189,7 @@ function createActiveRuntime(
   tree: RuntimeProcessTree,
   deps: Pick<
     NormalizedCodingRuntimeManagerDeps,
-    "approvalStore" | "codingToolApprovals" | "now" | "nowIso"
+    "approvalStore" | "codingToolApprovals" | "now" | "nowIso" | "resolveWorkspaceRootAccess"
   >,
   openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
   codexLifecycleAdapter?: CodexLifecycleAdapter,
@@ -1985,9 +2200,11 @@ function createActiveRuntime(
     tree,
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     approvalStore: deps.approvalStore,
+    issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: deps.codingToolApprovals,
     nowMs: deps.now,
     nowIso: deps.nowIso,
+    resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
     openCodeLifecycleAdapter,
     codexLifecycleAdapter,
     startupOutput:
@@ -2004,6 +2221,8 @@ function createActiveRuntime(
     stopPromise: undefined,
     stopResultStatus: "succeeded",
     stopRequested: false,
+    tearingDown: false,
+    reconcilePromise: undefined,
     paused: false,
     status: "starting",
     sequence: 0,
@@ -2015,6 +2234,7 @@ function createInactiveRuntime(
   approvalStore: SupervisedCodingApprovalStore,
   nowMs: () => number,
   nowIso: () => string,
+  resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined,
 ): ActiveRuntime {
   return {
     context: eventContext(request),
@@ -2022,9 +2242,11 @@ function createInactiveRuntime(
     tree: inertTree(),
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     approvalStore,
+    issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: undefined,
     nowMs,
     nowIso,
+    resolveWorkspaceRootAccess,
     openCodeLifecycleAdapter: undefined,
     codexLifecycleAdapter: undefined,
     startupOutput: undefined,
@@ -2040,6 +2262,8 @@ function createInactiveRuntime(
     stopPromise: undefined,
     stopResultStatus: "succeeded",
     stopRequested: false,
+    tearingDown: false,
+    reconcilePromise: undefined,
     paused: false,
     status: "stopped",
     sequence: 0,
@@ -2378,11 +2602,46 @@ function observeSandboxAttestation(
   }
 }
 
+type SpawnWorkspaceRootProof = { readonly ok: true; readonly cwd: string } | { readonly ok: false };
+
+/**
+ * The exact managed-root proof taken immediately before a runtime spawn (#3347 owner P1).
+ *
+ * The run surface proves workspace access once, before backend construction, and OpenCode/Codex
+ * preparation then awaits (qualification, prepare, egress). A worktree archived or identity-replaced
+ * during those awaits would previously still receive a long-lived runtime tree, because the resolver
+ * was only copied onto `ActiveRuntime` for later supervised file-event classification and was never
+ * consulted at the spawn itself. This re-runs it and requires the same managed-task grant for the
+ * identical admitted canonical root; the spawn then uses that proven path as its cwd.
+ *
+ * A run composed WITHOUT a resolver is not bound to a managed root (the same convention
+ * `resolveSupervisedWorkspaceFs` follows for its node-fs fallback), so it keeps the request's own
+ * root and its previous outcome.
+ */
+function proveSpawnWorkspaceRoot(
+  resolveAccess: (() => WorkspaceRootAccess | undefined) | undefined,
+  workspaceRoot: string,
+): SpawnWorkspaceRootProof {
+  if (resolveAccess === undefined) return { ok: true, cwd: workspaceRoot };
+  try {
+    const access = resolveAccess();
+    return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
+      ? { ok: true, cwd: access.canonicalRoot }
+      : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
 function supervisorLaunchRequest(
   request: CodingRuntimeLaunchRequest,
   executable: string,
   env: Record<string, string>,
   args: readonly string[],
+  // The canonical root of the capability proved immediately before this spawn (see
+  // proveSpawnWorkspaceRoot): the long-lived tree starts in the path that just re-proved, not in
+  // the request string admitted before the preparation awaits.
+  cwd: string,
   egressPolicy?: LongLivedRuntimeEgressPolicy,
 ): Parameters<RuntimeProcessSupervisor["spawnOwnedTree"]>[0] {
   return {
@@ -2391,7 +2650,7 @@ function supervisorLaunchRequest(
     treeBindingId: request.treeBindingId,
     executable,
     args,
-    cwd: request.workspaceRoot,
+    cwd,
     env,
     qualification: request.confinement ?? {
       platform: "win32",
@@ -2716,15 +2975,31 @@ function governedActionRuntimeEvent(
   return supervisedMutationEvent(active, sequence, event, request.actionKind);
 }
 
+// KEIKO-0557/#2906: classify BOTH the lexical sidecar-declared path AND the real,
+// symlink-resolved target within the workspace. A benign-looking in-workspace symlink (e.g.
+// `src/config-alias` -> `../.env`) stays root-contained -- so the containment gate alone would
+// admit it -- while pointing at a deny-listed file the lexical name never reveals.
+function classifySupervisedTargetSensitive(
+  workspaceRoot: string,
+  targetPath: string,
+  fs: WorkspaceFs,
+): boolean {
+  if (isDenied(targetPath)) return true;
+  const real = resolveEditTargetRealPath(workspaceRoot, targetPath, fs);
+  return real.realRelative !== undefined && isDenied(real.realRelative);
+}
+
 function supervisedFileEditEvent(
   active: ActiveRuntime,
   sequence: number,
   event: SidecarPermissionEvent,
 ): CodingWorkbenchRuntimeEvent {
+  const targetPath = event.targetPath ?? "";
   const decision = decideSupervisedFileEdit({
     ...supervisedEvidenceContext(active, "file-edit"),
     workspaceRoot: active.context.workspaceRoot,
-    targetPath: event.targetPath ?? "",
+    ...supervisedFileTargetPolicy(active, targetPath),
+    targetPath,
     allowedRelativePaths: event.allowedRelativePaths ?? [".."],
     fileCount: event.fileCount ?? 0,
     addedLines: event.addedLines ?? 0,
@@ -2738,7 +3013,44 @@ function supervisedFileEditEvent(
   });
 }
 
+function supervisedFileTargetPolicy(
+  active: ActiveRuntime,
+  targetPath: string,
+): Pick<SupervisedCodingFileEditRequest, "targetSensitive" | "workspaceFs"> {
+  const workspaceFs = resolveSupervisedWorkspaceFs(active);
+  if (workspaceFs === undefined) return { targetSensitive: true };
+  return {
+    workspaceFs,
+    targetSensitive: classifySupervisedTargetSensitive(
+      active.context.workspaceRoot,
+      targetPath,
+      workspaceFs,
+    ),
+  };
+}
+
+function resolveSupervisedWorkspaceFs(active: ActiveRuntime): WorkspaceFs | undefined {
+  const resolveAccess = active.resolveWorkspaceRootAccess;
+  if (resolveAccess === undefined) return nodeWorkspaceFs;
+  try {
+    const access = resolveAccess();
+    return access?.canonicalRoot === active.context.workspaceRoot ? access.fs : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function supervisedVerificationEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimeEvent {
+  const approvalFailure = invalidVerificationApprovalEvent(active, sequence, event);
+  if (approvalFailure !== undefined) return approvalFailure;
+  return supervisedVerificationOutcomeEvent(active, sequence, event);
+}
+
+function supervisedVerificationOutcomeEvent(
   active: ActiveRuntime,
   sequence: number,
   event: SidecarPermissionEvent,
@@ -2761,6 +3073,21 @@ function supervisedVerificationEvent(
   });
 }
 
+function invalidVerificationApprovalEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimeEvent | undefined {
+  if (event.approvalTokenMalformed === true) {
+    return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
+  }
+  if (event.approvalToken === undefined) return undefined;
+  const bindings = approvalBindingsForEvent(active, event, "verification-command");
+  return consumePresentedApproval(active, event, bindings) === undefined
+    ? supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale")
+    : undefined;
+}
+
 function supervisedMutationEvent(
   active: ActiveRuntime,
   sequence: number,
@@ -2773,8 +3100,9 @@ function supervisedMutationEvent(
   if (event.approvalTokenMalformed === true) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
-  const binding = approvalBindingForEvent(active, event, actionKind);
-  const approval = consumePresentedApproval(active, event, binding);
+  const bindings = approvalBindingsForEvent(active, event, actionKind);
+  const [binding] = bindings;
+  const approval = consumePresentedApproval(active, event, bindings);
   if (event.approvalToken !== undefined && approval === undefined) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
@@ -2802,29 +3130,73 @@ function supervisedMutationEvent(
   return supervisedFailureEvent(active, sequence, decision);
 }
 
+/**
+ * 3941816393: the tool-approval bridge redeems a "git ci" observation and a generic "connector"
+ * read through the exact same observe/activate pair as a verification command -- the same
+ * bounded-action risk, never a second mechanism (see codingToolApprovalBridge.ts's
+ * ApprovableCiObservationRequest / ApprovableConnectorRequest). A Set, not repeated `===`
+ * branches, so a future addition to CodingWorkbenchSupervisedActionKind cannot silently fall
+ * through this gate the way "ci-observe"/"connector-read" previously did.
+ */
+const TOOL_APPROVAL_BRIDGE_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set(
+  ["verification-command", "ci-observe", "connector-read"],
+);
+
+// Duplicates codingToolApprovalBridge.ts's private CI_OBSERVATION_TARGET_ID: that file is owned by
+// another concurrent change and does not export it. Needs: export the constant there so this
+// literal stops being a second copy of the same value.
+const CODING_TOOL_CI_OBSERVATION_TARGET_ID = "ci";
+
+function toolApprovalBridgeAction(
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): "verification" | "git" | "connector" {
+  if (actionKind === "ci-observe") return "git";
+  if (actionKind === "connector-read") return "connector";
+  return "verification";
+}
+
+function toolApprovalTargetId(
+  actionKind: CodingWorkbenchSupervisedActionKind,
+  commandLabel: string | undefined,
+  targetPathHash: string | undefined,
+): string | undefined {
+  if (actionKind === "ci-observe") return CODING_TOOL_CI_OBSERVATION_TARGET_ID;
+  if (actionKind === "verification-command" && commandLabel !== undefined) {
+    return codingToolVerificationApprovalTargetId(commandLabel, targetPathHash);
+  }
+  return targetPathHash === undefined ? commandLabel : undefined;
+}
+
 function observeCodingToolApproval(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind | undefined,
 ): boolean {
   const bridge = active.codingToolApprovals;
-  if (bridge === undefined || actionKind !== "verification-command") return true;
+  if (
+    bridge === undefined ||
+    actionKind === undefined ||
+    !TOOL_APPROVAL_BRIDGE_ACTION_KINDS.has(actionKind)
+  ) {
+    return true;
+  }
+  const targetId = toolApprovalTargetId(actionKind, event.commandLabel, event.targetPathHash);
   if (
     event.approvalId === undefined ||
     event.approvalDigest === undefined ||
     event.actionId === undefined ||
     event.idempotencyKey === undefined ||
-    event.commandLabel === undefined
+    targetId === undefined
   ) {
     return false;
   }
   return bridge.observePermission({
     runId: active.context.runId,
     requestId: event.requestId,
-    action: "verification",
+    action: toolApprovalBridgeAction(actionKind),
     actionId: event.actionId,
     idempotencyKey: event.idempotencyKey,
-    targetId: event.commandLabel,
+    targetId,
     proof: { approvalId: event.approvalId, approvalDigest: event.approvalDigest },
     expiresAt: event.expiresAt,
     nowMs: active.nowMs(),
@@ -2834,13 +3206,30 @@ function observeCodingToolApproval(
 function approvalBindingForIssue(
   active: ActiveRuntime,
   request: CodingRuntimeApprovalIssueRequest,
-): SupervisedCodingApprovalBindingOnce {
-  return approvalBinding({
+): SupervisedCodingApprovalBinding {
+  const binding = approvalBinding({
     runId: active.context.runId,
     requestId: request.requestId,
     actionKind: request.actionKind,
     connectorScopes: request.connectorScopes,
   });
+  return request.grantScope === "task" ? taskApprovalBinding(active, binding, request) : binding;
+}
+
+function issueSupervisedApproval(
+  store: SupervisedCodingApprovalStore,
+  binding: SupervisedCodingApprovalBinding,
+  request: CodingRuntimeApprovalIssueRequest,
+  nowMs: number,
+): SupervisedCodingIssuedApproval | undefined {
+  const input = {
+    approvedByUserId: request.approvedByUserId,
+    nowMs,
+    ttlMs: request.ttlMs,
+  };
+  return binding.grantScope === "task"
+    ? store.issueTaskGrant({ ...input, binding })
+    : store.issue({ ...input, binding });
 }
 
 function activateIssuedToolApproval(
@@ -2848,7 +3237,9 @@ function activateIssuedToolApproval(
   request: CodingRuntimeApprovalIssueRequest,
   issued: SupervisedCodingIssuedApproval,
 ): boolean {
-  if (request.actionKind !== "verification-command" || bridge === undefined) return true;
+  if (bridge === undefined || !TOOL_APPROVAL_BRIDGE_ACTION_KINDS.has(request.actionKind)) {
+    return true;
+  }
   return bridge.activatePermission({
     runId: request.runId,
     requestId: request.requestId,
@@ -2860,28 +3251,41 @@ function activateIssuedToolApproval(
 
 function rollbackIssuedApproval(
   store: SupervisedCodingApprovalStore,
-  binding: SupervisedCodingApprovalBindingOnce,
-  issued: SupervisedCodingIssuedApproval,
+  binding: SupervisedCodingApprovalBinding,
 ): void {
-  const rolledBack = store.consume({
-    approval: issued.approval,
-    binding,
-    nowMs: issued.approvedAtMs,
-  });
-  if (rolledBack === undefined) store.invalidateRun(binding.runId);
+  // Task grants deliberately survive consumption, so consume cannot roll them back. A failed bridge
+  // activation invalidates the run's approvals fail-closed; no just-issued reusable grant remains live.
+  store.invalidateRun(binding.runId);
 }
 
-function approvalBindingForEvent(
+function rememberIssuedTaskApproval(
+  active: ActiveRuntime,
+  binding: SupervisedCodingApprovalBinding,
+  approvalId: string,
+): void {
+  if (binding.grantScope !== "task") return;
+  active.issuedTaskApprovalMetadata.set(approvalId, {
+    commandTemplateId: binding.commandTemplateId,
+    safeArgumentClasses: [...binding.safeArgumentClasses],
+  });
+}
+
+function approvalBindingsForEvent(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind,
-): SupervisedCodingApprovalBindingOnce {
-  return approvalBinding({
+): readonly [SupervisedCodingApprovalBindingOnce, SupervisedCodingApprovalBindingTask] {
+  const binding = approvalBinding({
     runId: active.context.runId,
     requestId: event.requestId,
     actionKind,
     connectorScopes: event.connectorScopes,
   });
+  const issuedMetadata =
+    event.approvalToken === undefined
+      ? undefined
+      : active.issuedTaskApprovalMetadata.get(event.approvalToken.approvalId);
+  return [binding, taskApprovalBinding(active, binding, issuedMetadata ?? event)];
 }
 
 function approvalBinding(input: {
@@ -2902,17 +3306,78 @@ function approvalBinding(input: {
   };
 }
 
+function taskApprovalBinding(
+  active: ActiveRuntime,
+  binding: SupervisedCodingApprovalBindingOnce,
+  input: {
+    readonly commandTemplateId?: string | undefined;
+    readonly safeArgumentClasses?: readonly string[] | undefined;
+    readonly commandLabel?: string | undefined;
+  },
+): SupervisedCodingApprovalBindingTask {
+  const context = active.context;
+  return {
+    grantScope: "task",
+    runId: binding.runId,
+    requestId: binding.requestId,
+    actionKind: binding.actionKind,
+    scopeDigest: supervisedCodingTaskScopeDigest({
+      runId: binding.runId,
+      actionKind: binding.actionKind,
+      connectorScopes: binding.connectorScopes,
+    }),
+    connectorScopes: binding.connectorScopes,
+    commandTemplateId: input.commandTemplateId ?? input.commandLabel ?? binding.actionKind,
+    safeArgumentClasses: input.safeArgumentClasses ?? [],
+    workspaceDigest: supervisedCodingApprovalScopeDigest({
+      runId: binding.runId,
+      requestId: context.workspaceRoot,
+      actionKind: binding.actionKind,
+      connectorScopes: binding.connectorScopes,
+    }),
+    sourceDigest: supervisedCodingApprovalScopeDigest({
+      runId: binding.runId,
+      requestId: JSON.stringify({
+        runtimeSource: context.runtimeSource,
+        modelSource: context.modelSource,
+      }),
+      actionKind: binding.actionKind,
+      connectorScopes: binding.connectorScopes,
+    }),
+    policyVersion: taskPolicyVersion(context, binding),
+  };
+}
+
+function taskPolicyVersion(
+  context: ActiveRuntime["context"],
+  binding: SupervisedCodingApprovalBindingOnce,
+): string {
+  return supervisedCodingApprovalScopeDigest({
+    runId: binding.runId,
+    requestId: JSON.stringify({
+      effectiveMode: context.effectiveMode,
+      workspaceRoot: context.workspaceRoot,
+    }),
+    actionKind: binding.actionKind,
+    connectorScopes: binding.connectorScopes,
+  });
+}
+
 function consumePresentedApproval(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
-  binding: SupervisedCodingApprovalBinding,
+  bindings: readonly SupervisedCodingApprovalBinding[],
 ): SupervisedCodingConsumedApproval | undefined {
   if (event.approvalToken === undefined) return undefined;
-  return active.approvalStore.consume({
-    approval: event.approvalToken,
-    binding,
-    nowMs: active.nowMs(),
-  });
+  for (const binding of bindings) {
+    const consumed = active.approvalStore.consume({
+      approval: event.approvalToken,
+      binding,
+      nowMs: active.nowMs(),
+    });
+    if (consumed !== undefined) return consumed;
+  }
+  return undefined;
 }
 
 function normalizedConnectorScopes(
@@ -2996,4 +3461,21 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
   };
+}
+
+function isOwnedGitApproval(request: CodingRuntimeApprovalIssueRequest): boolean {
+  return (
+    request.actionKind === "commit" ||
+    request.actionKind === "git-stage" ||
+    (request.requestId.startsWith("delivery-") &&
+      (request.actionKind === "push" || request.actionKind === "pull-request"))
+  );
+}
+function draftApprovalKindMatches(
+  bridge: CodingToolApprovalBridge | undefined,
+  request: CodingRuntimeApprovalIssueRequest,
+): boolean {
+  if (request.actionKind !== "push" && request.actionKind !== "pull-request") return true;
+  const phase = bridge?.deliveryService?.review(request.requestId)?.record.phase;
+  return phase === (request.actionKind === "push" ? "push-proposed" : "pr-proposed");
 }

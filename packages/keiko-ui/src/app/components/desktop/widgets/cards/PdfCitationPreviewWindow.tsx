@@ -14,7 +14,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { PDFDocumentProxy as PdfJsDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy as PdfJsDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import styles from "./PdfCitationPreviewWindow.module.css";
 import {
   ApiError,
@@ -81,7 +81,7 @@ interface PdfDocumentLoadingTask {
   readonly promise: Promise<PdfDocumentProxy>;
 }
 
-type PdfJsModule = typeof import("pdfjs-dist");
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 type PdfDocumentProxy = PdfJsDocumentProxy & {
   readonly destroy?: () => Promise<void> | void;
 };
@@ -89,9 +89,15 @@ type PdfDocumentProxy = PdfJsDocumentProxy & {
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 
 function loadPdfJs(): Promise<PdfJsModule> {
-  pdfJsModulePromise ??= import("pdfjs-dist").then((pdfjs) => {
+  // PDF.js's modern build requires runtime APIs newer than Keiko's declared browser floor
+  // (Promise.try, URL.parse, Map#getOrInsertComputed and the Uint8Array base64 helpers among
+  // others). The legacy distribution bundles its own core-js implementations in BOTH realms, so
+  // keep the main module and worker on the matching legacy entries. A real-browser smoke removes
+  // those host APIs before parsing a tiny PDF and proves that this is executable compatibility,
+  // not merely a source-path assertion.
+  pdfJsModulePromise ??= import("pdfjs-dist/legacy/build/pdf.mjs").then((pdfjs) => {
     pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.mjs",
+      "pdfjs-dist/legacy/build/pdf.worker.mjs",
       import.meta.url,
     ).toString();
     return pdfjs;

@@ -9,10 +9,8 @@
 // zero network calls; the cumulative byte budget is reconciled via `chargeFetch` after each read.
 // Every stored value is content-free except the in-memory-only `sanitizedQuery`, which is retained
 // for local re-hashing and is NEVER persisted, evidenced, or emitted.
-import {
-  isCodeTaskPublicDomain,
-  type AuxiliaryResearchScopeV1,
-} from "@oscharko-dev/keiko-contracts";
+import type { AuxiliaryResearchScopeV1 } from "@oscharko-dev/keiko-contracts";
+import { isCodeTaskPublicDomain } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 
 // Defaults are bounded and fail-closed: a grant lives at most ten minutes, permits a small number
 // of fetches, and never streams more than the gateway's own per-response ceiling in aggregate.
@@ -63,11 +61,11 @@ export interface ResearchGrantRegistry {
     nowMs: number,
   ) => ResolvedResearchGrant | undefined;
   readonly activeGrants: (runId: string, nowMs: number) => readonly ResolvedResearchGrant[];
-  readonly resolveForHost: (
-    runId: string,
-    host: string,
-    nowMs: number,
-  ) => ResolvedResearchGrant | undefined;
+  // KEIKO-0595: `resolveForHost` was removed from the registry interface. The one production
+  // consumer (`researchEgressPort.ts::grantForRequest`) needs request-line-binding-aware
+  // selection on top of host normalisation, so it reads `activeGrants` and applies the richer
+  // rule locally. Keeping a separate host-only resolver here invited silent drift and offered a
+  // shape a future caller could reach for and lose the request-line-binding gate.
   // Reserves one fetch against the grant's fetch-count budget BEFORE any network call is made, so
   // the executor calls this ahead of every outbound hop (initial request and each redirect) and
   // performs zero outbound requests once the budget is exhausted. Increments `usedFetches` on "ok".
@@ -81,6 +79,24 @@ export interface ResearchGrantRegistry {
     nowMs: number,
   ) => ResearchChargeResult;
   readonly invalidateRun: (runId: string) => void;
+  /**
+   * KEIKO-0586: registers an AbortController that the executor is about to use for one outbound
+   * fetch. The registration is dropped automatically once the returned `release()` is called
+   * (finally block on the fetch), and every registered controller for a runId is fired when the
+   * run's grants are invalidated (revokeResearch or expiry sweep). This narrows the
+   * time-bounded gap between "operator clicked Revoke" and "underlying HTTP request actually
+   * stops" — previously the fetch continued running to completion with its body merely discarded.
+   */
+  readonly registerInFlightFetch: (runId: string, controller: AbortController) => () => void;
+  /**
+   * Saturates a specific grant's cumulative byte budget so `reserveFetch`'s byte gate fails
+   * closed on the next call. #3099 R7 P1: used by the research egress port on an over-cap or
+   * mid-stream read failure — the fetch DID happen against the endpoint, we just cannot
+   * measure the exact bytes read. Charging maxReadBytes (2 MB) against the 10 MB grant is
+   * insufficient because the charge succeeds and lets 4 more oversized responses through
+   * before the fetch-count cap. Saturating gives one strike, one exhaustion.
+   */
+  readonly saturateBytes: (runId: string, grantId: string) => void;
 }
 
 // Internal mutable form: only the two usage counters mutate (`usedFetches` via `reserveFetch`,
@@ -208,29 +224,31 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
     return [...this.pruned(runId, nowMs)];
   }
 
-  public resolveForHost(
-    runId: string,
-    host: string,
-    nowMs: number,
-  ): ResolvedResearchGrant | undefined {
-    const normalized = normalizeResearchHost(host);
-    return this.pruned(runId, nowMs).find((grant) => grant.domains.includes(normalized));
-  }
+  // KEIKO-0595: resolveForHost was removed; grantForRequest in researchEgressPort.ts owns the
+  // one production host-resolution path (activeGrants + request-line-binding preference).
 
   // Reserves one fetch against the fetch-count budget BEFORE the caller makes any network call.
   // Expiry is checked before pruning would remove the grant so "expired" stays distinguishable
-  // from "unknown".
+  // from "unknown". Also refuses a reservation once the cumulative byte budget is already exhausted
+  // — chargeFetch runs after the response body has been read, so without this gate the next hop
+  // would be admitted and only stopped at charge time, permitting one extra outbound request per
+  // over-budget grant.
   public reserveFetch(runId: string, grantId: string, nowMs: number): ResearchChargeResult {
     const grant = this.findGrant(runId, grantId);
     if (grant === undefined) return "unknown";
     if (grant.expiresAtMs <= nowMs) return "expired";
     if (grant.usedFetches + 1 > grant.maxFetches) return "limit-reached";
+    if (grant.usedBytes >= grant.maxTotalBytes) return "limit-reached";
     grant.usedFetches += 1;
     return "ok";
   }
 
   // Reconciles actual bytes read against the cumulative byte budget AFTER a response body has been
   // read. Never touches `usedFetches` — that budget is reserved up front by `reserveFetch`.
+  // #3099 P1 follow-up: an over-limit charge now saturates `usedBytes` at `maxTotalBytes` so
+  // subsequent `reserveFetch` calls see the terminally-exhausted state and deny. Previously
+  // `usedBytes` was left below the ceiling on the rejected charge, so the byte gate in
+  // reserveFetch never fired and later hops slipped through until the fetch-count cap.
   public chargeFetch(
     runId: string,
     grantId: string,
@@ -241,7 +259,10 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
     if (grant === undefined) return "unknown";
     if (grant.expiresAtMs <= nowMs) return "expired";
     const charged = clampBytes(bytes);
-    if (grant.usedBytes + charged > grant.maxTotalBytes) return "limit-reached";
+    if (grant.usedBytes + charged > grant.maxTotalBytes) {
+      grant.usedBytes = grant.maxTotalBytes;
+      return "limit-reached";
+    }
     grant.usedBytes += charged;
     return "ok";
   }
@@ -250,8 +271,44 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
     return this.grantsByRun.get(runId)?.find((candidate) => candidate.grantId === grantId);
   }
 
+  // KEIKO-0586: in-flight AbortControllers keyed by runId. When invalidateRun fires (revoke or
+  // expiry), every controller registered for that runId is aborted so the underlying HTTP
+  // request stops immediately instead of running to completion with its body discarded.
+  private readonly abortControllersByRun = new Map<string, Set<AbortController>>();
+
+  public registerInFlightFetch(runId: string, controller: AbortController): () => void {
+    const existing = this.abortControllersByRun.get(runId) ?? new Set<AbortController>();
+    existing.add(controller);
+    this.abortControllersByRun.set(runId, existing);
+    return (): void => {
+      const set = this.abortControllersByRun.get(runId);
+      if (set === undefined) return;
+      set.delete(controller);
+      if (set.size === 0) this.abortControllersByRun.delete(runId);
+    };
+  }
+
   public invalidateRun(runId: string): void {
     this.grantsByRun.delete(runId);
+    // KEIKO-0586: abort any in-flight fetches for the run so the underlying HTTP request stops
+    // immediately rather than running to completion and having its body discarded.
+    const controllers = this.abortControllersByRun.get(runId);
+    if (controllers !== undefined) {
+      for (const controller of controllers) {
+        try {
+          controller.abort();
+        } catch {
+          /* aborting a controller must never throw into the invalidation path */
+        }
+      }
+      this.abortControllersByRun.delete(runId);
+    }
+  }
+
+  public saturateBytes(runId: string, grantId: string): void {
+    const grant = this.findGrant(runId, grantId);
+    if (grant === undefined) return;
+    grant.usedBytes = grant.maxTotalBytes;
   }
 }
 

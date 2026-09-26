@@ -11,12 +11,10 @@
 // contract invariant holds. Path-/formula-safety lives in the pure adapters.
 
 import type { IncomingMessage } from "node:http";
-import {
-  compareStrings,
-  QualityIntelligence,
-  sortedStrings,
-  type QualityIntelligence as QI,
-} from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import {
@@ -600,6 +598,7 @@ function binaryResponse(
   manifest: QualityIntelligenceEvidenceManifest,
   candidateArtifactHashSha256Hex: string,
   approvedOnly: boolean,
+  omittedByQualityGate: number,
 ): ExportResponse {
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
@@ -656,6 +655,7 @@ function binaryResponse(
         byteLen: bytes.length,
         encoding: "base64" as const,
         body: bodyBase64,
+        omittedByQualityGate,
         ...(warnings.size > 0 ? { warnings: sortedStrings(warnings) } : {}),
       },
     },
@@ -680,6 +680,7 @@ function serialisedResponse(
   rows: readonly QualityIntelligenceCandidateRow[],
   manifest: QualityIntelligenceEvidenceManifest,
   candidateArtifactHashSha256Hex: string,
+  omittedByQualityGate: number,
 ): ExportResponse {
   const adapter = request.adapter;
   if (adapter === "pdf" || adapter === "zip-bundle") {
@@ -690,6 +691,7 @@ function serialisedResponse(
       manifest,
       candidateArtifactHashSha256Hex,
       request.approvedOnly,
+      omittedByQualityGate,
     );
   }
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
@@ -713,6 +715,7 @@ function serialisedResponse(
           dryRun: true,
           adapter,
           candidateCount: rows.length,
+          omittedByQualityGate,
           byteLen: serialized.byteLen,
           preview: serialized.body.slice(0, 1200),
           ...(warnings.length > 0 ? { warnings } : {}),
@@ -746,6 +749,7 @@ function serialisedResponse(
         contentType: meta.contentType,
         byteLen: Buffer.byteLength(body, "utf8"),
         body,
+        omittedByQualityGate,
         ...(warnings.length > 0 ? { warnings } : {}),
       },
     },
@@ -776,9 +780,13 @@ function serialiseExport(
   const isTms = !isBinary && QualityIntelligence.QUALITY_INTELLIGENCE_TMS_ADAPTERS.has(adapter);
   const approvedOnly = isTms ? true : request.approvedOnly;
   const review = loadRunReviewState(runId, evidenceDir);
-  const rows = selectRows(allRows, approvedOnly, review).filter((row) =>
-    isDeliverableQualityRow(row, review),
-  );
+  // KEIKO-0365: pre-filter set (after any approvedOnly narrowing) vs. post-filter set (after the
+  // deliverable quality gate). The delta is surfaced to callers as omittedByQualityGate so an
+  // "export all, including unapproved" caller can see when the deliverable quality floor silently
+  // dropped needs-review/weak/rejected rows from a 200 partial artifact.
+  const preFilterRows = selectRows(allRows, approvedOnly, review);
+  const rows = preFilterRows.filter((row) => isDeliverableQualityRow(row, review));
+  const omittedByQualityGate = preFilterRows.length - rows.length;
   if (rows.length === 0) {
     return {
       result: errorResult(
@@ -809,6 +817,7 @@ function serialiseExport(
     rows,
     manifest,
     candidateArtifactHashSha256Hex,
+    omittedByQualityGate,
   );
 }
 

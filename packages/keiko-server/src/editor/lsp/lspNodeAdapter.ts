@@ -11,30 +11,352 @@
 // only an ephemeral empty HOME (so the server cannot read or write the operator's real home) and the
 // process-group spawn/kill wiring. As defense-in-depth it asserts the executable is an absolute path,
 // so a future DIRECT caller that bypassed the manager's resolution cannot spawn a relative/bare name.
-// POSIX spawns detached and kills the whole process group; Windows kills the single child.
+// POSIX spawns detached and kills the whole process group; Windows bounds the process TREE with the
+// shared taskkill primitive, because a wrapped `.cmd` server runs as a grandchild of cmd.exe (#3350).
 
 import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
+import type {
+  ChildProcess,
+  ChildProcessWithoutNullStreams,
+  SpawnOptionsWithoutStdio,
+} from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, isAbsolute, join } from "node:path";
-import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
-import type { CommandRule } from "@oscharko-dev/keiko-tools";
+import {
+  activityLogErrorKindOr,
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  isCommandAllowed,
+  isSelfOrParentPid,
+  nodeWindowsTreeKill,
+  type CommandRule,
+  type WindowsShellInvocationOptions,
+  type WindowsTreeKillDisposition,
+  type WindowsTreeKill,
+} from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspProcessErrorCode } from "@oscharko-dev/keiko-contracts";
 import {
   EditorProcessHardeningError,
   buildCopyOnlyProcessEnv as buildSharedCopyOnlyProcessEnv,
   createIsolatedProcessDirectory as createSharedIsolatedProcessDirectory,
-  escalateKill as escalateSharedKill,
   resolveExecutableCandidateOutsideWorkspace as resolveSharedExecutableCandidate,
+  resolveWindowsSpawnInvocation,
   type ChildExitRegistration as SharedChildExitRegistration,
   type IsolatedProcessDirectory,
   type KillableChild as SharedKillableChild,
   type KillScheduler as SharedKillScheduler,
   type WorkspaceExternalExecutable as SharedWorkspaceExternalExecutable,
 } from "../processHardening.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { processServerLogSink } from "../../process-log-sink.js";
+import { errorKindOf } from "../../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../../observability/stack-frames.js";
 import type { LspSpawnHandle } from "./lspTransport.js";
+
+const LSP_SPAWN_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.spawn.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspSpawnCompleted",
+  fields: {
+    windowsWrapperEngaged: { type: "boolean", dataClass: "closed-enum", required: true },
+    platform: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "aix",
+        "android",
+        "cygwin",
+        "darwin",
+        "freebsd",
+        "haiku",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "sunos",
+        "win32",
+      ],
+    },
+    childPid: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["lsp-process-spawn"],
+  proofIds: ["lsp.spawn.completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.spawn.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspSpawnFailed",
+  fields: {
+    platform: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "aix",
+        "android",
+        "cygwin",
+        "darwin",
+        "freebsd",
+        "haiku",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "sunos",
+        "win32",
+      ],
+    },
+    childPid: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  // Process-scoped like process.started: no request correlation exists at the spawn boundary.
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["lsp-process-spawn"],
+  proofIds: ["lsp.spawn.failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_PROCESS_RUNTIME_ERROR_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.process.runtime-error",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspRuntimeError",
+  fields: {
+    childPid: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  // Process-scoped like process.started: no request correlation exists for a running server.
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["lsp-process-runtime"],
+  proofIds: ["lsp.process.runtime-error.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_PROCESS_TERMINATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.process.terminated",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspProcessTerminated",
+  fields: {
+    childPid: { type: "integer", dataClass: "count", required: true },
+    signal: { type: "string", dataClass: "opaque-id", required: true, maxLength: 16 },
+    windowsTreeKill: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "succeeded",
+        "failed",
+        "unknown",
+        "budget-exhausted",
+        "blocked-untrusted-system-root",
+        "refused-self-pid",
+        "root-not-found",
+        "not-attempted",
+      ],
+    },
+    treeContainment: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["confirmed", "unconfirmed"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["lsp-process-termination"],
+  proofIds: ["lsp.process.terminated.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_ACTIVITY_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  CANCELLED: "cancelled",
+  ABORT_ERR: "cancelled",
+  INITIALIZE_TIMEOUT: "timeout",
+  REQUEST_TIMED_OUT: "timeout",
+  SHUTDOWN_TIMEOUT: "timeout",
+  ETIMEDOUT: "timeout",
+  EACCES: "permission-denied",
+  EPERM: "permission-denied",
+  ERR_INVALID_ARG_VALUE: "invalid-request",
+  EXECUTABLE_NOT_FOUND: "unavailable",
+  ENOENT: "unavailable",
+  RESOURCE_BUDGET_EXCEEDED: "unavailable",
+  DISPOSED: "unavailable",
+};
+
+function lspActivityErrorKind(
+  error: unknown,
+  fallback?: LspProcessErrorCode,
+): ActivityLogErrorKind {
+  const raw = error === undefined ? fallback : errorKindOf(error);
+  const registered = activityLogErrorKindOr(raw, "internal");
+  if (registered !== "internal" || raw === "internal") return registered;
+  return raw === undefined ? "internal" : (LSP_ACTIVITY_ERROR_KINDS[raw] ?? "internal");
+}
+
+// AGENTS.md §8 Rule 1 (PR reviewer finding): this adapter's two platform-dependent decision
+// branches — whether the win32 hardened cmd.exe wrapper engaged at spawn (issue #3350) and
+// whether the win32 taskkill.exe tree-kill engaged on termination (same defect/fix as runCommand's
+// killGroup, exec.ts) — shipped with no activity-log evidence, so a support bundle could not
+// reconstruct which path a hung or failed `.cmd` language server actually took. This module has no
+// injected log port of its own (it is a low-level node:child_process adapter the manager depends
+// on structurally, per the file header), so — exactly like keiko-tools' own logging-agnostic
+// posture — it reaches directly for the SAME process-wide activity-log sink every other server
+// composition site uses (processServerLogSink()) rather than growing a second logging mechanism or
+// widening `LspSpawnFn`'s public signature. No request-scoped correlation id is available this
+// deep in the spawn boundary, so every line carries UNKNOWN_CORRELATION_ID.
+// `childPid`, never `pid`: `pid` is a reserved envelope field in the activity-log redaction
+// (log-redaction.ts RESERVED_FIELD_NAMES), so an `extra.pid` is silently dropped and the line
+// would carry only the SERVER's own process id — the identity loss that makes a support bundle
+// unable to join this line to the child tree. Fired on the child's real 'spawn' event, not on
+// spawn() returning: dispatch is not success, ENOENT arrives asynchronously via 'error'.
+function logLspSpawnCompleted(windowsWrapperEngaged: boolean, childPid: number | undefined): void {
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_SPAWN_COMPLETED_OPERATION,
+      { correlationId: UNKNOWN_CORRELATION_ID },
+      {
+        windowsWrapperEngaged,
+        platform: process.platform,
+        ...(childPid !== undefined ? { childPid } : {}),
+      },
+    ),
+  );
+}
+
+// F2 (PR reviewer finding): the two async/sync spawn-failure call sites below each already catch a
+// real Error (ENOENT, EACCES, a resource-limit failure, a hardening rejection, ...) and used to
+// discard it, collapsing every distinct cause onto the same generic `code` — a support bundle could
+// not tell an unresolvable executable apart from a permission or resource-limit failure. `error` is
+// routed through the SAME structured diagnostic machinery every other server call site already uses
+// (AGENTS.md §8 Rule 1), never a bespoke shape: `errorKindOf` (the closed-vocabulary classifier —
+// reads only a coded `.code`/class name, never `.message`) for `errorKind`, and `keikoStackFrames` /
+// `causeChain` (the dist-anchored Keiko-code stack reducer) for `extra.frames` / `extra.causeChain`.
+// Both degrade safely to an empty array when the real cause never passes through our own code (a
+// raw Node internal spawn failure, e.g. the async ENOENT case, has no Keiko-code frame to report),
+// so `frames`/`causeChain` are only ever added when there is real evidence to add (`nonEmpty`
+// mirrors diagnostics-log.ts's own `describeError` helper). `code` remains the fallback `errorKind`
+// for the ONE call site (the non-absolute-executable guard) that has no underlying Error at all.
+//
+// BODY-FREE (non-negotiable): none of `errorKindOf`/`keikoStackFrames`/`causeChain` ever reads
+// `.message`, `.path`, `.syscall`, `.cmd` or `.spawnargs` — Node's own ENOENT/EINVAL errors put the
+// resolved executable PATH on several of exactly those fields, so reading any of them here would
+// leak it straight into the activity log. Redaction survival for this exact shape is pinned by
+// `lspNodeAdapter.test.ts`'s "AGENTS.md §8 Rule 1" describe block, run through the REAL redactor.
+function logLspSpawnFailed(code: LspProcessErrorCode, error?: unknown, childPid?: number): void {
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_SPAWN_FAILED_OPERATION,
+      {
+        level: "error",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: lspActivityErrorKind(error, code),
+      },
+      {
+        platform: process.platform,
+        ...(childPid !== undefined ? { childPid } : {}),
+        ...(frames.length > 0 ? { frames } : {}),
+        ...(chain.length > 0 ? { causeChain: chain } : {}),
+      },
+    ),
+  );
+}
+
+function logLspRuntimeError(error: unknown, childPid: number | undefined): void {
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_PROCESS_RUNTIME_ERROR_OPERATION,
+      {
+        level: "error",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: lspActivityErrorKind(error),
+      },
+      {
+        ...(childPid !== undefined ? { childPid } : {}),
+        ...(frames.length > 0 ? { frames } : {}),
+        ...(chain.length > 0 ? { causeChain: chain } : {}),
+      },
+    ),
+  );
+}
+
+// Fires on every kill() call, including the SIGTERM-then-SIGKILL escalation `escalateKill` drives —
+// each line is an honest report of one real invocation, carrying the SIGNAL and the VERIFIED
+// Windows tree-kill disposition (taskkill's own completed exit status, never
+// dispatched-therefore-succeeded). The REASON for the termination lives one layer up: the process
+// manager's lifecycle transitions (SHUTDOWN, CRASHED + errorCode, RESTART_THROTTLED, …) reach the
+// lifecycle ledger with the same `childPid`, which is the join key between the two records. A
+// per-request correlation id does not exist for a long-lived language server, so the line carries
+// UNKNOWN_CORRELATION_ID by design.
+function logLspProcessTerminated(
+  childPid: number,
+  signal: NodeJS.Signals,
+  windowsTreeKill: WindowsTreeKillDisposition,
+  treeContainment: LspTreeContainment,
+): void {
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_PROCESS_TERMINATED_OPERATION,
+      { correlationId: UNKNOWN_CORRELATION_ID },
+      { childPid, signal, windowsTreeKill, treeContainment },
+    ),
+  );
+}
 
 // Typed failure carrying only a content-free `LspProcessErrorCode` — never a path, server output, or
 // stack-derived message beyond the code itself (ADR-0069 D6).
@@ -57,6 +379,11 @@ export type LspSpawnFn = (
   cwd: string,
 ) => LspSpawnHandle & {
   kill(signal: NodeJS.Signals): void;
+  lastKillResult?(): LspProcessKillResult | undefined;
+  /** Releases adapter-owned HOME/runtime state only after the manager proves whole-tree teardown. */
+  releaseRuntimeResources?(): void;
+  /** Present only when an adapter established an OS-owned lifetime boundary before spawn. */
+  treeLifetimeBoundary?: "os-owned" | undefined;
   onExit(callback: (code: number | null) => void): void;
   onError(callback: (error: Error) => void): void;
 };
@@ -70,8 +397,17 @@ export interface ApprovedExecutablePath {
 
 // Minimal child surface `escalateKill` needs. Both a real `ChildProcess` and the in-memory fake
 // satisfy it, so the escalation sequence is unit-testable with an injected kill tracker.
-export type KillableChild = SharedKillableChild;
+export interface KillableChild extends SharedKillableChild {
+  lastKillResult?(): LspProcessKillResult | undefined;
+}
 type WorkspaceExternalExecutable = SharedWorkspaceExternalExecutable;
+
+export type LspTreeContainment = "confirmed" | "unconfirmed";
+
+export interface LspProcessKillResult {
+  readonly treeContainment: LspTreeContainment;
+  readonly windowsTreeKill: WindowsTreeKillDisposition;
+}
 
 // Resolves a bare executable name on the operator's PATH to an absolute real path that lies OUTSIDE
 // the workspace root (ADR-0069 I2/I5). Throws `EXECUTABLE_NOT_FOUND` when the name has a separator,
@@ -149,17 +485,78 @@ export function createApprovedExecutablePath(
 }
 
 // POSIX group kill: signals the whole process group (`-pid`) so the LSP server's grandchildren are
-// included (ADR-0069 D2). Windows has no process groups here, so the single child is killed. A failed
-// kill (process already gone) is swallowed; the escalation timer still owns the SIGKILL fallback.
-function nodeGroupKill(pid: number, child: KillableChild, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32") {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      // Group may already be gone; fall through to a direct child kill.
-    }
+// included (ADR-0069 D2). Windows has no process groups here, so the tree is bounded with the shared
+// taskkill primitive instead: since issue #3350 routed a resolved `.cmd` language server through the
+// hardened cmd.exe wrapper, the immediate child is cmd.exe and the SERVER (node.exe running
+// typescript-language-server) is a grandchild that `child.kill()` cannot reach — it would survive
+// dispose, holding its stdio handles and the workspace files it indexed. The same defect and the same
+// fix as runCommand's killGroup (keiko-tools exec.ts); the primitive is imported rather than
+// re-derived so both spawn boundaries terminate identically. Failures return an unconfirmed
+// disposition instead of being promoted to success; the manager then retains ownership.
+export interface NodeGroupKillOptions {
+  readonly platform?: NodeJS.Platform | undefined;
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  readonly killWindowsTree?: WindowsTreeKill | undefined;
+}
+
+export function nodeGroupKill(
+  pid: number,
+  child: KillableChild,
+  signal: NodeJS.Signals,
+  options: NodeGroupKillOptions = {},
+): LspProcessKillResult {
+  // The shared guard is the final fail-closed boundary for a stale/recycled pid. In particular,
+  // return before either taskkill OR the direct child fallback can terminate Keiko or its launcher.
+  if (isSelfOrParentPid(pid)) {
+    return { windowsTreeKill: "refused-self-pid", treeContainment: "unconfirmed" };
   }
+  if ((options.platform ?? process.platform) !== "win32") {
+    return posixGroupKill(pid, child, signal);
+  }
+  // Synchronous and verified (see nodeWindowsTreeKill in keiko-tools): taskkill has COMPLETED
+  // against the live tree before the immediate child is signalled below.
+  const disposition = safeWindowsTreeKill(
+    options.killWindowsTree ?? nodeWindowsTreeKill,
+    pid,
+    options.processEnv ?? process.env,
+  );
+  directChildKill(child, signal);
+  return {
+    windowsTreeKill: disposition,
+    treeContainment: disposition === "succeeded" ? "confirmed" : "unconfirmed",
+  };
+}
+
+function safeWindowsTreeKill(
+  killWindowsTree: WindowsTreeKill,
+  pid: number,
+  processEnv: NodeJS.ProcessEnv,
+): WindowsTreeKillDisposition {
+  try {
+    return killWindowsTree(pid, processEnv);
+  } catch {
+    return "failed";
+  }
+}
+
+function posixGroupKill(
+  pid: number,
+  child: KillableChild,
+  signal: NodeJS.Signals,
+): LspProcessKillResult {
+  try {
+    process.kill(-pid, signal);
+    return {
+      windowsTreeKill: "not-attempted",
+      treeContainment: signal === "SIGKILL" ? "confirmed" : "unconfirmed",
+    };
+  } catch {
+    directChildKill(child, signal);
+    return { windowsTreeKill: "not-attempted", treeContainment: "unconfirmed" };
+  }
+}
+
+function directChildKill(child: KillableChild, signal: NodeJS.Signals): void {
   try {
     child.kill(signal);
   } catch {
@@ -167,11 +564,13 @@ function nodeGroupKill(pid: number, child: KillableChild, signal: NodeJS.Signals
   }
 }
 
-function safeKill(child: KillableChild, signal: NodeJS.Signals): void {
+function safeKill(child: KillableChild, signal: NodeJS.Signals): LspProcessKillResult | undefined {
   try {
     child.kill(signal);
+    return child.lastKillResult?.();
   } catch {
     // The child may have already exited; the escalation timer owns the SIGKILL fallback.
+    return undefined;
   }
 }
 
@@ -192,23 +591,58 @@ export function escalateKill(
   exited: () => boolean,
   scheduler?: KillScheduler,
   whenExited?: ChildExitRegistration,
-): Promise<void> {
-  return escalateSharedKill(child, gracePeriodMs, exited, scheduler, whenExited);
+): Promise<LspProcessKillResult | undefined> {
+  let result = safeKill(child, "SIGTERM");
+  if (exited()) return Promise.resolve(result);
+  const activeScheduler = scheduler ?? productionLspKillScheduler;
+  return new Promise<LspProcessKillResult | undefined>((resolve) => {
+    let settled = false;
+    let signalling = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    whenExited?.(() => {
+      if (!signalling) finish();
+    });
+    activeScheduler.setTimer(() => {
+      if (!exited()) {
+        signalling = true;
+        result = mergeKillResults(result, safeKill(child, "SIGKILL"));
+        signalling = false;
+      }
+      finish();
+    }, gracePeriodMs);
+  });
 }
 
 export type KillScheduler = SharedKillScheduler;
 
-function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
+const productionLspKillScheduler: KillScheduler = Object.freeze({
+  setTimer: (callback: () => void, delayMs: number) => setTimeout(callback, delayMs).unref(),
+});
+
+function mergeKillResults(
+  previous: LspProcessKillResult | undefined,
+  next: LspProcessKillResult | undefined,
+): LspProcessKillResult | undefined {
+  if (previous?.treeContainment === "confirmed") return previous;
+  return next ?? previous;
+}
+
+function wrapChild(
+  child: ChildProcessWithoutNullStreams,
+  releaseRuntimeResources: () => void,
+): ReturnType<LspSpawnFn> {
   const stdin = child.stdin;
   const stdout = child.stdout;
   const stderr = child.stderr;
-  if (stdin === null || stdout === null || stderr === null) {
-    throw new LspProcessError("SPAWN_FAILED");
-  }
   // A crashing or already-disposed language server may close stdin while the JSON-RPC client is
   // settling an in-flight request. The manager observes the child exit separately; the write-side
   // broken pipe must not escape as an unhandled process error.
   stdin.on("error", () => undefined);
+  let lastKillResult: LspProcessKillResult | undefined;
   return {
     stdin: {
       write: (chunk: Buffer): void => {
@@ -219,13 +653,11 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
     stderr,
     pid: child.pid,
     kill: (signal): void => {
-      const pid = child.pid;
-      if (pid === undefined) {
-        safeKill(child, signal);
-        return;
-      }
-      nodeGroupKill(pid, child, signal);
+      lastKillResult = undefined;
+      lastKillResult = killWrappedChild(child, signal);
     },
+    lastKillResult: (): LspProcessKillResult | undefined => lastKillResult,
+    releaseRuntimeResources,
     onExit: (callback): void => {
       child.on("exit", (code) => {
         callback(code);
@@ -237,30 +669,170 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
   };
 }
 
+function killWrappedChild(child: ChildProcess, signal: NodeJS.Signals): LspProcessKillResult {
+  const pid = child.pid;
+  if (pid === undefined) {
+    safeKill(child, signal);
+    return { windowsTreeKill: "not-attempted", treeContainment: "unconfirmed" };
+  }
+  // Never signal after Node has observed exit: the OS may already have reused the raw pid. An exit
+  // is not tree-containment evidence, so this still returns `unconfirmed` to the manager.
+  if (child.exitCode != null || child.signalCode != null) {
+    const result: LspProcessKillResult = {
+      windowsTreeKill: "not-attempted",
+      treeContainment: "unconfirmed",
+    };
+    logLspProcessTerminated(pid, signal, result.windowsTreeKill, result.treeContainment);
+    return result;
+  }
+  const result = nodeGroupKill(pid, child, signal);
+  logLspProcessTerminated(pid, signal, result.windowsTreeKill, result.treeContainment);
+  return result;
+}
+
 // Default spawn adapter (ADR-0069 D2). The manager has already run the deny-by-default preflight (I5),
 // resolved the executable to an absolute workspace-external path (I2), and built the copy-only env;
 // this adapter substitutes an ephemeral HOME/USERPROFILE and spawns detached on POSIX so the manager
 // can group-kill grandchildren. As defense-in-depth (FIX 8) it rejects a non-absolute executable, so a
 // future caller that bypassed `resolveExecutableOutsideWorkspace` cannot spawn a bare/relative name.
-export const defaultLspSpawnFn: LspSpawnFn = (executable, args, env, cwd) => {
-  if (!isAbsolute(executable)) {
-    throw new LspProcessError("EXECUTABLE_NOT_FOUND");
+export interface LspSpawnPlan {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly options: SpawnOptionsWithoutStdio & {
+    readonly stdio: ["pipe", "pipe", "pipe"];
+  };
+}
+
+// Builds EXACTLY what defaultLspSpawnFn hands to `spawn`, as a pure function so the Windows branch is
+// reachable from a test on any host (issue #3350). Without this seam the `.cmd` wrapping below is
+// unpinned: `resolveWindowsSpawnInvocation` and the `windowsVerbatimArguments` spread could both be
+// deleted and every LSP test would stay green, because they all inject `deps.spawn` and bypass this
+// adapter entirely — silently reintroducing EINVAL for npm-installed `.cmd` language servers
+// (typescript-language-server, pyright, bash-language-server).
+export function buildLspSpawnPlan(
+  executable: string,
+  args: readonly string[],
+  childEnv: NodeJS.ProcessEnv,
+  cwd: string,
+  opts?: WindowsShellInvocationOptions,
+): LspSpawnPlan {
+  const platform = opts?.platform ?? process.platform;
+  // A resolved `.cmd`/`.bat` language server (routine on Windows for npm-installed servers) cannot be
+  // spawned with shell:false without EINVAL; the hardened cmd.exe wrapper is a no-op for every other
+  // resolved path and on every other platform.
+  const invocation = resolveWindowsSpawnInvocation(executable, args, opts);
+  return {
+    command: invocation.command,
+    args: [...invocation.args],
+    options: {
+      cwd,
+      env: childEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+      // POSIX spawns detached so the manager can group-kill grandchildren (ADR-0069 D2); Windows has
+      // no process groups here.
+      detached: platform !== "win32",
+      windowsHide: true,
+      ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    },
+  };
+}
+
+export type LspNodeSpawn = (
+  command: string,
+  args: readonly string[],
+  options: LspSpawnPlan["options"],
+) => ChildProcessWithoutNullStreams;
+
+const nodeLspSpawn: LspNodeSpawn = (command, args, options) => spawn(command, args, options);
+
+export function createDefaultLspSpawnFn(
+  spawnChild: LspNodeSpawn = nodeLspSpawn,
+  homeFactory: () => EphemeralHome = createEphemeralHome,
+): LspSpawnFn {
+  return (executable, args, env, cwd): ReturnType<LspSpawnFn> => {
+    if (!isAbsolute(executable)) {
+      logLspSpawnFailed("EXECUTABLE_NOT_FOUND");
+      throw new LspProcessError("EXECUTABLE_NOT_FOUND");
+    }
+    const home = homeFactory();
+    // Removes the ephemeral HOME exactly once, on whichever safe failure/release path fires first. Every
+    // path after createEphemeralHome() must run it: a SYNCHRONOUS throw (buildLspSpawnPlan rejecting
+    // a control character or an untrusted SystemRoot, or spawn itself),
+    // an ASYNCHRONOUS spawn failure ('error' with no 'exit' following — ENOENT's normal shape), or
+    // the manager's post-containment release. Before this guard, sync throws leaked one HOME directory
+    // per spawn attempt and emitted no lsp.spawn.failed line.
+    const cleanupHomeOnce = oneShotCleanup(() => {
+      home.cleanup();
+    });
+    const childEnv = { ...env, HOME: home.path, USERPROFILE: home.path };
+    let spawnedChild: ChildProcessWithoutNullStreams | undefined;
+    try {
+      const plan = buildLspSpawnPlan(executable, args, childEnv, cwd);
+      const child = spawnChild(plan.command, plan.args, plan.options);
+      spawnedChild = child;
+      // The immediate child's exit is not proof that descendants stopped using HOME. The manager
+      // releases this one-shot cleanup only after confirmed whole-tree termination (or an OS-owned
+      // lifetime boundary supplied by another adapter); an unsolicited root exit intentionally
+      // retains the directory together with its durable quarantine lease.
+      const wrapped = wrapChild(child, cleanupHomeOnce);
+      // Spawn success is the child's real `spawn` event, not spawn() returning: dispatch always
+      // returns, while ENOENT and friends arrive asynchronously via `error`.
+      let spawnConfirmed = false;
+      child.once("spawn", () => {
+        spawnConfirmed = true;
+        logLspSpawnCompleted(plan.options.windowsVerbatimArguments === true, child.pid);
+      });
+      child.on("error", (processError) => {
+        if (spawnConfirmed) {
+          // ChildProcess can emit `error` after a successful `spawn` (for example, a later IPC or
+          // abort failure). It is a runtime fault, not a retroactive spawn failure. The manager owns
+          // termination and HOME must remain until the corresponding exit confirms containment.
+          logLspRuntimeError(processError, child.pid);
+          return;
+        }
+        cleanupHomeOnce();
+        logLspSpawnFailed("SPAWN_FAILED", processError);
+      });
+      return wrapped;
+    } catch (error) {
+      if (spawnedChild === undefined) cleanupHomeOnce();
+      else cleanOrTerminateUnwrappedChild(spawnedChild, cleanupHomeOnce);
+      logLspSpawnFailed("SPAWN_FAILED", error, spawnedChild?.pid);
+      throw error;
+    }
+  };
+}
+
+function oneShotCleanup(cleanup: () => void): () => void {
+  let completed = false;
+  return (): void => {
+    if (completed) return;
+    completed = true;
+    cleanup();
+  };
+}
+
+function cleanOrTerminateUnwrappedChild(child: ChildProcess, cleanup: () => void): void {
+  child.on("error", () => {
+    if (child.pid === undefined) cleanup();
+  });
+  if (child.exitCode != null || child.signalCode != null) return;
+  const result = terminateUnwrappedChild(child);
+  if (result?.treeContainment === "confirmed") child.once("exit", cleanup);
+}
+
+function terminateUnwrappedChild(child: ChildProcess): LspProcessKillResult | undefined {
+  const pid = child.pid;
+  if (pid === undefined) {
+    return safeKill(child, "SIGKILL");
   }
-  const home = createEphemeralHome();
-  const childEnv = { ...env, HOME: home.path, USERPROFILE: home.path };
-  const child = spawn(executable, [...args], {
-    cwd,
-    env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-    detached: process.platform !== "win32",
-    windowsHide: true,
-  });
-  const wrapped = wrapChild(child);
-  wrapped.onExit(() => {
-    home.cleanup();
-  });
-  return wrapped;
-};
+  if (child.exitCode != null || child.signalCode != null) return undefined;
+  const result = nodeGroupKill(pid, child, "SIGKILL");
+  logLspProcessTerminated(pid, "SIGKILL", result.windowsTreeKill, result.treeContainment);
+  return result;
+}
+
+export const defaultLspSpawnFn: LspSpawnFn = createDefaultLspSpawnFn();
 
 // Convenience preflight used by the manager before it calls the injected spawn fn: proves the command
 // is allowlisted (I5) and builds the copy-only child env (no parent secrets leak). Returns the env on

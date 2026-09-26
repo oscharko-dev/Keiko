@@ -27,9 +27,8 @@
 // with sibling QI epic work (e.g. #280) — the dispatcher in `routes.ts` only needs to spread
 // the group.
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { currentGatewayConfig } from "../deps.js";
@@ -43,6 +42,7 @@ import { containsForbiddenSecretShape } from "./connectorErrors.js";
 import { executeQiRun } from "./runExecution.js";
 import { qiRunRegistry } from "./runRegistry.js";
 import { buildQiModelRoutingForRun } from "./modelPolicyRoutes.js";
+import { newReferenceId } from "../reference-id.js";
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
 
@@ -172,6 +172,24 @@ const parseSourceEnvelopeIds = (
   return ids;
 };
 
+// KEIKO-0593: QualityIntelligenceConversationCenterHandoff.id is now branded
+// QualityIntelligenceHandoffId. Mirrors parseOptionalRunId's try/catch-around-the-asX-constructor
+// shape immediately below -- the constructor throws TypeError on a forbidden path fragment,
+// control character, oversized, or non-NFKC-normalised value, which a bare isNonEmptyString check
+// would accept.
+const parseHandoffId = (
+  raw: unknown,
+):
+  | { readonly ok: true; readonly value: QualityIntelligence.QualityIntelligenceHandoffId }
+  | { readonly ok: false } => {
+  if (typeof raw !== "string") return { ok: false };
+  try {
+    return { ok: true, value: QualityIntelligence.asQualityIntelligenceHandoffId(raw) };
+  } catch {
+    return { ok: false };
+  }
+};
+
 const parseOptionalRunId = (
   raw: unknown,
 ):
@@ -194,29 +212,59 @@ const validatePayloadRef = (
   return parseSourceEnvelopeIds(raw.sourceEnvelopeIds);
 };
 
+interface ParsedEnvelopeFields {
+  readonly id: QualityIntelligence.QualityIntelligenceHandoffId;
+  readonly requestedByChatMessageId: string;
+  readonly promptedAction: QualityIntelligence.QualityIntelligenceHandoffPromptedAction;
+  readonly sourceEnvelopeIds: readonly QualityIntelligence.QualityIntelligenceSourceEnvelopeId[];
+  readonly runId: QualityIntelligence.QualityIntelligenceRunId | undefined;
+}
+
+// Split out of validateEnvelope (KEIKO-0593) to keep both functions under the complexity ceiling
+// once the handoff id gained its own branded-constructor validation step.
+const parseEnvelopeFields = (
+  parsed: Readonly<Record<string, unknown>>,
+): ParsedEnvelopeFields | undefined => {
+  const handoffIdResult = parseHandoffId(parsed.id);
+  if (!handoffIdResult.ok) return undefined;
+  if (!isNonEmptyString(parsed.requestedByChatMessageId)) return undefined;
+  if (!isAllowedAction(parsed.promptedAction)) return undefined;
+  const sourceEnvelopeIds = validatePayloadRef(parsed.payloadRef);
+  if (sourceEnvelopeIds === undefined) return undefined;
+  const runIdResult = parseOptionalRunId(parsed.runId);
+  if (!runIdResult.ok) return undefined;
+  return {
+    id: handoffIdResult.value,
+    requestedByChatMessageId: parsed.requestedByChatMessageId,
+    promptedAction: parsed.promptedAction,
+    sourceEnvelopeIds,
+    runId: runIdResult.value,
+  };
+};
+
 const validateEnvelope = (parsed: unknown): Validation => {
   if (!isPlainObject(parsed)) return fail();
   if (!hasOnlyAllowedKeys(parsed, ALLOWED_ENVELOPE_KEYS)) return fail();
-  if (!isNonEmptyString(parsed.id)) return fail();
-  if (!isNonEmptyString(parsed.requestedByChatMessageId)) return fail();
-  if (!isAllowedAction(parsed.promptedAction)) return fail();
-
-  const sourceEnvelopeIds = validatePayloadRef(parsed.payloadRef);
-  if (sourceEnvelopeIds === undefined) return fail();
-
-  const runIdResult = parseOptionalRunId(parsed.runId);
-  if (!runIdResult.ok) return fail();
+  const fields = parseEnvelopeFields(parsed);
+  if (fields === undefined) return fail();
 
   // Defence-in-depth: scrub every string value for credential-shaped substrings.
   if (scanForbiddenStrings(parsed)) return fail("QI_HANDOFF_FORBIDDEN_PAYLOAD");
 
   const envelope: QualityIntelligence.QualityIntelligenceConversationCenterHandoff = {
-    id: parsed.id,
-    requestedByChatMessageId: parsed.requestedByChatMessageId,
-    promptedAction: parsed.promptedAction,
-    payloadRef: { sourceEnvelopeIds },
-    ...(runIdResult.value !== undefined ? { runId: runIdResult.value } : {}),
+    id: fields.id,
+    requestedByChatMessageId: fields.requestedByChatMessageId,
+    promptedAction: fields.promptedAction,
+    payloadRef: { sourceEnvelopeIds: fields.sourceEnvelopeIds },
+    ...(fields.runId !== undefined ? { runId: fields.runId } : {}),
   };
+  // KEIKO-0593: payloadRef.sourceEnvelopeIds now has an enforced maximum
+  // (QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS); this was previously unbounded here.
+  try {
+    QualityIntelligence.assertQualityIntelligenceConversationCenterHandoffInvariant(envelope);
+  } catch {
+    return fail();
+  }
   return { kind: "ok", envelope };
 };
 
@@ -285,8 +333,13 @@ const buildHandoffMessage = (
 // to a user-selected SUBSET of the connected context; until that resolver exists the run faithfully
 // ingests the chat's whole connected workspace context, so an empty (or any) id list is honoured by
 // using the connected scopes.
-const startHandoffRun = (deps: UiHandlerDeps, roots: readonly string[]): string => {
-  const runId = `qi-run-${randomUUID()}`;
+const startHandoffRun = (
+  deps: UiHandlerDeps,
+  roots: readonly string[],
+  correlationId: string | undefined,
+): string => {
+  // A QI run window persists it as a reference (#3557 review).
+  const runId = newReferenceId({ kind: "qi-run", prefix: "qi-run-", correlationId });
   const registeredAt = new Date().toISOString();
   const controller = qiRunRegistry.register(runId, registeredAt);
   const totals = { candidates: 0, findings: 0, exports: 0 };
@@ -317,7 +370,7 @@ const startHandoffRun = (deps: UiHandlerDeps, roots: readonly string[]): string 
   const runPromise =
     currentGatewayConfig(deps) === undefined
       ? execute()
-      : buildQiModelRoutingForRun(deps, {}).then((modelRouting) => execute(modelRouting));
+      : buildQiModelRoutingForRun(deps, {}, runId).then((modelRouting) => execute(modelRouting));
   void runPromise
     .then((summary) => {
       qiRunRegistry.complete(runId, summary.status);
@@ -354,11 +407,12 @@ const resolveHandoffRunId = (
   deps: UiHandlerDeps,
   envelope: QualityIntelligence.QualityIntelligenceConversationCenterHandoff,
   chatId: string,
+  correlationId: string | undefined,
 ): string | undefined => {
   if (envelope.promptedAction !== "design-tests") return envelope.runId;
   const chat = deps.store.findChatById(chatId);
   const roots = collectConnectedRoots(chat);
-  if (roots.length > 0) return startHandoffRun(deps, roots);
+  if (roots.length > 0) return startHandoffRun(deps, roots, correlationId);
   return envelope.runId;
 };
 
@@ -404,7 +458,7 @@ export const createHandleQiHandoff = (
       return errResult(404, "QI_HANDOFF_UNKNOWN_CHAT_MESSAGE");
     }
 
-    const linkedRunId = resolveHandoffRunId(deps, envelope, resolved.chatId);
+    const linkedRunId = resolveHandoffRunId(deps, envelope, resolved.chatId, ctx.correlationId);
     const persisted = deps.store.createMessage(
       buildHandoffMessage(resolved, envelope, now, linkedRunId),
     );

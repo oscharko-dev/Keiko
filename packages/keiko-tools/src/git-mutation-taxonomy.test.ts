@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type {
+  GitDeliveryExecutionErrorCode,
+  GitDeliveryExecutionResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_EXECUTION_ERROR_CODES,
   GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryExecutionErrorCode,
-  type GitDeliveryExecutionResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   GIT_MUTATION_FAILURE_CATEGORIES,
   GIT_MUTATION_LIFECYCLE_PHASES,
@@ -78,6 +80,7 @@ describe("git mutation taxonomy — failure categories", () => {
     expect(gitMutationCategoryForExecutionError("network-failure")).toBe("provider-failure");
     expect(gitMutationCategoryForExecutionError("conflict")).toBe("recovery-required");
     expect(gitMutationCategoryForExecutionError("precondition-failed")).toBe("recovery-required");
+    expect(gitMutationCategoryForExecutionError("signature-failed")).toBe("recovery-required");
     expect(gitMutationCategoryForExecutionError("timeout")).toBe("execution-failure");
     expect(gitMutationCategoryForExecutionError("internal-error")).toBe("execution-failure");
   });

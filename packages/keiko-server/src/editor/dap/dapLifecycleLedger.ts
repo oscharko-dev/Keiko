@@ -1,8 +1,5 @@
-import {
-  isDebugLifecycleEvidence,
-  type DebugLifecycleEvidence,
-  type DebugLifecycleEvent,
-} from "@oscharko-dev/keiko-contracts";
+import type { DebugLifecycleEvidence, DebugLifecycleEvent } from "@oscharko-dev/keiko-contracts";
+import { isDebugLifecycleEvidence } from "@oscharko-dev/keiko-contracts/runtime/debug/debug-lifecycle";
 
 export interface DebugLiveEvidenceProjection {
   readonly records: readonly DebugLifecycleEvent[];

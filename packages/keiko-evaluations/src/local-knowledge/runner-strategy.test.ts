@@ -6,34 +6,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  ChunkId,
-  DocumentId,
-  KnowledgeCapsuleId,
-  KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-local-knowledge";
 
-import { EVAL_EMBEDDING_IDENTITY } from "./fixtures.js";
+import { EVAL_EMBEDDING_IDENTITY, capsuleId, chunkId, documentId, sourceId } from "./fixtures.js";
 import type { RetrievalEvalFixture } from "./types.js";
 
 const observedQueries: RetrievalQuery[] = [];
-
-function capsuleId(value: string): KnowledgeCapsuleId {
-  return value as KnowledgeCapsuleId;
-}
-
-function sourceId(value: string): KnowledgeSourceId {
-  return value as KnowledgeSourceId;
-}
-
-function documentId(value: string): DocumentId {
-  return value as DocumentId;
-}
-
-function chunkId(value: string): ChunkId {
-  return value as ChunkId;
-}
 
 vi.mock("@oscharko-dev/keiko-local-knowledge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-local-knowledge")>();

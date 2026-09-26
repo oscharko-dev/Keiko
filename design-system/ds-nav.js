@@ -63,10 +63,20 @@
     },
   ];
 
+  /* KEIKO-0911 partial: the moon path IS byte-identical to lift-glyphs.js's G.moon so
+     LiftGlyph is the single source of truth for it. The sun path CANNOT be sourced from
+     LiftGlyph — LiftGlyph.G.sun renders the center circle as `ring(12, 12, 4)` (an arc
+     with a 34° gap) while this theme toggle deliberately uses a full `<circle r="4">`;
+     swapping them changes the rendered geometry (see doNot on the finding). The inline
+     sun SVG below preserves that exact geometry AND the stroke-width the ds.css toggle
+     was calibrated against. Wrapper classes .ti-moon/.ti-sun stay untouched — ds.css
+     depends on them for light/dark visibility. */
   var THEME_TOGGLE =
     '<button class="theme-toggle" type="button" onclick="dsToggleTheme &amp;&amp; dsToggleTheme()" aria-label="Toggle colour theme">' +
     '<span class="ti">' +
-    '<svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1"/></svg>' +
+    '<span class="ti-moon">' +
+    (window.LiftGlyph ? window.LiftGlyph.svg("moon", 16) : "") +
+    "</span>" +
     '<svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9"/></svg>' +
     "</span>" +
     '<span class="tspace">Theme</span><span data-theme-label>Dark</span>' +

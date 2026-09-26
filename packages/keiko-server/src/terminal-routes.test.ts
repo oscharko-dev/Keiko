@@ -2,16 +2,26 @@
 // the real spawn-backed manager so these tests never spawn a real child. The createUiServer
 // fixture mirrors browser-routes.test.ts so CSRF guard, host-check, and SSE framer run live.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { createTerminalExecutionManager } from "./terminal.js";
+import type { WorkspaceRootAccessOutcome } from "./task-workspace/workspace-root-access.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import { EventEmitter } from "node:events";
+import type { ServerResponse } from "node:http";
+import { handleTerminalEvents, openTerminalSseStream } from "./terminal-routes.js";
+import type { SseBackpressureSignal } from "./sse-write.js";
+import type { RouteContext } from "./routes.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   TerminalToolError,
   type TerminalEventEmitter,
@@ -20,6 +30,12 @@ import {
   type TerminalExecutionManager,
   type TerminalExecutionResult,
 } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 interface FakeOptions {
   readonly executeShouldThrow?: TerminalToolError;
@@ -151,6 +167,20 @@ function baseUrl(): string {
   return `http://${UI_HOST}:${String(port)}`;
 }
 
+// Serves one request against a server composed from the fixture deps plus `overrides`, so a test
+// can vary the terminal manager or the managed-root configuration without reshaping the fixture.
+async function withDeps<T>(
+  overrides: Partial<UiHandlerDeps>,
+  run: (url: string) => Promise<T>,
+): Promise<T> {
+  const built = await buildServer({ ...deps, ...overrides });
+  try {
+    return await run(`http://${UI_HOST}:${String(built.port)}`);
+  } finally {
+    await closeServer(built.server);
+  }
+}
+
 function csrfHeaders(): Record<string, string> {
   return {
     "Content-Type": "application/json",
@@ -239,6 +269,46 @@ describe("GET /api/terminal/directories", () => {
     expect(body.roots.some((r) => r.label === "Project root")).toBe(true);
   });
 
+  it("threads the request correlation into a denied-root directory log", async () => {
+    const fixture = await mkdtemp(join(tmpdir(), "keiko-term-route-denied-"));
+    const deniedTarget = join(fixture, ".aws", "workspace");
+    const linkedRoot = join(fixture, "selected-project");
+    const correlationId = "terminal-directories-correlation-0001";
+    const sink = createBufferedServerLogSink();
+    try {
+      await mkdir(linkedRoot);
+      deps.store.createProject(linkedRoot, "denied-root");
+      await rm(linkedRoot, { recursive: true });
+      await mkdir(deniedTarget, { recursive: true });
+      await symlink(deniedTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+
+      const res = await fetch(
+        `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(linkedRoot)}`,
+        { headers: { "X-Keiko-Correlation-Id": correlationId } },
+      );
+
+      expect(res.status).toBe(403);
+      // F84: the server's own request line follows the denial on the same correlation, and neither
+      // line carries the path, raw or encoded.
+      await vi.waitFor(() => {
+        expect(sink.events).toHaveLength(2);
+      });
+      expect(sink.events[0]).toMatchObject({
+        op: "workspace.root.denied",
+        correlationId,
+        errorKind: "permission-denied",
+        extra: { failureKind: "WORKSPACE_PATH_DENIED" },
+      });
+      expect(sink.events[1]).toMatchObject({ category: "http", correlationId, status: 403 });
+      expect(JSON.stringify(sink.events)).not.toContain(fixture);
+      expect(JSON.stringify(sink.events)).not.toContain(encodeURIComponent(fixture));
+    } finally {
+      resetServerLogger();
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when the registered project root has been deleted instead of falling back to process.cwd()", async () => {
     await rm(workspaceRoot, { recursive: true, force: true });
     const res = await fetch(
@@ -268,6 +338,186 @@ describe("GET /api/terminal/directories", () => {
       `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(sub)}`,
     );
     expect(res.status).toBe(200);
+  });
+});
+
+// Every production request reaches the terminal manager with a central root resolver injected, so
+// this — not the un-injected fallback the fixture above exercises — is the branch a user hits. It
+// used to collapse both refusal decisions onto CWD_DENIED, so a missing or unreadable registered
+// root was reported to the user as a policy denial and the manager's PROJECT_NOT_FOUND branch was
+// dead in production (#3347 cursor). The status is the user-visible artifact, so both are pinned
+// here, at the route.
+describe("GET /api/terminal/directories — resolver decision → HTTP status (#3347)", () => {
+  function managerWithOutcome(outcome: WorkspaceRootAccessOutcome): TerminalExecutionManager {
+    return createTerminalExecutionManager({
+      store: deps.store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      processEnv: { PATH: "/usr/bin" },
+      resolveWorkspaceRootAccess: () => outcome,
+    });
+  }
+
+  async function directoriesStatus(
+    outcome: WorkspaceRootAccessOutcome,
+  ): Promise<{ status: number; code: string }> {
+    return withDeps({ terminal: managerWithOutcome(outcome) }, async (url) => {
+      const res = await fetch(
+        `${url}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
+      );
+      const body = (await res.json()) as { error?: { code?: string } };
+      return { status: res.status, code: body.error?.code ?? "" };
+    });
+  }
+
+  it("answers 403 CWD_DENIED when the resolver refuses the root by policy", async () => {
+    await expect(directoriesStatus({ decision: "denied" })).resolves.toEqual({
+      status: 403,
+      code: "CWD_DENIED",
+    });
+  });
+
+  it("answers 404 PROJECT_NOT_FOUND when the root is missing or unreadable", async () => {
+    await expect(directoriesStatus({ decision: "unresolved" })).resolves.toEqual({
+      status: 404,
+      code: "PROJECT_NOT_FOUND",
+    });
+  });
+
+  it("answers 404 PROJECT_NOT_FOUND on the execution route for the same root", async () => {
+    const result = await withDeps(
+      { terminal: managerWithOutcome({ decision: "unresolved" }) },
+      async (url) => {
+        const res = await fetch(`${url}/api/terminal/executions`, {
+          method: "POST",
+          headers: csrfHeaders(),
+          body: JSON.stringify({ projectId: workspaceRoot, command: "ls", args: [] }),
+        });
+        const body = (await res.json()) as { error?: { code?: string } };
+        return { status: res.status, code: body.error?.code ?? "" };
+      },
+    );
+
+    expect(result).toEqual({ status: 404, code: "PROJECT_NOT_FOUND" });
+  });
+});
+
+// #3347 owner P2: `resolveWorkspaceRootAccess` is optional on the manager interface, so a
+// composition without it left `access` undefined and let the listing fall back to plain
+// nodeWorkspaceFs — a registered project under the configured managed task-workspace root could be
+// enumerated with no lifecycle or gitdir proof behind it. Managed classification must fail closed.
+describe("GET /api/terminal/directories — managed root, no authority resolver (#3347)", () => {
+  let managedRoot: string;
+  let registeredRoot: string;
+
+  beforeEach(async () => {
+    managedRoot = await mkdtemp(join(tmpdir(), "keiko-term-managed-"));
+    registeredRoot = join(managedRoot, "repo-1", "workspace-1");
+    await mkdir(join(registeredRoot, "src"), { recursive: true });
+    deps.store.createProject(registeredRoot, "managed-project");
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(managedRoot, { recursive: true, force: true });
+  });
+
+  it("fails closed with 403 CWD_DENIED and performs no filesystem read", async () => {
+    const readDir = vi.spyOn(nodeWorkspaceFs, "readDir");
+    const realPath = vi.spyOn(nodeWorkspaceFs, "realPath");
+    const stat = vi.spyOn(nodeWorkspaceFs, "stat");
+
+    // The fixture's FakeTerminalExecutionManager deliberately does NOT implement the optional
+    // resolveWorkspaceRootAccess method — the exact composition this finding is about.
+    const result = await withDeps({ managedTaskWorkspaceRoot: managedRoot }, async (url) => {
+      const res = await fetch(
+        `${url}/api/terminal/directories?projectId=${encodeURIComponent(registeredRoot)}`,
+      );
+      const body = (await res.json()) as { error?: { code?: string } };
+      return { status: res.status, code: body.error?.code ?? "" };
+    });
+
+    expect(result).toEqual({ status: 403, code: "CWD_DENIED" });
+    expect(readDir).not.toHaveBeenCalled();
+    expect(realPath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("records the refusal as a correlated, body-free denial event", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      await withDeps({ managedTaskWorkspaceRoot: managedRoot }, async (url) => {
+        const res = await fetch(
+          `${url}/api/terminal/directories?projectId=${encodeURIComponent(registeredRoot)}`,
+          { headers: { "X-Keiko-Correlation-Id": "terminal-managed-correlation-0001" } },
+        );
+        expect(res.status).toBe(403);
+      });
+    } finally {
+      resetServerLogger();
+    }
+
+    // F84: the server's own request line follows the denial on the same correlation, and neither
+    // line carries the path, raw or encoded.
+    expect(sink.events).toHaveLength(2);
+    expect(sink.events[0]).toMatchObject({
+      op: "workspace.root.denied",
+      correlationId: "terminal-managed-correlation-0001",
+      errorKind: "authority-denied",
+      extra: {
+        decision: "denied",
+        reason: "managed-authority-unavailable",
+        failureKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
+      },
+    });
+    expect(sink.events[1]).toMatchObject({
+      category: "http",
+      correlationId: "terminal-managed-correlation-0001",
+      status: 403,
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(managedRoot);
+    expect(JSON.stringify(sink.events)).not.toContain(encodeURIComponent(managedRoot));
+  });
+
+  it("still serves an ordinary registered root outside the managed root", async () => {
+    const result = await withDeps({ managedTaskWorkspaceRoot: managedRoot }, async (url) => {
+      const res = await fetch(
+        `${url}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
+      );
+      return res.status;
+    });
+
+    expect(result).toBe(200);
+  });
+});
+
+// #3347 owner P2 (reproduced): the picker discovered denied directories — a root listing offered
+// node_modules and navigating straight into it returned its contents.
+describe("GET /api/terminal/directories — deny vocabulary (#3347)", () => {
+  it("omits denied children from a root listing", async () => {
+    for (const name of ["node_modules", ".git", ".keiko", ".aws", ".ssh", "src"]) {
+      await mkdir(join(workspaceRoot, name), { recursive: true });
+    }
+
+    const res = await fetch(
+      `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: { name: string }[] };
+    expect(body.entries.map((entry) => entry.name)).toEqual(["src"]);
+  });
+
+  it("refuses direct navigation into a denied directory with 403 CWD_DENIED", async () => {
+    await mkdir(join(workspaceRoot, "node_modules", "pkg"), { recursive: true });
+
+    const res = await fetch(
+      `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent("node_modules")}`,
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("CWD_DENIED");
   });
 });
 
@@ -302,16 +552,21 @@ describe("POST /api/terminal/executions", () => {
   });
 
   it("forwards a valid request to execute() and returns the result body", async () => {
+    const correlationId = "terminal-execution-correlation-0001";
     const res = await fetch(`${baseUrl()}/api/terminal/executions`, {
       method: "POST",
-      headers: csrfHeaders(),
+      headers: { ...csrfHeaders(), "X-Keiko-Correlation-Id": correlationId },
       body: JSON.stringify({ projectId: workspaceRoot, command: "ls", args: ["-la"] }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { exitCode: number; stdout: string };
     expect(body.exitCode).toBe(0);
     expect(body.stdout).toBe("ok");
-    expect(terminal.executed[0]).toMatchObject({ projectId: workspaceRoot, command: "ls" });
+    expect(terminal.executed[0]).toMatchObject({
+      projectId: workspaceRoot,
+      command: "ls",
+      correlationId,
+    });
   });
 
   it("forwards an optional requestId to execute()", async () => {
@@ -478,3 +733,233 @@ describe("GET /api/terminal/events", () => {
 
 // Host-check guard coverage lives in tests/ui/host-check.test.ts (fetch() rewrites the Host
 // header before transmission so an in-process test cannot exercise that path through fetch).
+
+// KEIKO-0142: terminal-routes hand-rolled the write+destroy backpressure check instead of the
+// shared writeOrDestroy helper, so it had no per-connection AbortController, no unsubscribe on a
+// backpressure kill, and no observable signal — a slow-client termination was indistinguishable
+// from an intentional cancel. Mirrors command-runner-routes.test.ts's already-migrated block.
+interface FakeSseRes {
+  res: ServerResponse;
+  readonly writes: string[];
+  destroyCount: number;
+  writeReturns: boolean;
+  readonly emitClose: () => void;
+}
+
+function makeFakeSseRes(): FakeSseRes {
+  const writes: string[] = [];
+  const emitter = new EventEmitter();
+  const state: FakeSseRes = {
+    res: undefined as unknown as ServerResponse,
+    writes,
+    destroyCount: 0,
+    writeReturns: true,
+    emitClose: (): void => {
+      emitter.emit("close");
+    },
+  };
+  const res = {
+    writeHead(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    write(chunk: string): boolean {
+      writes.push(chunk);
+      return state.writeReturns;
+    },
+    end(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    destroy(): void {
+      state.destroyCount += 1;
+    },
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+  };
+  state.res = res as unknown as ServerResponse;
+  return state;
+}
+
+describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
+  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-bp",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+
+    // The abort unsubscribed, so a second event produces no further writes or destroys.
+    const writesAfterKill = fake.writes.length;
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-bp-2",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+    expect(fake.writes).toHaveLength(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+
+    // close firing after an abort-driven unsubscribe must not double-unsubscribe or throw.
+    expect(() => {
+      fake.emitClose();
+    }).not.toThrow();
+  });
+
+  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
+    // The ready frame is written before any manager event. If it is rejected and bypasses
+    // writeOrDestroy, the subscription stays live on a socket that is already not draining.
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    // Destroyed and signalled immediately, with no manager event required.
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it("kills on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+    // The complementary path: ready frame accepted, a later event frame rejected.
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+    expect(fake.destroyCount).toBe(0);
+
+    fake.writeReturns = false;
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-late",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it("keeps the normal write path intact when res.write returns true", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-ok",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    expect(fake.writes.length).toBeGreaterThan(1);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line because openTerminalSseStream had no parameter to receive it, even
+// though handleTerminalEvents' RouteContext carries one. The heartbeat is the first write on
+// every stream (sse-write.ts's per-stream state is set-once-wins), so threading it through the
+// heartbeat's backpressure object is sufficient for the whole stream's terminal line.
+describe("openTerminalSseStream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+
+    openTerminalSseStream(fake.res, manager, (value) => value, undefined, "corr-terminal-1");
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "sse.stream.closed",
+      correlationId: "corr-terminal-1",
+    });
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+
+    openTerminalSseStream(fake.res, manager, (value) => value);
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]?.correlationId).toBeUndefined();
+  });
+});
+
+describe("handleTerminalEvents backpressure correlation (ADR-0173 D5 / g12)", () => {
+  it("threads the request's own correlation id into the backpressure diagnostic instead of minting one", () => {
+    const fake = makeFakeSseRes();
+    fake.writeReturns = false; // rejects the ready frame -> immediate backpressure kill.
+    const manager = new FakeTerminalExecutionManager();
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const ctx: RouteContext = {
+      req: { on: (): void => undefined } as unknown as RouteContext["req"],
+      res: fake.res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/terminal/events"),
+      correlationId: "req-terminal-thread-01",
+    };
+    const routeDeps: UiHandlerDeps = { ...deps, terminal: manager, diagnostics };
+
+    handleTerminalEvents(ctx, routeDeps);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("sse.terminal.backpressure");
+    expect(records[0]?.correlationId).toBe("req-terminal-thread-01");
+  });
+});

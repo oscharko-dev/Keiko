@@ -13,7 +13,7 @@ import type {
   CodingContextWirePack,
   EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts";
+import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { Redactor } from "../deps.js";
 
 export const CODING_CONTEXT_EVIDENCE_SCHEMA_VERSION = "1" as const;
@@ -26,6 +26,10 @@ function countByTier(
     number
   >;
   for (const entry of wirePack.entries) {
+    // No cast needed (Codex follow-on, ADR-0152 D6): entry.sourceTier now types as
+    // CodingContextSourceTier — RetrievalContextCitation carries its own SourceTier type parameter,
+    // and CodingContextWirePack instantiates it with CodingContextSourceTier — so this index is
+    // exhaustive and type-checked against the same catalog CODING_CONTEXT_SOURCE_TIERS derives from.
     counts[entry.sourceTier] += 1;
   }
   return counts;

@@ -20,6 +20,7 @@
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeStoreError } from "../errors.js";
+import { invalidateVectorIndexStateForCapsule } from "../indexing/vector-index-state.js";
 import type { KnowledgeStore } from "../store.js";
 
 import type { AuditEventSink, CapsuleRetentionPolicy, RetentionApplyResult } from "./types.js";
@@ -157,6 +158,19 @@ function deleteExpiredCapsuleData(
     if (retain.retainVectorsDays !== undefined) {
       const vectorCutoff = cutoffFor(now, retain.retainVectorsDays);
       deletedVectorCount = runDelete(store, DELETE_OLD_VECTORS_SQL, capsuleId, vectorCutoff);
+      // KEIKO-0490: mirror the vector-persist.ts contract — every raw vectors DELETE must be
+      // paired with vector_index_state invalidation. Belt-and-braces alongside the
+      // vectors_index_state_ad AFTER-DELETE trigger in local-knowledge-schema.ts: the
+      // trigger enforces the same invariant today, but the fix makes retention-applier.ts
+      // consistent with every other vectors DELETE call site (deleteVectorsForDocument,
+      // deleteVectorsForCapsule) so a future schema change that drops the trigger cannot
+      // silently leave this one path staled behind.
+      //
+      // Only fire the invalidation when the DELETE actually removed rows (PR-review follow-up):
+      // an unconditional invalidation would repeatedly dirty an unchanged corpus's warm USearch
+      // cache and pay a full rebuild for every no-op retention sweep. Call lands BEFORE COMMIT
+      // so a crash mid-retention cannot leave the two out of sync.
+      if (deletedVectorCount > 0) invalidateVectorIndexStateForCapsule(db, capsuleId);
     }
     if (retain.retainExtractedTextDays !== undefined) {
       const textCutoff = cutoffFor(now, retain.retainExtractedTextDays);

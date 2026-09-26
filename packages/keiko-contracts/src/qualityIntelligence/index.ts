@@ -1,8 +1,7 @@
 // Public barrel for the Quality Intelligence contract surface (Epic #270, Issue #277).
 //
 // Pure leaf module. Re-exports every type, constant, and validator from this directory
-// for consumption via `@oscharko-dev/keiko-contracts` (which re-exports this barrel
-// under the `QualityIntelligence` namespace).
+// for runtime consumption through `@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index`.
 
 export const QUALITY_INTELLIGENCE_SCHEMA_VERSION = "1" as const;
 
@@ -26,6 +25,7 @@ export type {
   QualityIntelligenceSourceEnvelopeId,
   QualityIntelligenceEvidenceAtomId,
   QualityIntelligenceAuditSummaryId,
+  QualityIntelligenceHandoffId,
 } from "./ids.js";
 export {
   asQualityIntelligenceRunId,
@@ -37,6 +37,7 @@ export {
   asQualityIntelligenceSourceEnvelopeId,
   asQualityIntelligenceEvidenceAtomId,
   asQualityIntelligenceAuditSummaryId,
+  asQualityIntelligenceHandoffId,
   validateQualityIntelligenceIdString,
 } from "./ids.js";
 
@@ -103,8 +104,13 @@ export type {
   QualityIntelligenceCoverageKind,
   QualityIntelligenceCoverageMapping,
   QualityIntelligenceCoverageMap,
+  QualityIntelligenceConfidence,
 } from "./coverageMap.js";
-export { QUALITY_INTELLIGENCE_COVERAGE_KINDS, assertCoverageMapInvariant } from "./coverageMap.js";
+export {
+  QUALITY_INTELLIGENCE_COVERAGE_KINDS,
+  assertCoverageMapInvariant,
+  isQualityIntelligenceConfidence,
+} from "./coverageMap.js";
 
 // ─── Validation finding ────────────────────────────────────────────────────────
 export type {
@@ -132,6 +138,7 @@ export {
 // ─── Run plan + events ─────────────────────────────────────────────────────────
 export type {
   QualityIntelligencePlannerKind,
+  QualityIntelligenceStageName,
   QualityIntelligenceRunStage,
   QualityIntelligenceRunPlan,
   QualityIntelligenceRunQueuedPayload,
@@ -153,6 +160,7 @@ export type {
 export {
   QUALITY_INTELLIGENCE_EVENT_SCHEMA_VERSION,
   QUALITY_INTELLIGENCE_PLANNER_KINDS,
+  QUALITY_INTELLIGENCE_STAGE_NAMES,
   QUALITY_INTELLIGENCE_RUN_EVENT_KINDS,
   assertRunEventSequenceMonotonic,
 } from "./runPlanAndEvents.js";
@@ -186,6 +194,7 @@ export type {
 export {
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,
+  QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST,
   assertExportBundleInvariant,
 } from "./exportBundle.js";
 
@@ -203,7 +212,11 @@ export type {
   QualityIntelligenceHandoffChatMessageRef,
   QualityIntelligenceConversationCenterHandoff,
 } from "./handoffEnvelope.js";
-export { QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS } from "./handoffEnvelope.js";
+export {
+  QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS,
+  QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS,
+  assertQualityIntelligenceConversationCenterHandoffInvariant,
+} from "./handoffEnvelope.js";
 
 // ─── Test-quality rubric (Epic #736, Issue #746) ─────────────────────────────
 export type {
@@ -231,7 +244,9 @@ export type {
   QualityIntelligenceUiDriftMetadata,
   QualityIntelligenceQualityDiagnostics,
   QualityIntelligenceUiCandidate,
+  QualityIntelligenceUiCandidateQualityVerdict,
   QualityIntelligenceInlineSourceKind,
+  QualityIntelligenceAdfNode,
   QualityIntelligenceRequirementsSource,
   QualityIntelligenceWorkspaceSource,
   QualityIntelligenceFileSource,
@@ -253,11 +268,13 @@ export type {
   QualityIntelligenceModelPreflightStageResult,
   QualityIntelligenceModelPreflightSummary,
   QualityIntelligenceModelStageFailure,
+  QualityIntelligenceTerminalDegradation,
   QualityIntelligenceModelRouting,
   QualityIntelligenceModelPolicyResponse,
   QualityIntelligenceModelPolicyPreflightRequest,
   QualityIntelligenceModelPolicyPreflightResponse,
   QualityIntelligenceStartRunRequest,
+  QualityIntelligenceErrorCode,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceSourceSummary,
   QualityIntelligenceRunStreamAccepted,
@@ -266,4 +283,11 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./bffWire.js";
-export { QUALITY_INTELLIGENCE_RUN_STATUSES } from "./bffWire.js";
+export {
+  QUALITY_INTELLIGENCE_RUN_STATUSES,
+  QUALITY_INTELLIGENCE_ERROR_CODES,
+  deriveQualityIntelligenceTerminalDegradation,
+  // KEIKO-0891: producer-side ceilings on the run-start request the browser must never widen.
+  QUALITY_INTELLIGENCE_MAX_RUN_SOURCES,
+  isQualityIntelligenceSeed,
+} from "./bffWire.js";

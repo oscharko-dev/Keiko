@@ -1,0 +1,8 @@
+{
+  "scenarioId": "issue-to-pr-autonomous-delivery",
+  "commitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "platform": "macos-arm64",
+  "testStatus": "passed",
+  "recordedAt": "2026-09-09T00:25:49.599Z",
+  "provenance": "real-model"
+}

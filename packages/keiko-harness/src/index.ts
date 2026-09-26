@@ -20,6 +20,7 @@ export {
   DEFAULT_LIMITS,
   HARNESS_CODES,
   TERMINAL_STATES,
+  isTerminalHarnessState,
   type EditorAgentTurnInput,
   type ExplainPlanInput,
   type GenerateUnitTestsInput,
@@ -94,3 +95,20 @@ export {
 export { resolveTaskPlan, type TaskPlan } from "./tasks/policy.js";
 
 export type { HarnessShaperInput, HarnessShaperPort } from "./shaper-port.js";
+
+export type {
+  HarnessCompactionInput,
+  HarnessCompactionPort,
+  HarnessCompactionResult,
+} from "./context-compaction-port.js";
+export type {
+  HarnessCatalogFactory,
+  HarnessCatalogContext,
+  HarnessToolExecutionEvidence,
+} from "./catalog-runtime.js";
+export type { HarnessBudgetContext } from "./catalog-budget.js";
+export { createLegacyPortCatalogFactory } from "./legacy-port-catalog.js";
+export {
+  createEditorAgentCatalogFactory,
+  editorAgentRegistrationSet,
+} from "./editor-agent-catalog.js";

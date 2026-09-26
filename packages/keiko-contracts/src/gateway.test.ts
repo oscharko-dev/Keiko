@@ -5,17 +5,28 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  isToolCallingVerificationFresh,
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  conversationDefaultRank,
+  electConversationDefault,
   describeVoiceProviderAvailability,
   explainConversationIneligibility,
+  preferredConversationModelOrder,
   INFILLING_ALIGNMENTS,
   isCompleteRealtimeVoiceCapability,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
   isConfiguredVoiceProvider,
   isConversationEligibleModel,
+  codingWorkbenchModelEligibility,
+  isCodingWorkbenchReadinessCandidate,
+  isCodingWorkbenchModel,
+  listCodingWorkbenchReadinessCandidates,
+  selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
+  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
   listVoicePersonas,
+  MODEL_COST_RANK,
   modelSupportsInfilling,
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
@@ -25,6 +36,10 @@ import {
   selectSpeechOutputCapability,
   VOICE_PERSONAS,
   VOICE_PROVIDER_LOCALITIES,
+  DECLARED_MODEL_MODES,
+  boundedUnsupportedReason,
+  isChatCompatibleDeclaredMode,
+  modelKindForDeclaredMode,
 } from "./gateway.js";
 import type {
   CompletionModelSelection,
@@ -42,6 +57,12 @@ function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
     contextWindow: 128_000,
     maxOutputTokens: 4_096,
     toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "test-fingerprint",
+    },
     structuredOutput: true,
     streaming: true,
     supportsImageInput: false,
@@ -55,6 +76,168 @@ function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
     ...overrides,
   };
 }
+
+describe("isCodingWorkbenchModel", () => {
+  // Customer report on 1.1.0: a LiteLLM gateway declares no coding label and no workflow flag, so
+  // every discovered model carried `workflowEligible: false` and `preferredUseCases: ["Chat"]`.
+  // The Coding Workbench offered none although each had passed the live forced tool-call probe.
+  it("accepts a discovered chat model once its tool calling is freshly verified", () => {
+    const discovered = cap({ workflowEligible: false, preferredUseCases: ["Chat"] });
+    expect(isCodingWorkbenchModel(discovered)).toBe(true);
+  });
+
+  it.each(["Coding", "Code review", "Non-coding", "Chat"])(
+    "does not gate on the use-case label %s",
+    (useCase) => {
+      expect(isCodingWorkbenchModel(cap({ preferredUseCases: [useCase] }))).toBe(true);
+    },
+  );
+
+  it("requires a chat model with tool calling", () => {
+    expect(isCodingWorkbenchModel(cap({ kind: "embedding" }))).toBe(false);
+    expect(isCodingWorkbenchModel(cap({ toolCalling: false }))).toBe(false);
+  });
+
+  it("keeps a chat model without a tool proof eligible for automatic verification", () => {
+    const candidate = cap({
+      preferredUseCases: ["Chat"],
+      workflowEligible: false,
+      toolCalling: false,
+      toolCallingVerification: undefined,
+    });
+
+    expect(isCodingWorkbenchReadinessCandidate(candidate)).toBe(true);
+    expect(isCodingWorkbenchModel(candidate)).toBe(false);
+    expect(isCodingWorkbenchReadinessCandidate(cap({ kind: "embedding" }))).toBe(false);
+  });
+
+  it("probes a coding-labelled model before a cheaper unlabelled one", () => {
+    const selected = selectCodingWorkbenchReadinessCandidate([
+      cap({ id: "chat-only", preferredUseCases: ["Chat"], costClass: "low" }),
+      cap({
+        id: "coding-expensive",
+        preferredUseCases: ["Coding"],
+        toolCalling: false,
+        toolCallingVerification: undefined,
+        costClass: "high",
+      }),
+      cap({
+        id: "coding-cheap",
+        preferredUseCases: ["Code review"],
+        toolCalling: false,
+        toolCallingVerification: undefined,
+        costClass: "medium",
+      }),
+    ]);
+
+    expect(selected?.id).toBe("coding-cheap");
+  });
+
+  it("orders candidates coding-labelled first, then by cost, keeping configuration order on ties", () => {
+    const candidates = listCodingWorkbenchReadinessCandidates([
+      cap({ id: "coding-high", preferredUseCases: ["Coding"], costClass: "high" }),
+      cap({ id: "coding-medium-a", preferredUseCases: ["Coding"], costClass: "medium" }),
+      cap({ id: "chat-only", preferredUseCases: ["Chat"], costClass: "low" }),
+      cap({ id: "coding-low", preferredUseCases: ["Code review"], costClass: "low" }),
+      cap({ id: "coding-medium-b", preferredUseCases: ["Coding"], costClass: "medium" }),
+      cap({ id: "embedding", kind: "embedding", costClass: "low" }),
+    ]);
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual([
+      "coding-low",
+      "coding-medium-a",
+      "coding-medium-b",
+      "coding-high",
+      "chat-only",
+    ]);
+  });
+
+  // A forced tool-call proof expires 24 h after its probe. Coding run 24 (2026-09-11) was admitted
+  // with a proof 3.5 min short of that age and lost its model mid-run (F73), so eligibility is
+  // judged as of an instant the caller names, and a stale proof has a name of its own.
+  it("judges the tool-calling proof as of the instant it is asked for", () => {
+    const checkedAt = Date.parse("2026-09-10T04:30:32.744Z");
+    const model = cap({
+      preferredUseCases: ["Coding"],
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date(checkedAt).toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+    const admitted = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 210_000;
+    const later = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 3_732;
+    expect(codingWorkbenchModelEligibility(model, { nowMs: admitted })).toBe("eligible");
+    expect(codingWorkbenchModelEligibility(model, { nowMs: later })).toBe(
+      "tool-calling-unverified",
+    );
+    expect(codingWorkbenchModelEligibility(cap({ kind: "embedding" }), { nowMs: admitted })).toBe(
+      "ineligible",
+    );
+  });
+
+  // 1.1.8 lab: the gateway config loader stores a proof that aged out, or one bound to another
+  // deployment configuration, as `toolCalling: false`. That model still claims tool calling and its
+  // remedy is a new probe; only a refuted or never concluded proof claims nothing.
+  it("reads a proof the loader demoted as one to renew", () => {
+    const checkedAt = Date.parse("2026-09-24T08:00:00.000Z");
+    const proof = (
+      status: "verified" | "unsupported" | "unverified",
+    ): ModelCapability["toolCallingVerification"] => ({
+      status,
+      checkedAt: new Date(checkedAt).toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "test-fingerprint",
+    });
+    const young = { nowMs: checkedAt + 60_000 };
+    const aged = { nowMs: checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 1 };
+    const demoted = cap({ toolCalling: false, toolCallingVerification: proof("verified") });
+
+    expect(codingWorkbenchModelEligibility(demoted, aged)).toBe("tool-calling-unverified");
+    expect(codingWorkbenchModelEligibility(demoted, young)).toBe("tool-calling-unverified");
+    expect(isCodingWorkbenchModel(demoted)).toBe(false);
+    expect(
+      codingWorkbenchModelEligibility(cap({ toolCallingVerification: proof("verified") }), young),
+    ).toBe("eligible");
+    for (const status of ["unsupported", "unverified"] as const) {
+      const refused = cap({ toolCalling: false, toolCallingVerification: proof(status) });
+      expect(codingWorkbenchModelEligibility(refused, young)).toBe("ineligible");
+    }
+    const neverProbed = cap({ toolCalling: false, toolCallingVerification: undefined });
+    expect(codingWorkbenchModelEligibility(neverProbed, young)).toBe("ineligible");
+    const embedding = cap({ kind: "embedding", toolCalling: false });
+    expect(codingWorkbenchModelEligibility(embedding, young)).toBe("ineligible");
+  });
+
+  // Coding run 25 (2026-09-11): the Coding Workbench builds its picker with
+  // `models.filter(isCodingWorkbenchModel)`. While the rule took an optional numeric instant,
+  // Array.filter handed it each element's index, so every model was judged as of the epoch and the
+  // picker offered none (F76).
+  it("keeps a model with a fresh proof when handed point-free to Array.filter", () => {
+    const fresh = cap({
+      preferredUseCases: ["Coding"],
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date(Date.now() - 60_000).toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+    expect([fresh, fresh].filter(isCodingWorkbenchModel)).toEqual([fresh, fresh]);
+    expect([fresh].map((model) => codingWorkbenchModelEligibility(model))).toEqual(["eligible"]);
+  });
+
+  it("refuses point-free use of the instant-taking rules at compile time", () => {
+    const pointFree = (models: readonly ModelCapability[]): unknown => [
+      // @ts-expect-error F76: Array.map would hand the element index to the instant parameter.
+      models.map(codingWorkbenchModelEligibility),
+      // @ts-expect-error F76: the proof's own freshness rule takes its instant the same way.
+      models.map((model) => model.toolCallingVerification).filter(isToolCallingVerificationFresh),
+    ];
+    expect(pointFree([])).toEqual([[], []]);
+  });
+});
 
 describe("INFILLING_ALIGNMENTS", () => {
   it("enumerates the three alignment postures", () => {
@@ -167,8 +350,13 @@ const voiceCap = (overrides: Partial<ModelCapability> = {}): ModelCapability =>
   });
 
 describe("VOICE_PROVIDER_LOCALITIES", () => {
-  it("enumerates the three provider localities", () => {
-    expect(VOICE_PROVIDER_LOCALITIES).toEqual(["azure-foundry", "customer-hosted", "local-only"]);
+  it("enumerates direct and gateway-managed provider localities", () => {
+    expect(VOICE_PROVIDER_LOCALITIES).toEqual([
+      "azure-foundry",
+      "customer-hosted",
+      "local-only",
+      "gateway-managed",
+    ]);
   });
 });
 
@@ -390,5 +578,206 @@ describe("describeVoiceProviderAvailability", () => {
       realtimeVoice: false,
       personas: [],
     });
+  });
+});
+
+// Customer field incident (0.3.11): a mode-less OCR model FIRST in the configured list captured
+// the "first eligible model wins" default for every new chat. The rank is the shared preference
+// the UI picker and the server default selection both consult.
+describe("conversationDefaultRank", () => {
+  it("ranks a declared chat-compatible mode first, even on a special-purpose id", () => {
+    expect(conversationDefaultRank(cap({ id: "qwen-chat", chatModeDeclared: true }))).toBe(0);
+    // Declared mode is the gateway's affirmative statement; it beats the id heuristic.
+    expect(conversationDefaultRank(cap({ id: "dotsocr", chatModeDeclared: true }))).toBe(0);
+  });
+
+  it("ranks a mode-less ordinary id in the middle tier", () => {
+    expect(conversationDefaultRank(cap({ id: "qwen-chat" }))).toBe(1);
+    expect(conversationDefaultRank(cap({ id: "llama-3-70b-instruct" }))).toBe(1);
+    // "ocr" embedded mid-token is not a suffix: no down-rank for lookalike names.
+    expect(conversationDefaultRank(cap({ id: "procreate-chat" }))).toBe(1);
+  });
+
+  it("ranks mode-less special-purpose ids last — the dotsocr field shape", () => {
+    expect(conversationDefaultRank(cap({ id: "dotsocr" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "dots.ocr" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "my-ocr-model" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "whisper-large-v3" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "bge-reranker-v2" }))).toBe(2);
+    // The documented marker set includes plain "speech" engines (review finding: the marker
+    // was documented but missing from the token set).
+    expect(conversationDefaultRank(cap({ id: "speech-to-text-general" }))).toBe(2);
+  });
+
+  it("treats an explicit chatModeDeclared: false like an absent signal", () => {
+    expect(conversationDefaultRank(cap({ id: "qwen-chat", chatModeDeclared: false }))).toBe(1);
+    expect(conversationDefaultRank(cap({ id: "dotsocr", chatModeDeclared: false }))).toBe(2);
+  });
+});
+
+describe("electConversationDefault", () => {
+  const observed = (m: ModelCapability): boolean | undefined => m.conversationReady;
+
+  it("lets a verified probe break ties only WITHIN the best rank tier", () => {
+    const models = [
+      cap({ id: "dotsocr", conversationReady: true }),
+      { ...cap({ id: "qwen-chat", chatModeDeclared: true }), conversationReady: undefined },
+    ];
+    // The warm special-purpose model is VERIFIED, the declared chat model is unprobed — the
+    // tier must win, or a single warm probe re-opens the default-capture the rank prevents.
+    expect(electConversationDefault(models, observed)?.id).toBe("qwen-chat");
+  });
+
+  it("prefers the verified model within the same tier", () => {
+    const models = [
+      { ...cap({ id: "mistral-small" }), conversationReady: undefined },
+      cap({ id: "llama-3-70b-instruct", conversationReady: true }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("llama-3-70b-instruct");
+  });
+
+  it("falls through an exhausted tier: observed-unready declared models yield to a verified fallback", () => {
+    // The walk journey: the declared chat model failed its probe (observed false) while the
+    // special-purpose model verified warm — chat must still work, so the verified fallback
+    // wins over an admission already known to fail.
+    const models = [
+      cap({ id: "dotsocr", conversationReady: true }),
+      cap({ id: "qwen-chat", chatModeDeclared: true, conversationReady: false }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("dotsocr");
+  });
+
+  it("returns the best-ranked head when everything is observed-unready, undefined when empty", () => {
+    const models = [
+      cap({ id: "dotsocr", conversationReady: false }),
+      cap({ id: "qwen-chat", chatModeDeclared: true, conversationReady: false }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("qwen-chat");
+    expect(electConversationDefault([], observed)).toBeUndefined();
+  });
+});
+
+describe("preferredConversationModelOrder", () => {
+  it("orders declared-mode models first and special-purpose ids last, keeping config order in ties", () => {
+    const models = [
+      cap({ id: "dotsocr" }),
+      cap({ id: "qwen-chat", chatModeDeclared: true }),
+      cap({ id: "mistral-small" }),
+      cap({ id: "llama-3-70b-instruct" }),
+    ];
+    expect(preferredConversationModelOrder(models).map((model) => model.id)).toEqual([
+      "qwen-chat",
+      "mistral-small",
+      "llama-3-70b-instruct",
+      "dotsocr",
+    ]);
+  });
+
+  it("is a preference, never an eligibility gate: a lone special-purpose model stays first", () => {
+    const models = [cap({ id: "dotsocr" })];
+    expect(preferredConversationModelOrder(models).map((model) => model.id)).toEqual(["dotsocr"]);
+  });
+
+  it("does not mutate its input", () => {
+    const models = [cap({ id: "dotsocr" }), cap({ id: "qwen-chat", chatModeDeclared: true })];
+    const snapshot = models.map((model) => model.id);
+    void preferredConversationModelOrder(models);
+    expect(models.map((model) => model.id)).toEqual(snapshot);
+  });
+});
+
+describe("modelKindForDeclaredMode", () => {
+  // A gateway's declared mode is the ONLY affirmative statement it makes about what a model IS.
+  // Keiko is model-agnostic: customers host arbitrary models, so a name may express a preference
+  // but never a role. Field incident: a "rerank" model named bge-reranker-v2-m3 was bound to every
+  // Knowledge Pod as its embedding model because the id contained "bge".
+  it("maps every chat-compatible mode onto chat", () => {
+    for (const mode of ["chat", "completion", "responses"]) {
+      expect(modelKindForDeclaredMode(mode)).toBe("chat");
+      expect(isChatCompatibleDeclaredMode(mode)).toBe(true);
+    }
+  });
+
+  it("maps the embedding mode onto embedding, and nothing else does", () => {
+    expect(modelKindForDeclaredMode("embedding")).toBe("embedding");
+    expect(isChatCompatibleDeclaredMode("embedding")).toBe(false);
+  });
+
+  it("refuses to give a role to modes discovery cannot configure", () => {
+    for (const mode of [
+      "rerank",
+      "image_generation",
+      "audio_transcription",
+      "audio_speech",
+      "moderation",
+    ]) {
+      expect(modelKindForDeclaredMode(mode)).toBe("unsupported");
+    }
+  });
+
+  it("treats an UNRECOGNISED declaration as unsupported, never as chat", () => {
+    // Guessing from the id here is exactly what the table exists to prevent: the gateway said the
+    // model is something specific, and Keiko does not know that something.
+    expect(modelKindForDeclaredMode("realtime")).toBe("unsupported");
+    expect(modelKindForDeclaredMode("vendor-private-mode")).toBe("unsupported");
+    expect(modelKindForDeclaredMode("")).toBe("unsupported");
+  });
+
+  it("normalises casing and surrounding whitespace", () => {
+    expect(modelKindForDeclaredMode("  EMBEDDING ")).toBe("embedding");
+    expect(modelKindForDeclaredMode("Chat")).toBe("chat");
+  });
+
+  it("does not resolve inherited object properties as modes", () => {
+    expect(modelKindForDeclaredMode("constructor")).toBe("unsupported");
+    expect(modelKindForDeclaredMode("toString")).toBe("unsupported");
+  });
+
+  it("exports exactly the vocabulary the role table defines", () => {
+    // Exact content, not membership: a membership loop passes for ANY list, so it could not catch
+    // a mode present in the union and the role table but missing from the exported array — which
+    // would silently degrade a KNOWN mode to "unrecognised-mode" in boundedUnsupportedReason.
+    expect([...DECLARED_MODEL_MODES]).toEqual([
+      "chat",
+      "completion",
+      "responses",
+      "embedding",
+      "rerank",
+      "image_generation",
+      "audio_transcription",
+      "audio_speech",
+      "moderation",
+    ]);
+  });
+
+  it("bounds every reason to the closed vocabulary", () => {
+    for (const mode of DECLARED_MODEL_MODES) {
+      expect(boundedUnsupportedReason(mode)).toBe(mode);
+    }
+    expect(boundedUnsupportedReason("vendor-private-mode")).toBe("unrecognised-mode");
+    expect(boundedUnsupportedReason("  REALTIME ")).toBe("unrecognised-mode");
+  });
+});
+
+describe("KEIKO-0545 — MODEL_COST_RANK is frozen", () => {
+  // MODEL_COST_RANK backs the cost-preference comparison used to pick between otherwise-equivalent
+  // model capabilities (see the "MODEL_COST_RANK[capability.costClass] < ..." selection below); a
+  // writable rank table would let a caller invert the low/medium/high ordering for the rest of the
+  // process. It is a flat Record<CostClass, number> with no nested objects/arrays, so a shallow
+  // Object.freeze fully protects it — deepFreeze is not required.
+
+  it("refuses a write to any rank entry", () => {
+    expect(Object.isFrozen(MODEL_COST_RANK)).toBe(true);
+    expect(() => {
+      (MODEL_COST_RANK as { low: number }).low = 5;
+    }).toThrow(TypeError);
+    expect(() => {
+      (MODEL_COST_RANK as { high: number }).high = -1;
+    }).toThrow(TypeError);
+  });
+
+  it("keeps the expected low < medium < high ordering", () => {
+    expect(MODEL_COST_RANK.low).toBeLessThan(MODEL_COST_RANK.medium);
+    expect(MODEL_COST_RANK.medium).toBeLessThan(MODEL_COST_RANK.high);
   });
 });

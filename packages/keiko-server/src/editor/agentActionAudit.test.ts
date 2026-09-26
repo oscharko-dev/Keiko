@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  classifyEditorAgentAction,
-  type EditorAgentActionPolicyDecision,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorAgentActionPolicyDecision } from "@oscharko-dev/keiko-contracts";
+import { classifyEditorAgentAction } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 import {
   _resetEditorAgentAuditForTests,
   listEditorAgentActionAudit,

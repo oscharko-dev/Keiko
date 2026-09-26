@@ -26,15 +26,19 @@ import type {
   VoiceCapabilityResolution,
   VoicePersona,
 } from "./types.js";
-import {
-  UNVERIFIED_GATEWAY,
-  deriveContextProfileFromCapability,
-  type CodingWorkbenchModelSource,
-  type CodingWorkbenchSidecarGatewayProjection,
-  type CodingWorkbenchSidecarGatewayResult,
-  type CodingWorkbenchSidecarGatewayUnavailableReason,
-  type GatewayVerificationState,
+import type {
+  CodingWorkbenchModelSource,
+  CodingWorkbenchSidecarGatewayProjection,
+  CodingWorkbenchSidecarGatewayResult,
+  CodingWorkbenchSidecarGatewayUnavailableReason,
+  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  codingWorkbenchModelEligibility,
+  isToolCallingVerificationFresh,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
   Map<string, VoiceCapabilityResolution>
@@ -72,13 +76,21 @@ export interface ResolveCodingSafeSidecarGatewayProfileOptions {
    * `unverified` — the fail-closed state — and never implies a healthy provider.
    */
   readonly gatewayVerification?: GatewayVerificationState | undefined;
+  /** Concrete provider model selected for this run. Omitted keeps deterministic default election. */
+  readonly modelId?: string | undefined;
+  /**
+   * The instant the model's tool-calling proof is judged at. An admitted run passes its admission
+   * (capability issuance) so a proof that ages out mid-run does not strand it (F73); omitted means
+   * now, which is what every new run is held to.
+   */
+  readonly verificationAtMs?: number | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
   if (capability.kind !== query.kind) {
     return false;
   }
-  if (query.toolCalling === true && !capability.toolCalling) {
+  if (query.toolCalling === true && !hasCurrentToolCallingVerification(capability)) {
     return false;
   }
   if (query.structuredOutput === true && !capability.structuredOutput) {
@@ -91,6 +103,12 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
     return false;
   }
   return true;
+}
+
+export function hasCurrentToolCallingVerification(capability: ModelCapability): boolean {
+  return (
+    capability.toolCalling && isToolCallingVerificationFresh(capability.toolCallingVerification)
+  );
 }
 
 export function assertConfiguredModel(config: ConfiguredCapabilitySource, modelId: string): void {
@@ -196,45 +214,34 @@ function codingSidecarProjection(
     runMetadata: {
       maxPromptTokens: contextProfile.maxInputTokens,
       maxOutputTokens: contextProfile.reservedOutputTokens,
-      maxInputMessages: 64,
-      maxRequestBytes: 64_000,
+      // OpenCode records multiple assistant/tool messages per user turn. The raw 1 MiB body cap
+      // remains the hard memory bound, while 512 permits native compaction to run before ordinary
+      // multi-turn coding sessions hit an unrelated record-count rejection.
+      maxInputMessages: 512,
+      // The wire envelope includes JSON-escaped tool transcripts and schemas. A 64 KB cap
+      // rejected ordinary coding context long before the separate prompt-token ceiling.
+      maxRequestBytes: 1_048_576,
     },
     verification,
   };
 }
 
-function normalizePreferredUseCase(useCase: string): string {
-  return useCase.trim().toLowerCase().replace(/\s+/g, "-");
-}
-
-function hasCodingPreferredUseCase(capability: ModelCapability): boolean {
-  return capability.preferredUseCases.some((useCase) => {
-    const normalized = normalizePreferredUseCase(useCase);
-    return (
-      normalized === "coding" ||
-      normalized === "code" ||
-      normalized === "software-development" ||
-      normalized === "code-review" ||
-      normalized.includes("coding")
-    );
-  });
-}
-
-function isCodingSafeSidecarCapability(capability: ModelCapability): boolean {
-  return (
-    capability.kind === "chat" &&
-    capability.toolCalling &&
-    capability.workflowEligible &&
-    hasCodingPreferredUseCase(capability)
-  );
+function eligibleAt(capability: ModelCapability, nowMs: number): boolean {
+  return codingWorkbenchModelEligibility(capability, { nowMs }) === "eligible";
 }
 
 function selectCodingSafeSidecarCapability(
   config: ConfiguredCapabilitySource,
+  modelId: string | undefined,
+  nowMs: number,
 ): ModelCapability | undefined {
+  if (modelId !== undefined) {
+    const selected = listConfiguredCapabilities(config).find((item) => item.id === modelId);
+    return selected !== undefined && eligibleAt(selected, nowMs) ? selected : undefined;
+  }
   let best: ModelCapability | undefined;
   for (const capability of listConfiguredCapabilities(config)) {
-    if (!isCodingSafeSidecarCapability(capability)) {
+    if (!eligibleAt(capability, nowMs)) {
       continue;
     }
     if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
@@ -259,12 +266,24 @@ function hasCredential(provider: ModelProviderConfig): boolean {
 // the same configuration.
 function unavailableReasonForSidecarConfig(
   config: GatewayConfig,
+  modelId: string | undefined,
+  nowMs: number,
 ): CodingWorkbenchSidecarGatewayUnavailableReason {
   const capabilities = listConfiguredCapabilities(config);
-  const chatCapabilities = capabilities.filter((capability) => capability.kind === "chat");
+  // F73: a coding model whose only gap is an aged-out tool-calling proof is named for that, never
+  // "non-coding-capable"; the operator's remedy is a new probe, not a different model.
+  const targeted =
+    modelId === undefined ? capabilities : capabilities.filter((item) => item.id === modelId);
   if (
-    chatCapabilities.some((capability) => capability.toolCalling && capability.workflowEligible)
+    targeted.some(
+      (capability) =>
+        codingWorkbenchModelEligibility(capability, { nowMs }) === "tool-calling-unverified",
+    )
   ) {
+    return "tool-calling-unverified";
+  }
+  const chatCapabilities = capabilities.filter((capability) => capability.kind === "chat");
+  if (chatCapabilities.some((capability) => capability.toolCalling)) {
     return "non-coding-capable";
   }
   if (capabilities.length === 0) {
@@ -273,13 +292,13 @@ function unavailableReasonForSidecarConfig(
   if (chatCapabilities.length === 0) {
     return "non-chat";
   }
-  // No chat capability is (toolCalling && workflowEligible) past this point: a chat model that can
-  // call tools is therefore blocked by workflow eligibility, and only a config whose chat models
-  // all lack tool calling reports the tool-calling gap.
-  if (chatCapabilities.some((capability) => capability.toolCalling)) {
-    return "non-workflow-eligible";
-  }
+  // No chat capability can call tools past this point, so the tool-calling gap is the reason.
   return "no-tool-calling";
+}
+
+// The instant a model's tool-calling proof is judged at: an admitted run's admission, else now.
+function verificationInstant(options: ResolveCodingSafeSidecarGatewayProfileOptions): number {
+  return options.verificationAtMs ?? Date.now();
 }
 
 export function resolveCodingSafeSidecarGatewayProfile(
@@ -295,9 +314,12 @@ export function resolveCodingSafeSidecarGatewayProfile(
   if (config === undefined || config.providers.length === 0) {
     return codingSidecarUnavailable("missing-config");
   }
-  const selected = selectCodingSafeSidecarCapability(config);
+  const verificationAtMs = verificationInstant(options);
+  const selected = selectCodingSafeSidecarCapability(config, options.modelId, verificationAtMs);
   if (selected === undefined) {
-    return codingSidecarUnavailable(unavailableReasonForSidecarConfig(config));
+    return codingSidecarUnavailable(
+      unavailableReasonForSidecarConfig(config, options.modelId, verificationAtMs),
+    );
   }
   const provider = providerFor(config, selected.id);
   if (provider === undefined) {

@@ -5,11 +5,8 @@ import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import {
-  DEFAULT_LSP_PROCESS_CONFIG,
-  type ManagedLspRustConfiguration,
-  type WorkspaceInfo,
-} from "@oscharko-dev/keiko-contracts";
+import type { ManagedLspRustConfiguration, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LSP_PROCESS_CONFIG } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 
 import { createLspProcessManager, type LspProcessManager } from "../lspProcessManager.js";
 import { RUST_OFFLINE_ENV, RUST_PROVIDER_SPEC, rustProtocolConfiguration } from "./rustProvider.js";
@@ -108,6 +105,7 @@ describe.skipIf(!provisioned)(suiteName, () => {
   function workspace(): WorkspaceInfo {
     return {
       root,
+      selectedRoot: root,
       name: undefined,
       version: undefined,
       testFramework: "unknown",

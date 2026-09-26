@@ -41,6 +41,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { readJsonFile } from "./lib/json.mjs";
 
 const DEFAULT_MATRIX = "docs/release/quality-intelligence-dependency-decision-matrix.md";
 
@@ -52,8 +53,28 @@ const FORBIDDEN_IMPORT_PATTERNS = ["@oscharko-dev/test-intelligence", "@oscharko
 // realistic way to reach `test-intelligence`/`ti-*` without the contiguous literal. `[^`/]*` keeps
 // the match inside the package-name segment, so legitimate dynamic SUBPATHS of statically-named
 // packages (`import(`@oscharko-dev/keiko-foo/${sub}`)`) are NOT flagged.
+//
+// KEIKO-0900: this pattern detects ONLY the template-literal interpolation form of dynamic-scope
+// evasion. String concatenation (`import("@oscharko-dev/" + pkg)`) and array-join obfuscation
+// (`import(["@oscharko-dev", pkg].join("/"))`) are not matched by this literal. The
+// FORBIDDEN_NONLITERAL_IMPORT_PATTERN below fires when the same file contains any dynamic
+// import()/require() whose ARGUMENT is not a static string literal AND the file text also
+// contains a token that could resolve to a forbidden namespace. Together these cover the three
+// realistic obfuscation shapes without flagging every dynamic import in the tree.
 const FORBIDDEN_DYNAMIC_SCOPE_PATTERN =
   /\b(?:import|require)\s*\(\s*`[^`]*@oscharko-dev\/[^`/]*\$\{/u;
+
+// A dynamic import/require whose argument is NOT a plain string/template literal. Match:
+//   import(<non-literal>)          require(<non-literal>)
+// Excluded: a bare string literal `"…"` or `'…'` or a plain template ``…`` with no `${` inside.
+const FORBIDDEN_NONLITERAL_IMPORT_PATTERN =
+  /\b(?:import|require)\s*\(\s*(?!['"`][^'"`]*['"`]\s*\))/u;
+
+// KEIKO-0900: a file that carries a token capable of resolving to a forbidden namespace under
+// runtime concatenation. `test-intelligence` and `@oscharko-dev/ti-` are the two literal
+// fragments known to reach the forbidden set; any file that both contains one of those and
+// makes a non-literal import/require is a plausible evasion.
+const FORBIDDEN_NAMESPACE_TOKEN_FRAGMENTS = ["test-intelligence", "@oscharko-dev/ti-"];
 
 const TELEMETRY_SUBSTRINGS = [
   "@sentry/",
@@ -77,14 +98,9 @@ const SCANNED_DEPENDENCY_SECTIONS = [
 ];
 
 // Manifest sections that determine what ships in the published `@oscharko-dev/keiko` runtime graph.
-// `devDependencies`/`peerDependencies` are deliberately excluded — they do not ship in the tarball.
+// Workspace peers are included separately because staging promotes them to the root manifest.
 const PUBLISHED_RUNTIME_SECTIONS = ["dependencies", "optionalDependencies"];
-
-// Namespaces exempt from the published-runtime completeness check (check 7). Workspace packages are
-// governed by the bundle contract (`check-package-surface.mjs`); `@types/*` packages are
-// declaration-only (no runtime JS, install hook, or network reach) so they carry no supply-chain
-// execution risk even when declared under `dependencies`.
-const COMPLETENESS_EXEMPT_PREFIXES = ["@oscharko-dev/", "@types/"];
+const PROMOTED_WORKSPACE_RUNTIME_SECTIONS = [...PUBLISHED_RUNTIME_SECTIONS, "peerDependencies"];
 
 const SOURCE_SCAN_ROOTS = [
   { dir: "src", recurse: true },
@@ -136,10 +152,6 @@ function safeStat(path) {
   } catch {
     return null;
   }
-}
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function listEntries(dir) {
@@ -226,6 +238,19 @@ function findForbiddenImportHits(files) {
     if (FORBIDDEN_DYNAMIC_SCOPE_PATTERN.test(content)) {
       hits.push({ file, pattern: "dynamic @oscharko-dev/ package-name import (template literal)" });
     }
+    // KEIKO-0900: string-concatenation and array-join obfuscation cases — flagged only when the
+    // file also carries a token fragment capable of assembling to a forbidden namespace, so a
+    // routine dynamic import unrelated to test-intelligence is not condemned.
+    if (
+      FORBIDDEN_NONLITERAL_IMPORT_PATTERN.test(content) &&
+      FORBIDDEN_NAMESPACE_TOKEN_FRAGMENTS.some((fragment) => content.includes(fragment))
+    ) {
+      hits.push({
+        file,
+        pattern:
+          "dynamic import()/require() with non-literal argument alongside a forbidden-namespace token",
+      });
+    }
   }
   return hits;
 }
@@ -250,7 +275,7 @@ function nameMatchesForbidden(name) {
 }
 
 function checkRootManifestForbidden(rootManifestPath) {
-  const manifest = readJson(rootManifestPath);
+  const manifest = readJsonFile(rootManifestPath);
   const hits = [];
   const sections = manifestDependencySections(manifest, SCANNED_DEPENDENCY_SECTIONS);
   for (const { section, names } of sections) {
@@ -274,7 +299,7 @@ function checkWorkspaceManifestForbidden(packagesDir) {
     if (!entry.isDirectory()) continue;
     const manifestPath = join(packagesDir, entry.name, "package.json");
     if (!safeStat(manifestPath)?.isFile()) continue;
-    const manifest = readJson(manifestPath);
+    const manifest = readJsonFile(manifestPath);
     const sections = manifestDependencySections(manifest, SCANNED_DEPENDENCY_SECTIONS);
     for (const { section, names } of sections) {
       for (const name of names) {
@@ -313,7 +338,7 @@ function lifecycleHitsFromScripts(label, scripts) {
 function checkLifecycleHooks(rootManifestPath, packagesDir) {
   const hits = [];
   for (const { label, path } of listAllManifestPaths(rootManifestPath, packagesDir)) {
-    const manifest = readJson(path);
+    const manifest = readJsonFile(path);
     hits.push(...lifecycleHitsFromScripts(label, manifest.scripts));
   }
   return hits;
@@ -343,7 +368,7 @@ function telemetryHitsForManifest(label, manifest) {
 function checkTelemetryStrings(rootManifestPath, packagesDir) {
   const hits = [];
   for (const { label, path } of listAllManifestPaths(rootManifestPath, packagesDir)) {
-    hits.push(...telemetryHitsForManifest(label, readJson(path)));
+    hits.push(...telemetryHitsForManifest(label, readJsonFile(path)));
   }
   return hits;
 }
@@ -401,7 +426,7 @@ function addDependencyNamesFromManifest(manifest, seen) {
 function collectAllManifestDependencyNames(rootManifestPath, packagesDir) {
   const seen = new Set();
   for (const { path } of listAllManifestPaths(rootManifestPath, packagesDir)) {
-    addDependencyNamesFromManifest(readJson(path), seen);
+    addDependencyNamesFromManifest(readJsonFile(path), seen);
   }
   return seen;
 }
@@ -467,47 +492,69 @@ function checkMatrixConsistency(matrixPath, rootManifestPath, packagesDir) {
 
 // --- Check 7: published-runtime completeness (fail-closed on unapproved dependencies) ---
 
-function isCompletenessExempt(name) {
-  for (const prefix of COMPLETENESS_EXEMPT_PREFIXES) {
-    if (name.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-function externalRuntimeNamesFromManifest(manifest) {
+function externalRuntimeNamesFromManifest(manifest, runtimeWorkspaceNames, sections) {
   const entries = [];
-  for (const section of PUBLISHED_RUNTIME_SECTIONS) {
+  for (const section of sections) {
     const value = manifest[section];
     if (value && typeof value === "object" && !Array.isArray(value)) {
       for (const name of Object.keys(value)) {
-        if (!isCompletenessExempt(name)) entries.push({ name, section });
+        if (!runtimeWorkspaceNames.has(name)) entries.push({ name, section });
       }
     }
   }
   return entries;
 }
 
+function validatedRuntimeWorkspaceNames(bundled, packagesDir) {
+  const names = new Set();
+  for (const fullName of bundled) {
+    if (typeof fullName !== "string" || !/^@oscharko-dev\/keiko-[a-z0-9-]+$/u.test(fullName)) {
+      throw new Error(
+        `bundleDependencies entry is not a reviewed runtime workspace: ${String(fullName)}`,
+      );
+    }
+    const shortName = fullName.slice("@oscharko-dev/".length);
+    const manifestPath = join(packagesDir, shortName, "package.json");
+    if (!safeStat(manifestPath)?.isFile()) {
+      throw new Error(`bundled runtime workspace manifest is missing: ${fullName}`);
+    }
+    const manifest = readJsonFile(manifestPath);
+    if (manifest.name !== fullName) {
+      throw new Error(`bundled runtime workspace manifest name does not match: ${fullName}`);
+    }
+    names.add(fullName);
+  }
+  return names;
+}
+
 // The published runtime surface = the root manifest's runtime/optional deps plus the runtime/optional
-// deps of every `bundleDependencies` workspace package — those are the only manifests whose declared
-// externals are packed into the published tarball. Returns name -> { label, section } of the first
-// manifest that declared it.
+// deps of every workspace in the reviewed runtime inventory. Those manifests are packed into staged
+// vendor archives. Returns name -> { label, section } of the first manifest that declared it.
 function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
-  const rootManifest = readJson(rootManifestPath);
+  const rootManifest = readJsonFile(rootManifestPath);
   const collected = new Map();
   const add = (name, label, section) => {
     if (!collected.has(name)) collected.set(name, { label, section });
   };
-  for (const { name, section } of externalRuntimeNamesFromManifest(rootManifest)) {
-    add(name, "<root>", section);
-  }
   const bundled = Array.isArray(rootManifest.bundleDependencies)
     ? rootManifest.bundleDependencies
     : [];
+  const runtimeWorkspaceNames = validatedRuntimeWorkspaceNames(bundled, packagesDir);
+  for (const { name, section } of externalRuntimeNamesFromManifest(
+    rootManifest,
+    runtimeWorkspaceNames,
+    PUBLISHED_RUNTIME_SECTIONS,
+  )) {
+    add(name, "<root>", section);
+  }
   for (const fullName of bundled) {
     const shortName = fullName.replace(/^@oscharko-dev\//, "");
     const manifestPath = join(packagesDir, shortName, "package.json");
-    if (!safeStat(manifestPath)?.isFile()) continue;
-    for (const { name, section } of externalRuntimeNamesFromManifest(readJson(manifestPath))) {
+    for (const { name, section } of externalRuntimeNamesFromManifest(
+      readJsonFile(manifestPath),
+      runtimeWorkspaceNames,
+      PROMOTED_WORKSPACE_RUNTIME_SECTIONS,
+    )) {
       add(name, shortName, section);
     }
   }

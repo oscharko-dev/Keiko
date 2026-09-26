@@ -9,19 +9,19 @@
 
 import { createHash } from "node:crypto";
 
-import {
-  HARNESS_VERSION,
-  redactAbsolutePaths,
-  type ContextCommandOutcome,
-  type ContextCompactionModelSummary,
-  type ContextCompactionRecord,
-  type ContextInvalidationKey,
-  type ContextPreservedFact,
-  type ContextProvenanceRef,
-  type ContextAssumption,
-  type ContextUserConstraint,
-  type CostClass,
+import type {
+  ContextCommandOutcome,
+  ContextCompactionModelSummary,
+  ContextCompactionRecord,
+  ContextInvalidationKey,
+  ContextPreservedFact,
+  ContextProvenanceRef,
+  ContextAssumption,
+  ContextUserConstraint,
+  CostClass,
 } from "@oscharko-dev/keiko-contracts";
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
+import { redactAbsolutePaths } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
 import { persistEvidenceManifest } from "./persist.js";
@@ -204,6 +204,12 @@ function redactRehydration(
     ...(handle.evidenceAtomId === undefined
       ? {}
       : { evidenceAtomId: redactedPathSafe(handle.evidenceAtomId, redact) }),
+    // KEIKO-0328: preserve the persisted tool-result artifact id. Body-free (opaque hash-like
+    // identifier), so it's safe to keep; load-bearing for the `kind: "tool-result"` rehydration
+    // path — without it the audit trail terminates at a dangling pointer.
+    ...(handle.artifactId === undefined
+      ? {}
+      : { artifactId: redactedPathSafe(handle.artifactId, redact) }),
     ...(handle.notPersistedReason === undefined
       ? {}
       : { notPersistedReason: redactedPathSafe(handle.notPersistedReason, redact) }),

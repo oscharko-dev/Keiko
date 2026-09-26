@@ -141,7 +141,11 @@ function buildRegistrar(): FakeRegistrar {
     registrar: {
       registerDefinitionProvider: (selector): { dispose: () => void } => {
         registered.push(selector);
-        return { dispose: (): void => void (disposed += 1) };
+        return {
+          dispose: (): void => {
+            disposed += 1;
+          },
+        };
       },
     },
     registered: () => registered,

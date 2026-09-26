@@ -8,7 +8,7 @@ import type { ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessEvent } from "./types.js";
 import { CommandDeniedError } from "@oscharko-dev/keiko-tools";
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
-import { response, toolCall, buildContext } from "./_support.js";
+import { response, toolCall, buildContext, prepareToolResponse } from "./_support.js";
 
 const COMMAND_SANDBOX = {
   envAllowlist: ["PATH", "TZ"],
@@ -61,6 +61,7 @@ describe("executor — S-M1 command:executed audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "run_command")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     const emitted = eventsOfType(sink.events(), "command:executed");
     expect(emitted).toHaveLength(1);
@@ -95,6 +96,7 @@ describe("executor — S-M1 command:executed audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "run_command")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     const emitted = eventsOfType(sink.events(), "sandbox:configured");
     expect(emitted).toHaveLength(1);
@@ -130,6 +132,7 @@ describe("executor — S-M1 command:executed audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "run_command")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     const e = eventsOfType(sink.events(), "command:executed")[0];
     expect(e?.exitCode).toBeNull();
@@ -151,6 +154,7 @@ describe("executor — S-M1 patch:applied audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "apply_patch")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     const emitted = eventsOfType(sink.events(), "patch:applied");
     expect(emitted).toHaveLength(1);
@@ -172,6 +176,7 @@ describe("executor — S-M1 no metadata, no audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "read_file")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     expect(eventsOfType(sink.events(), "command:executed")).toHaveLength(0);
     expect(eventsOfType(sink.events(), "sandbox:configured")).toHaveLength(0);
@@ -193,6 +198,7 @@ describe("executor — S-M1 no metadata, no audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "run_command")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     expect(eventsOfType(sink.events(), "command:executed")).toHaveLength(0);
     expect(eventsOfType(sink.events(), "sandbox:configured")).toHaveLength(0);
@@ -213,6 +219,7 @@ describe("executor — S-M1 no metadata, no audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "run_command")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     expect(eventsOfType(sink.events(), "tool:call:failed")[0]?.errorCode).toBe(
       "TOOL_COMMAND_DENIED",
@@ -234,6 +241,7 @@ describe("executor — S-M1 no metadata, no audit event", () => {
       finishReason: "tool_calls",
       toolCalls: [toolCall("c1", "read_file")],
     });
+    prepareToolResponse(ctx);
     await handleToolCall(ctx);
     expect(eventsOfType(sink.events(), "tool:call:failed")[0]?.errorCode).toBe(
       "WORKSPACE_PATH_DENIED",

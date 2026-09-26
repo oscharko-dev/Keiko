@@ -12,6 +12,7 @@
 import {
   closeSync,
   fsyncSync,
+  linkSync,
   readdirSync,
   readFileSync,
   openSync,
@@ -21,13 +22,14 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { sortedStrings } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { replaceViaDurableTempFile } from "./durable-write.js";
+import { PostRenameFsyncError, replaceViaDurableTempFile } from "./durable-write.js";
 import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
 import {
   existingOwnedDirectory,
+  isSingleLinkRegularFile,
   prepareOwnedDirectory,
   removeOwnedRunDirectory,
 } from "./fs-safety.js";
@@ -141,15 +143,12 @@ function isManifestName(name: string): boolean {
   }
 }
 
-function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
-  try {
-    const stat = fs.stat(path);
-    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot inspect evidence manifest: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+function toManifestInspectionError(message: string): Error {
+  return new EvidenceReadError(`cannot inspect evidence manifest: ${message}`);
+}
+
+function isSingleLinkManifest(path: string, fs: WorkspaceFs): boolean {
+  return isSingleLinkRegularFile(path, fs, toManifestInspectionError);
 }
 
 function listManifestRunIds(
@@ -173,7 +172,7 @@ function listManifestRunIds(
         entry.isSymbolicLink() ||
         !entry.isFile() ||
         !isManifestName(entry.name) ||
-        !isSingleLinkRegularFile(join(realBase, entry.name), fs)
+        !isSingleLinkManifest(join(realBase, entry.name), fs)
       ) {
         continue;
       }
@@ -196,6 +195,15 @@ function atomicWrite(target: string, json: string, randomSuffix: () => string): 
     // rename so the rename discipline is durable across power loss.
     replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
+    // A PostRenameFsyncError means the content IS durable on the target: only the parent-dir
+    // metadata fsync failed. Route it through a distinct message so a caller reading the error
+    // does not conclude "nothing was written", and skip the rmSync (the temp was already renamed
+    // away). See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `evidence write parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `evidence write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -208,7 +216,7 @@ function assertWritableLedgerEntry(target: string, fs: WorkspaceFs): void {
   if (entry === undefined) {
     return;
   }
-  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || !isSingleLinkManifest(target, fs)) {
     throw new EvidenceWriteError("cannot overwrite a non-ledger evidence manifest");
   }
 }
@@ -253,7 +261,7 @@ function getManifest(baseDir: string, fs: WorkspaceFs, runId: string): string | 
     if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
       return undefined;
     }
-    if (!isSingleLinkRegularFile(target, fs)) {
+    if (!isSingleLinkManifest(target, fs)) {
       return undefined;
     }
     return readFileSync(target, "utf8");
@@ -303,41 +311,71 @@ function lockOwnerIsDead(lockPath: string): boolean {
   }
 }
 
-function acquireManifestLock(realBase: string, runId: string): () => void {
-  assertValidRunId(runId);
-  assertLockFilenameFits(runId);
-  const lockPath = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_LOCK_SUFFIX}`);
-  const deadline = Date.now() + MANIFEST_LOCK_TIMEOUT_MS;
-  let fd: number | undefined;
+// Stages the owner PID in a per-attempt file, fsynced before it is ever linked into place. Content
+// is byte-identical to the original writeLockOwnerPid output ("<pid>\n") so readLockOwnerPid/
+// lockOwnerIsDead (unchanged, per doNot) and the "stamps the acquiring PID" pin need no changes.
+function stageLockOwnerPid(tempPath: string): string {
+  const stamp = `${String(process.pid)}\n`;
+  const fd = openSync(tempPath, "wx");
+  try {
+    writeSync(fd, stamp);
+    fsyncSync(fd);
+    return stamp;
+  } finally {
+    closeSync(fd);
+  }
+}
 
-  while (fd === undefined) {
+// Publishing the lock by hard-linking an already-stamped file is atomic and EEXIST-fails exactly
+// like `openSync(lockPath, "wx")` did, but the lock is NEVER observably present-yet-unstamped.
+// That in-between state is indistinguishable from a crashed writer's abandoned lock, so the fast
+// reclaim above would delete a lock whose live owner had simply not finished acquiring it, and let
+// two processes into the same critical section (a silent lost update, not a torn file).
+function publishManifestLock(realBase: string, lockPath: string, deadline: number): string {
+  for (;;) {
+    // A fixed-length staging name (not `<lockPath>.<uuid>`) keeps the filename inside the POSIX
+    // limit for every runId the lock name itself admits, so a long runId cannot surface an
+    // ENAMETOOLONG carrying the absolute path (CWE-209, guarded above for the lock itself).
+    const tempPath = resolveWithinWorkspace(realBase, `.${randomUUID()}.pidtmp`);
     try {
-      fd = openSync(lockPath, "wx");
+      const stamp = stageLockOwnerPid(tempPath);
+      linkSync(tempPath, lockPath);
+      return stamp;
     } catch (error) {
       if (retryManifestLock(error, lockPath, deadline)) continue;
       throw new EvidenceWriteError(
         `evidence update lock failed: ${error instanceof Error ? error.message : "unknown"}`,
       );
+    } finally {
+      rmSync(tempPath, { force: true });
     }
   }
+}
 
-  writeLockOwnerPid(fd);
+function acquireManifestLock(realBase: string, runId: string): () => void {
+  assertValidRunId(runId);
+  assertLockFilenameFits(runId);
+  const lockPath = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_LOCK_SUFFIX}`);
+  const deadline = Date.now() + MANIFEST_LOCK_TIMEOUT_MS;
+  const ownedStamp = publishManifestLock(realBase, lockPath, deadline);
+
   return (): void => {
+    // Release only while the lock's content is still the stamp we published. Removing by path
+    // alone would drop a process that legitimately reclaimed this lock (as dead-owned or stale)
+    // out of its own critical section — and comparing by inode instead of content would not: a
+    // deleted inode can be reused by the very next create on the same path, so two genuinely
+    // different lock files could transiently share an inode number. A lock we decline to remove
+    // here is not stranded: the dead-owner and mtime-staleness reclaims still recover it.
+    let current: string | undefined;
     try {
-      closeSync(fd);
-    } finally {
+      current = readFileSync(lockPath, "utf8");
+    } catch {
+      current = undefined;
+    }
+    if (current === ownedStamp) {
       rmSync(lockPath, { force: true });
     }
   };
-}
-
-function writeLockOwnerPid(fd: number): void {
-  try {
-    writeSync(fd, `${String(process.pid)}\n`);
-    fsyncSync(fd);
-  } catch {
-    // Best-effort ownership stamp: if the write fails the lock still works via mtime staleness.
-  }
 }
 
 function retryManifestLock(error: unknown, lockPath: string, deadline: number): boolean {
@@ -377,7 +415,7 @@ function readManifestForUpdate(target: string, fs: WorkspaceFs): string | undefi
     if (entry === undefined) {
       return undefined;
     }
-    if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+    if (!entry.isFile() || !isSingleLinkManifest(target, fs)) {
       throw new EvidenceWriteError("cannot update a non-ledger evidence manifest");
     }
     return readFileSync(target, "utf8");
@@ -419,7 +457,7 @@ function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): void {
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return;
   }
-  if (!isSingleLinkRegularFile(target, fs)) {
+  if (!isSingleLinkManifest(target, fs)) {
     return;
   }
   rmSync(target, { force: true });

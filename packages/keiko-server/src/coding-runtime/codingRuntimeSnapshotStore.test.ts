@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DatabaseSync } from "node:sqlite";
-import { runMigrations } from "../store/schema.js";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
+import type {
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchOperatorDecision,
+} from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_OPERATOR_DECISIONS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { restoreV13SchemaFixture } from "../store/legacySchemaTestFixture.js";
+import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "../store/schema.js";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshot,
@@ -36,7 +43,115 @@ function store(): ReturnType<typeof createCodingRuntimeSnapshotStore> {
   return createCodingRuntimeSnapshotStore(db);
 }
 
+const ISSUE_BINDING: CodingWorkbenchIssueBinding = {
+  schemaVersion: "1",
+  repositoryId: "repository-0123456789abcdef",
+  remoteDigest: "1".repeat(64),
+  issueNumber: 3385,
+  issueIdDigest: "2".repeat(64),
+  defaultBaseRef: "dev",
+  contentRevisionDigest: "3".repeat(64),
+  bindingDigest: "4".repeat(64),
+};
+
+// The seven v22 columns, in migration order. Content-free by construction: an id the task workspace
+// already derives, four digests, a number and a branch name — never a title, body, URL or remote.
+const ISSUE_COLUMNS = [
+  "issue_repository_id",
+  "issue_remote_digest",
+  "issue_number",
+  "issue_id_digest",
+  "issue_default_base_ref",
+  "issue_content_revision_digest",
+  "issue_binding_digest",
+] as const;
+
+// A V29-shaped row, written directly. `createCodingRuntimeSnapshotStore` prepares its statements
+// against the HEAD column set, so it cannot be constructed against an older schema at all — the
+// assertion at the end of this test states exactly that. Only the NOT NULL columns are given; every
+// later column this test cares about is set by the UPDATE that follows.
+function seedV29Row(db: DatabaseSync): void {
+  const s = snapshot();
+  db.prepare(
+    `INSERT INTO coding_runtime_snapshots (
+       run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+       created_at, updated_at, task_digest, workspace_digest, operator_digest, authority_digest,
+       binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+       issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+       issue_default_base_ref, issue_content_revision_digest, issue_binding_digest
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    s.runId,
+    s.schemaVersion,
+    s.state,
+    s.revision,
+    s.requestedMode,
+    s.runtimeSource,
+    s.modelSource,
+    s.createdAt,
+    s.updatedAt,
+    s.taskDigest,
+    s.workspaceDigest,
+    s.operatorDigest,
+    s.authorityDigest,
+    s.bindingDigest,
+    s.provenanceDigest,
+    s.toolCallCount,
+    s.patchByteCount,
+    s.modelRequestCount,
+    ISSUE_BINDING.repositoryId,
+    ISSUE_BINDING.remoteDigest,
+    ISSUE_BINDING.issueNumber,
+    ISSUE_BINDING.issueIdDigest,
+    ISSUE_BINDING.defaultBaseRef,
+    ISSUE_BINDING.contentRevisionDigest,
+    ISSUE_BINDING.bindingDigest,
+  );
+}
+
+function columnNames(db: DatabaseSync): readonly string[] {
+  return (
+    db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+  ).map((row) => row.name);
+}
+
 describe("CodingRuntimeSnapshotStore", () => {
+  it("preserves v29 identity and receipt columns while adding the issue failure code", () => {
+    const db = new DatabaseSync(":memory:");
+    for (const migration of MIGRATIONS.filter((entry) => entry.version <= 29)) {
+      db.exec(migration.sql);
+      migration.apply?.(db);
+    }
+    db.exec("PRAGMA user_version = 29");
+    seedV29Row(db);
+    db.exec(`UPDATE coding_runtime_snapshots SET
+      verified_commit_result = '{}', draft_delivery_record = '{}',
+      draft_delivery_source_receipt = '{}', last_successful_verified_commit = '{}',
+      ci_readiness_record = '{}', ci_observation_revision = 7`);
+    // The columns THIS schema version has, read from the database rather than restated: what the
+    // pin protects is that no later migration drops one or rewrites its value. Comparing whole rows
+    // instead would also fail on a migration that only ADDS a column, which is not the regression
+    // this test exists for and which V34 legitimately does.
+    const v29Columns = columnNames(db);
+    const before = db.prepare("SELECT * FROM coding_runtime_snapshots").get();
+    runMigrations(db);
+    const after = db.prepare("SELECT * FROM coding_runtime_snapshots").get();
+    for (const column of v29Columns) {
+      expect({ [column]: after?.[column] }).toEqual({ [column]: before?.[column] });
+    }
+    expect(columnNames(db)).toEqual(expect.arrayContaining([...v29Columns]));
+    expect(() => {
+      db.exec(`UPDATE coding_runtime_snapshots
+      SET failure_code = 'issue-context-unavailable'`);
+    }).not.toThrow();
+    expect(() => {
+      db.exec(`UPDATE coding_runtime_snapshots
+      SET failure_code = 'unknown-failure'`);
+    }).toThrow(/CHECK/u);
+    expect(() => createCodingRuntimeSnapshotStore(db).create(snapshot("run-2"))).toThrow();
+    db.close();
+  });
+
   it("round-trips only the bounded terminal process result", () => {
     const s = store();
     s.create(snapshot());
@@ -52,19 +167,48 @@ describe("CodingRuntimeSnapshotStore", () => {
     expect(JSON.stringify(s.get("run-1"))).not.toContain("stdout body");
   });
 
+  // #2906 round-3 review (KEIKO-0532): coding_runtime_snapshots.failure_code is a hand-maintained
+  // CHECK constraint copy of CODING_WORKBENCH_RUNTIME_FAILURE_CODES. A contract literal the
+  // constraint does not also list makes an otherwise-valid terminal transition fail with
+  // SQLITE_CONSTRAINT instead of recording the failure. Round-trip every literal so the two lists
+  // are pinned in sync, not just the ones a hand-picked example happens to cover.
+  it("round-trips every CODING_WORKBENCH_RUNTIME_FAILURE_CODES literal as a terminal failure_code", () => {
+    for (const failureCode of CODING_WORKBENCH_RUNTIME_FAILURE_CODES) {
+      const s = store();
+      s.create(snapshot());
+      const failed = s.transition("run-1", {
+        state: "failed",
+        revision: 1,
+        updatedAt: at,
+        failureCode,
+      });
+      expect(failed.failureCode).toBe(failureCode);
+      expect(s.get("run-1")?.failureCode).toBe(failureCode);
+    }
+  });
+
   it("persists only lifecycle snapshots and holds the recovery slot after acknowledgement", () => {
     const s = store();
     s.create(snapshot());
     expect(s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z")).toEqual(["run-1"]);
-    expect(s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z").state).toBe(
-      "recovery-required",
-    );
+    // Recovery #3390: acknowledgement is itself an observable lifecycle mutation on the row — a
+    // poller or SSE catch-up reading the same revision back must see the acknowledgement as new
+    // fact, not a same-revision no-op. `recoveryAcknowledgedAt` alone advancing with the revision
+    // frozen at 1 (the last `markNonterminalRecoveryRequired` bump) was the exact defect: a caller
+    // diffing on revision alone never observed the acknowledgement at all.
+    const acknowledged = s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+    expect(acknowledged).toMatchObject({
+      state: "recovery-required",
+      revision: 2,
+      updatedAt: "2026-07-13T10:02:00.000Z",
+      recoveryAcknowledgedAt: "2026-07-13T10:02:00.000Z",
+    });
     expect(() => s.create(snapshot("run-2"))).toThrow();
     const released = s.releaseRecoveryForRetry("run-1", "2026-07-13T10:03:00.000Z");
     expect(released).toMatchObject({
       state: "recovery-required",
       terminalAt: "2026-07-13T10:03:00.000Z",
-      revision: 2,
+      revision: 3,
     });
     expect(s.create(snapshot("run-2")).runId).toBe("run-2");
     expect(s.get("run-1")).toEqual(released);
@@ -78,6 +222,118 @@ describe("CodingRuntimeSnapshotStore", () => {
       "acknowledged recovery runtime snapshot was not found",
     );
   });
+
+  it("atomically admits a successor from an acknowledged recovery slot", () => {
+    const s = store();
+    s.create(snapshot());
+    s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+    s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+
+    const successor = {
+      ...snapshot("run-2"),
+      createdAt: "2026-07-13T10:03:00.000Z",
+      updatedAt: "2026-07-13T10:03:00.000Z",
+      predecessorRunId: "run-1",
+    } satisfies CodingRuntimeSnapshot;
+    expect(s.create(successor)).toEqual(successor);
+    expect(s.get("run-1")).toMatchObject({
+      state: "recovery-required",
+      terminalAt: "2026-07-13T10:03:00.000Z",
+      revision: 3,
+    });
+    expect(s.listRecentActive()).toEqual([successor]);
+  });
+
+  it("admits a linked successor without rewriting an ordinary terminal predecessor", () => {
+    const s = store();
+    s.create(snapshot());
+    const failed = s.transition("run-1", {
+      state: "failed",
+      revision: 1,
+      updatedAt: "2026-07-13T10:01:00.000Z",
+      terminalAt: "2026-07-13T10:01:00.000Z",
+    });
+
+    expect(
+      s.create({
+        ...snapshot("run-2"),
+        createdAt: "2026-07-13T10:02:00.000Z",
+        updatedAt: "2026-07-13T10:02:00.000Z",
+        predecessorRunId: "run-1",
+      }).predecessorRunId,
+    ).toBe("run-1");
+    expect(s.get("run-1")).toEqual(failed);
+  });
+
+  it("admits a linked successor from an acknowledged recovery row released earlier", () => {
+    const s = store();
+    s.create(snapshot());
+    s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+    s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+    const released = s.releaseRecoveryForRetry("run-1", "2026-07-13T10:03:00.000Z");
+    const successor = {
+      ...snapshot("run-2"),
+      createdAt: "2026-07-13T10:04:00.000Z",
+      updatedAt: "2026-07-13T10:04:00.000Z",
+      predecessorRunId: "run-1",
+    } satisfies CodingRuntimeSnapshot;
+
+    expect(s.create(successor)).toEqual(successor);
+    expect(s.get("run-1")).toEqual(released);
+  });
+
+  it("refuses a linked successor from an unacknowledged recovery slot", () => {
+    const s = store();
+    s.create(snapshot());
+    const recovering = s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+
+    expect(() =>
+      s.create({
+        ...snapshot("run-2"),
+        createdAt: "2026-07-13T10:02:00.000Z",
+        updatedAt: "2026-07-13T10:02:00.000Z",
+        predecessorRunId: "run-1",
+      }),
+    ).toThrow("acknowledged recovery runtime snapshot was not found");
+    expect(s.listRecentActive().map(({ runId }) => runId)).toEqual(recovering);
+    expect(s.get("run-2")).toBeUndefined();
+  });
+
+  it.each(["recovery-required", "running"] as const)(
+    "does not treat a terminal timestamp alone as released %s authority",
+    (state) => {
+      const s = store();
+      const prior = { ...snapshot(), state, terminalAt: at };
+      s.create(prior);
+
+      expect(() => s.create({ ...snapshot("run-2"), predecessorRunId: prior.runId })).toThrow(
+        "predecessor runtime snapshot was not settled",
+      );
+      expect(s.get(prior.runId)).toEqual(prior);
+      expect(s.get("run-2")).toBeUndefined();
+    },
+  );
+
+  it("retains the acknowledged recovery slot when successor insertion fails", () => {
+    const s = store();
+    s.create(snapshot("run-2"));
+    s.transition("run-2", { state: "succeeded", revision: 1, updatedAt: at, terminalAt: at });
+    s.create(snapshot());
+    s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+    const acknowledged = s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z");
+
+    expect(() =>
+      s.create({
+        ...snapshot("run-2"),
+        createdAt: "2026-07-13T10:03:00.000Z",
+        updatedAt: "2026-07-13T10:03:00.000Z",
+        predecessorRunId: "run-1",
+      }),
+    ).toThrow();
+    expect(s.get("run-1")).toEqual(acknowledged);
+    expect(s.listRecentActive()).toEqual([acknowledged]);
+  });
+
   it("prunes oldest settled entries in one bounded transaction", () => {
     const s = store();
     for (let i = 0; i < 10_001; i += 1) {
@@ -169,5 +425,415 @@ describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
     expect(s.get("run-1")).toBeDefined();
     s.deletePruned([]);
     expect(s.get("run-1")).toBeDefined();
+  });
+});
+
+describe("pauseReason persistence (schema v34)", () => {
+  // Owner review, PR #3452: `markNonterminalRecoveryRequired` writes `state` by raw SQL and used to
+  // leave `pause_reason` behind, so a run paused for an operator decision when the process restarted
+  // became a row `assertSnapshot` refuses on the very next read — which is `startupReconcileNow`'s
+  // own `listRecentActive`, so the BFF would not have come up. The restart path must clear the
+  // reason like every other state change, and every later read of the row must work.
+  it("clears pauseReason when a restart marks a paused run recovery-required", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    s.transition("run-1", {
+      state: "paused",
+      revision: 2,
+      updatedAt: at,
+      pauseReason: "workspace-script-trust",
+    });
+
+    expect(s.markNonterminalRecoveryRequired("2026-07-13T10:00:01.000Z")).toEqual(["run-1"]);
+
+    expect(() => s.listRecentActive(1)).not.toThrow();
+    expect(s.get("run-1")).toMatchObject({ state: "recovery-required" });
+    expect(s.get("run-1")?.pauseReason).toBeUndefined();
+    const row = db
+      .prepare("SELECT pause_reason FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { pause_reason: string | null };
+    expect(row.pause_reason).toBeNull();
+    expect(() => s.acknowledgeRecovery("run-1", "2026-07-13T10:00:02.000Z")).not.toThrow();
+    db.close();
+  });
+
+  // A `running` -> `paused` transition is the only legal path into `paused` from this fixture's
+  // initial `starting` state (mirrors "persists the paused state through a running round-trip"
+  // above). `pauseReason` must round-trip through both the in-memory snapshot and the persisted
+  // `pause_reason` column, not only the object the store happens to keep around.
+  it("round-trips a pauseReason through a running -> paused transition, including the persisted column", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    const paused = s.transition("run-1", {
+      state: "paused",
+      revision: 2,
+      updatedAt: at,
+      pauseReason: "workspace-script-trust",
+    });
+
+    expect(paused.pauseReason).toBe("workspace-script-trust");
+    expect(s.get("run-1")?.pauseReason).toBe("workspace-script-trust");
+    const row = db
+      .prepare("SELECT pause_reason FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { pause_reason: string | null };
+    expect(row.pause_reason).toBe("workspace-script-trust");
+    db.close();
+  });
+
+  // The pin that matters most: `transition()` WRITES `pauseReason: transition.pauseReason` rather
+  // than merging it in, so a later transition that omits the field must clear a previously set
+  // reason instead of letting `...current` carry it forward into every later state forever.
+  it("clears pauseReason when a paused run transitions away from paused", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    s.transition("run-1", {
+      state: "paused",
+      revision: 2,
+      updatedAt: at,
+      pauseReason: "workspace-script-trust",
+    });
+
+    const resumed = s.transition("run-1", { state: "running", revision: 3, updatedAt: at });
+
+    expect(resumed.pauseReason).toBeUndefined();
+    expect(s.get("run-1")?.pauseReason).toBeUndefined();
+    const row = db
+      .prepare("SELECT pause_reason FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { pause_reason: string | null };
+    expect(row.pause_reason).toBeNull();
+    db.close();
+  });
+
+  it("rejects a pauseReason on a transition to a non-paused state", () => {
+    const s = store();
+    s.create(snapshot());
+
+    expect(() =>
+      s.transition("run-1", {
+        state: "running",
+        revision: 1,
+        updatedAt: at,
+        pauseReason: "workspace-script-trust",
+      }),
+    ).toThrow("pauseReason is only valid while paused");
+  });
+
+  // Same shape as "round-trips every CODING_WORKBENCH_RUNTIME_FAILURE_CODES literal as a terminal
+  // failure_code" above: the vocabulary is derived from the contract constant, never restated, so a
+  // future-widened vocabulary is covered by this test without an edit here.
+  it("round-trips every CODING_WORKBENCH_OPERATOR_DECISIONS literal as a pauseReason while paused", () => {
+    for (const pauseReason of CODING_WORKBENCH_OPERATOR_DECISIONS) {
+      const s = store();
+      s.create(snapshot());
+      s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+      const paused = s.transition("run-1", {
+        state: "paused",
+        revision: 2,
+        updatedAt: at,
+        pauseReason,
+      });
+      expect(paused.pauseReason).toBe(pauseReason);
+      expect(s.get("run-1")?.pauseReason).toBe(pauseReason);
+    }
+  });
+
+  it("rejects a pauseReason outside the closed CODING_WORKBENCH_OPERATOR_DECISIONS vocabulary", () => {
+    const s = store();
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+
+    expect(() =>
+      s.transition("run-1", {
+        state: "paused",
+        revision: 2,
+        updatedAt: at,
+        pauseReason: "not-a-real-operator-decision" as CodingWorkbenchOperatorDecision,
+      }),
+    ).toThrow("invalid pauseReason");
+  });
+});
+
+describe("issue-bound snapshots (#3385, schema v22)", () => {
+  it("round-trips the content-free issue binding and keeps it through transitions and recovery", () => {
+    const s = store();
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+
+    expect(s.get("run-1")?.issueBinding).toEqual(ISSUE_BINDING);
+    expect(s.listRecentActive(1)[0]?.issueBinding).toEqual(ISSUE_BINDING);
+    expect(
+      s.transition("run-1", { state: "running", revision: 1, updatedAt: at }).issueBinding,
+    ).toEqual(ISSUE_BINDING);
+    expect(s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z")).toEqual(["run-1"]);
+    const recovered = s.get("run-1");
+    expect(recovered?.state).toBe("recovery-required");
+    expect(recovered?.issueBinding).toEqual(ISSUE_BINDING);
+    expect(s.listAll(1)[0]?.issueBinding).toEqual(ISSUE_BINDING);
+  });
+
+  it("persists no issue columns for a generic run", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+
+    expect(s.get("run-1")?.issueBinding).toBeUndefined();
+    expect("issueBinding" in (s.get("run-1") ?? {})).toBe(false);
+    const row = db
+      .prepare(`SELECT ${ISSUE_COLUMNS.join(", ")} FROM coding_runtime_snapshots WHERE run_id = ?`)
+      .get("run-1") as Record<string, unknown>;
+    for (const column of ISSUE_COLUMNS) expect(row[column], column).toBeNull();
+  });
+
+  it("refuses a malformed issue binding field by field", () => {
+    const rejected: readonly Partial<Record<keyof CodingWorkbenchIssueBinding, unknown>>[] = [
+      { schemaVersion: "2" },
+      { repositoryId: "" },
+      { repositoryId: "../escape" },
+      { repositoryId: "a".repeat(129) },
+      { remoteDigest: "not-a-digest" },
+      { remoteDigest: "A".repeat(64) },
+      { issueNumber: 0 },
+      { issueNumber: 2.5 },
+      { issueNumber: 1_000_000_001 },
+      { issueIdDigest: "2".repeat(63) },
+      { defaultBaseRef: "" },
+      { defaultBaseRef: "dev branch" },
+      { defaultBaseRef: "feature/../x" },
+      { defaultBaseRef: "-dev" },
+      { contentRevisionDigest: 42 },
+      { bindingDigest: "4".repeat(65) },
+    ];
+    for (const override of rejected) {
+      const s = store();
+      expect(
+        () =>
+          s.create({
+            ...snapshot(),
+            issueBinding: { ...ISSUE_BINDING, ...override } as CodingWorkbenchIssueBinding,
+          }),
+        JSON.stringify(override),
+      ).toThrow(/issue/u);
+      expect(s.get("run-1")).toBeUndefined();
+    }
+  });
+
+  it("fails closed on a partially persisted issue binding row instead of projecting a generic run", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    db.exec("UPDATE coding_runtime_snapshots SET issue_number = NULL WHERE run_id = 'run-1'");
+
+    expect(() => s.get("run-1")).toThrow(/issue binding/u);
+    expect(() => s.listRecentActive(1)).toThrow(/issue binding/u);
+  });
+
+  // D9-style migration pin: forward-only in production, and the reverse fixture must remove exactly
+  // what v22 added so a v13 database migrates to the same shape a fresh one has.
+  it("adds the seven issue columns forward-only and the legacy fixture removes them", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const fresh = columnNames(db);
+    for (const column of ISSUE_COLUMNS) expect(fresh, column).toContain(column);
+
+    restoreV13SchemaFixture(db);
+    const legacy = columnNames(db);
+    for (const column of ISSUE_COLUMNS) expect(legacy, column).not.toContain(column);
+
+    runMigrations(db);
+    expect(columnNames(db)).toEqual(fresh);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(
+      SCHEMA_VERSION,
+    );
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    expect(s.get("run-1")?.issueBinding).toEqual(ISSUE_BINDING);
+  });
+
+  it("retains context identity across store reconstruction without a delivery binding", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    createCodingRuntimeSnapshotStore(db).create({
+      ...snapshot(),
+      issueContextBinding: ISSUE_BINDING,
+    });
+    const restored = createCodingRuntimeSnapshotStore(db).get("run-1");
+    expect(restored?.issueContextBinding).toEqual(ISSUE_BINDING);
+    expect(restored?.issueBinding).toBeUndefined();
+    expect(() =>
+      createCodingRuntimeSnapshotStore(db).create({
+        ...snapshot(),
+        runId: "conflicting",
+        issueBinding: ISSUE_BINDING,
+        issueContextBinding: ISSUE_BINDING,
+      }),
+    ).toThrow("mutually exclusive");
+    expect(() => {
+      db.exec("UPDATE coding_runtime_snapshots SET issue_purpose = 'unknown'");
+    }).toThrow(/CHECK/u);
+    db.close();
+  });
+
+  it("holds the SQL bounds on every issue column, not only the store's own validation", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    for (const [column, value] of [
+      ["issue_repository_id", "''"],
+      ["issue_remote_digest", "'abc'"],
+      ["issue_number", "0"],
+      ["issue_number", "1000000001"],
+      ["issue_id_digest", `'${"x".repeat(65)}'`],
+      ["issue_default_base_ref", "''"],
+      ["issue_content_revision_digest", "'short'"],
+      ["issue_binding_digest", "'short'"],
+    ] as const) {
+      expect(() => {
+        db.exec(`UPDATE coding_runtime_snapshots SET ${column} = ${value} WHERE run_id = 'run-1'`);
+      }, `${column}=${value}`).toThrow(/CHECK/u);
+    }
+  });
+});
+
+function commitReceipt(): import("@oscharko-dev/keiko-contracts").VerifiedCommitResult {
+  return {
+    schemaVersion: "1",
+    proposalId: "commit-1",
+    runId: "run-1",
+    envelopeDigest: "b".repeat(64),
+    runtimeAuthorityDigest: digest,
+    workspaceDigest: digest,
+    repositoryDigest: "c".repeat(64),
+    baseSha: "1".repeat(40),
+    parentSha: "2".repeat(40),
+    stagedTreeDigest: "d".repeat(64),
+    verificationEvidenceId: "verification-1",
+    messageDigest: "e".repeat(64),
+    status: "recovery-required",
+    reason: "execution-uncertain",
+    recordedAt: at,
+  };
+}
+
+describe("verified commit persistence (#3386, schema v23)", () => {
+  it("round-trips the closed receipt through recovery without saving a live approval", () => {
+    const s = store();
+    s.create(snapshot());
+    const receipt = commitReceipt();
+    expect(s.recordVerifiedCommit(receipt).verifiedCommitResult).toEqual(receipt);
+    s.markNonterminalRecoveryRequired(at);
+    expect(s.get("run-1")?.verifiedCommitResult).toEqual(receipt);
+    expect(JSON.stringify(s.get("run-1"))).not.toContain("approvalToken");
+  });
+  // #3384 batch-1 B5-6: a verified-commit write mutates a column that IS part of the public
+  // snapshot, so it must advance revision/updated_at exactly like acknowledge/releaseRecovery do --
+  // otherwise a poller or SSE catch-up sees a same-revision no-op and misses the write.
+  it("advances revision and updated_at on a verified-commit write", () => {
+    const s = store();
+    s.create(snapshot());
+    const before = s.get("run-1");
+    if (before === undefined) throw new Error("expected snapshot");
+    const recordedAt = "2026-07-13T10:05:00.000Z";
+    const after = s.recordVerifiedCommit(commitReceipt(), recordedAt);
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.updatedAt).toBe(recordedAt);
+    expect(s.get("run-1")?.revision).toBe(before.revision + 1);
+    expect(s.get("run-1")?.updatedAt).toBe(recordedAt);
+  });
+  // #3384 batch-1 B3-6: the write is now a compare-and-swap on the exact prior bytes this call
+  // observed. Simulate a second writer racing in between this call's internal prior-row read and
+  // its own UPDATE (propose/execute/reconcile can all reach this path with no upstream mutex) by
+  // injecting a conflicting write at the moment the UPDATE statement is prepared -- the bound
+  // parameters were already computed from the pre-race read, so the CAS predicate must now refuse
+  // the write instead of silently overwriting it.
+  it("rejects a concurrent verified-commit write racing between its read and its write", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.recordVerifiedCommit(commitReceipt());
+    const originalPrepare: DatabaseSync["prepare"] = db.prepare.bind(db);
+    const isVerifiedCommitUpdate = (sql: string): boolean =>
+      sql.includes("SET verified_commit_result = ?") && sql.includes("revision = revision + 1");
+    db.prepare = (sql: string): StatementSync => {
+      if (isVerifiedCommitUpdate(sql))
+        originalPrepare(
+          "UPDATE coding_runtime_snapshots SET verified_commit_result = ? WHERE run_id = ?",
+        ).run(JSON.stringify({ ...commitReceipt(), proposalId: "commit-raced" }), "run-1");
+      return originalPrepare(sql);
+    };
+    try {
+      expect(() => s.recordVerifiedCommit({ ...commitReceipt(), proposalId: "commit-2" })).toThrow(
+        "concurrent verified commit update",
+      );
+    } finally {
+      db.prepare = originalPrepare;
+      db.close();
+    }
+  });
+  it.each([
+    "approvalToken",
+    "approval",
+    "command",
+    "args",
+    "env",
+    "message",
+    "output",
+    "diff",
+    "path",
+    "secret",
+  ])("rejects hostile %s on write, initial create, and persisted read", (field) => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    const hostile = { ...commitReceipt(), [field]: { body: "private fixture" } };
+    expect(() => s.create({ ...snapshot(), verifiedCommitResult: hostile })).toThrow(
+      "invalid verified commit",
+    );
+    s.create(snapshot());
+    expect(() => s.recordVerifiedCommit(hostile)).toThrow("invalid verified commit");
+    expect(s.get("run-1")?.verifiedCommitResult).toBeUndefined();
+    db.prepare("UPDATE coding_runtime_snapshots SET verified_commit_result = ?").run(
+      JSON.stringify(hostile),
+    );
+    expect(() => s.get("run-1")).toThrow("invalid persisted verified commit");
+    db.close();
+  });
+  it("refuses nested-body substitution and mismatched accepted run bindings", () => {
+    const s = store();
+    s.create(snapshot());
+    for (const change of [
+      { messageDigest: { secret: "private fixture" } },
+      { workspaceDigest: "0".repeat(64) },
+      { runtimeAuthorityDigest: "0".repeat(64) },
+      { issueBindingDigest: "0".repeat(64) },
+      { runId: "run-2" },
+    ]) {
+      const value = {
+        ...commitReceipt(),
+        ...change,
+      } as import("@oscharko-dev/keiko-contracts").VerifiedCommitResult;
+      expect(() => s.recordVerifiedCommit(value)).toThrow();
+    }
+    expect(s.get("run-1")?.verifiedCommitResult).toBeUndefined();
+  });
+  it("enforces bounded valid JSON in SQLite as well as the typed persistence boundary", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    createCodingRuntimeSnapshotStore(db).create(snapshot());
+    const update = db.prepare("UPDATE coding_runtime_snapshots SET verified_commit_result = ?");
+    expect(() => update.run("not-json")).toThrow();
+    expect(() => update.run(JSON.stringify({ body: "x".repeat(8192) }))).toThrow();
+    db.close();
   });
 });

@@ -21,12 +21,14 @@ export type {
   Clock,
   CostClass,
   FinishReason,
+  GatewayBrandingConfig,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -44,6 +46,7 @@ export type {
   StreamDelta,
   StreamEvent,
   ToolDefinition,
+  ToolCallingVerification,
   UsageMetadata,
   VoicePersona,
   VoicePersonaVoice,
@@ -51,11 +54,13 @@ export type {
   GatewaySamplingParameterIssue,
   GatewaySamplingParameterName,
   GatewaySamplingParameters,
+  ModelReasoningEffort,
 } from "./types.js";
 
 export {
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
+  MODEL_REASONING_EFFORTS,
   assertValidGatewaySamplingParameters,
   isValidGatewaySamplingParameters,
   isValidGatewayTemperature,
@@ -107,15 +112,30 @@ export {
 
 export { CAPABILITY_DATA } from "./capabilities.data.js";
 
+// Endpoint-protocol wire values live in the contract seam (#3037 follow-up); re-exported here so
+// gateway consumers keep one import surface.
+export {
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+
 export {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
+  DEFAULT_COOLDOWN_MS,
+  DEFAULT_FAILURE_THRESHOLD,
+  DEFAULT_HALF_OPEN_PROBES,
+  GATEWAY_CONFIG_SCHEMA_VERSION,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
   resolveOutboundHttpEgressConfig,
+  resolvePrDescriptionBrandingFromConfig,
+  toolCallingConfigurationFingerprint,
   toSafeObject,
+  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
   validateBaseUrl,
   type EnvSource,
   type ParseGatewayConfigOptions,
@@ -124,7 +144,40 @@ export {
   type SafeRerankerConfig,
 } from "./config.js";
 
-export { Gateway, type GatewayDeps } from "./gateway.js";
+// The ONE env-only Model Gateway provider-admission formula (config.ts's own comment on it):
+// appended here rather than folded into the export block above so this file stays append-only
+// for this addition (KEIKO-final-audit F13/F24).
+export { hasConfiguredEnvModelProvider } from "./config.js";
+
+export {
+  Gateway,
+  type GatewayCallRequest,
+  type GatewayDeps,
+  type GatewaySpendBudget,
+  type GatewaySpendReservation,
+} from "./gateway.js";
+
+// The caller-supplied correlation context a `GatewayCallRequest` may carry (ADR-0173 D5). Exported
+// so a `ModelPort`/`ChatModel` caller outside this package can build one without reaching past the
+// public surface into `./observability.js` directly.
+export { type ModelGatewayLogContext } from "./observability.js";
+
+// The provider-specific detail (HTTP status, server-supplied retry-after) a `ProviderError`/
+// `RateLimitError` already types and redacts at construction (ADR-0173 D5 g26). Exported so the
+// keiko-server diagnostic call sites that turn a GatewayError into an HTTP/SSE response can fold
+// the same detail into their operator diagnostic that `resilience.ts`'s own retry lines already
+// carry, instead of re-deriving it from the error a second time.
+export { providerErrorDetail, type ProviderErrorDetail } from "./resilience.js";
+
+// Fetch-seam and Clock replay doubles (ADR-0173 D5, §7.3): deterministic reconstruction of a
+// gateway call's retry/circuit-breaker behaviour from a scripted HTTP transcript, one layer below
+// `createScriptedModelPort` (`@oscharko-dev/keiko-evaluations`).
+export {
+  createScriptedGatewayClock,
+  createScriptedGatewayFetch,
+  type GatewayClockScript,
+  type GatewayReplayScriptEntry,
+} from "./replay.js";
 
 export {
   requestGatewayReadinessChatCompletion,
@@ -185,11 +238,8 @@ export {
   isRealtimeVoice,
   requestRealtimeNegotiation,
   resolveRealtimeVoice,
-  type RealtimeFunctionTool,
   type RealtimeVoice,
   type RealtimeSessionType,
-  type RealtimeSessionTool,
-  type RealtimeSessionToolChoice,
   type RealtimeTranscriptionDelay,
   type RealtimeNegotiationErrorKind,
   type RealtimeNegotiationOutcome,
@@ -285,3 +335,8 @@ export type {
 // deterministic planner, the structured generator, the provider-neutral renderers, and the validate
 // primitives used by the workflow's optional model-assisted refinement stage.
 export * as PromptEnhancer from "./promptEnhancer/index.js";
+export * as PrDescription from "./prDescription/index.js";
+
+export { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
+export { ResponseRedactionError } from "./openai-adapter.js";
+export type { GatewayToolCatalogBridge } from "./toolCatalogBridge.js";

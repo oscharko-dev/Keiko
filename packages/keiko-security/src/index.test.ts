@@ -5,6 +5,8 @@
 // "stable public surface" guarantee load-bearing.
 
 import { describe, it, expect } from "vitest";
+
+import { createRequire } from "node:module";
 import {
   KEIKO_SECURITY_VERSION,
   redact,
@@ -35,8 +37,29 @@ import {
   RedactingError,
   DIR_MODE,
   FILE_MODE,
+  MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
+  MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
+  SAFE_ARTIFACT_CLASSES,
+  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
+  SafeArtifactFileError,
+  acknowledgeSafeArtifactFileSet,
   ensureDirHardened,
   chmodIfPresent,
+  openSafeArtifactFile,
+  publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
+  replaceSafeArtifactFile,
+  safeArtifactContainmentAssurance,
+  safeArtifactPermissionAssurance,
+  safeArtifactPublicationSlot,
+  verifySafeArtifactFileDescriptor,
+  bindSecurityLogCorrelation,
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+  WINDOWS_ATOMIC_RENAME_RETRY_CODES,
+  WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS,
+  atomicPublishRename,
+  atomicPublishTreeSwap,
+  withCwdOutsideTree,
   SqliteQuickCheckError,
   sqliteErrorLike,
   sqliteErrorText,
@@ -44,9 +67,15 @@ import {
   errorRecord,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-security package surface", () => {
-  it("exposes the version constant pinned at 0.1.0", () => {
-    expect(KEIKO_SECURITY_VERSION).toBe("0.2.15");
+  it("exposes the version constant pinned at the package version", () => {
+    expect(KEIKO_SECURITY_VERSION).toBe(packageVersion);
   });
 
   it("exposes the redaction primitives as callable functions", () => {
@@ -120,8 +149,33 @@ describe("keiko-security package surface", () => {
   it("exposes the shared fs-hardening primitives", () => {
     expect(DIR_MODE).toBe(0o700);
     expect(FILE_MODE).toBe(0o600);
+    expect(MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES).toBeLessThanOrEqual(
+      MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
+    );
     expect(typeof ensureDirHardened).toBe("function");
     expect(typeof chmodIfPresent).toBe("function");
+    expect(SAFE_ARTIFACT_CLASSES).toContain("activity-log");
+    expect(SAFE_ARTIFACT_FILE_FAILURE_KINDS).toContain("unsafe-target");
+    expect(typeof SafeArtifactFileError).toBe("function");
+    expect(typeof openSafeArtifactFile).toBe("function");
+    expect(typeof verifySafeArtifactFileDescriptor).toBe("function");
+    expect(typeof publishSafeArtifactFileSet).toBe("function");
+    expect(typeof recoverSafeArtifactFileSet).toBe("function");
+    expect(typeof acknowledgeSafeArtifactFileSet).toBe("function");
+    expect(typeof safeArtifactPublicationSlot).toBe("function");
+    expect(typeof replaceSafeArtifactFile).toBe("function");
+    expect(typeof safeArtifactContainmentAssurance).toBe("function");
+    expect(typeof safeArtifactPermissionAssurance).toBe("function");
+  });
+
+  it("exposes the shared atomic-publish rename primitives", () => {
+    expect(typeof atomicPublishRename).toBe("function");
+    expect(typeof atomicPublishTreeSwap).toBe("function");
+    expect(typeof withCwdOutsideTree).toBe("function");
+    expect([...WINDOWS_ATOMIC_RENAME_RETRY_CODES]).toEqual(["EBUSY", "EPERM"]);
+    expect([...WINDOWS_ATOMIC_RENAME_BACKOFF_MS]).toEqual([0, 20, 40, 80, 160, 320]);
+    expect([...WINDOWS_ATOMIC_RENAME_STATE_FILE_BACKOFF_MS]).toEqual([0, 20, 40]);
+    expect(typeof bindSecurityLogCorrelation).toBe("function");
   });
 
   it("exposes the shared SQLite corruption classifier", () => {

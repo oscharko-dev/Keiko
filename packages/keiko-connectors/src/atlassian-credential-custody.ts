@@ -25,6 +25,10 @@
 
 import { randomBytes } from "node:crypto";
 import { Buffer } from "node:buffer";
+import type {
+  AtlassianConnectorAuthScheme,
+  AtlassianConnectorProvider,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CONNECTOR_AUTH_REF_PREFIX,
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
@@ -32,9 +36,7 @@ import {
   isAtlassianConnectorProvider,
   isSafeAtlassianConnectorBaseUrl,
   isSafeAtlassianDisplayName,
-  type AtlassianConnectorAuthScheme,
-  type AtlassianConnectorProvider,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 
 // ─── Bounds for the credential material itself (hostile-input guards) ─────────
@@ -44,6 +46,13 @@ import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault
 export const ATLASSIAN_ACCOUNT_EMAIL_MAX_CHARS = 254;
 export const ATLASSIAN_API_TOKEN_MIN_CHARS = 8;
 export const ATLASSIAN_API_TOKEN_MAX_CHARS = 1024;
+
+// Defense-in-depth cap on the number of stored Atlassian credentials/connectors (KEIKO-0826). An
+// independently-appropriate limit for this resource — not shared with, or derived from, the
+// unrelated pending-approval registry cap (ATLASSIAN_ACTION_APPROVAL_MAX_PENDING in
+// keiko-server's actionApprovals.ts), which bounds a different resource with a different natural
+// size. A handful to a few dozen configured connectors is the realistic ceiling for any tenant.
+export const ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES = 64;
 
 const ACCOUNT_EMAIL_PATTERN = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u;
 const API_TOKEN_PATTERN = /^[\x21-\x7E]+$/u;
@@ -71,7 +80,8 @@ export type AtlassianCredentialCustodyErrorCode =
   | "unsupported-auth-scheme"
   | "credential-not-found"
   | "credential-unreadable"
-  | "vault-unavailable";
+  | "vault-unavailable"
+  | "credential-limit-exceeded";
 
 // Fixed, content-free messages per code. Field-level `details` name FIELDS only, never values.
 const CUSTODY_ERROR_MESSAGES: Readonly<Record<AtlassianCredentialCustodyErrorCode, string>> = {
@@ -81,6 +91,7 @@ const CUSTODY_ERROR_MESSAGES: Readonly<Record<AtlassianCredentialCustodyErrorCod
   "credential-not-found": "Atlassian connector credential is not available.",
   "credential-unreadable": "Atlassian connector credential could not be read from custody.",
   "vault-unavailable": "Atlassian connector credential vault operation failed.",
+  "credential-limit-exceeded": "Atlassian connector credential storage limit has been reached.",
 };
 
 export class AtlassianCredentialCustodyError extends Error {
@@ -229,6 +240,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Total order over metadata rows: createdAt ascending, then authRef ascending by code unit
+// (matching adf-to-text.ts's compareByCodeUnit convention — deliberately not localeCompare, for
+// locale-independent, byte-identical output). Exported package-internally (not part of the public
+// barrel) so its equal-case behavior is independently testable: a two-way ternary tie-breaker
+// previously reported compare(a, a) === 1 (KEIKO-0810) instead of 0, which is not a valid total
+// order and risks an implementation-defined Array.prototype.sort outcome.
+export function compareAtlassianCredentialMetadata(
+  left: AtlassianCredentialMetadata,
+  right: AtlassianCredentialMetadata,
+): number {
+  if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+  if (left.authRef < right.authRef) return -1;
+  if (left.authRef > right.authRef) return 1;
+  return 0;
+}
+
 const CREATE_INPUT_KEYS: ReadonlySet<string> = new Set([
   "provider",
   "displayName",
@@ -348,6 +375,14 @@ function createCredential(
   input: unknown,
 ): AtlassianCredentialMetadata {
   const validated = validateCreateInput(input);
+  // Fail closed once the storage cap is reached (KEIKO-0826), before the vault write — a caller
+  // who can already reach the credential-creation route must not be able to grow the vault
+  // unboundedly. Deliberately not folded into validateCreateInput: that function validates the
+  // untrusted payload SHAPE only; the count check needs deps.metadataStore, which only this
+  // function has in scope.
+  if (deps.metadataStore.list().length >= ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES) {
+    throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+  }
   const authRef = mintAuthRef();
   const metadata: AtlassianCredentialMetadata = {
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
@@ -388,7 +423,12 @@ function resolveForExecution(
     throw new AtlassianCredentialCustodyError("credential-not-found");
   }
   const metadata = deps.metadataStore.get(authRef);
-  if (metadata === undefined) {
+  // Re-validate the metadata read back from the injected store (KEIKO-0894), mirroring
+  // parseSecretEnvelope's re-validation of the vault side just below: the store is expected to
+  // only ever hold what `create` wrote, but a tainted record — hand-edited, corrupted, or written
+  // by a future store implementation that skips the key allowlist — must never resolve a
+  // credential. Indistinguishable from "never existed": no oracle for which case occurred.
+  if (metadata === undefined || !isAtlassianCredentialMetadata(metadata)) {
     throw new AtlassianCredentialCustodyError("credential-not-found");
   }
   const sealed = vaultOp(() => deps.vault.get(authRef));
@@ -408,13 +448,23 @@ export function createAtlassianCredentialCustody(
   const now = deps.now ?? ((): number => Date.now());
   const custody: AtlassianCredentialCustody = {
     create: (input: unknown): AtlassianCredentialMetadata => createCredential(deps, now, input),
-    getMetadata: (authRef: string): AtlassianCredentialMetadata | undefined =>
-      isAtlassianConnectorAuthRef(authRef) ? deps.metadataStore.get(authRef) : undefined,
+    // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that
+    // resolves to a record failing the key allowlist is indistinguishable from one that was never
+    // stored.
+    getMetadata: (authRef: string): AtlassianCredentialMetadata | undefined => {
+      if (!isAtlassianConnectorAuthRef(authRef)) return undefined;
+      const raw = deps.metadataStore.get(authRef);
+      return raw !== undefined && isAtlassianCredentialMetadata(raw) ? raw : undefined;
+    },
+    // list() is UI-facing (the credentials panel), so a tainted record is silently DROPPED rather
+    // than failing the whole call closed: one corrupted row must not hide every other legitimate
+    // credential from the UI, and this mirrors getMetadata's per-item "not there" posture above
+    // rather than treating the entire list as unreadable (KEIKO-0894 — this is the documented
+    // choice the finding asked for).
     list: (): readonly AtlassianCredentialMetadata[] =>
-      [...deps.metadataStore.list()].sort(
-        (left, right) =>
-          left.createdAt - right.createdAt || (left.authRef < right.authRef ? -1 : 1),
-      ),
+      [...deps.metadataStore.list()]
+        .filter(isAtlassianCredentialMetadata)
+        .sort(compareAtlassianCredentialMetadata),
     delete: (authRef: string): boolean => {
       if (!isAtlassianConnectorAuthRef(authRef)) return false;
       if (deps.metadataStore.get(authRef) === undefined) return false;

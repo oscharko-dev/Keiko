@@ -1,0 +1,2530 @@
+// `keiko support analyze` — pure logic: parsing, grouping, and ordering `server*.log` lines
+// (whether raw, or copied verbatim into a `keiko support export` bundle) by `correlationId`.
+//
+// Wave 6 (epic #3233 closeout, w6-log-analyze-full) extends the Wave 1 minimal `LogTimeline`
+// (`lines`, `firstTs`, `lastTs`, `durationMs`, `errorKinds`) with `frames` (the union of every
+// `frames[]` entry seen for the correlationId, occurrence order, capped) — OMITTED, never an
+// empty array, when no line in the timeline carried frames, the same no-placeholder-stubbing
+// discipline the rest of this file already follows. It also adds whole-file `clusters`
+// (`OpCluster[]`, grouping every parsed line by `(category, op, errorKind)` regardless of
+// correlationId) and `buildReproductionSeed`/`renderGatewayReplayScriptFixture`, which assemble a
+// `ReproductionSeed` — a `gatewayScript`/`httpRequest`/`storeFingerprint`/`indexingJob`/
+// `stackFrames`/`causeChain` reconstruction for one correlationId, plus a `warnings` field naming
+// exactly what could NOT be reconstructed and why. `support.ts` owns argv parsing and wires these
+// exports (plus `renderHumanReproductionSeed`, below) to `--clusters`/`--seed`/`--emit-fixture`.
+//
+// Ordering: `seq` has shipped unconditionally since the v2 envelope (schemaVersion 2), so within
+// one process lifetime a v2 line is ordered by `seq` — never by its position in the file. ACROSS
+// process lifetimes the envelope promises no order (ADR-0173 D2), so lifetimes are ranked by the
+// position of their FIRST line in the file — the order the operator's machine actually produced
+// them — and a lifetime's lines are kept together behind that rank. A line written before the v2
+// envelope shipped (schemaVersion 1, no pid/instanceId/seq) can still be present in a server.log
+// spanning the upgrade or in a retained legacy rotation archive; it has no lifetime to belong to,
+// so it ranks by its own file position. The result is ONE total order (rank, then seq) rather than a
+// comparator that switches rule per pair, which is not transitive and would hand `sort` an
+// undefined result the moment a pre-v2 line sits between two v2 lines of the same process.
+//
+// `AnalyzeAllResult` (whole-file scope, unlike the per-`LogTimeline` fields above) carries three
+// more fields the analyzer CAN populate honestly today (ADR-0173 D9/D10): `processes` — one
+// summary per process lifetime, built from every line with a full (pid, instanceId, seq) triple
+// regardless of correlationId, so the correlationId-less `process.*` lifecycle lines stay
+// reconstructable; `legacyLineCount` — lines successfully parsed but missing that triple; and
+// `warnings`, which carries exactly one entry naming `legacyLineCount` when it is nonzero. This is
+// the honest machine-readable admission that file-position ordering was used for some lines, which
+// Wave 6 extends rather than the analyzer silently omitting the caveat.
+//
+// `support.ts` owns argv parsing, file reads, and stdout/stderr; this file owns everything that
+// can be exercised on an in-memory string.
+
+import { createHash } from "node:crypto";
+import {
+  readToolCatalogEvidence,
+  toolCatalogWarnings,
+  type ToolCatalogLogEvidence,
+  type ToolLifecycleValidator,
+  type ToolDiagnosticRedactor,
+} from "./support-tool-catalog.js";
+import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+  ActivityLogEventValidationError,
+  activityLogOperationSchema,
+  isActivityLogIdentityDigest,
+  isActivityLogInstanceId,
+  isActivityLogErrorKind,
+  isActivityLogPlatformClass,
+  isActivityLogProcessId,
+  isActivityLogProductVersion,
+  isActivityLogSequence,
+  validateActivityLogOperationRecord,
+  type ActivityLogCompletenessState,
+  type ActivityLogEventEnvelope,
+  type ActivityLogLossState,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
+import {
+  activityLogFailureClassesOf,
+  projectActivityLogSufficiency,
+  restrictActivityLogSufficiency,
+  type ActivityLogSufficiency,
+  type ActivityLogSufficiencyLine,
+} from "./support-analyze-sufficiency.js";
+
+export interface SupportAnalyzeOptions {
+  readonly toolLifecycleValidator?: ToolLifecycleValidator;
+  readonly toolDiagnosticRedactor?: ToolDiagnosticRedactor;
+}
+
+const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
+  "ts",
+  "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
+  "pid",
+  "instanceId",
+  "seq",
+  "level",
+  "category",
+  "op",
+  "correlationId",
+  "parentCorrelationId",
+  "durationMs",
+  "status",
+  "errorKind",
+  "frames",
+  "causeChain",
+]);
+
+type ServerLogStatus = number | string;
+
+export interface ServerLogLineView {
+  readonly toolCatalog?: ToolCatalogLogEvidence;
+  readonly ts: string;
+  readonly pid?: number | undefined;
+  readonly instanceId?: string | undefined;
+  readonly seq?: number | undefined;
+  readonly level?: string | undefined;
+  readonly category: string;
+  readonly op: string;
+  readonly parentCorrelationId?: string | undefined;
+  readonly errorKind?: string | undefined;
+  readonly durationMs?: number | undefined;
+  readonly status?: ServerLogStatus | undefined;
+  readonly frames?: readonly string[] | undefined;
+  // Sibling of `frames`: `redactLogObject` special-cases both by name the same way (ADR-0173
+  // §4.4), and `formatServerLogLine` flattens both onto the top level of the written JSON.
+  readonly causeChain?: readonly string[] | undefined;
+  readonly extra?: Readonly<Record<string, unknown>> | undefined;
+}
+
+export interface LogTimeline {
+  readonly correlationId: string;
+  readonly lines: readonly ServerLogLineView[];
+  readonly firstTs: string;
+  readonly lastTs: string;
+  readonly durationMs: number;
+  readonly errorKinds: readonly string[];
+  // Wave 6: the union of every `frames[]` entry seen across this timeline's lines, occurrence
+  // order, capped at `MAX_TIMELINE_FRAMES`. Omitted (never `[]`) when no line carried frames.
+  readonly frames?: readonly string[] | undefined;
+}
+
+export interface UpdateAttemptTimeline extends LogTimeline {
+  readonly candidateId: string;
+  readonly correlationIds: readonly string[];
+  readonly sessionId?: string | undefined;
+}
+
+// A process lifetime summarised across ALL its lines, not only the ones that carry a
+// correlationId — `process.started`/`process.heartbeat`/`process.exiting` lines have none (ADR-0173
+// D9), so a timeline built only from `groupByCorrelationId` can never reconstruct them. Ordered
+// (like `timelines`) by first appearance in the file.
+export interface ProcessSummary {
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly firstSeq: number;
+  readonly lastSeq: number;
+  readonly lineCount: number;
+  readonly firstTs: string;
+  readonly lastTs: string;
+  // The `process.started` line's `extra` bucket for this lifetime, when one was seen.
+  readonly started?: Readonly<Record<string, unknown>> | undefined;
+  // The `reason` field of the `process.exiting` line's `extra` bucket, when one was seen.
+  readonly exitReason?: string | undefined;
+}
+
+export type ActivityLogEvidenceClassification =
+  "supported" | "legacy" | "unsupported" | "corrupt" | "truncated" | "incomplete";
+
+export interface ActivityLogEvidenceIntegrity {
+  readonly completeness: ActivityLogCompletenessState;
+  readonly loss: ActivityLogLossState;
+}
+
+// ADR-0173 D10's closed vocabularies, derived from the analyzer's own verdict instead of the
+// constructor defaults. Only supported or legacy evidence (which implies no malformed line) is
+// complete; a truncated or corrupt artifact is a known, counted subset whose unreadable bytes stand
+// where a record should be; unsupported lines are preserved but excluded; incomplete identity or
+// writer evidence means completeness cannot be established at all. Shared by the analysis evidence
+// line and the SupportIncident descriptor (#3533) so both state one verdict the same way.
+export const ACTIVITY_LOG_EVIDENCE_INTEGRITY: Readonly<
+  Record<ActivityLogEvidenceClassification, ActivityLogEvidenceIntegrity>
+> = {
+  supported: { completeness: "complete", loss: "none" },
+  legacy: { completeness: "complete", loss: "none" },
+  unsupported: { completeness: "partial", loss: "none" },
+  corrupt: { completeness: "partial", loss: "event-dropped" },
+  truncated: { completeness: "partial", loss: "event-dropped" },
+  incomplete: { completeness: "unknown", loss: "none" },
+};
+
+export type ProcessSequenceAnomalyKind = "gap" | "duplicate" | "decreasing" | "reset";
+
+export interface ProcessSequenceAnomaly {
+  readonly kind: ProcessSequenceAnomalyKind;
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly fileIndex: number;
+  readonly previousSeq: number;
+  readonly seq: number;
+  readonly missingFrom?: number | undefined;
+  readonly missingTo?: number | undefined;
+}
+
+export interface ActivityLogEvidenceSummary {
+  readonly classification: ActivityLogEvidenceClassification;
+  readonly supportedLineCount: number;
+  readonly legacyLineCount: number;
+  readonly unsupportedLineCount: number;
+  readonly corruptLineCount: number;
+  readonly truncatedLineCount: number;
+  readonly incompleteLineCount: number;
+  readonly sequenceAnomalies: readonly ProcessSequenceAnomaly[];
+}
+
+export interface AnalyzeAllResult {
+  readonly sourceKind: SourceKind;
+  // Whole-artifact observation metadata, derived from every valid log record whether it carries a
+  // correlation id or not. Undefined means the runtime did not report a usable value; callers
+  // must never infer one from file timestamps or timeline ordering.
+  readonly latestTimestamp: string | undefined;
+  readonly latestInstanceId: string | undefined;
+  readonly timelines: readonly LogTimeline[];
+  readonly malformedLineCount: number;
+  readonly evidence: ActivityLogEvidenceSummary;
+  readonly processes: readonly ProcessSummary[];
+  // Lines successfully parsed as log records but missing the full (pid, instanceId, seq) v2
+  // identity triple — pre-v2 lines the long-lived current file or a legacy archive can still hold.
+  readonly legacyLineCount: number;
+  // Exactly one entry when legacyLineCount > 0, naming the count; empty otherwise. The honest
+  // machine-readable admission that this analyzer fell back to file-position ordering for some
+  // lines — Wave 6 extends this rather than the analyzer silently omitting the caveat.
+  readonly warnings: readonly string[];
+  // Wave 6: every parsed line (correlated or not) grouped by (category, op, errorKind),
+  // first-occurrence order — always present, empty when there are no parsed lines, the same
+  // "real empty state, not a placeholder" convention `processes`/`timelines` already use.
+  readonly clusters: readonly OpCluster[];
+  // Update execution begins on a candidate-scoped preflight correlation and continues on the
+  // originating HTTP request correlation. This projection joins only explicit candidate/session
+  // identity fields emitted by production; it never guesses from target version or timestamps.
+  readonly updateAttempts: readonly UpdateAttemptTimeline[];
+  // #3532: every observed failure class projected to complete/degraded/insufficient with closed
+  // reasons, derived from the registry's failure-class contracts (support-analyze-sufficiency.ts).
+  readonly sufficiency: ActivityLogSufficiency;
+}
+
+export type SourceKind = "bundle" | "raw-log";
+
+function splitLines(text: string): readonly string[] {
+  if (text.length === 0) return [];
+  const lines = text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+function tryParseJsonObject(raw: string): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// A support bundle's first line is a manifest object tagged `$section: "manifest"`; a raw
+// server.log's first line is an ordinary log record (ts+category+op, no `$section`). Any other
+// shape (unparseable, empty file) is treated as a raw log — its own line-level malformed-line
+// accounting handles the rest.
+export function detectSourceKind(firstLine: string | undefined): SourceKind {
+  if (firstLine === undefined) return "raw-log";
+  const parsed = tryParseJsonObject(firstLine);
+  return parsed?.$section === "manifest" ? "bundle" : "raw-log";
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function optionalStringArray(value: unknown): readonly string[] | undefined {
+  return isStringArray(value) ? value : undefined;
+}
+
+function viewStatus(op: string, fields: Record<string, unknown>): number | string | undefined {
+  const numeric = optionalNumber(fields, "status");
+  if (numeric !== undefined) return numeric;
+  return op.startsWith("update.") ? optionalString(fields, "status") : undefined;
+}
+
+// `status` is reserved ONLY when it actually carries the envelope's own numeric HTTP-like status
+// (`ServerLogEvent.status`, applied by `applyEnvelopeFields` in `server-log.ts`) — several real
+// emitters (epic #3384's `logGitDeliveryMutation` among them) instead put a closed-vocabulary
+// STRING under their OWN `extra.status` (`GitMutationOutcome["status"]`) with no numeric envelope
+// status on the same line at all. Excluding the name unconditionally silently dropped that string
+// from every timeline and seed; a value's actual type, not its field name alone, decides here.
+function isReservedEnvelopeKey(key: string, value: unknown): boolean {
+  if (key === "status") return typeof value === "number";
+  return KNOWN_ENVELOPE_KEYS.has(key);
+}
+
+// Bucketing every OTHER top-level key on the parsed record: `formatServerLogLine` flattens an
+// event's `extra` object onto the top level of the written JSON (there is no nested `.extra` key
+// on disk), so reconstructing a display-only `extra` bucket means collecting whatever survived
+// redaction beyond the known envelope keys.
+function extraFields(
+  record: Record<string, unknown>,
+): Readonly<Record<string, unknown>> | undefined {
+  // Null prototype: a `"__proto__"` key parsed out of a log line is an ordinary own property on
+  // `record` (`JSON.parse` defines it via `[[DefineOwnProperty]]`, not the exotic setter), but
+  // assigning it onto a plain `{}` here would hit `Object.prototype`'s inherited `__proto__`
+  // setter instead of defining an own property — silently dropping the field from the reported
+  // `extra` bucket (and, for an object value, replacing `extra`'s own prototype) rather than
+  // reporting it, which is exactly the silent skip this module's header states it must not do.
+  const extra: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  let hasAny = false;
+  for (const key of Object.keys(record)) {
+    if (isReservedEnvelopeKey(key, record[key])) continue;
+    extra[key] = record[key];
+    hasAny = true;
+  }
+  return hasAny ? extra : undefined;
+}
+
+interface Identity {
+  readonly schemaVersion: number | undefined;
+  readonly pid: number | undefined;
+  readonly instanceId: string | undefined;
+  readonly seq: number | undefined;
+}
+
+function readIdentity(record: Record<string, unknown>): Identity {
+  return {
+    schemaVersion: optionalNumber(record, "schemaVersion"),
+    pid: optionalNumber(record, "pid"),
+    instanceId: optionalString(record, "instanceId"),
+    seq: optionalNumber(record, "seq"),
+  };
+}
+
+// Split out of `buildView` purely to keep that function's cyclomatic complexity under the
+// repository's ceiling (AGENTS.md §6) — the three identity fields are optional for exactly the
+// same "a pre-v2 line has none" reason as every other field there.
+function identityFields(identity: Identity): Pick<ServerLogLineView, "pid" | "instanceId" | "seq"> {
+  return {
+    ...(identity.pid === undefined ? {} : { pid: identity.pid }),
+    ...(identity.instanceId === undefined ? {} : { instanceId: identity.instanceId }),
+    ...(identity.seq === undefined ? {} : { seq: identity.seq }),
+  };
+}
+
+function parentCorrelationFields(
+  record: Record<string, unknown>,
+): Pick<ServerLogLineView, "parentCorrelationId"> {
+  const parentCorrelationId = optionalString(record, "parentCorrelationId");
+  return parentCorrelationId === undefined ? {} : { parentCorrelationId };
+}
+
+function toolCatalogViewFields(
+  toolCatalog: ToolCatalogLogEvidence | undefined,
+): Pick<ServerLogLineView, "toolCatalog"> {
+  return toolCatalog === undefined ? {} : { toolCatalog };
+}
+
+function buildView(
+  ts: string,
+  category: string,
+  op: string,
+  record: Record<string, unknown>,
+  identity: Identity,
+  options: SupportAnalyzeOptions,
+): ServerLogLineView {
+  const toolCatalog = readToolCatalogEvidence(
+    record,
+    options.toolLifecycleValidator,
+    options.toolDiagnosticRedactor,
+  );
+  const fields = toolCatalogFields(record, toolCatalog);
+  const level = optionalString(record, "level");
+  const errorKind = optionalString(fields, "errorKind");
+  const durationMs = optionalNumber(fields, "durationMs");
+  const status = viewStatus(op, fields);
+  const frames = optionalStringArray(fields.frames);
+  const causeChain = optionalStringArray(fields.causeChain);
+  const extra = toolCatalog === undefined ? extraFields(record) : undefined;
+  return {
+    ts,
+    category,
+    op,
+    ...identityFields(identity),
+    ...toolCatalogViewFields(toolCatalog),
+    ...parentCorrelationFields(record),
+    ...(level === undefined ? {} : { level }),
+    ...(errorKind === undefined ? {} : { errorKind }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(status === undefined ? {} : { status }),
+    ...(frames === undefined ? {} : { frames }),
+    ...(causeChain === undefined ? {} : { causeChain }),
+    ...(extra === undefined ? {} : { extra }),
+  };
+}
+
+function toolCatalogFields(
+  record: Record<string, unknown>,
+  evidence: ToolCatalogLogEvidence | undefined,
+): Record<string, unknown> {
+  if (evidence === undefined) return record;
+  if (evidence.kind === "lifecycle") return { ...evidence.event };
+  if (evidence.kind === "sink-failure") return { ...evidence };
+  return {};
+}
+
+export interface ParsedLine {
+  readonly view: ServerLogLineView;
+  readonly correlationId: string | undefined;
+  readonly hasFullIdentity: boolean;
+  readonly fileIndex: number;
+}
+
+export type LineClassification =
+  | {
+      readonly kind: "line";
+      readonly evidence: "supported" | "legacy";
+      readonly parsed: ParsedLine;
+    }
+  | { readonly kind: "section" }
+  | {
+      readonly kind: "rejected";
+      readonly evidence: "unsupported" | "corrupt" | "truncated" | "incomplete";
+    };
+
+const ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS = [
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
+] as const;
+
+function validProcessId(value: unknown): value is number {
+  return isActivityLogProcessId(value);
+}
+
+function validSequence(value: unknown): value is number {
+  return isActivityLogSequence(value);
+}
+
+function validInstanceId(value: unknown): value is string {
+  return isActivityLogInstanceId(value);
+}
+
+function hasValidProcessIdentity(record: Record<string, unknown>): boolean {
+  return (
+    validProcessId(record.pid) && validInstanceId(record.instanceId) && validSequence(record.seq)
+  );
+}
+
+function hasInvalidPresentProcessIdentity(record: Record<string, unknown>): boolean {
+  return (
+    (record.pid !== undefined && !validProcessId(record.pid)) ||
+    (record.instanceId !== undefined && !validInstanceId(record.instanceId)) ||
+    (record.seq !== undefined && !validSequence(record.seq))
+  );
+}
+
+const ACTIVITY_LOG_COMPATIBILITY_STATE_SET: ReadonlySet<string> = new Set(
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+);
+const ACTIVITY_LOG_WRITER_CAPABILITY_SET: ReadonlySet<string> = new Set(
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+);
+
+function validRegistryDigests(record: Record<string, unknown>): boolean {
+  return (
+    isActivityLogIdentityDigest(record.schemaDigest) &&
+    isActivityLogIdentityDigest(record.catalogDigest)
+  );
+}
+
+function validRuntimeIdentity(record: Record<string, unknown>): boolean {
+  return (
+    record.buildClass === "node-esm" &&
+    (record.releaseClass === "stable" || record.releaseClass === "prerelease") &&
+    isActivityLogPlatformClass(record.platformClass) &&
+    isActivityLogProductVersion(record.productVersion)
+  );
+}
+
+function validRegistryIdentityShape(record: Record<string, unknown>): boolean {
+  return (
+    typeof record.registryVersion === "number" &&
+    Number.isSafeInteger(record.registryVersion) &&
+    record.registryVersion > 0 &&
+    validRegistryDigests(record) &&
+    validRuntimeIdentity(record) &&
+    typeof record.compatibilityState === "string" &&
+    ACTIVITY_LOG_COMPATIBILITY_STATE_SET.has(record.compatibilityState) &&
+    typeof record.writerCapability === "string" &&
+    ACTIVITY_LOG_WRITER_CAPABILITY_SET.has(record.writerCapability)
+  );
+}
+
+function declaredCompatibility(record: Record<string, unknown>): ActivityLogEvidenceClassification {
+  if (record.compatibilityState === "legacy-supported") return "legacy";
+  if (record.compatibilityState === "unsupported-version") return "unsupported";
+  if (record.compatibilityState === "corrupt") return "corrupt";
+  if (record.compatibilityState === "truncated") return "truncated";
+  if (record.compatibilityState === "incomplete" || record.writerCapability !== "active") {
+    return "incomplete";
+  }
+  return "supported";
+}
+
+function registryIdentityClassification(
+  record: Record<string, unknown>,
+): ActivityLogEvidenceClassification {
+  const present = ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.filter((key) => record[key] !== undefined);
+  if (present.length === 0) return "supported";
+  if (present.length !== ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.length) return "incomplete";
+  if (!validRegistryIdentityShape(record)) return "corrupt";
+  if (
+    record.registryVersion !== ACTIVITY_LOG_REGISTRY_VERSION ||
+    record.schemaDigest !== ACTIVITY_LOG_SCHEMA_DIGEST ||
+    record.catalogDigest !== ACTIVITY_LOG_CATALOG_DIGEST
+  ) {
+    return "unsupported";
+  }
+  return declaredCompatibility(record);
+}
+
+function schemaVersionClassification(
+  schemaVersion: unknown,
+  identityCount: number,
+): ActivityLogEvidenceClassification | undefined {
+  if (schemaVersion === undefined) return identityCount === 0 ? "legacy" : "incomplete";
+  if (
+    typeof schemaVersion !== "number" ||
+    !Number.isSafeInteger(schemaVersion) ||
+    schemaVersion <= 0
+  )
+    return "corrupt";
+  if (schemaVersion === 1) return identityCount === 0 ? "legacy" : "corrupt";
+  if (schemaVersion !== 2) return "unsupported";
+  return undefined;
+}
+
+function identityClassification(
+  record: Record<string, unknown>,
+): ActivityLogEvidenceClassification {
+  const identityValues = [record.pid, record.instanceId, record.seq];
+  const identityCount = identityValues.filter((value) => value !== undefined).length;
+  const hasInvalidPresentIdentity = hasInvalidPresentProcessIdentity(record);
+  const schemaClassification = schemaVersionClassification(record.schemaVersion, identityCount);
+  if (schemaClassification !== undefined) {
+    return schemaClassification === "incomplete" && hasInvalidPresentIdentity
+      ? "corrupt"
+      : schemaClassification;
+  }
+  if (hasInvalidPresentIdentity) return "corrupt";
+  if (identityCount < identityValues.length) return "incomplete";
+  return registryIdentityClassification(record);
+}
+
+function registeredFields(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): Readonly<Record<string, unknown>> {
+  const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const name of Object.keys(registration.fields)) {
+    if (name === "status" && typeof record.status === "number") continue;
+    if (record[name] !== undefined) fields[name] = record[name];
+  }
+  return fields;
+}
+
+const ACTIVITY_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
+
+function validOptionalType(value: unknown, expected: "string" | "number"): boolean {
+  return value === undefined || typeof value === expected;
+}
+
+function validRecordLevel(value: unknown): boolean {
+  return typeof value === "string" && ACTIVITY_LOG_LEVELS.has(value);
+}
+
+function validRecordStatus(
+  value: unknown,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  return (
+    value === undefined ||
+    typeof value === "number" ||
+    (typeof value === "string" && registration.fields.status?.type === "string")
+  );
+}
+
+function validRecordEnvelopeFields(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  return (
+    validRecordLevel(record.level) &&
+    validOptionalType(record.correlationId, "string") &&
+    validOptionalType(record.parentCorrelationId, "string") &&
+    validOptionalType(record.durationMs, "number") &&
+    validRecordStatus(record.status, registration) &&
+    (record.errorKind === undefined || isActivityLogErrorKind(record.errorKind))
+  );
+}
+
+function recordEnvelope(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): ActivityLogEventEnvelope | undefined {
+  if (!validRecordEnvelopeFields(record, registration)) return undefined;
+  const level = optionalString(record, "level") as ActivityLogEventEnvelope["level"];
+  const correlationId = optionalString(record, "correlationId");
+  const parentCorrelationId = optionalString(record, "parentCorrelationId");
+  const durationMs = optionalNumber(record, "durationMs");
+  const status = optionalNumber(record, "status");
+  const errorKind = isActivityLogErrorKind(record.errorKind) ? record.errorKind : undefined;
+  return {
+    ...(level === undefined ? {} : { level: level as ActivityLogEventEnvelope["level"] }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(typeof status === "number" ? { status } : {}),
+    ...(errorKind === undefined ? {} : { errorKind }),
+  };
+}
+
+function hasUnknownRegisteredField(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  const allowed = new Set(Object.keys(registration.fields));
+  return Object.keys(record).some((key) => !KNOWN_ENVELOPE_KEYS.has(key) && !allowed.has(key));
+}
+
+function registeredRecordClassification(
+  record: Record<string, unknown>,
+  category: string,
+  op: string,
+): ActivityLogEvidenceClassification {
+  const registration = activityLogOperationSchema(op);
+  if (registration === undefined) return "corrupt";
+  const envelope = recordEnvelope(record, registration);
+  if (envelope === undefined) return "corrupt";
+  if (hasUnknownRegisteredField(record, registration)) return "corrupt";
+  try {
+    validateActivityLogOperationRecord(
+      op,
+      category,
+      envelope,
+      registeredFields(record, registration),
+    );
+    return "supported";
+  } catch (error) {
+    return error instanceof ActivityLogEventValidationError && error.kind === "missing-field"
+      ? "incomplete"
+      : "corrupt";
+  }
+}
+
+function isPersistedTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+type RejectedEvidence = "unsupported" | "corrupt" | "truncated" | "incomplete";
+
+function rejectedLine(evidence: RejectedEvidence): LineClassification {
+  return { kind: "rejected" as const, evidence };
+}
+
+function invalidJsonEvidence(terminalFragment: boolean): "truncated" | "corrupt" {
+  return terminalFragment ? "truncated" : "corrupt";
+}
+
+interface RequiredLineLabels {
+  readonly ts: string;
+  readonly category: string;
+  readonly op: string;
+}
+
+function requiredLineLabels(record: Record<string, unknown>): RequiredLineLabels | undefined {
+  const ts = optionalString(record, "ts");
+  const category = optionalString(record, "category");
+  const op = optionalString(record, "op");
+  if (ts === undefined || !isPersistedTimestamp(ts)) return undefined;
+  if (category === undefined || op === undefined) return undefined;
+  return { ts, category, op };
+}
+
+function acceptedEvidence(
+  evidence: ActivityLogEvidenceClassification,
+): evidence is "supported" | "legacy" {
+  return evidence === "supported" || evidence === "legacy";
+}
+
+function recordEvidence(
+  record: Record<string, unknown>,
+  labels: RequiredLineLabels,
+  evidence: "supported" | "legacy",
+): ActivityLogEvidenceClassification {
+  if (evidence === "supported" && record.registryVersion !== undefined) {
+    return registeredRecordClassification(record, labels.category, labels.op);
+  }
+  return evidence;
+}
+
+// A `$section`-tagged line is bundle metadata, not evidence. Unsupported versions are classified
+// before their unknown envelope is interpreted; every supported or legacy record still requires
+// the common ts/category/op shape.
+export function classifyLine(
+  raw: string,
+  fileIndex: number,
+  terminalFragment: boolean,
+  options: SupportAnalyzeOptions,
+): LineClassification {
+  const record = tryParseJsonObject(raw);
+  if (record === undefined) return rejectedLine(invalidJsonEvidence(terminalFragment));
+  if (typeof record.$section === "string") return { kind: "section" };
+  const evidence = identityClassification(record);
+  if (evidence === "unsupported") return rejectedLine(evidence);
+  const labels = requiredLineLabels(record);
+  if (labels === undefined) return rejectedLine("corrupt");
+  if (!acceptedEvidence(evidence)) return rejectedLine(evidence);
+  const recordClassification = recordEvidence(record, labels, evidence);
+  if (!acceptedEvidence(recordClassification)) return rejectedLine(recordClassification);
+  const identity = readIdentity(record);
+  return {
+    kind: "line",
+    evidence: recordClassification,
+    parsed: {
+      view: buildView(labels.ts, labels.category, labels.op, record, identity, options),
+      correlationId: optionalString(record, "correlationId"),
+      hasFullIdentity: hasValidProcessIdentity(record),
+      fileIndex,
+    },
+  };
+}
+
+function addDirectCorrelation(direct: Map<string, ParsedLine[]>, record: ParsedLine): void {
+  const correlationId = record.correlationId;
+  if (correlationId === undefined) return;
+  const existing = direct.get(correlationId);
+  if (existing === undefined) direct.set(correlationId, [record]);
+  else existing.push(record);
+}
+
+function addParentLink(children: Map<string, Set<string>>, record: ParsedLine): void {
+  const parent = record.view.parentCorrelationId;
+  const child = record.correlationId;
+  if (parent === undefined || child === undefined || parent === child) return;
+  const linked = children.get(parent) ?? new Set<string>();
+  linked.add(child);
+  children.set(parent, linked);
+}
+
+function expandedParentGroup(
+  parent: string,
+  linked: ReadonlySet<string>,
+  direct: ReadonlyMap<string, readonly ParsedLine[]>,
+): ParsedLine[] {
+  const expanded = [...(direct.get(parent) ?? [])];
+  const seen = new Set(expanded);
+  // One line establishes the request-to-run edge; other lines with that request ID may carry
+  // no parent field. Include the whole uniquely identified child timeline while keeping its
+  // direct lookup intact. The shared fallback ID requires record-level parent evidence.
+  for (const child of linked) {
+    for (const record of direct.get(child) ?? []) {
+      // The fallback correlation is shared by unrelated requests. Only an explicit parent
+      // on that individual record proves it belongs to this run.
+      if (
+        child === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
+        record.view.parentCorrelationId !== parent
+      ) {
+        continue;
+      }
+      if (seen.has(record)) continue;
+      expanded.push(record);
+      seen.add(record);
+    }
+  }
+  // assignOrder ranks each process lifetime by the first record it encounters. Parent-first
+  // expansion is not file order when a child request was written before the run's own line.
+  return expanded.sort((left, right) => left.fileIndex - right.fileIndex);
+}
+
+function groupByCorrelationId(records: readonly ParsedLine[]): ReadonlyMap<string, ParsedLine[]> {
+  const direct = new Map<string, ParsedLine[]>();
+  const children = new Map<string, Set<string>>();
+  for (const record of records) {
+    addDirectCorrelation(direct, record);
+    addParentLink(children, record);
+  }
+  const groups = new Map(direct);
+  for (const [parent, linked] of children) {
+    groups.set(parent, expandedParentGroup(parent, linked, direct));
+  }
+  return groups;
+}
+
+function updateIdentity(
+  view: ServerLogLineView,
+  key: "candidateId" | "sessionId",
+): string | undefined {
+  if (!view.op.startsWith("update.")) return undefined;
+  const value = view.extra?.[key];
+  return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : undefined;
+}
+
+interface UpdateAttemptIndexes {
+  readonly candidateRecords: ReadonlyMap<string, readonly ParsedLine[]>;
+  readonly correlationRecords: ReadonlyMap<string, readonly ParsedLine[]>;
+  readonly childCorrelations: ReadonlyMap<string, readonly ChildCorrelation[]>;
+}
+
+interface ChildCorrelation {
+  readonly correlationId: string;
+  readonly fileIndex: number;
+}
+
+function appendIndexEntry(index: Map<string, ParsedLine[]>, key: string, record: ParsedLine): void {
+  const entries = index.get(key);
+  if (entries === undefined) {
+    index.set(key, [record]);
+  } else {
+    entries.push(record);
+  }
+}
+
+function appendChildCorrelation(
+  index: Map<string, ChildCorrelation[]>,
+  parentCorrelationId: string,
+  child: ChildCorrelation,
+): void {
+  const children = index.get(parentCorrelationId);
+  if (children === undefined) {
+    index.set(parentCorrelationId, [child]);
+  } else {
+    children.push(child);
+  }
+}
+
+function buildUpdateAttemptIndexes(records: readonly ParsedLine[]): UpdateAttemptIndexes {
+  const candidateRecords = new Map<string, ParsedLine[]>();
+  const correlationRecords = new Map<string, ParsedLine[]>();
+  const childCorrelations = new Map<string, ChildCorrelation[]>();
+  for (const record of records) {
+    const candidateId = updateIdentity(record.view, "candidateId");
+    if (candidateId !== undefined) appendIndexEntry(candidateRecords, candidateId, record);
+    if (record.correlationId !== undefined) {
+      appendIndexEntry(correlationRecords, record.correlationId, record);
+      if (record.view.parentCorrelationId !== undefined) {
+        appendChildCorrelation(childCorrelations, record.view.parentCorrelationId, {
+          correlationId: record.correlationId,
+          fileIndex: record.fileIndex,
+        });
+      }
+    }
+  }
+  return { candidateRecords, correlationRecords, childCorrelations };
+}
+
+interface PendingCorrelation extends ChildCorrelation {
+  readonly pass: number;
+}
+
+function comparePendingCorrelations(a: PendingCorrelation, b: PendingCorrelation): number {
+  return a.pass === b.pass ? a.fileIndex - b.fileIndex : a.pass - b.pass;
+}
+
+function pendingCorrelationAt(
+  queue: readonly PendingCorrelation[],
+  index: number,
+): PendingCorrelation {
+  const entry = queue.at(index);
+  if (entry === undefined) {
+    throw new Error("Update correlation priority queue invariant failed.");
+  }
+  return entry;
+}
+
+function addPendingCorrelation(queue: PendingCorrelation[], entry: PendingCorrelation): void {
+  queue.push(entry);
+  let index = queue.length - 1;
+  while (index > 0) {
+    const parentIndex = Math.floor((index - 1) / 2);
+    const parent = pendingCorrelationAt(queue, parentIndex);
+    if (comparePendingCorrelations(parent, entry) <= 0) break;
+    queue[index] = parent;
+    index = parentIndex;
+  }
+  queue[index] = entry;
+}
+
+function removePendingCorrelation(queue: PendingCorrelation[]): PendingCorrelation | undefined {
+  const first = queue[0];
+  const last = queue.pop();
+  if (first === undefined || last === undefined) return undefined;
+  if (queue.length === 0) return first;
+  let index = 0;
+  while (index * 2 + 1 < queue.length) {
+    const leftIndex = index * 2 + 1;
+    const rightIndex = leftIndex + 1;
+    const left = pendingCorrelationAt(queue, leftIndex);
+    const right = queue.at(rightIndex);
+    const childIndex =
+      right !== undefined && comparePendingCorrelations(right, left) < 0 ? rightIndex : leftIndex;
+    const child = pendingCorrelationAt(queue, childIndex);
+    if (comparePendingCorrelations(last, child) <= 0) break;
+    queue[index] = child;
+    index = childIndex;
+  }
+  queue[index] = last;
+  return first;
+}
+
+function reachableCorrelationIds(
+  roots: readonly ParsedLine[],
+  childCorrelations: ReadonlyMap<string, readonly ChildCorrelation[]>,
+): ReadonlySet<string> {
+  const correlationIds = new Set<string>();
+  const pending: string[] = [];
+  for (const root of roots) {
+    if (root.correlationId !== undefined && !correlationIds.has(root.correlationId)) {
+      correlationIds.add(root.correlationId);
+      pending.push(root.correlationId);
+    }
+  }
+  const queue: PendingCorrelation[] = [];
+  const bestPending = new Map<string, PendingCorrelation>();
+  const scheduleChildren = (
+    correlationId: string,
+    parent: PendingCorrelation | undefined,
+  ): void => {
+    for (const child of childCorrelations.get(correlationId) ?? []) {
+      if (correlationIds.has(child.correlationId)) continue;
+      const entry = {
+        ...child,
+        pass:
+          parent === undefined || child.fileIndex > parent.fileIndex
+            ? (parent?.pass ?? 1)
+            : parent.pass + 1,
+      };
+      const best = bestPending.get(entry.correlationId);
+      if (best === undefined || comparePendingCorrelations(entry, best) < 0) {
+        bestPending.set(entry.correlationId, entry);
+        addPendingCorrelation(queue, entry);
+      }
+    }
+  };
+  for (const correlationId of pending) scheduleChildren(correlationId, undefined);
+  let next = removePendingCorrelation(queue);
+  while (next !== undefined) {
+    if (bestPending.get(next.correlationId) === next) {
+      correlationIds.add(next.correlationId);
+      scheduleChildren(next.correlationId, next);
+    }
+    next = removePendingCorrelation(queue);
+  }
+  return correlationIds;
+}
+
+function orderedAttemptLines(
+  candidateRecords: readonly ParsedLine[],
+  correlationIds: ReadonlySet<string>,
+  correlationRecords: ReadonlyMap<string, readonly ParsedLine[]>,
+): readonly ParsedLine[] {
+  const linesByFileIndex = new Map<number, ParsedLine>();
+  for (const record of candidateRecords) linesByFileIndex.set(record.fileIndex, record);
+  for (const correlationId of correlationIds) {
+    for (const record of correlationRecords.get(correlationId) ?? []) {
+      linesByFileIndex.set(record.fileIndex, record);
+    }
+  }
+  return [...linesByFileIndex.values()].sort((a, b) => a.fileIndex - b.fileIndex);
+}
+
+function buildUpdateAttempts(records: readonly ParsedLine[]): readonly UpdateAttemptTimeline[] {
+  const { candidateRecords, correlationRecords, childCorrelations } =
+    buildUpdateAttemptIndexes(records);
+  return [...candidateRecords].map(([candidateId, roots]) => {
+    const correlationIds = reachableCorrelationIds(roots, childCorrelations);
+    const attemptLines = orderedAttemptLines(roots, correlationIds, correlationRecords);
+    const sessionId = attemptLines
+      .map((record) => updateIdentity(record.view, "sessionId"))
+      .find((value) => value !== undefined);
+    return {
+      ...buildTimeline(candidateId, attemptLines),
+      candidateId,
+      correlationIds: [...correlationIds],
+      ...(sessionId === undefined ? {} : { sessionId }),
+    };
+  });
+}
+
+function orZero(value: number | undefined): number {
+  return value ?? 0;
+}
+
+function orEmpty(value: string | undefined): string {
+  return value ?? "";
+}
+
+// The process-lifetime key of a v2 line; a pre-v2 line has none.
+function lifetimeKey(line: ParsedLine): string | undefined {
+  return line.hasFullIdentity
+    ? `${String(orZero(line.view.pid))}:${orEmpty(line.view.instanceId)}`
+    : undefined;
+}
+
+interface OrderedLine {
+  readonly line: ParsedLine;
+  // The file position of the first line of this line's process lifetime (its own position for a
+  // pre-v2 line), then `seq` inside the lifetime (file position again for a pre-v2 line).
+  readonly rank: number;
+  readonly within: number;
+}
+
+function assignOrder(group: readonly ParsedLine[]): readonly OrderedLine[] {
+  const firstSeen = new Map<string, number>();
+  return group.map((line) => {
+    const key = lifetimeKey(line);
+    if (key === undefined) return { line, rank: line.fileIndex, within: line.fileIndex };
+    const rank = firstSeen.get(key) ?? line.fileIndex;
+    firstSeen.set(key, rank);
+    return { line, rank, within: orZero(line.view.seq) };
+  });
+}
+
+function compareOrdered(a: OrderedLine, b: OrderedLine): number {
+  return a.rank === b.rank ? a.within - b.within : a.rank - b.rank;
+}
+
+// Generic over `T` (epic #3384): reused for `IssueToPrJourneyView.phasesObserved`
+// (`IssueToPrJourneyPhase[]`) as well as every existing `readonly string[]` caller below — one
+// dedup-in-first-occurrence-order implementation, not a second copy for a narrower element type.
+function distinctInOrder<T>(values: readonly T[]): readonly T[] {
+  const seen = new Set<T>();
+  const out: T[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function minMaxTs(values: readonly string[]): { readonly first: string; readonly last: string } {
+  let first = values[0] ?? "";
+  let last = values[0] ?? "";
+  for (const value of values) {
+    if (value < first) first = value;
+    if (value > last) last = value;
+  }
+  return { first, last };
+}
+
+// Wave 6 cap on `LogTimeline.frames`: the union is aggregated across every line in a (potentially
+// long-running) timeline, not one line's own already-capped `frames[]` — a generous ceiling well
+// above any single line's own 8-frame cap (ADR-0173 §2), never unbounded.
+const MAX_TIMELINE_FRAMES = 32;
+
+function aggregateFrames(views: readonly ServerLogLineView[]): readonly string[] {
+  const all: string[] = [];
+  for (const view of views) {
+    if (view.frames === undefined) continue;
+    all.push(...view.frames);
+  }
+  return distinctInOrder(all).slice(0, MAX_TIMELINE_FRAMES);
+}
+
+function buildTimeline(correlationId: string, group: readonly ParsedLine[]): LogTimeline {
+  const views = [...assignOrder(group)].sort(compareOrdered).map((ordered) => ordered.line.view);
+  const { first, last } = minMaxTs(views.map((view) => view.ts));
+  const parsedFirst = Date.parse(first);
+  const parsedLast = Date.parse(last);
+  const durationMs =
+    Number.isFinite(parsedFirst) && Number.isFinite(parsedLast) ? parsedLast - parsedFirst : 0;
+  const errorKinds = distinctInOrder(
+    views.map((view) => view.errorKind).filter((kind): kind is string => kind !== undefined),
+  );
+  const frames = aggregateFrames(views);
+  return {
+    correlationId,
+    lines: views,
+    firstTs: first,
+    lastTs: last,
+    durationMs,
+    errorKinds,
+    ...(frames.length === 0 ? {} : { frames }),
+  };
+}
+
+interface ProcessAccum {
+  pid: number;
+  instanceId: string;
+  firstSeq: number;
+  lastSeq: number;
+  lineCount: number;
+  firstTs: string;
+  lastTs: string;
+  started: Readonly<Record<string, unknown>> | undefined;
+  exitReason: string | undefined;
+}
+
+function exitReasonOf(view: ServerLogLineView): string | undefined {
+  const reason = view.extra?.reason;
+  return typeof reason === "string" ? reason : undefined;
+}
+
+function newProcessAccum(view: ServerLogLineView, pid: number, instanceId: string): ProcessAccum {
+  const seq = orZero(view.seq);
+  return {
+    pid,
+    instanceId,
+    firstSeq: seq,
+    lastSeq: seq,
+    lineCount: 1,
+    firstTs: view.ts,
+    lastTs: view.ts,
+    started: view.op === "process.started" ? view.extra : undefined,
+    exitReason: view.op === "process.exiting" ? exitReasonOf(view) : undefined,
+  };
+}
+
+function mergeIntoProcessAccum(accum: ProcessAccum, view: ServerLogLineView): void {
+  const seq = orZero(view.seq);
+  accum.lineCount += 1;
+  accum.firstSeq = Math.min(accum.firstSeq, seq);
+  accum.lastSeq = Math.max(accum.lastSeq, seq);
+  if (view.ts < accum.firstTs) accum.firstTs = view.ts;
+  if (view.ts > accum.lastTs) accum.lastTs = view.ts;
+  if (view.op === "process.started" && view.extra !== undefined) accum.started = view.extra;
+  if (view.op === "process.exiting") {
+    const reason = exitReasonOf(view);
+    if (reason !== undefined) accum.exitReason = reason;
+  }
+}
+
+// Summarises every process lifetime seen across ALL parsed lines — including the lifecycle lines
+// (`process.started`/`process.heartbeat`/`process.exiting`) that carry no correlationId and so
+// never enter a `LogTimeline` — in first-file-appearance order (a `Map`'s insertion order, the
+// same ranking rule `assignOrder` uses for timelines).
+function buildProcessSummaries(lines: readonly ParsedLine[]): readonly ProcessSummary[] {
+  const accums = new Map<string, ProcessAccum>();
+  for (const { view, hasFullIdentity } of lines) {
+    if (!hasFullIdentity || view.pid === undefined || view.instanceId === undefined) continue;
+    const key = `${String(view.pid)}:${view.instanceId}`;
+    const existing = accums.get(key);
+    if (existing === undefined) {
+      accums.set(key, newProcessAccum(view, view.pid, view.instanceId));
+    } else {
+      mergeIntoProcessAccum(existing, view);
+    }
+  }
+  return [...accums.values()];
+}
+
+// Wave 6: a whole-artifact frequency view, independent of correlationId — "what kept happening"
+// rather than "what happened on one request". Grouped by (category, op, errorKind) so a reader can
+// see, e.g., "gateway.retry.scheduled with GATEWAY_RATE_LIMIT happened 40 times across 12 calls"
+// without opening every one of those 12 timelines individually.
+export interface OpCluster {
+  readonly category: string;
+  readonly op: string;
+  readonly errorKind: string | null;
+  readonly count: number;
+  readonly sampleCorrelationIds: readonly string[];
+}
+
+const MAX_CLUSTER_SAMPLE_IDS = 5;
+
+interface ClusterAccum {
+  category: string;
+  op: string;
+  errorKind: string | null;
+  count: number;
+  sampleCorrelationIds: string[];
+  seenIds: Set<string>;
+}
+
+function clusterKey(category: string, op: string, errorKind: string | null): string {
+  return `${category}\0${op}\0${errorKind ?? ""}`;
+}
+
+function newClusterAccum(category: string, op: string, errorKind: string | null): ClusterAccum {
+  return { category, op, errorKind, count: 0, sampleCorrelationIds: [], seenIds: new Set() };
+}
+
+function addClusterSample(accum: ClusterAccum, correlationId: string | undefined): void {
+  if (correlationId === undefined || accum.seenIds.has(correlationId)) return;
+  accum.seenIds.add(correlationId);
+  if (accum.sampleCorrelationIds.length < MAX_CLUSTER_SAMPLE_IDS) {
+    accum.sampleCorrelationIds.push(correlationId);
+  }
+}
+
+// Groups ALL parsed lines (correlated or not) by (category, op, errorKind), first-occurrence
+// order — a `Map`'s insertion order, the same ranking rule every other aggregate in this file uses.
+function buildOpClusters(lines: readonly ParsedLine[]): readonly OpCluster[] {
+  const accums = new Map<string, ClusterAccum>();
+  for (const { view, correlationId } of lines) {
+    const errorKind = view.errorKind ?? null;
+    const key = clusterKey(view.category, view.op, errorKind);
+    const accum = accums.get(key) ?? newClusterAccum(view.category, view.op, errorKind);
+    accum.count += 1;
+    addClusterSample(accum, correlationId);
+    accums.set(key, accum);
+  }
+  return [...accums.values()].map((accum) => ({
+    category: accum.category,
+    op: accum.op,
+    errorKind: accum.errorKind,
+    count: accum.count,
+    sampleCorrelationIds: accum.sampleCorrelationIds,
+  }));
+}
+
+export interface MutableEvidenceCounts {
+  supported: number;
+  legacy: number;
+  unsupported: number;
+  corrupt: number;
+  truncated: number;
+  incomplete: number;
+}
+
+export function emptyEvidenceCounts(): MutableEvidenceCounts {
+  return { supported: 0, legacy: 0, unsupported: 0, corrupt: 0, truncated: 0, incomplete: 0 };
+}
+
+export function incrementEvidence(
+  counts: MutableEvidenceCounts,
+  classification: ActivityLogEvidenceClassification,
+): void {
+  counts[classification] += 1;
+}
+
+function overallEvidenceClassification(
+  counts: MutableEvidenceCounts,
+  anomalies: readonly ProcessSequenceAnomaly[],
+): ActivityLogEvidenceClassification {
+  if (counts.corrupt > 0) return "corrupt";
+  if (counts.truncated > 0) return "truncated";
+  if (counts.unsupported > 0) return "unsupported";
+  // `seq` is allocated process-wide across every state directory. A gap in one analyzed artifact
+  // can therefore be a write to another directory, not missing evidence. Keep reporting the gap,
+  // but only identity violations that cannot arise from cross-directory allocation degrade the
+  // artifact's integrity classification.
+  if (counts.incomplete > 0 || anomalies.some((anomaly) => anomaly.kind !== "gap")) {
+    return "incomplete";
+  }
+  if (counts.legacy > 0) return "legacy";
+  return "supported";
+}
+
+export function evidenceSummary(
+  counts: MutableEvidenceCounts,
+  sequenceAnomalies: readonly ProcessSequenceAnomaly[],
+): ActivityLogEvidenceSummary {
+  return {
+    classification: overallEvidenceClassification(counts, sequenceAnomalies),
+    supportedLineCount: counts.supported,
+    legacyLineCount: counts.legacy,
+    unsupportedLineCount: counts.unsupported,
+    corruptLineCount: counts.corrupt,
+    truncatedLineCount: counts.truncated,
+    incompleteLineCount: counts.incomplete,
+    sequenceAnomalies,
+  };
+}
+
+function evidenceWarnings(evidence: ActivityLogEvidenceSummary): readonly string[] {
+  const warnings: string[] = [];
+  if (evidence.legacyLineCount > 0) {
+    warnings.push(
+      `${String(evidence.legacyLineCount)} line(s) predate the v2 envelope and were ordered by file position`,
+    );
+  }
+  for (const classification of ["unsupported", "corrupt", "truncated", "incomplete"] as const) {
+    const count = evidence[`${classification}LineCount`];
+    if (count > 0) warnings.push(`${String(count)} ${classification} Activity Log line(s)`);
+  }
+  if (evidence.sequenceAnomalies.length > 0) {
+    warnings.push(
+      `${String(evidence.sequenceAnomalies.length)} process sequence anomaly/anomalies`,
+    );
+  }
+  return warnings;
+}
+
+export interface SequenceState {
+  readonly seen: Set<number>;
+  previous: number;
+}
+
+function sequenceAnomaly(
+  kind: ProcessSequenceAnomalyKind,
+  line: ParsedLine,
+  previousSeq: number,
+  missing?: { readonly from: number; readonly to: number },
+): ProcessSequenceAnomaly {
+  return {
+    kind,
+    pid: orZero(line.view.pid),
+    instanceId: orEmpty(line.view.instanceId),
+    fileIndex: line.fileIndex,
+    previousSeq,
+    seq: orZero(line.view.seq),
+    ...(missing === undefined ? {} : { missingFrom: missing.from, missingTo: missing.to }),
+  };
+}
+
+export function lineSequenceAnomalies(
+  line: ParsedLine,
+  state: SequenceState,
+): ProcessSequenceAnomaly[] {
+  const anomalies: ProcessSequenceAnomaly[] = [];
+  const seq = orZero(line.view.seq);
+  if (seq > state.previous + 1) {
+    anomalies.push(
+      sequenceAnomaly("gap", line, state.previous, { from: state.previous + 1, to: seq - 1 }),
+    );
+  }
+  if (state.seen.has(seq)) anomalies.push(sequenceAnomaly("duplicate", line, state.previous));
+  if (seq === 1 && state.previous > 1)
+    anomalies.push(sequenceAnomaly("reset", line, state.previous));
+  if (seq < state.previous) anomalies.push(sequenceAnomaly("decreasing", line, state.previous));
+  state.seen.add(seq);
+  state.previous = seq;
+  return anomalies;
+}
+
+function detectSequenceAnomalies(lines: readonly ParsedLine[]): readonly ProcessSequenceAnomaly[] {
+  const states = new Map<string, SequenceState>();
+  const anomalies: ProcessSequenceAnomaly[] = [];
+  for (const line of lines) {
+    const key = lifetimeKey(line);
+    if (key === undefined) continue;
+    const state = states.get(key) ?? { seen: new Set<number>(), previous: 0 };
+    anomalies.push(...lineSequenceAnomalies(line, state));
+    states.set(key, state);
+  }
+  return anomalies;
+}
+
+interface LatestObservation {
+  readonly latestTimestamp: string | undefined;
+  readonly latestInstanceId: string | undefined;
+}
+
+function isLaterObservation(
+  candidateMs: number,
+  candidateIndex: number,
+  currentMs: number,
+  currentIndex: number,
+): boolean {
+  return candidateMs > currentMs || (candidateMs === currentMs && candidateIndex > currentIndex);
+}
+
+function latestObservation(lines: readonly ParsedLine[]): LatestObservation {
+  let latestTimestamp: string | undefined;
+  let latestTimestampMs = Number.NEGATIVE_INFINITY;
+  let latestTimestampIndex = -1;
+  let latestInstanceId: string | undefined;
+  let latestInstanceMs = Number.NEGATIVE_INFINITY;
+  let latestInstanceIndex = -1;
+  for (const line of lines) {
+    const parsedMs = Date.parse(line.view.ts);
+    if (!Number.isFinite(parsedMs)) continue;
+    if (isLaterObservation(parsedMs, line.fileIndex, latestTimestampMs, latestTimestampIndex)) {
+      latestTimestamp = line.view.ts;
+      latestTimestampMs = parsedMs;
+      latestTimestampIndex = line.fileIndex;
+    }
+    if (
+      line.view.instanceId !== undefined &&
+      isLaterObservation(parsedMs, line.fileIndex, latestInstanceMs, latestInstanceIndex)
+    ) {
+      latestInstanceId = line.view.instanceId;
+      latestInstanceMs = parsedMs;
+      latestInstanceIndex = line.fileIndex;
+    }
+  }
+  return { latestTimestamp, latestInstanceId };
+}
+
+// Parses `text` (the full content of a raw Activity Log file OR a support bundle), groups every line
+// that carries a correlationId into one LogTimeline per id (first-occurrence order), and counts
+// every line that could not be read as a log record. A line with no correlationId at all
+// (`process.*` lines, a first-ever request before any id was assigned) belongs to no timeline and
+// is neither malformed nor counted — this module only reconstructs correlated request/run stories.
+// A bundle joins the lines of many Activity Log files (#3530 segments), so a crashed writer's torn
+// tail can sit in the MIDDLE of the bundle. The manifest's `sourceLogFileLines` names each file's
+// line count and whether it ended in a fragment; those positions classify as `truncated` exactly as
+// the bundle's own final fragment does. A malformed or oversized declaration reinterprets nothing,
+// and the declaration can only move an invalid line between two rejected classes.
+const MAX_SOURCE_LOG_FILE_ENTRIES = 100_000;
+
+interface SourceFileBoundary {
+  readonly lineCount: number;
+  readonly terminalFragment: boolean;
+}
+
+function sourceFileBoundary(value: unknown): SourceFileBoundary | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const lineCount: unknown = Reflect.get(value, "lineCount");
+  const terminalFragment: unknown = Reflect.get(value, "terminalFragment");
+  return typeof lineCount === "number" &&
+    Number.isSafeInteger(lineCount) &&
+    lineCount >= 0 &&
+    typeof terminalFragment === "boolean"
+    ? { lineCount, terminalFragment }
+    : undefined;
+}
+
+// The declared fragment positions, relative to the first content line after the bundle's leading
+// `$section` records (their count is only known once the first evidence line streams past).
+function bundleRelativeFragments(manifestLine: string | undefined): ReadonlySet<number> {
+  const entries: unknown = tryParseJsonObject(manifestLine ?? "")?.sourceLogFileLines;
+  if (!Array.isArray(entries) || entries.length > MAX_SOURCE_LOG_FILE_ENTRIES) return new Set();
+  const fragments = new Set<number>();
+  let offset = 0;
+  for (const entry of entries) {
+    const boundary = sourceFileBoundary(entry);
+    if (boundary === undefined) return new Set();
+    offset += boundary.lineCount;
+    if (boundary.terminalFragment && boundary.lineCount > 0) fragments.add(offset - 1);
+  }
+  return fragments;
+}
+
+/** One line of an Activity Log artifact; only a final torn fragment is not `terminated`. */
+export interface ActivityLogTextLine {
+  readonly text: string;
+  readonly terminated: boolean;
+}
+
+function* textLines(text: string): Generator<ActivityLogTextLine> {
+  const lines = splitLines(text);
+  const lastIndex = lines.length - 1;
+  for (const [index, line] of lines.entries()) {
+    yield { text: line, terminated: index < lastIndex || text.endsWith("\n") };
+  }
+}
+
+interface LineAccumulation {
+  readonly parsedLines: ParsedLine[];
+  readonly evidenceCounts: MutableEvidenceCounts;
+  malformedLineCount: number;
+  // Content lines seen, and how many leading `$section` records preceded the first evidence line.
+  contentIndex: number;
+  leadingSections: number | undefined;
+}
+
+function accumulateContentLine(
+  accumulation: LineAccumulation,
+  line: ActivityLogTextLine,
+  fragments: ReadonlySet<number>,
+  options: SupportAnalyzeOptions,
+): void {
+  const index = accumulation.contentIndex;
+  accumulation.contentIndex += 1;
+  // A line that turns out to be a section ignores the flag, so the tentative offset is safe.
+  const leading = accumulation.leadingSections ?? index;
+  const terminalFragment = fragments.has(index - leading) || !line.terminated;
+  const classification = classifyLine(line.text, index, terminalFragment, options);
+  if (classification.kind === "section") return;
+  accumulation.leadingSections ??= index;
+  incrementEvidence(accumulation.evidenceCounts, classification.evidence);
+  if (classification.kind === "line") accumulation.parsedLines.push(classification.parsed);
+  else if (classification.evidence !== "unsupported") accumulation.malformedLineCount += 1;
+}
+
+export function analyzeLogText(
+  text: string,
+  options: SupportAnalyzeOptions = {},
+): AnalyzeAllResult {
+  return analyzeLogLines(textLines(text), options);
+}
+
+/**
+ * Streams an Activity Log artifact line by line (#3531): the text is never held whole, so memory
+ * follows the retained evidence rather than the artifact size. Ordering and every verdict are
+ * identical to `analyzeLogText`, which delegates here.
+ */
+export function analyzeLogLines(
+  lines: Iterable<ActivityLogTextLine>,
+  options: SupportAnalyzeOptions = {},
+): AnalyzeAllResult {
+  const iterator = lines[Symbol.iterator]();
+  const first = iterator.next();
+  const firstLine: ActivityLogTextLine | undefined = first.done === true ? undefined : first.value;
+  const kind = detectSourceKind(firstLine?.text);
+  const fragments =
+    kind === "bundle" ? bundleRelativeFragments(firstLine?.text) : new Set<number>();
+  const accumulation: LineAccumulation = {
+    parsedLines: [],
+    evidenceCounts: emptyEvidenceCounts(),
+    malformedLineCount: 0,
+    contentIndex: 0,
+    leadingSections: undefined,
+  };
+  if (firstLine !== undefined && kind === "raw-log") {
+    accumulateContentLine(accumulation, firstLine, fragments, options);
+  }
+  for (let next = iterator.next(); next.done !== true; next = iterator.next()) {
+    accumulateContentLine(accumulation, next.value, fragments, options);
+  }
+  return analyzeParsedLines(kind, accumulation);
+}
+
+function analyzeParsedLines(kind: SourceKind, accumulation: LineAccumulation): AnalyzeAllResult {
+  const { parsedLines, evidenceCounts, malformedLineCount } = accumulation;
+  const groups = groupByCorrelationId(parsedLines);
+  const timelines = [...groups.entries()].map(([correlationId, group]) =>
+    buildTimeline(correlationId, group),
+  );
+  const processes = buildProcessSummaries(parsedLines);
+  const sequenceAnomalies = detectSequenceAnomalies(parsedLines);
+  const evidence = evidenceSummary(evidenceCounts, sequenceAnomalies);
+  const legacyLineCount = evidence.legacyLineCount;
+  const warnings = evidenceWarnings(evidence);
+  const clusters = buildOpClusters(parsedLines);
+  const updateAttempts = buildUpdateAttempts(parsedLines);
+  const observation = latestObservation(parsedLines);
+  const sufficiency = projectActivityLogSufficiency(parsedLines.map(sufficiencyLine), evidence);
+  return {
+    sourceKind: kind,
+    ...observation,
+    timelines,
+    malformedLineCount,
+    evidence,
+    processes,
+    legacyLineCount,
+    warnings,
+    clusters,
+    updateAttempts,
+    sufficiency,
+  };
+}
+
+/** The artifact's sufficiency narrowed to the failure classes one timeline observed (#3532). */
+export function timelineSufficiency(
+  result: AnalyzeAllResult,
+  timeline: LogTimeline,
+): ActivityLogSufficiency {
+  return restrictActivityLogSufficiency(
+    result.sufficiency,
+    activityLogFailureClassesOf(timeline.lines.map((line) => line.op)),
+  );
+}
+
+export function sufficiencyLine(line: ParsedLine): ActivityLogSufficiencyLine {
+  return {
+    op: line.view.op,
+    correlationId: line.correlationId,
+    parentCorrelationId: line.view.parentCorrelationId,
+    pid: line.view.pid,
+    instanceId: line.view.instanceId,
+    fields: line.view.extra,
+  };
+}
+
+export function findUpdateAttempt(
+  result: AnalyzeAllResult,
+  candidateOrCorrelationId: string,
+): UpdateAttemptTimeline | undefined {
+  return result.updateAttempts.find(
+    (attempt) =>
+      attempt.candidateId === candidateOrCorrelationId ||
+      attempt.correlationIds.includes(candidateOrCorrelationId),
+  );
+}
+
+export function findTimeline(
+  result: AnalyzeAllResult,
+  correlationId: string,
+): LogTimeline | undefined {
+  return result.timelines.find((timeline) => timeline.correlationId === correlationId);
+}
+
+function renderEventLine(view: ServerLogLineView): string {
+  const seq = view.seq !== undefined ? String(view.seq) : "-";
+  const level = view.level ?? "-";
+  const suffix = [
+    view.errorKind === undefined ? undefined : `[${view.errorKind}]`,
+    view.durationMs === undefined ? undefined : `[${String(view.durationMs)}ms]`,
+    view.toolCatalog === undefined ? undefined : `toolCatalog=${JSON.stringify(view.toolCatalog)}`,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" ");
+  const base = `${view.ts} ${seq} ${level} ${view.category} ${view.op}`;
+  return suffix.length > 0 ? `${base} ${suffix}` : base;
+}
+
+export function renderHumanTimeline(timeline: LogTimeline): string {
+  const header = `correlationId=${timeline.correlationId} lines=${String(timeline.lines.length)} durationMs=${String(timeline.durationMs)}\n`;
+  if (timeline.lines.length === 0) return header;
+  const body = timeline.lines.map((line) => `  ${renderEventLine(line)}`).join("\n");
+  return `${header}${body}\n`;
+}
+
+function renderProcessSummary(process: ProcessSummary): string {
+  const seqRange = `${String(process.firstSeq)}-${String(process.lastSeq)}`;
+  const started = process.started === undefined ? "" : " started=yes";
+  const exit = process.exitReason === undefined ? "" : ` exitReason=${process.exitReason}`;
+  return (
+    `  pid=${String(process.pid)} instanceId=${process.instanceId} ` +
+    `lines=${String(process.lineCount)} seq=${seqRange} ts=${process.firstTs}..${process.lastTs}` +
+    `${started}${exit}`
+  );
+}
+
+function renderProcessSummaries(processes: readonly ProcessSummary[]): string {
+  const header = `Processes: ${String(processes.length)}\n`;
+  const body = processes.map((process) => renderProcessSummary(process)).join("\n");
+  return `${header}${body}\n`;
+}
+
+function renderWarnings(warnings: readonly string[]): string {
+  const lines = warnings.map((warning) => `warning: ${warning}`);
+  return `${lines.join("\n")}\n`;
+}
+
+function renderSequenceAnomaly(anomaly: ProcessSequenceAnomaly): string {
+  const missing =
+    anomaly.missingFrom === undefined
+      ? ""
+      : ` missing=${String(anomaly.missingFrom)}-${String(anomaly.missingTo)}`;
+  return (
+    `  ${anomaly.kind} pid=${String(anomaly.pid)} instanceId=${anomaly.instanceId} ` +
+    `fileIndex=${String(anomaly.fileIndex)} previousSeq=${String(anomaly.previousSeq)} ` +
+    `seq=${String(anomaly.seq)}${missing}`
+  );
+}
+
+function renderSequenceAnomalies(anomalies: readonly ProcessSequenceAnomaly[]): string {
+  return `Sequence anomalies: ${String(anomalies.length)}\n${anomalies
+    .map((anomaly) => renderSequenceAnomaly(anomaly))
+    .join("\n")}\n`;
+}
+
+function renderCluster(cluster: OpCluster): string {
+  const errorKind = cluster.errorKind ?? "-";
+  const samples = cluster.sampleCorrelationIds.join(",");
+  return (
+    `  ${cluster.category} ${cluster.op} [${errorKind}] count=${String(cluster.count)}` +
+    (samples.length > 0 ? ` sample=${samples}` : "")
+  );
+}
+
+// Standalone, Wave 6: not called from `renderHumanAllTimelines` (a `--clusters` view is a
+// deliberately DIFFERENT report from the default per-timeline one, not a section folded into it),
+// exported for a future `--clusters` CLI flag to call directly.
+export function renderHumanClusters(clusters: readonly OpCluster[]): string {
+  const header = `Clusters: ${String(clusters.length)}\n`;
+  if (clusters.length === 0) return header;
+  return `${header}${clusters.map((cluster) => renderCluster(cluster)).join("\n")}\n`;
+}
+
+export function renderHumanAllTimelines(result: AnalyzeAllResult): string {
+  const sections: string[] = [];
+  if (result.warnings.length > 0) sections.push(renderWarnings(result.warnings));
+  if (result.evidence.sequenceAnomalies.length > 0) {
+    sections.push(renderSequenceAnomalies(result.evidence.sequenceAnomalies));
+  }
+  if (result.processes.length > 0) sections.push(renderProcessSummaries(result.processes));
+  sections.push(
+    result.timelines.length === 0
+      ? "No correlated events found.\n"
+      : result.timelines.map((timeline) => renderHumanTimeline(timeline)).join("\n"),
+  );
+  return sections.join("\n");
+}
+
+// ─── Wave 6: ReproductionSeed (`--seed`) ────────────────────────────────────────────────────────
+//
+// Everything below assembles a `ReproductionSeed` for one correlationId: a `gatewayScript`
+// (scanning `gateway.chat.*`/`gateway.stream.*`/`gateway.retry.*` lines for the httpStatus/
+// retryAfterMs/finishReason/usage/firstTokenMs fields ADR-0173 Wave 3 added), an `httpRequest`
+// (the timeline's `http`/`request` and `http`/`sse.stream.closed` lines), a `storeFingerprint`
+// (the bundle manifest's `storeFingerprints`, Wave 4a — undefined for a raw Activity Log file, which
+// carries no manifest), an `indexingJob` (the timeline's `indexing.job.started` line, Wave 4a),
+// `stackFrames`/`causeChain` (straight off the timeline), and a `warnings` field naming exactly
+// what could not be reconstructed and why — never silently omitted.
+
+export interface GatewayReplayAttempt {
+  readonly outcome: "success" | "provider-error" | "rate-limit" | "timeout" | "transport-error";
+  readonly httpStatus?: number | undefined;
+  readonly retryAfterMs?: number | undefined;
+  readonly durationMs: number;
+  readonly finishReason?: string | undefined;
+  readonly usage?: { readonly promptTokens: number; readonly completionTokens: number } | undefined;
+  readonly toolCallCount?: number | undefined;
+  readonly firstTokenMs?: number | undefined;
+}
+
+export interface GatewayReplayScript {
+  readonly modelId: string;
+  readonly attempts: readonly GatewayReplayAttempt[];
+}
+
+const GATEWAY_RETRY_OPS: ReadonlySet<string> = new Set([
+  "gateway.retry.scheduled",
+  "gateway.retry.exhausted",
+  "gateway.retry.budget-exhausted",
+]);
+const GATEWAY_SUCCESS_OPS: ReadonlySet<string> = new Set([
+  "gateway.chat.completed",
+  "gateway.stream.completed",
+]);
+const GATEWAY_FAILURE_OPS: ReadonlySet<string> = new Set([
+  "gateway.chat.failed",
+  "gateway.stream.failed",
+  "gateway.stream.abandoned",
+]);
+
+function isGatewayAttemptLine(view: ServerLogLineView): boolean {
+  if (view.category !== "gateway") return false;
+  return (
+    GATEWAY_RETRY_OPS.has(view.op) ||
+    GATEWAY_SUCCESS_OPS.has(view.op) ||
+    GATEWAY_FAILURE_OPS.has(view.op)
+  );
+}
+
+// Current typed events use ADR-0173's closed error-kind vocabulary. Retained pre-registry logs can
+// still carry the gateway's historical `GatewayError.code`, so keep those exact aliases readable
+// rather than making an upgrade erase an otherwise reconstructable replay outcome. Anything else
+// falls into the generic provider-error bucket.
+function attemptOutcome(errorKind: string | undefined): GatewayReplayAttempt["outcome"] {
+  if (errorKind === "rate-limited" || errorKind === "GATEWAY_RATE_LIMIT") return "rate-limit";
+  if (errorKind === "timeout" || errorKind === "GATEWAY_TIMEOUT") return "timeout";
+  if (errorKind === "GATEWAY_TRANSPORT") return "transport-error";
+  return "provider-error";
+}
+
+function attemptUsage(
+  extra: Readonly<Record<string, unknown>>,
+): { readonly promptTokens: number; readonly completionTokens: number } | undefined {
+  const promptTokens = optionalNumber(extra, "promptTokens");
+  const completionTokens = optionalNumber(extra, "completionTokens");
+  return promptTokens === undefined || completionTokens === undefined
+    ? undefined
+    : { promptTokens, completionTokens };
+}
+
+function gatewayAttemptFrom(view: ServerLogLineView): GatewayReplayAttempt {
+  const extra = view.extra ?? {};
+  const outcome = GATEWAY_SUCCESS_OPS.has(view.op) ? "success" : attemptOutcome(view.errorKind);
+  const httpStatus = optionalNumber(extra, "httpStatus");
+  const retryAfterMs = optionalNumber(extra, "retryAfterMs");
+  const finishReason = optionalString(extra, "finishReason");
+  const usage = attemptUsage(extra);
+  const toolCallCount = optionalNumber(extra, "toolCallCount");
+  const firstTokenMs = optionalNumber(extra, "firstTokenMs");
+  return {
+    outcome,
+    durationMs: view.durationMs ?? 0,
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    ...(finishReason === undefined ? {} : { finishReason }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(toolCallCount === undefined ? {} : { toolCallCount }),
+    ...(firstTokenMs === undefined ? {} : { firstTokenMs }),
+  };
+}
+
+function gatewayModelId(lines: readonly ServerLogLineView[]): string {
+  for (const view of lines) {
+    const modelId = optionalString(view.extra ?? {}, "modelId");
+    if (modelId !== undefined) return modelId;
+  }
+  return "unknown-model";
+}
+
+// Undefined when the timeline carries no gateway line at all — distinct from an attempts array
+// that IS populated but every attempt failed, which is a real, reportable replay script.
+export function buildGatewayReplayScript(
+  lines: readonly ServerLogLineView[],
+): GatewayReplayScript | undefined {
+  const attemptLines = lines.filter(isGatewayAttemptLine);
+  if (attemptLines.length === 0) return undefined;
+  return { modelId: gatewayModelId(lines), attempts: attemptLines.map(gatewayAttemptFrom) };
+}
+
+// Field names match `server.ts`'s `buildHttpRequestExtra`/`sse-write.ts`'s `emitSseStreamClosed`
+// exactly (verified against the current checkout, ADR-0173 §9) — never restated as a formula, only
+// read back off whatever those producers actually wrote.
+export interface HttpRequestSeed {
+  readonly method?: string | undefined;
+  readonly routeTemplate?: string | undefined;
+  readonly queryParamNames?: readonly string[] | undefined;
+  readonly responseBytes?: number | undefined;
+  readonly status?: number | undefined;
+  readonly durationMs?: number | undefined;
+  readonly aborted?: boolean | undefined;
+  readonly frameCount?: number | undefined;
+}
+
+function optionalBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function buildHttpRequestSeed(lines: readonly ServerLogLineView[]): HttpRequestSeed | undefined {
+  const requestLine = lines.find((view) => view.category === "http" && view.op === "request");
+  const sseLine = lines.find((view) => view.category === "http" && view.op === "sse.stream.closed");
+  if (requestLine === undefined && sseLine === undefined) return undefined;
+  const extra = requestLine?.extra ?? {};
+  const frameCount = optionalNumber(sseLine?.extra ?? {}, "frameCount");
+  return {
+    method: optionalString(extra, "method"),
+    routeTemplate: optionalString(extra, "routeTemplate"),
+    queryParamNames: optionalStringArray(extra.queryParamNames),
+    responseBytes: optionalNumber(extra, "responseBytes"),
+    status: typeof requestLine?.status === "number" ? requestLine.status : undefined,
+    durationMs: requestLine?.durationMs,
+    aborted: optionalBoolean(extra, "aborted"),
+    frameCount,
+  };
+}
+
+// Field names match `orchestrator.ts`'s `emitJobStarted`/`chunkerConfigExtra` exactly (verified
+// against the current checkout, ADR-0173 §8/g16).
+export interface IndexingJobSeed {
+  readonly sourceCount?: number | undefined;
+  readonly batchSize?: number | undefined;
+  readonly concurrency?: number | undefined;
+  readonly minChunkTokens?: number | undefined;
+  readonly maxChunkTokens?: number | undefined;
+  readonly overlapTokens?: number | undefined;
+  readonly tokenizerKind?: string | undefined;
+}
+
+function buildIndexingJobSeed(lines: readonly ServerLogLineView[]): IndexingJobSeed | undefined {
+  const started = lines.find(
+    (view) => view.category === "indexing" && view.op === "indexing.job.started",
+  );
+  if (started === undefined) return undefined;
+  const extra = started.extra ?? {};
+  return {
+    sourceCount: optionalNumber(extra, "sourceCount"),
+    batchSize: optionalNumber(extra, "batchSize"),
+    concurrency: optionalNumber(extra, "concurrency"),
+    minChunkTokens: optionalNumber(extra, "minChunkTokens"),
+    maxChunkTokens: optionalNumber(extra, "maxChunkTokens"),
+    overlapTokens: optionalNumber(extra, "overlapTokens"),
+    tokenizerKind: optionalString(extra, "tokenizerKind"),
+  };
+}
+
+// ─── Epic #3384: issue-to-PR journey reconstruction ────────────────────────────────────────────
+//
+// Reconstructs the repository-delivery journey (intake -> mutation authority -> verified commit ->
+// push -> draft PR -> CI readiness -> description generation/apply -> journey outcome) from the
+// body-free `git.delivery.*`/`git.pr-description*`/`git.journey-*`/`coding-context.github*`/
+// `git-change.chat.*`/`coding-repository-handler.*` lines already present on a correlated timeline.
+// Every field a step carries is copied VERBATIM off the emitter's own closed-vocabulary `extra`
+// value (state/status/phase/decision/outcome/reason, plus the digest/id fields a replay needs) —
+// this reconstruction never invents a label the production emitter did not itself write.
+//
+// Fail-closed by construction: a step's `status`/`reason`/`digests` are read from the SAME
+// `redactLogFields` choke point the activity-log sink itself writes through (never the raw line),
+// so a value-shape violation (prose, a secret, a path) that a hostile or corrupted log line still
+// carries under an otherwise-innocuous field name is caught here exactly as it would be at write
+// time. When no redactor is supplied at all, a step is reported UNVERIFIED with no content fields
+// populated, rather than falling back to trusting the raw line (AGENTS.md §4).
+
+export type IssueToPrJourneyPhase =
+  "intake" | "authority" | "commit" | "push" | "pr" | "readiness" | "description" | "outcome";
+
+// Ops whose phase does not depend on their own `extra` — a straight lookup.
+const JOURNEY_OP_PHASE = new Map<string, IssueToPrJourneyPhase>([
+  ["coding-repository-handler.started", "intake"],
+  ["coding-repository-handler.settled", "intake"],
+  ["coding-context.github.read", "intake"],
+  ["coding-context.github-remote.evaluated", "intake"],
+  ["git-change.chat.connected", "intake"],
+  ["git-change.chat.refreshed", "intake"],
+  ["git-change.chat.stale", "intake"],
+  ["git-change.chat.blocked", "intake"],
+  ["coding-context.github-authorization.evaluated", "authority"],
+  ["coding-context.github-authorization.changed", "authority"],
+  ["git.delivery.authority.admitted", "authority"],
+  ["git.delivery.authority.denied", "authority"],
+  ["git.delivery.buffers.checked", "commit"],
+  ["git.delivery.commit.approval.required", "commit"],
+  ["git.delivery.commit.approval.minted", "commit"],
+  ["git.delivery.push.approval.required", "push"],
+  ["git.delivery.push.approval.minted", "push"],
+  ["git.delivery.pr.approval.required", "pr"],
+  ["git.delivery.pr.approval.minted", "pr"],
+  ["git.delivery.readiness.observed", "readiness"],
+  // #3389 (epic #3384 correction 7): the draft-PR -> ready transition. `.approval.required`/
+  // `.approval.minted` mirror the commit/push/pr approval pair above; `.executed`/`.drift` are the
+  // mark-ready-specific outcome pair (drift is the precondition-failed case of the same mutation,
+  // never folded into `.executed` so a replay can tell "ready" from "the branch moved under us").
+  ["git.delivery.pr-mark-ready.approval.required", "readiness"],
+  ["git.delivery.pr-mark-ready.approval.minted", "readiness"],
+  ["git.delivery.pr-mark-ready.executed", "readiness"],
+  ["git.delivery.pr-mark-ready.drift", "readiness"],
+  ["git.pr-description", "description"],
+  ["git.pr-description.receipt", "description"],
+  // #3401: the coding-runtime automatic-description dispatch lifecycle (dispatched/coalesced/
+  // superseded/blocked/generated/failed) — one fixed op, the sub-step carried in its own `event`
+  // extra field, ahead of `git.pr-description`'s apply/receipt evidence in the same phase.
+  ["coding-runtime.description", "description"],
+  // Chat's own admission gate ahead of the Model Gateway for a git-change-connected turn
+  // (chat-handlers.ts `logGitChangeTurnAuthority`) — the description-generation admission decision
+  // itself, distinct from the apply/receipt evidence above.
+  ["pr-description.chat.turn.admitted", "description"],
+  ["pr-description.chat.turn.denied", "description"],
+  ["git.journey-observation", "outcome"],
+  ["git.journey-outcome.recorded", "outcome"],
+]);
+
+// Ops whose phase is carried on the `GitDeliveryActionKind` (`git-delivery.ts`) named in their own
+// `extra` rather than fixed by the op itself — one generic mutation-lifecycle op reports on every
+// action kind (AGENTS.md §5: one formatter, not one op per action kind).
+const JOURNEY_ACTION_KIND_PHASE: Readonly<Record<string, IssueToPrJourneyPhase>> = {
+  commit: "commit",
+  push: "push",
+  "pr-create": "pr",
+  "pr-update": "pr",
+  "pr-description-apply": "description",
+  // #3389: `pr-mark-ready` is a real `GitDeliveryActionKind` member (git-delivery.ts) and this
+  // generic mutation-lifecycle path (`git.delivery.mutation.completed`/`.failed`) is capable of
+  // reporting on any action kind — mapped here for the same completeness reason every other
+  // action kind is, even though today's mark-ready flow logs its own dedicated ops (above)
+  // instead of routing through this generic path.
+  "pr-mark-ready": "readiness",
+};
+const JOURNEY_ACTION_KIND_OPS: ReadonlySet<string> = new Set([
+  "git.delivery.mutation.completed",
+  "git.delivery.mutation.failed",
+  "git.delivery.dispatch.no-spawn",
+]);
+
+// Every op literal this reconstruction recognises, direct or action-kind-derived — the set
+// `hasIssueToPrJourneyOps` consults to decide whether a redaction verifier is worth loading at all.
+const ALL_JOURNEY_OPS: ReadonlySet<string> = new Set([
+  ...JOURNEY_OP_PHASE.keys(),
+  ...JOURNEY_ACTION_KIND_OPS,
+]);
+
+function actionKindPhase(
+  source: Readonly<Record<string, unknown>>,
+): IssueToPrJourneyPhase | undefined {
+  const kind = optionalString(source, "actionKind") ?? optionalString(source, "operation");
+  return kind === undefined ? undefined : JOURNEY_ACTION_KIND_PHASE[kind];
+}
+
+function phaseForLine(view: ServerLogLineView): IssueToPrJourneyPhase | undefined {
+  const direct = JOURNEY_OP_PHASE.get(view.op);
+  if (direct !== undefined) return direct;
+  if (!JOURNEY_ACTION_KIND_OPS.has(view.op)) return undefined;
+  return actionKindPhase(view.extra ?? {});
+}
+
+// Whether `result` carries any evidence this reconstruction covers — the whole-file `clusters`
+// view already groups every line by op regardless of correlationId, so this is a cheap, exact
+// membership check rather than a second scan of every line.
+export function hasIssueToPrJourneyOps(result: AnalyzeAllResult): boolean {
+  return result.clusters.some((cluster) => ALL_JOURNEY_OPS.has(cluster.op));
+}
+
+export interface IssueToPrJourneyStep {
+  readonly phase: IssueToPrJourneyPhase;
+  readonly op: string;
+  readonly ts: string;
+  // False exactly when no redactor was supplied — every other field is then omitted rather than
+  // read from the unverified raw line.
+  readonly redactionVerified: boolean;
+  readonly status?: string | undefined;
+  readonly reason?: string | undefined;
+  readonly errorKind?: string | undefined;
+  // The digest/id fields a replay needs (runId, headSha, evidenceRef, snapshotDigest, …), read
+  // off the SAME re-verified fields as status/reason — never off the raw line.
+  readonly digests?: Readonly<Record<string, string | number>> | undefined;
+  // Present only when re-running the line's own `extra` through `redactLogFields` produced a
+  // DIFFERENT value for one of its fields — evidence that the raw line carried a body-bearing
+  // value under that name. Names only, never the offending value itself.
+  readonly redactionViolations?: readonly string[] | undefined;
+}
+
+export interface IssueToPrJourneyView {
+  readonly steps: readonly IssueToPrJourneyStep[];
+  readonly phasesObserved: readonly IssueToPrJourneyPhase[];
+  readonly redactionViolationCount: number;
+}
+
+function extraString(
+  source: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): string | undefined {
+  const value = source?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function stepStatus(source: Readonly<Record<string, unknown>>): string | undefined {
+  return (
+    extraString(source, "state") ??
+    extraString(source, "status") ??
+    extraString(source, "phase") ??
+    extraString(source, "decision") ??
+    extraString(source, "outcome")
+  );
+}
+
+const JOURNEY_DIGEST_FIELDS: readonly string[] = [
+  "runId",
+  "headSha",
+  "evidenceRef",
+  "remoteDigest",
+  "remoteDigestPrefix",
+  "snapshotDigest",
+  "artifactDigest",
+  "bodyDigest",
+  "scopeDigest",
+  "relationshipId",
+  "revision",
+  "prExternalId",
+];
+
+function digestValue(
+  source: Readonly<Record<string, unknown>>,
+  key: string,
+): string | number | undefined {
+  const value = source[key];
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function journeyDigests(
+  source: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, string | number>> | undefined {
+  const out: Record<string, string | number> = {};
+  for (const key of JOURNEY_DIGEST_FIELDS) {
+    const value = digestValue(source, key);
+    if (value !== undefined) out[key] = value;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+// A field-name violation (denylisted content) OR a value-shape violation (prose/secret/path caught
+// regardless of name) both show up the same way: `redactLogFields` replaces or drops the field, so
+// its re-verified value differs from what the raw line carried. `null` is excluded on purpose — the
+// production redactor drops it by design (it is not one of the allowed value types), which is
+// correct behaviour, not evidence of a leak.
+function redactionViolations(
+  raw: Readonly<Record<string, unknown>> | undefined,
+  verified: Readonly<Record<string, unknown>>,
+): readonly string[] | undefined {
+  if (raw === undefined) return undefined;
+  const violated = Object.keys(raw).filter((key) => {
+    const value = raw[key];
+    if (value === null) return false;
+    return JSON.stringify(value) !== JSON.stringify(verified[key]);
+  });
+  return violated.length === 0 ? undefined : violated;
+}
+
+function journeyStepFor(
+  view: ServerLogLineView,
+  phase: IssueToPrJourneyPhase,
+  redactor: ToolDiagnosticRedactor | undefined,
+): IssueToPrJourneyStep {
+  if (redactor === undefined) {
+    return { phase, op: view.op, ts: view.ts, redactionVerified: false };
+  }
+  const verified = redactor(view.extra ?? {}) ?? {};
+  const violations = redactionViolations(view.extra, verified);
+  const status = stepStatus(verified);
+  const reason = extraString(verified, "reason");
+  const digests = journeyDigests(verified);
+  return {
+    phase,
+    op: view.op,
+    ts: view.ts,
+    redactionVerified: true,
+    ...(status === undefined ? {} : { status }),
+    ...(reason === undefined ? {} : { reason }),
+    ...(view.errorKind === undefined ? {} : { errorKind: view.errorKind }),
+    ...(digests === undefined ? {} : { digests }),
+    ...(violations === undefined ? {} : { redactionViolations: violations }),
+  };
+}
+
+// Undefined when the timeline carries none of this reconstruction's ops at all — the same
+// "absent, not empty" convention `buildGatewayReplayScript`/`buildHttpRequestSeed` already use.
+function buildIssueToPrJourneyView(
+  lines: readonly ServerLogLineView[],
+  redactor: ToolDiagnosticRedactor | undefined,
+): IssueToPrJourneyView | undefined {
+  const steps: IssueToPrJourneyStep[] = [];
+  for (const view of lines) {
+    const phase = phaseForLine(view);
+    if (phase === undefined) continue;
+    steps.push(journeyStepFor(view, phase, redactor));
+  }
+  if (steps.length === 0) return undefined;
+  return {
+    steps,
+    phasesObserved: distinctInOrder(steps.map((step) => step.phase)),
+    redactionViolationCount: steps.filter((step) => step.redactionViolations !== undefined).length,
+  };
+}
+
+function issueToPrJourneyWarning(journey: IssueToPrJourneyView | undefined): string | undefined {
+  if (journey === undefined) {
+    return (
+      "no git-delivery/pr-description/journey-observation lines found for this correlationId — " +
+      "either no repository-delivery journey occurred on this run, or this artifact predates the " +
+      "issue-to-PR journey evidence"
+    );
+  }
+  if (journey.steps.some((step) => !step.redactionVerified)) {
+    return (
+      "no redaction verifier supplied — issueToPrJourney step fields were withheld rather than " +
+      "read from an unverified line"
+    );
+  }
+  return journey.redactionViolationCount > 0
+    ? `${String(journey.redactionViolationCount)} issueToPrJourney step(s) carried a field that ` +
+        "failed redaction re-verification and were withheld from this seed"
+    : undefined;
+}
+
+// A bundle's manifest line (index 0, `$section: "manifest"`) carries `storeFingerprints` when the
+// exporter is Wave-4a-or-later. `classifyLine` treats it as bundle metadata and never parses its
+// content, so this reads it directly, independent of `analyzeLogText`. Every candidate is
+// re-validated with the contract's own `isStoreFingerprint` guard (never trusted merely because it
+// parsed as JSON) — a raw Activity Log file, which has no manifest line at all, always returns undefined.
+function extractManifestStoreFingerprints(
+  firstLine: string | undefined,
+): readonly StoreFingerprint[] | undefined {
+  if (firstLine === undefined) return undefined;
+  const record = tryParseJsonObject(firstLine);
+  if (record?.$section !== "manifest" || !Array.isArray(record.storeFingerprints)) {
+    return undefined;
+  }
+  const valid = record.storeFingerprints.filter(isStoreFingerprint);
+  return valid.length > 0 ? valid : undefined;
+}
+
+const MAX_SEED_CAUSE_CHAIN = 16;
+
+function aggregateCauseChain(lines: readonly ServerLogLineView[]): readonly string[] {
+  const all: string[] = [];
+  for (const view of lines) {
+    if (view.causeChain === undefined) continue;
+    all.push(...view.causeChain);
+  }
+  return distinctInOrder(all).slice(0, MAX_SEED_CAUSE_CHAIN);
+}
+
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+export interface ReproductionSeed {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly sourceArtifact: {
+    readonly kind: SourceKind;
+    readonly lineCount: number;
+    readonly sha256: string;
+  };
+  readonly correlationId: string;
+  readonly timeline: readonly ServerLogLineView[];
+  readonly gatewayScript?: GatewayReplayScript | undefined;
+  readonly toolCatalog?: readonly ToolCatalogLogEvidence[];
+  readonly httpRequest?: HttpRequestSeed | undefined;
+  readonly storeFingerprint?: readonly StoreFingerprint[] | undefined;
+  readonly indexingJob?: IndexingJobSeed | undefined;
+  // Epic #3384: the issue-to-PR repository-delivery journey, when this correlationId's timeline
+  // carries any of its ops — undefined, never an empty view, when it carries none.
+  readonly issueToPrJourney?: IssueToPrJourneyView | undefined;
+  readonly stackFrames?: readonly string[] | undefined;
+  readonly causeChain?: readonly string[] | undefined;
+  // #3532: complete/degraded/insufficient for the failure classes this timeline observed.
+  readonly sufficiency: ActivityLogSufficiency;
+  // What could NOT be reconstructed from this artifact, and why — GRAFTED FROM DESIGN C
+  // (ADR-0173 §10). Never empty in practice: every seed at minimum names the standing
+  // by-design gap that no prompt/response body is ever logged.
+  readonly warnings: readonly string[];
+}
+
+const REPRODUCTION_SEED_SCHEMA_VERSION = 1;
+
+const NO_BODY_WARNING =
+  "no prompt/response body was ever logged by design — content-shape only " +
+  "(counts, ids, and closed-vocabulary labels, never message/completion text)";
+
+function framesWarning(frames: readonly string[]): string | undefined {
+  return frames.length === 0
+    ? "no frames recorded for this correlationId — either no error occurred on this call, or " +
+        "this artifact predates Wave 2's frame capture"
+    : undefined;
+}
+
+function gatewayScriptWarning(script: GatewayReplayScript | undefined): string | undefined {
+  return script === undefined
+    ? "no gateway.chat.*/gateway.stream.*/gateway.retry.* lines found for this correlationId — " +
+        "either no gateway call occurred, or this artifact predates Wave 3's provider detail"
+    : undefined;
+}
+
+function httpRequestWarning(seed: HttpRequestSeed | undefined): string | undefined {
+  return seed === undefined
+    ? "no http.request line found for this correlationId — this artifact may cover only an " +
+        "internal/background operation with no HTTP request boundary"
+    : undefined;
+}
+
+function storeFingerprintWarning(
+  kind: SourceKind,
+  fingerprints: readonly StoreFingerprint[] | undefined,
+): string | undefined {
+  if (fingerprints !== undefined) return undefined;
+  return kind === "raw-log"
+    ? "a raw Activity Log file carries no store fingerprints — export a support bundle " +
+        "(`keiko support export`) to include them"
+    : "no store fingerprints found in this bundle's manifest — either the exporter predates " +
+        "Wave 4a, or every store was unavailable at export time";
+}
+
+interface SeedWarningInputs {
+  readonly kind: SourceKind;
+  readonly frames: readonly string[];
+  readonly gatewayScript: GatewayReplayScript | undefined;
+  readonly httpRequest: HttpRequestSeed | undefined;
+  readonly storeFingerprint: readonly StoreFingerprint[] | undefined;
+  readonly issueToPrJourney: IssueToPrJourneyView | undefined;
+}
+
+function buildSeedWarnings(input: SeedWarningInputs): readonly string[] {
+  return [
+    NO_BODY_WARNING,
+    framesWarning(input.frames),
+    gatewayScriptWarning(input.gatewayScript),
+    httpRequestWarning(input.httpRequest),
+    storeFingerprintWarning(input.kind, input.storeFingerprint),
+    issueToPrJourneyWarning(input.issueToPrJourney),
+  ].filter((warning): warning is string => warning !== undefined);
+}
+
+function toolCatalogSeed(
+  toolCatalog: readonly ToolCatalogLogEvidence[],
+): Pick<ReproductionSeed, "toolCatalog"> {
+  return toolCatalog.length === 0 ? {} : { toolCatalog };
+}
+
+interface SeedComputedFields {
+  readonly gatewayScript: GatewayReplayScript | undefined;
+  readonly httpRequest: HttpRequestSeed | undefined;
+  readonly storeFingerprint: readonly StoreFingerprint[] | undefined;
+  readonly indexingJob: IndexingJobSeed | undefined;
+  readonly issueToPrJourney: IssueToPrJourneyView | undefined;
+  readonly stackFrames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
+// Split out of `buildReproductionSeed` purely to stay under the repository's per-function
+// complexity ceiling (AGENTS.md §6) — no behavioural seam of its own.
+function optionalSeedFields(
+  fields: SeedComputedFields,
+): Pick<
+  ReproductionSeed,
+  | "gatewayScript"
+  | "httpRequest"
+  | "storeFingerprint"
+  | "indexingJob"
+  | "issueToPrJourney"
+  | "stackFrames"
+  | "causeChain"
+> {
+  return {
+    ...(fields.gatewayScript === undefined ? {} : { gatewayScript: fields.gatewayScript }),
+    ...(fields.httpRequest === undefined ? {} : { httpRequest: fields.httpRequest }),
+    ...(fields.storeFingerprint === undefined ? {} : { storeFingerprint: fields.storeFingerprint }),
+    ...(fields.indexingJob === undefined ? {} : { indexingJob: fields.indexingJob }),
+    ...(fields.issueToPrJourney === undefined ? {} : { issueToPrJourney: fields.issueToPrJourney }),
+    ...(fields.stackFrames.length === 0 ? {} : { stackFrames: fields.stackFrames }),
+    ...(fields.causeChain.length === 0 ? {} : { causeChain: fields.causeChain }),
+  };
+}
+
+interface SeedComputation extends SeedComputedFields {
+  readonly kind: SourceKind;
+  readonly toolCatalog: readonly ToolCatalogLogEvidence[];
+}
+
+// Every derived field a `ReproductionSeed` assembles from one timeline, computed once — split out
+// of `buildReproductionSeed` purely to stay under the repository's per-function line/complexity
+// ceilings (AGENTS.md §6), no behavioural seam of its own.
+function computeSeedFields(
+  source: ReproductionSeedSource,
+  timeline: LogTimeline,
+  options: SupportAnalyzeOptions,
+): SeedComputation {
+  const toolCatalog = timeline.lines.flatMap((line) =>
+    line.toolCatalog === undefined ? [] : [line.toolCatalog],
+  );
+  return {
+    kind: detectSourceKind(source.firstLine),
+    gatewayScript: buildGatewayReplayScript(timeline.lines),
+    httpRequest: buildHttpRequestSeed(timeline.lines),
+    indexingJob: buildIndexingJobSeed(timeline.lines),
+    storeFingerprint: extractManifestStoreFingerprints(source.firstLine),
+    stackFrames: timeline.frames ?? [],
+    causeChain: aggregateCauseChain(timeline.lines),
+    toolCatalog,
+    issueToPrJourney: buildIssueToPrJourneyView(timeline.lines, options.toolDiagnosticRedactor),
+  };
+}
+
+// What a seed records about its source artifact. The CLI computes it while streaming the file
+// (#3531), so a seed never needs the artifact held whole: the line count, the SHA-256 of the
+// artifact's bytes, and its first line (a bundle's manifest line, for its store fingerprints).
+export interface ReproductionSeedSource {
+  readonly lineCount: number;
+  readonly sha256: string;
+  readonly firstLine: string | undefined;
+}
+
+// Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw Activity Log file or a
+// support bundle — auto-detected, same as `analyzeLogText`). Undefined when no timeline exists for
+// `correlationId`, mirroring `findTimeline`. `generatedAt` is caller-supplied (never `new Date()`
+// read here) so this stays pure and deterministic, like every other export in this file.
+export function buildReproductionSeed(
+  text: string,
+  correlationId: string,
+  generatedAt: Date,
+  options: SupportAnalyzeOptions = {},
+): ReproductionSeed | undefined {
+  const lines = splitLines(text);
+  return buildReproductionSeedFromAnalysis(
+    analyzeLogText(text, options),
+    { lineCount: lines.length, sha256: sha256Hex(text), firstLine: lines[0] },
+    correlationId,
+    generatedAt,
+    options,
+  );
+}
+
+// The same seed from an analysis the caller already streamed plus the facts of its source, so
+// `keiko support analyze --seed` and `--emit-fixture` never load the artifact whole (#3531).
+export function buildReproductionSeedFromAnalysis(
+  analysis: AnalyzeAllResult,
+  source: ReproductionSeedSource,
+  correlationId: string,
+  generatedAt: Date,
+  options: SupportAnalyzeOptions = {},
+): ReproductionSeed | undefined {
+  const timeline = findTimeline(analysis, correlationId);
+  if (timeline === undefined) return undefined;
+  const fields = computeSeedFields(source, timeline, options);
+
+  return {
+    schemaVersion: REPRODUCTION_SEED_SCHEMA_VERSION,
+    generatedAt: generatedAt.toISOString(),
+    sourceArtifact: {
+      kind: fields.kind,
+      lineCount: source.lineCount,
+      sha256: source.sha256,
+    },
+    correlationId,
+    timeline: timeline.lines,
+    ...optionalSeedFields(fields),
+    ...toolCatalogSeed(fields.toolCatalog),
+    sufficiency: timelineSufficiency(analysis, timeline),
+    warnings: [
+      ...toolCatalogWarnings(fields.toolCatalog),
+      ...buildSeedWarnings({
+        kind: fields.kind,
+        frames: fields.stackFrames,
+        gatewayScript: fields.gatewayScript,
+        httpRequest: fields.httpRequest,
+        storeFingerprint: fields.storeFingerprint,
+        issueToPrJourney: fields.issueToPrJourney,
+      }),
+    ],
+  };
+}
+
+// ─── Wave 6: `--emit-fixture` ───────────────────────────────────────────────────────────────────
+//
+// Renders `script` as a ready-to-paste TypeScript module: a `GatewayReplayScriptEntry[]` literal
+// for `createScriptedGatewayFetch` (`@oscharko-dev/keiko-model-gateway`'s replay.ts). Built via
+// `JSON.stringify` on a plain-data shape rather than hand-assembled template strings, so the
+// output's syntax is guaranteed valid (a JSON object/array literal is always a valid TS/JS object
+// literal) — there is no manual quoting/escaping step that could produce broken source.
+
+const FAILURE_STATUS_FALLBACK: Readonly<Record<GatewayReplayAttempt["outcome"], number>> = {
+  success: 200,
+  "rate-limit": 429,
+  timeout: 504,
+  "provider-error": 500,
+  "transport-error": 0,
+};
+
+type FixtureEntry =
+  | {
+      readonly status: number;
+      readonly headers?: Record<string, string>;
+      readonly bodyJson: unknown;
+      readonly latencyMs: number;
+    }
+  | { readonly networkError: true };
+
+function successFixtureBody(attempt: GatewayReplayAttempt): unknown {
+  return {
+    choices: [
+      {
+        finish_reason: attempt.finishReason ?? "stop",
+        message: { role: "assistant", content: "" },
+      },
+    ],
+    ...(attempt.usage === undefined
+      ? {}
+      : {
+          usage: {
+            prompt_tokens: attempt.usage.promptTokens,
+            completion_tokens: attempt.usage.completionTokens,
+          },
+        }),
+  };
+}
+
+function failureFixtureEntry(attempt: GatewayReplayAttempt): FixtureEntry {
+  if (attempt.outcome === "transport-error") return { networkError: true };
+  const status = attempt.httpStatus ?? FAILURE_STATUS_FALLBACK[attempt.outcome];
+  const headers =
+    attempt.retryAfterMs === undefined
+      ? undefined
+      : { "retry-after": String(Math.ceil(attempt.retryAfterMs / 1000)) };
+  return {
+    status,
+    ...(headers === undefined ? {} : { headers }),
+    bodyJson: { error: { message: "reconstructed from ReproductionSeed", type: attempt.outcome } },
+    latencyMs: attempt.durationMs,
+  };
+}
+
+function fixtureEntryFor(attempt: GatewayReplayAttempt): FixtureEntry {
+  return attempt.outcome === "success"
+    ? { status: 200, bodyJson: successFixtureBody(attempt), latencyMs: attempt.durationMs }
+    : failureFixtureEntry(attempt);
+}
+
+// Returns undefined (never an empty-array fixture) when `script` has no attempts — there is
+// nothing meaningful to paste.
+export function renderGatewayReplayScriptFixture(script: GatewayReplayScript): string | undefined {
+  if (script.attempts.length === 0) return undefined;
+  const entries = script.attempts.map(fixtureEntryFor);
+  return (
+    "// Generated by `keiko support analyze --emit-fixture` from a ReproductionSeed's gatewayScript.\n" +
+    "// Ready to paste into a *.test.ts for createScriptedGatewayFetch (@oscharko-dev/keiko-model-gateway).\n" +
+    'import type { GatewayReplayScriptEntry } from "@oscharko-dev/keiko-model-gateway";\n\n' +
+    `export const gatewayReplayScript: GatewayReplayScriptEntry[] = ${JSON.stringify(entries, null, 2)};\n`
+  );
+}
+
+// Human rendering for `keiko support analyze --seed` (without --json). Each structured sub-field
+// is printed as its own compact JSON line rather than a hand-formatted table — a seed's whole
+// point is to be read back by an agent, so the human view stays a thin, honest read of the exact
+// same data `--json` emits, never a second formula computing something new from it (AGENTS.md §7).
+// One compact JSON line per structured sub-field that is either present or absent (never a length
+// check) — split out of `renderHumanReproductionSeed` purely to stay under the repository's
+// per-function complexity ceiling (AGENTS.md §6), no behavioural seam of its own.
+function renderOptionalSeedSections(seed: ReproductionSeed): readonly string[] {
+  const sections: (string | undefined)[] = [
+    seed.gatewayScript === undefined
+      ? undefined
+      : `gatewayScript: ${JSON.stringify(seed.gatewayScript)}`,
+    seed.toolCatalog === undefined ? undefined : `toolCatalog: ${JSON.stringify(seed.toolCatalog)}`,
+    seed.httpRequest === undefined ? undefined : `httpRequest: ${JSON.stringify(seed.httpRequest)}`,
+    seed.indexingJob === undefined ? undefined : `indexingJob: ${JSON.stringify(seed.indexingJob)}`,
+    seed.storeFingerprint === undefined
+      ? undefined
+      : `storeFingerprint: ${JSON.stringify(seed.storeFingerprint)}`,
+    seed.issueToPrJourney === undefined
+      ? undefined
+      : `issueToPrJourney: ${JSON.stringify(seed.issueToPrJourney)}`,
+  ];
+  return sections.filter((section): section is string => section !== undefined);
+}
+
+export function renderHumanReproductionSeed(seed: ReproductionSeed): string {
+  const lines = [
+    `correlationId=${seed.correlationId} schemaVersion=${String(seed.schemaVersion)}`,
+    `source: kind=${seed.sourceArtifact.kind} lines=${String(seed.sourceArtifact.lineCount)} ` +
+      `sha256=${seed.sourceArtifact.sha256}`,
+    `sufficiency: ${seed.sufficiency.status}` +
+      (seed.sufficiency.reasons.length === 0 ? "" : ` (${seed.sufficiency.reasons.join(", ")})`),
+    ...renderOptionalSeedSections(seed),
+  ];
+  if (seed.stackFrames !== undefined && seed.stackFrames.length > 0) {
+    const frameLines = seed.stackFrames.map((frame) => `  ${frame}`).join("\n");
+    lines.push(`stackFrames:\n${frameLines}`);
+  }
+  if (seed.causeChain !== undefined && seed.causeChain.length > 0) {
+    lines.push(`causeChain: ${seed.causeChain.join(" -> ")}`);
+  }
+  const warningLines = seed.warnings.map((warning) => `  - ${warning}`).join("\n");
+  lines.push(`warnings:\n${warningLines}`);
+  return `${lines.join("\n")}\n`;
+}

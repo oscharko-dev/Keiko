@@ -1,8 +1,9 @@
 {
   "issue": 2257,
   "surface": "live-coding-workbench-timeline",
-  "status": "verified",
-  "verified": true,
+  "status": "historical",
+  "verified": false,
+  "retirementNote": "Housekeeping 2026-08-10: the producing suite coding-workbench-2257 and its config were retired after months without a running lane; these measurements record the verification as it stood when captured, and the reproduction command below names the retired config, so this document is no longer reproducible by a lane. Live coverage: coding-workbench-2253 in the extended e2e matrix.",
   "seedEventCount": 1000,
   "maximumRetainedEvents": 500,
   "maximumRenderedRows": 96,

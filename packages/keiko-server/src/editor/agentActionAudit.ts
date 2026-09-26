@@ -7,18 +7,20 @@
 // run through the keiko-security redactor (defense in depth) before it is stored or served, so raw
 // source text and secrets cannot reach the ledger.
 
+import type {
+  EditorAgentActionAuditRecord,
+  EditorAgentActionPolicyDecision,
+  EditorAgentActionStatus,
+  EditorAgentActionType,
+  EditorAgentConflictCode,
+  EditorAgentFailureCode,
+  EditorAgentRootAttribution,
+  EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   buildEditorAgentActionAuditRecord,
   isMutatingEditorAgentAction,
-  type EditorAgentActionAuditRecord,
-  type EditorAgentActionPolicyDecision,
-  type EditorAgentActionStatus,
-  type EditorAgentActionType,
-  type EditorAgentConflictCode,
-  type EditorAgentFailureCode,
-  type EditorAgentRootAttribution,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 import { deepRedactStrings, redact } from "@oscharko-dev/keiko-security";
 
 // Bounded like the route-edge idempotency map: a long-lived server cannot grow this without limit.

@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-model-gateway",
-  "version": "0.2.15",
+  "version": "1.1.9",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: Keiko model gateway — provider abstraction, OpenAI-compatible adapter, capability registry, routing, resilience, TLS handling. Not published independently.",
@@ -18,6 +18,10 @@
     "./internal/resilience": {
       "types": "./dist/resilience.d.ts",
       "import": "./dist/resilience.js"
+    },
+    "./internal/prompt-token-accounting": {
+      "types": "./dist/prompt-token-accounting.d.ts",
+      "import": "./dist/prompt-token-accounting.js"
     }
   },
   "scripts": {
@@ -30,11 +34,12 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25"
+    "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.15",
-    "@oscharko-dev/keiko-security": "0.2.15"
+    "@oscharko-dev/keiko-contracts": "1.1.9",
+    "@oscharko-dev/keiko-security": "1.1.9",
+    "@oscharko-dev/keiko-tool-catalog": "1.1.9"
   },
   "private": true
 }

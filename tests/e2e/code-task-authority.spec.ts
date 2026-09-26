@@ -25,10 +25,11 @@
 // confirmed" and disable Start.
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
-import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import {
   FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
@@ -39,18 +40,19 @@ import {
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
   AUTHORITY_EDITED_CONTENT,
+  AUTHORITY_ORIGINAL_CONTENT,
   AUTHORITY_TARGET_RELATIVE_PATH,
   authorityManagedWorkspaceRoot,
   authorityRepositoryRoot,
   authorityStateDir,
 } from "./support/coding-runtime-2386-authority.js";
 import { openEditorWorkspace, openTreeFile } from "./support/editorWorkspace.js";
+import { activateWindow } from "./support/window-chrome.js";
 
 const stateDir = authorityStateDir();
 const repositoryRoot = authorityRepositoryRoot(stateDir);
 const managedRoot = authorityManagedWorkspaceRoot(stateDir);
 const realBinaryJourney = process.env.KEIKO_E2E_REAL_BINARY === "1";
-const commandModifier = process.platform === "darwin" ? "Meta" : "Control";
 
 function workbench(page: Page): Locator {
   return page.locator('section[aria-label="Coding Workbench"][data-state]');
@@ -88,8 +90,8 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
     // before the workbench is even opened.
     await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   }
-  await page.getByRole("button", { name: "Coding Workbench" }).click();
-  await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
+  await expect(workbench(page)).toBeVisible();
 }
 
 // Drives the "Code setup" section end to end through UI interactions only: binding the fixture
@@ -242,55 +244,52 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Editor" }).click();
   const workspace = await openEditorWorkspace(page);
   const editorWindow = page.locator('section[data-window-id="editor"]');
-  await editorWindow.focus();
-  await expect(editorWindow).toHaveAttribute("data-top", "true");
+  // Raise through the shared helper, which uses the product's own pointer path. A bare focus() no
+  // longer raises a window: WindowFrame only treats keyboard navigation as a raise signal, so a
+  // still-loading window cannot grab focus and jump over the one the user moved to.
+  await activateWindow(editorWindow);
   // The caret is aria-hidden since #2605 (role="tree" may own only treeitem/group), so it is
   // addressed by selector rather than by role. Expansion is also reachable via Arrow Right.
   await workspace.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(workspace, AUTHORITY_TARGET_RELATIVE_PATH);
   await expect.poll(() => hasEditorSession(page, root)).toBe(true);
-  const codingWindow = page.locator('section[data-window-id="coding"]');
-  await codingWindow
-    .getByRole("group", { name: "Coding Workbench window controls" })
-    .getByRole("button", { name: "Close Coding Workbench window" })
-    .click();
-  await expect(codingWindow).toHaveCount(0);
-  await trustRealBinaryWorkspaceScripts(page);
+  await assertInheritedWorkspaceTrust(page);
+  await activateWindow(page.locator('section[data-window-id="coding"]'));
 }
 
-async function trustRealBinaryWorkspaceScripts(page: Page): Promise<void> {
-  const trustResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/editor/verification/trust"),
-  );
-  const catalogRefresh = page.waitForResponse(
-    (response) =>
-      response.request().method() === "GET" &&
-      response.url().includes("/api/editor/verification/catalog?projectId="),
-  );
-  await page.keyboard.press(`${commandModifier}+Shift+KeyP`);
-  const query = page.getByRole("combobox", { name: "Command query" });
-  await expect(query).toBeVisible();
-  await query.fill(">Trust Workspace Scripts");
-  const command = page.getByRole("option").filter({ hasText: "Trust Workspace Scripts" }).first();
-  await expect(command).toBeVisible();
-  await command.click();
-  expect((await trustResponse).status()).toBe(200);
-  expect((await catalogRefresh).status()).toBe(200);
+// M11 (#2612/#2686) rebuilt workspace trust around user-facing projects: registering the folder
+// the human chose IS the explicit local-human trust act (`handleCreateProject` grants script
+// trust), provisioning derives that trust onto the managed worktree, managed worktrees are
+// deliberately absent from the trust panel, and the editor palette's `Trust Workspace Scripts`
+// command is unavailable for the active root. The journey therefore registers the fixture
+// repository as a project BEFORE the run provisions its worktree — the exact call the folder
+// picker performs — and later asserts the inherited trust where the old palette step used to be.
+// Both engines need this: the vetted verification runs over trusted workspace scripts in the
+// scripted journey exactly as in the real-binary one.
+async function registerTrustedRepositoryProject(page: Page): Promise<void> {
+  const created = await page.request.post("/api/projects", {
+    headers: { "x-keiko-csrf": "1" },
+    data: { path: repositoryRoot, name: "Authority Fixture Repository" },
+  });
+  expect(created.status()).toBe(201);
+  const body = (await created.json()) as { readonly warning?: unknown };
+  // A registration that leaves the project restricted would silently break the derived worktree
+  // trust the rest of the journey depends on — surface it here, not as a 240s editor timeout.
+  expect(body.warning).toBeUndefined();
 }
 
-async function reopenRealBinaryCodingWorkbench(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
-  const codingWindow = page.locator('section[data-window-id="coding"]');
-  await expect(codingWindow).toHaveAttribute("data-top", "true");
-  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+async function assertInheritedWorkspaceTrust(page: Page): Promise<void> {
+  // Provisioning derived the repository project's trust onto the managed worktree, so the editor
+  // must open trusted: no restricted-mode banner. The verification activity that follows is the
+  // deep proof — the typecheck script only runs over trusted workspace scripts.
+  await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
 }
 
 async function approveRealBinaryChangeset(page: Page): Promise<void> {
   if (!realBinaryJourney) return;
-  const editorWindow = page.locator('section[data-window-id="editor"]');
-  const review = editorWindow.getByRole("group", { name: "Agent changeset review" });
+  // The run's own registered bridge owns this review. Keep it mounted and approve its exact
+  // proposed diff in the Workbench; opening an unrelated Editor session cannot transfer authority.
+  const review = workbench(page).getByRole("region", { name: "Review the proposed file change" });
   await expect
     .poll(() => latestChangesetAudit(page))
     .toMatchObject({
@@ -298,12 +297,11 @@ async function approveRealBinaryChangeset(page: Page): Promise<void> {
       outcome: "queued",
     });
   await expect(review).toBeVisible({ timeout: 30_000 });
-  await expect(editorWindow).toHaveAttribute("data-top", "true");
-  const apply = review.getByTestId("keiko-diff-apply");
+  await expect(review).toContainText(AUTHORITY_TARGET_RELATIVE_PATH);
+  const apply = review.getByRole("button", { name: "Apply change", exact: true });
   await expect(apply).toBeVisible();
   await apply.click();
   await expect(review).toBeHidden();
-  await reopenRealBinaryCodingWorkbench(page);
 }
 
 async function proveVerificationActivity(timeline: Locator): Promise<void> {
@@ -344,7 +342,7 @@ async function proveRunChangesView(
   stranger: APIRequestContext,
   target: string,
 ): Promise<void> {
-  const changes = page.getByRole("region", { name: "Run changes" });
+  const changes = page.getByRole("region", { name: "Changes" });
   const fileButton = changes.getByRole("button", {
     name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u"),
   });
@@ -363,7 +361,7 @@ async function proveRunChangesView(
 // stale-while-revalidate contract; this end-to-end assertion is a lightweight guard that the
 // contract survives all the way through the real render tree in a real browser session.
 async function proveChangesRefreshPreservesFocusAndContent(
-  page: Page,
+  _page: Page,
   fileButton: Locator,
   diffPane: Locator,
 ): Promise<void> {
@@ -403,7 +401,7 @@ async function proveRevocationSurfacesRepairState(page: Page): Promise<void> {
   await expect(
     runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
   ).toBeVisible();
-  const changes = page.getByRole("region", { name: "Run changes" });
+  const changes = page.getByRole("region", { name: "Changes" });
   await expect(changes.getByRole("alert")).toContainText("app session may need to be paired", {
     timeout: 15_000,
   });
@@ -420,13 +418,21 @@ async function proveLiveActivityTimeline(
   runId: string,
 ): Promise<void> {
   await awaitRequiredQuestion(page);
+  if (realBinaryJourney) {
+    await proveRepositorySearchConsumption(timeline);
+    await proveSkillDiscoveryConsumption(timeline);
+  }
   await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
   await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
-  await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText("workspace");
+  const completedRead = timeline
+    .locator('[data-tool-state="succeeded"]')
+    .filter({ hasText: "workspace" });
+  await expect(completedRead).toHaveCount(1);
+  await expect(completedRead).toContainText("workspace");
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
-  await openRealBinaryEditorBridge(page);
   await approveRealBinaryChangeset(page);
+  await openRealBinaryEditorBridge(page);
   await proveVerificationActivity(timeline);
   await expect(
     timeline.getByText(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX, { exact: false }),
@@ -443,6 +449,53 @@ async function proveLiveActivityTimeline(
   expect(edited).toHaveLength(1);
   expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
   if (!realBinaryJourney) await proveRunChangesView(page, request, edited[0] ?? "");
+}
+
+async function proveRepositorySearchConsumption(timeline: Locator): Promise<void> {
+  const path = join(stateDir, "h1-result-consumption.json");
+  await expect.poll(() => existsSync(path)).toBe(true);
+  const proof: unknown = JSON.parse(readFileSync(path, "utf8"));
+  expect(proof).toMatchObject({
+    schemaVersion: 1,
+    toolCallId: "h1-real-binary-search",
+    hitCount: 1,
+    pathDigest: createHash("sha256").update(AUTHORITY_TARGET_RELATIVE_PATH).digest("hex"),
+    snippetDigest: createHash("sha256").update(AUTHORITY_ORIGINAL_CONTENT.trim()).digest("hex"),
+    startLine: 1,
+    endLine: 1,
+    readTargetDerivedFromResult: true,
+  });
+  for (const tool of ["keiko_repository_search", "keiko_workspace_read"]) {
+    const succeeded = timeline.locator('[data-tool-state="succeeded"]').filter({ hasText: tool });
+    await expect(succeeded).toHaveCount(1);
+    await expect(succeeded).toBeVisible();
+  }
+}
+
+// #3417: the real binary discovered the approved skills through production composition and
+// invoked the one skill the runtime's own listing named; the timeline carries both governed calls
+// and the audited skill invocation.
+async function proveSkillDiscoveryConsumption(timeline: Locator): Promise<void> {
+  const path = join(stateDir, "skill-discovery-consumption.json");
+  await expect.poll(() => existsSync(path)).toBe(true);
+  const proof: unknown = JSON.parse(readFileSync(path, "utf8"));
+  expect(proof).toMatchObject({
+    schemaVersion: 1,
+    toolCallId: "skill-real-binary-discovery",
+    listedCount: 1,
+    skillIdDigest: createHash("sha256").update("skl_repo-structure-summary@1").digest("hex"),
+    invokedSkillDerivedFromResult: true,
+  });
+  for (const tool of ["keiko_skill_discover", "keiko_skill"]) {
+    // Matched on the card's exact label, so `keiko_skill` cannot also match
+    // `keiko_skill_discover`. A `hasText` regular expression cannot do it: the text engine reads a
+    // pattern with the repository's mandatory `u` flag as literal text and matches nothing.
+    const succeeded = timeline
+      .locator('[data-tool-state="succeeded"]')
+      .filter({ has: timeline.page().getByText(`Tool activity: ${tool}`, { exact: true }) });
+    await expect(succeeded).toHaveCount(1);
+  }
+  await expect(timeline.getByText("Skill invoked", { exact: true }).first()).toBeVisible();
 }
 
 async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {
@@ -498,6 +551,27 @@ test("#2386 authority: the workbench readiness surface is live, not static", asy
   await expect(page.getByRole("button", { name: "Start coding run" })).toHaveCount(0);
 });
 
+// #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
+// comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the
+// server-confirmed mode instead of owning the selector. Never full access on a fresh install.
+// This journey then proves a SUPERVISED run (see the header contract): under supervised-coding
+// the envelope allows workspace-contained edits and vetted verification without per-action
+// approval. Under the governed-assist default those admissions are ask-first, so the child's
+// edit and verification tool calls would be silently denied at the tool-facade authority —
+// exactly the post-#2644 stall this step repairs. The human raising the mode IS the product
+// flow; the widening-rejection step below still proves a LIVE run cannot be widened further.
+async function proveDefaultModeThenRaiseToSupervised(page: Page): Promise<void> {
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "governed-assist",
+  );
+  await requestAutonomyMode(page, /Supervised workspace/u);
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "supervised-coding",
+  );
+}
+
 test("#2386 authority: question, sticky pause, widening rejection, follow-up, settle", async ({
   page,
   request,
@@ -505,15 +579,10 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   // #2478: the boot URL carries the launcher-minted pairing attestation; question text is served
   // only to this paired window from here on.
   await openWorkbench(page, launcherPairingFragment());
+  await registerTrustedRepositoryProject(page);
   await bindFixtureWorkspace(page);
 
-  // #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
-  // comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the
-  // server-confirmed mode instead of owning the selector. Never full access on a fresh install.
-  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
-    "data-mode",
-    "governed-assist",
-  );
+  await proveDefaultModeThenRaiseToSupervised(page);
   await page.getByLabel("Task instructions").fill("Rename the authority constant under src/");
   const start = page.getByRole("button", { name: "Start coding run" });
   await expect(start).toBeEnabled();
@@ -539,22 +608,32 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
 
   // Widening past the server-confirmed effective mode while the run is live must not take effect;
   // the paused run keeps its authority. The selector now lives in Settings (#2644), so the proof is
-  // that requesting Full access there leaves the live run's confirmed mode untouched.
+  // that requesting Full access there leaves the live run's confirmed mode untouched — the
+  // supervised mode this journey raised to before starting.
   await requestAutonomyMode(page, /Full access/u);
   await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
     "data-mode",
-    "governed-assist",
+    "supervised-coding",
   );
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
-  await requestAutonomyMode(page, /Ask for approval/u);
 
   // A follow-up drafted while paused is admitted as a new task turn — and must NOT auto-resume.
+  // It runs BEFORE the narrowing request below: since #2644 the mode is product-wide, so a
+  // narrowed policy would legitimately hold a NEW task turn for approval instead of admitting it.
   const taskSubmitted = timeline.getByText("Task submitted", { exact: true });
   const submittedBefore = await taskSubmitted.count();
   await page.getByLabel("Task instructions").fill("Follow up: tighten the constant name");
   await page.getByRole("button", { name: "Send follow-up" }).click();
   await expect(taskSubmitted).toHaveCount(submittedBefore + 1, { timeout: 90_000 });
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+
+  // Narrowing the product-wide policy while the run is paused leaves the live run's confirmed
+  // mode untouched, exactly like the widening attempt above.
+  await requestAutonomyMode(page, /Ask for approval/u);
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "supervised-coding",
+  );
 
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");

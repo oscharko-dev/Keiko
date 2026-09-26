@@ -1,19 +1,31 @@
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import {
-  editorAgentRootBindingDenyReason,
-  isContainedAgentPath,
-  validateWorkspaceManifest,
-  type EditorAgentActionDenyReason,
-  type EditorAgentRootBinding,
-  type EditorAgentSessionSnapshot,
-  type WorkspaceManifest,
-  type WorkspaceRootDescriptor,
+import type {
+  EditorAgentActionDenyReason,
+  EditorAgentRootBinding,
+  EditorAgentSessionSnapshot,
+  WorkspaceManifest,
+  WorkspaceRootDescriptor,
 } from "@oscharko-dev/keiko-contracts";
-import { containedRealPathInfo, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import { editorAgentRootBindingDenyReason } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
+import {
+  EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES,
+  isContainedAgentPath,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
+import {
+  containedRealPathInfo,
+  isWithinWorkspace,
+  type WorkspaceFs,
+  detectWorkspaceAt,
+  readWorkspaceFile,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { UiStore, WorkspaceManifestRecordRow } from "../store/index.js";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import type { WorkspaceRootAccessOutcome } from "../task-workspace/workspace-root-access.js";
 
 export type EditorAgentRootBoundaryReason = Extract<
   EditorAgentActionDenyReason,
@@ -273,9 +285,101 @@ function belongsToOtherRoot(root: EditorAgentResolvedRoot, candidate: string): b
   );
 }
 
+// `fs` is the filesystem port the root's own authority resolved — for a Keiko-managed task worktree
+// the owned-root port the managed access minted (workspace-root-access.ts). The check answers "does
+// the path leave the resolved root"; with the plain node port that answer re-admitted the root under
+// the user-workspace rules, and a worktree below the state directory's always-denied segment
+// (`~/.keiko/…/task-workspaces`) refused every path inside it as an escape, which denied every
+// governed coding edit (workbench end-to-end run, 2026-09-03).
+/**
+ * The dependency slice the containment port needs. Named here so BOTH editor route families can
+ * pass themselves: `agentRoutes.ts` and `agentVerificationRoute.ts` each carried a near-verbatim
+ * private copy of this resolution, and a fix applied to one copy but not the other would silently
+ * re-open the managed-root containment defect this boundary exists to close (cursor review,
+ * PR #3381).
+ */
+export interface EditorAgentContainmentDeps {
+  readonly workspaceRootAccessResolver?:
+    ((requestedRoot: string, correlationId?: string) => WorkspaceRootAccessOutcome) | undefined;
+}
+
+/**
+ * A resolved containment port, or the refusal that resolving it produced. The refusal is NOT
+ * collapsible into the node port: doing that ran the boundary check for a root whose authority had
+ * just been refused (revoked lifecycle, replaced identity, unproven gitdir identity) against the
+ * plain user-workspace rules, where a managed worktree under the state directory's always-denied
+ * segment fails on every path — so the operator was told the target escapes its workspace when the
+ * truth was that the workspace's own authority no longer held (P3, PR #3381 review).
+ */
+export type EditorAgentContainmentPort =
+  | { readonly ok: true; readonly fs: WorkspaceFs }
+  | { readonly ok: false; readonly reason: EditorAgentRootBoundaryReason };
+
+/**
+ * Resolves the filesystem port the root's own authority grants: the owned-root port a proven
+ * managed task worktree minted, the plain node port for an ordinary root, and a refusal when the
+ * resolver denied the root or could not complete the proof at all.
+ *
+ * `correlationId` is threaded into the resolver so the body-free `workspace.root.denied` line it
+ * already emits for a denial (workspace-root-access.ts) lands on the caller's timeline instead of
+ * UNKNOWN_CORRELATION_ID — one denial-logging vocabulary, not a second one at this boundary.
+ */
+export function resolveEditorAgentContainmentPort(
+  deps: EditorAgentContainmentDeps | undefined,
+  workspaceRoot: string,
+  correlationId?: string,
+): EditorAgentContainmentPort {
+  const resolveAccess = deps?.workspaceRootAccessResolver;
+  if (resolveAccess === undefined) return { ok: true, fs: nodeWorkspaceFs };
+  let outcome: WorkspaceRootAccessOutcome;
+  try {
+    outcome = resolveAccess(workspaceRoot, correlationId);
+  } catch (error) {
+    // The production resolver reports every classified denial itself and never throws; a throw
+    // means the proof could not be completed at all, so it is the one refusal with no record of
+    // its own. Report it here rather than letting it disappear into a boundary escape.
+    recordContainmentPortFailure(error, correlationId);
+    return { ok: false, reason: "root-binding-invalid" };
+  }
+  if (outcome.decision === "granted") return { ok: true, fs: outcome.access.fs };
+  // "denied" is a policy refusal of THIS root and is already on the activity log under the
+  // correlation id above. "unresolved" is an ordinary missing/unreadable root, which the boundary
+  // check itself answers, so it keeps the node port and its previous outcome.
+  return outcome.decision === "denied"
+    ? { ok: false, reason: "root-binding-invalid" }
+    : { ok: true, fs: nodeWorkspaceFs };
+}
+
+function recordContainmentPortFailure(error: unknown, correlationId: string | undefined): void {
+  emitServerDiagnostic(undefined, {
+    correlationId: correlationIdOrUnknown(correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "editor.agent.root-containment",
+    source: "editor.agent-root-boundary",
+    errorClass: contentFreeErrorClass(error),
+    message: "editor-agent-root-authority-unresolvable",
+  });
+}
+
+/**
+ * The one call every route makes: resolve the root's containment port, then run the path-boundary
+ * check through it. A refused port surfaces as its own denial reason instead of being mistaken for
+ * a path escape.
+ */
+export function editorAgentRootContainmentReason(
+  root: EditorAgentResolvedRoot,
+  paths: readonly string[],
+  deps: EditorAgentContainmentDeps | undefined,
+  correlationId?: string,
+): EditorAgentRootBoundaryReason | null {
+  const port = resolveEditorAgentContainmentPort(deps, root.workspaceRoot, correlationId);
+  return port.ok ? editorAgentPathBoundaryReason(root, paths, port.fs) : port.reason;
+}
+
 export function editorAgentPathBoundaryReason(
   root: EditorAgentResolvedRoot,
   paths: readonly string[],
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): Extract<
   EditorAgentRootBoundaryReason,
   "decompose-per-root" | "workspace-boundary-escape"
@@ -285,7 +389,7 @@ export function editorAgentPathBoundaryReason(
     const absolute = isAbsolute(path) ? resolve(path) : resolve(root.workspaceRoot, path);
     try {
       if (!isContainedAgentPath(path)) throw new Error("lexical escape");
-      containedRealPathInfo(nodeWorkspaceFs, root.workspaceRoot, absolute);
+      containedRealPathInfo(fs, root.workspaceRoot, absolute);
     } catch {
       return belongsToOtherRoot(root, realCandidate(absolute))
         ? "decompose-per-root"
@@ -293,4 +397,32 @@ export function editorAgentPathBoundaryReason(
     }
   }
   return null;
+}
+
+/**
+ * The document text a server-resolved editor operation (`navigateSymbol`) needs when the client did
+ * not send the buffer, read through the port the root's own authority resolved. This read detected
+ * the workspace through the plain node port, so for a managed task worktree — below the state
+ * directory's always-denied `.keiko` segment — it threw before reading anything and every such
+ * navigation failed with the generic server-resolved error (review of PR #3452; the same defect
+ * class PR #3381 repaired for the patch route's pre-image read). A refused port is a refusal, never
+ * a fallback to the plain port: the boundary above already recorded why.
+ */
+export function serverResolvedDocumentText(
+  deps: EditorAgentContainmentDeps | undefined,
+  workspaceRoot: string,
+  path: string,
+  text: string | undefined,
+  correlationId?: string,
+): string {
+  if (text !== undefined) return text;
+  const port = resolveEditorAgentContainmentPort(deps, workspaceRoot, correlationId);
+  if (!port.ok) throw new Error(`editor agent root binding refused: ${port.reason}`);
+  const workspace = detectWorkspaceAt(workspaceRoot, port.fs);
+  return readWorkspaceFile(
+    workspace,
+    path,
+    { maxBytes: EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES },
+    port.fs,
+  ).text;
 }

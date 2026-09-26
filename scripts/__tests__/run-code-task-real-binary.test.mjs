@@ -1,22 +1,206 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
+  buildRealBinaryScenarioArtifact,
   buildJourneyReport,
   classifyLsofNetworkNames,
   createJourneyContext,
+  createMaterializedLimitObserver,
   createNetworkObserver,
+  ensureMacTarget,
   governedExecutable,
   missingRealBinaryEvidence,
   readGatewayObservation,
+  readDeclaredChildGeometry,
+  readH1SearchEvidence,
+  readManagedCatalogEvidence,
+  retainJourneyActivityLog,
   processIdsForExecutable,
   readMaterializedLimits,
   realBinaryEvidenceComplete,
+  writeManagedCatalogObservation,
+  writeRealBinaryQualificationEvidence,
 } from "../run-code-task-real-binary.mjs";
+import { readReceipts } from "../check-coding-issue-journey-evidence.mjs";
+import { resolveCodingSafeSidecarGatewayProfile } from "@oscharko-dev/keiko-model-gateway";
+import { resolveOpenCodeContextGeometry } from "../../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
+import { OPENCODE_PINNED_VERSION } from "../../packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js";
+import { functionalGatewayConfig } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+
+const H1_SEARCH = {
+  schemaVersion: 1,
+  toolCallId: "h1-real-binary-search",
+  hitCount: 1,
+  pathDigest: "a".repeat(64),
+  snippetDigest: "b".repeat(64),
+  startLine: 1,
+  endLine: 1,
+  readTargetDerivedFromResult: true,
+};
+const ACTIVITY_LOG = { status: "retained", sha256: "c".repeat(64) };
+const SOURCE_HEAD = "1".repeat(40);
+const CATALOG_BINDING = {
+  catalogRevision: "d".repeat(64),
+  profile: { id: "opencode", version: 1 },
+  projectionDigest: "e".repeat(64),
+  handlerSetDigest: "f".repeat(64),
+};
+const MANAGED_CATALOG = {
+  binding: CATALOG_BINDING,
+  correlationId: "real-binary-correlation",
+  settlementCount: 3,
+  proof: {
+    kind: "managed-search-read",
+    searchSettled: true,
+    boundedReadSettled: true,
+    causalHandoff: true,
+  },
+};
+
+function expectedProductionGeometry() {
+  const profile = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig());
+  if (profile.status !== "available") throw new TypeError("production profile is unavailable");
+  const geometry = resolveOpenCodeContextGeometry(profile.runMetadata);
+  if (geometry === undefined) throw new TypeError("production geometry is unavailable");
+  return geometry;
+}
+
+function productionDeclaredGeometry() {
+  const stateDir = mkdtempSync(join(tmpdir(), "keiko-declared-geometry-"));
+  const configPath = join(stateDir, "bff-state", "ui-db", "keiko.config.json");
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(functionalGatewayConfig()));
+    const geometry = readDeclaredChildGeometry(stateDir);
+    if (geometry === undefined) throw new TypeError("production geometry fixture is unavailable");
+    return geometry;
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
+function persistedReferenceGatewayConfig() {
+  const config = functionalGatewayConfig();
+  return {
+    ...config,
+    providers: config.providers.map(({ apiKey: _apiKey, ...provider }) => ({
+      ...provider,
+      apiKeySecretRef: `cred:${provider.modelId}`,
+    })),
+  };
+}
+
+function completeQualificationReport() {
+  const declaredGeometry = productionDeclaredGeometry();
+  return buildJourneyReport({
+    sourceHead: SOURCE_HEAD,
+    exitCode: 0,
+    gateway: {
+      requestCount: 2,
+      outputTokenLimits: [declaredGeometry.maxOutputTokens],
+      catalogBindingRequestCount: 2,
+    },
+    declaredGeometry,
+    limits: [
+      {
+        context: declaredGeometry.contextWindowTokens,
+        input: declaredGeometry.maxInputTokens,
+        output: declaredGeometry.maxOutputTokens,
+      },
+    ],
+    missingPayload: { passed: true, unavailableReason: "payload-missing" },
+    h1Search: H1_SEARCH,
+    managedCatalog: MANAGED_CATALOG,
+    activityLog: ACTIVITY_LOG,
+    observer: createNetworkObserver("/nonexistent/opencode"),
+    target: "macos-arm64",
+    wallClockMs: 41_128,
+    completedAt: "2026-09-06T11:30:00.000Z",
+  });
+}
+
+/**
+ * Whether `candidate` really lives under `root`, separator-aware.
+ *
+ * `candidate.startsWith(root)` accepts `${root}-evil/state`, a SIBLING directory — so a state path
+ * assembled by concatenation instead of `join` would satisfy a prefix pin while escaping the
+ * resolved temp root the helper exists to stay inside.
+ */
+function containedIn(root, candidate) {
+  const offset = relative(root, candidate);
+  return offset !== "" && !offset.startsWith("..") && !isAbsolute(offset);
+}
 
 describe("#2483 real-binary observation helpers", () => {
+  // #3530: the journey's Activity Log is a set of segments; every one is retained, oldest first,
+  // as one artifact whose digest covers exactly the retained bytes.
+  it("retains every activity log segment before deleting ephemeral journey state", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-real-binary-activity-"));
+    const context = {
+      stateDir: join(root, "state"),
+      evidencePath: join(root, "out", "report.json"),
+    };
+    try {
+      expect(retainJourneyActivityLog(context)).toEqual({ status: "missing" });
+      const logsDir = join(context.stateDir, "activity", "logs");
+      mkdirSync(logsDir, { recursive: true });
+      const identity = {
+        startMs: Date.parse("2026-09-18T10:00:00.000Z"),
+        pid: 4242,
+        instanceId: "a1b2c3d4",
+        index: 1,
+      };
+      const first = '{"op":"coding-runtime.run-started","correlationId":"run-fixture"}\n';
+      const second = '{"op":"coding-runtime.run-settled","correlationId":"run-fixture"}\n';
+      writeFileSync(join(logsDir, activityLogSegmentFileName(identity, "sealed")), first);
+      writeFileSync(
+        join(logsDir, activityLogSegmentFileName({ ...identity, index: 2 }, "active")),
+        second,
+      );
+      const retained = retainJourneyActivityLog(context);
+      rmSync(context.stateDir, { recursive: true });
+      const artifact = readFileSync(`${context.evidencePath}.activity.jsonl`, "utf8");
+      expect(artifact).toBe(`${first}${second}`);
+      expect(retained).toEqual({
+        status: "retained",
+        sha256: createHash("sha256").update(artifact).digest("hex"),
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("retains only validated body-free H1 consumption facts before state cleanup", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-real-binary-receipt-"));
+    const path = join(root, "h1-result-consumption.json");
+    try {
+      expect(readH1SearchEvidence(root)).toBeUndefined();
+      writeFileSync(path, JSON.stringify({ ...H1_SEARCH, rawContent: "never retained" }));
+      expect(readH1SearchEvidence(root)).toEqual(H1_SEARCH);
+      writeFileSync(path, JSON.stringify({ ...H1_SEARCH, pathDigest: "/raw/path" }));
+      expect(readH1SearchEvidence(root)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("rejects the Windows dev-lane target before its macOS-only real-binary journey", () => {
+    expect(() => ensureMacTarget("windows-x64")).toThrow("requires macOS arm64 or x64");
+    expect(ensureMacTarget("macos-arm64")).toBe("macos-arm64");
+  });
+
   it("classifies connections without returning a persisted endpoint projection", () => {
     const observations = classifyLsofNetworkNames(
       [
@@ -49,7 +233,7 @@ describe("#2483 real-binary observation helpers", () => {
     expect(processIdsForExecutable(processList, executable)).toEqual([41]);
   });
 
-  it("reads only the content-free model limit pair from a materialized child config", () => {
+  it("reads only the content-free model limit triple from a materialized child config", () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-2483-limits-"));
     const configDir = join(
       stateDir,
@@ -68,49 +252,355 @@ describe("#2483 real-binary observation helpers", () => {
         JSON.stringify({
           provider: {
             "keiko-runtime": {
-              models: { coding: { limit: { context: 32_768, output: 4_096 } } },
+              models: { coding: { limit: { context: 32_768, input: 28_672, output: 4_096 } } },
             },
           },
           prompt: "must-not-be-projected",
         }),
       );
 
-      expect(readMaterializedLimits(stateDir)).toEqual([{ context: 32_768, output: 4_096 }]);
+      expect(readMaterializedLimits(stateDir)).toEqual([
+        { context: 32_768, input: 28_672, output: 4_096 },
+      ]);
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("requires every real-binary acceptance observation before reporting success", () => {
-    const complete = {
-      journey: { exitCode: 0 },
-      limits: {
-        materializedChildLimits: [{ context: 32_768, output: 4_096 }],
-        gatewayRequestCount: 1,
-        observedGatewayOutputTokenLimits: [4_096],
-      },
-      missingPayload: { passed: true, unavailableReason: "payload-missing" },
+  it("retains distinct observed child input limits across successive samples", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-2483-limit-observer-"));
+    const configPath = join(
+      stateDir,
+      "bff-state",
+      "ui-db",
+      "coding-runtime",
+      "opencode",
+      "run-1",
+      "config",
+      "opencode",
+      "opencode.json",
+    );
+    const observer = createMaterializedLimitObserver(stateDir);
+    try {
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          provider: {
+            "keiko-runtime": {
+              models: { coding: { limit: { context: 45_056, input: 40_960, output: 4_096 } } },
+            },
+          },
+        }),
+      );
+      observer.sample();
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          provider: {
+            "keiko-runtime": {
+              models: { coding: { limit: { context: 45_056, input: 40_961, output: 4_096 } } },
+            },
+          },
+        }),
+      );
+      observer.sample();
+
+      expect(observer.report()).toEqual([
+        { context: 45_056, input: 40_960, output: 4_096 },
+        { context: 45_056, input: 40_961, output: 4_096 },
+      ]);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("derives declared geometry through the production selection and launch-profile owners", () => {
+    const config = { providers: ["fixture"] };
+    const metadata = {
+      maxPromptTokens: 128_000,
+      maxOutputTokens: 4_096,
+      maxInputMessages: 512,
+      maxRequestBytes: 1_048_576,
     };
+    const geometry = {
+      contextWindowTokens: 45_056,
+      maxInputTokens: 40_960,
+      maxOutputTokens: 4_096,
+    };
+    const seen = [];
+
+    expect(
+      readDeclaredChildGeometry(
+        "/private/state",
+        (path, env) => {
+          seen.push(path);
+          expect(env).toBe(process.env);
+          return config;
+        },
+        (input) => {
+          expect(input).toBe(config);
+          return { status: "available", runMetadata: metadata };
+        },
+        (input) => {
+          expect(input).toBe(metadata);
+          return geometry;
+        },
+      ),
+    ).toEqual({ ...geometry, runMetadata: metadata });
+    expect(seen[0]).toBe("/private/state/bff-state/ui-db/keiko.config.json");
+  });
+
+  it("derives the exact real-binary fixture geometry from the actual production owners", () => {
+    expect(productionDeclaredGeometry()).toMatchObject(expectedProductionGeometry());
+  });
+
+  it("derives geometry after production has migrated provider credentials to references", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-declared-reference-geometry-"));
+    const configPath = join(stateDir, "bff-state", "ui-db", "keiko.config.json");
+    try {
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(configPath, JSON.stringify(persistedReferenceGatewayConfig()));
+
+      expect(readDeclaredChildGeometry(stateDir)).toMatchObject(expectedProductionGeometry());
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a body-free stage and error class when declared geometry cannot be read", () => {
+    const failures = [];
+    const geometry = readDeclaredChildGeometry(
+      "/private/state",
+      () => {
+        throw new TypeError("sensitive config detail");
+      },
+      () => {
+        throw new Error("unreachable");
+      },
+      () => {
+        throw new Error("unreachable");
+      },
+      (failure) => failures.push(failure),
+    );
+
+    expect(geometry).toBeUndefined();
+    expect(failures).toEqual([{ stage: "config-load", errorClass: "TypeError" }]);
+    const complete = completeQualificationReport();
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          declaredChildGeometry: undefined,
+          declaredChildGeometryFailure: failures[0],
+        },
+      }),
+    ).toEqual([
+      "no single materialized child geometry matched the admitted gateway output limit " +
+        "(stage config-load, error TypeError)",
+    ]);
+  });
+
+  it("requires every real-binary acceptance observation before reporting success", () => {
+    const complete = completeQualificationReport();
+    const declared = complete.limits.declaredChildGeometry;
 
     expect(realBinaryEvidenceComplete(complete)).toBe(true);
+    expect(realBinaryEvidenceComplete({ ...complete, h1Search: undefined })).toBe(false);
     expect(
       realBinaryEvidenceComplete({
         ...complete,
         limits: { ...complete.limits, materializedChildLimits: [] },
       }),
     ).toBe(false);
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          materializedChildLimits: [
+            {
+              context: declared.contextWindowTokens + 1,
+              input: declared.maxInputTokens,
+              output: declared.maxOutputTokens,
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          materializedChildLimits: [
+            {
+              context: declared.contextWindowTokens,
+              input: declared.maxInputTokens + 1,
+              output: declared.maxOutputTokens,
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          materializedChildLimits: [
+            ...complete.limits.materializedChildLimits,
+            {
+              context: declared.contextWindowTokens + 1,
+              input: declared.maxInputTokens,
+              output: declared.maxOutputTokens,
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts the exact production-advertised geometry when its output matches gateway admission", () => {
+    const complete = completeQualificationReport();
+    const declared = complete.limits.declaredChildGeometry;
+
+    expect(realBinaryEvidenceComplete(complete)).toBe(true);
+    expect(buildRealBinaryScenarioArtifact(complete).limits).toEqual({
+      admission: declared.runMetadata,
+      contextWindow: declared.contextWindowTokens,
+      inputTokens: declared.maxInputTokens,
+      outputTokens: declared.maxOutputTokens,
+      gatewayRequestCount: 2,
+      gatewayCatalogBindingRequestCount: 2,
+    });
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        limits: {
+          ...complete.limits,
+          observedGatewayOutputTokenLimits: [
+            complete.limits.declaredChildGeometry.maxOutputTokens + 1,
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("projects the complete real-binary producer report into closed qualification evidence", () => {
+    const report = completeQualificationReport();
+    const artifact = buildRealBinaryScenarioArtifact(report);
+    const declared = report.limits.declaredChildGeometry;
+
+    expect(artifact).toMatchObject({
+      scenarioId: "real-binary-lane",
+      evidenceClass: "production-functional",
+      sourceCommitSha: SOURCE_HEAD,
+      platformTarget: "macos-arm64",
+      result: "passed",
+      runtime: { name: "opencode-compatible", version: OPENCODE_PINNED_VERSION },
+      run: {
+        correlationId: MANAGED_CATALOG.correlationId,
+        activityLogSha256: ACTIVITY_LOG.sha256,
+      },
+      limits: {
+        admission: declared.runMetadata,
+        contextWindow: declared.contextWindowTokens,
+        inputTokens: declared.maxInputTokens,
+        outputTokens: declared.maxOutputTokens,
+        gatewayRequestCount: 2,
+        gatewayCatalogBindingRequestCount: 2,
+      },
+      h1Search: {
+        toolCallId: H1_SEARCH.toolCallId,
+        hitCount: 1,
+        pathDigest: H1_SEARCH.pathDigest,
+        snippetDigest: H1_SEARCH.snippetDigest,
+        startLine: 1,
+        endLine: 1,
+        readTargetDerivedFromResult: true,
+      },
+      managedCatalog: {
+        binding: CATALOG_BINDING,
+        settlementCount: 3,
+        proof: MANAGED_CATALOG.proof,
+      },
+    });
+    expect(JSON.stringify(artifact)).not.toMatch(/"raw|path\/|endpoint|"prompt"|"response"/iu);
+  });
+
+  it("checks the complete-run predicate before projecting report fields", () => {
+    const incomplete = {
+      ...completeQualificationReport(),
+      sourceHead: "main",
+      get runtime() {
+        throw new Error("projection must not run");
+      },
+    };
+
+    expect(() => buildRealBinaryScenarioArtifact(incomplete)).toThrow(
+      "real-binary qualification evidence is incomplete",
+    );
+  });
+
+  it("writes an optional production-functional receipt that the shared reader validates", () => {
+    const receiptsDir = mkdtempSync(join(tmpdir(), "keiko-real-binary-receipt-"));
+    try {
+      expect(
+        writeRealBinaryQualificationEvidence(completeQualificationReport(), {
+          KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
+        }),
+      ).toBe(true);
+      const receipt = readReceipts(receiptsDir).get("real-binary-lane");
+      expect(receipt).toMatchObject({
+        scenarioId: "real-binary-lane",
+        commitSha: SOURCE_HEAD,
+        platform: "macos-arm64",
+        testStatus: "passed",
+        recordedAt: "2026-09-06T11:30:00.000Z",
+        provenance: "production-functional",
+        artifactValidationErrors: [],
+      });
+    } finally {
+      rmSync(receiptsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps ordinary runs unchanged and refuses incomplete configured qualification", () => {
+    const receiptsDir = mkdtempSync(join(tmpdir(), "keiko-real-binary-receipt-"));
+    const incomplete = { ...completeQualificationReport(), h1Search: undefined };
+    try {
+      expect(writeRealBinaryQualificationEvidence(incomplete, {})).toBe(false);
+      expect(readdirSync(receiptsDir)).toEqual([]);
+      expect(() =>
+        writeRealBinaryQualificationEvidence(incomplete, {
+          KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
+        }),
+      ).toThrow("real-binary qualification evidence is incomplete");
+      expect(readdirSync(receiptsDir)).toEqual([]);
+    } finally {
+      rmSync(receiptsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a qualification receipt directory writable by another local user", () => {
+    const receiptsDir = mkdtempSync(join(tmpdir(), "keiko-real-binary-receipt-"));
+    try {
+      chmodSync(receiptsDir, 0o755);
+      expect(() =>
+        writeRealBinaryQualificationEvidence(completeQualificationReport(), {
+          KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
+        }),
+      ).toThrow("qualification receipts directory must be a private real directory");
+      expect(readdirSync(receiptsDir)).toEqual([]);
+    } finally {
+      rmSync(receiptsDir, { recursive: true, force: true });
+    }
   });
 
   it("names every missing observation so a failed run explains itself", () => {
-    const complete = {
-      journey: { exitCode: 0 },
-      limits: {
-        materializedChildLimits: [{ context: 32_768, output: 4_096 }],
-        gatewayRequestCount: 1,
-        observedGatewayOutputTokenLimits: [4_096],
-      },
-      missingPayload: { passed: true, unavailableReason: "payload-missing" },
-    };
+    const complete = completeQualificationReport();
 
     expect(missingRealBinaryEvidence(complete)).toEqual([]);
     expect(missingRealBinaryEvidence({ ...complete, journey: { exitCode: 1 } })).toEqual([
@@ -121,13 +611,21 @@ describe("#2483 real-binary observation helpers", () => {
         ...complete,
         limits: { ...complete.limits, gatewayRequestCount: 0 },
       }),
-    ).toEqual(["no gateway request was observed"]);
+    ).toEqual([
+      "no gateway request was observed",
+      "not every gateway request carried the stable productive catalog binding",
+    ]);
     expect(
       missingRealBinaryEvidence({
         ...complete,
-        limits: { ...complete.limits, observedGatewayOutputTokenLimits: [8_192] },
+        limits: {
+          ...complete.limits,
+          observedGatewayOutputTokenLimits: [
+            complete.limits.declaredChildGeometry.maxOutputTokens + 1,
+          ],
+        },
       }),
-    ).toEqual(["no gateway request carried the effective output limit 4096"]);
+    ).toEqual(["no single materialized child geometry matched the admitted gateway output limit"]);
     expect(
       missingRealBinaryEvidence({
         ...complete,
@@ -145,6 +643,41 @@ describe("#2483 real-binary observation helpers", () => {
     ).toEqual(["payload-missing probe reported runtime-unqualified"]);
   });
 
+  it("writes managed qualification only after the whole real-binary journey is complete", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-managed-observation-"));
+    const complete = completeQualificationReport();
+    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR = directory;
+    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = "2".repeat(40);
+    try {
+      expect(writeManagedCatalogObservation({ ...complete, h1Search: undefined })).toBe(false);
+      expect(writeManagedCatalogObservation(complete)).toBe(false);
+      expect(readdirSync(directory)).toEqual([]);
+      process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = SOURCE_HEAD;
+      expect(writeManagedCatalogObservation(complete)).toBe(true);
+      expect(
+        JSON.parse(
+          readFileSync(
+            join(directory, "managed-opencode.managed-opencode.observation.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({
+        component: "managed-opencode",
+        binding: CATALOG_BINDING,
+        settlementCount: 3,
+        proof: MANAGED_CATALOG.proof,
+        runBinding: {
+          correlationId: MANAGED_CATALOG.correlationId,
+          activityLogSha256: ACTIVITY_LOG.sha256,
+        },
+      });
+    } finally {
+      delete process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR;
+      delete process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("reports every gap at once rather than only the first", () => {
     const gaps = missingRealBinaryEvidence({
       journey: { exitCode: 1 },
@@ -156,7 +689,9 @@ describe("#2483 real-binary observation helpers", () => {
       missingPayload: undefined,
     });
 
-    expect(gaps).toHaveLength(5);
+    expect(gaps).toHaveLength(9);
+    expect(gaps).toContain("no exact source head was retained");
+    expect(gaps).toContain("no useful H1 search-to-read result evidence");
   });
 
   it("resolves a governed executable only from a fixed absolute path", () => {
@@ -200,12 +735,77 @@ describe("#2483 real-binary observation helpers", () => {
       JSON.stringify({ requestCount: 3, outputTokenLimits: [4096, "x", 8192] }),
     );
 
-    expect(readGatewayObservation(absent)).toEqual({ requestCount: 0, outputTokenLimits: [] });
+    expect(readGatewayObservation(absent)).toEqual({
+      requestCount: 0,
+      outputTokenLimits: [],
+      catalogBinding: undefined,
+      catalogBindingRequestCount: 0,
+    });
     // Non-integer entries are dropped rather than admitted into the evidence.
     expect(readGatewayObservation(partial)).toEqual({
       requestCount: 3,
       outputTokenLimits: [4096, 8192],
+      catalogBinding: undefined,
+      catalogBindingRequestCount: 0,
     });
+  });
+
+  it("joins actual gateway binding to successful search and derived bounded-read settlements", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-managed-catalog-"));
+    const logPath = join(stateDir, "activity", "logs", "server.log");
+    const correlationId = "real-binary-correlation";
+    const settled = (canonicalId, invocationId, status = "completed") => ({
+      op: "tool-catalog.invocation-settled",
+      correlationId,
+      invocationId,
+      status,
+      toolRef: { canonicalId, contractVersion: 1 },
+      catalogRevision: CATALOG_BINDING.catalogRevision,
+      profile: CATALOG_BINDING.profile,
+      projectionDigest: CATALOG_BINDING.projectionDigest,
+    });
+    try {
+      mkdirSync(dirname(logPath), { recursive: true });
+      writeFileSync(
+        logPath,
+        [
+          settled("keiko.repo.search", "search-invocation"),
+          settled("keiko.workspace.edit", "edit-invocation"),
+          settled("keiko.workspace.read", "read-invocation"),
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      );
+      const gateway = {
+        requestCount: 4,
+        outputTokenLimits: [4096],
+        catalogBinding: CATALOG_BINDING,
+        catalogBindingRequestCount: 4,
+      };
+
+      expect(readManagedCatalogEvidence(stateDir, gateway, H1_SEARCH)).toEqual(MANAGED_CATALOG);
+      expect(
+        readManagedCatalogEvidence(
+          stateDir,
+          { ...gateway, catalogBindingRequestCount: 3 },
+          H1_SEARCH,
+        ),
+      ).toBeUndefined();
+      writeFileSync(
+        logPath,
+        [
+          settled("keiko.workspace.read", "read-invocation"),
+          settled("keiko.repo.search", "search-invocation"),
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      );
+      expect(readManagedCatalogEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+      writeFileSync(logPath, '{"op":"tool-catalog.invocation-settled"\n');
+      expect(readManagedCatalogEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("derives a run-scoped journey context without leaking it into the repository", () => {
@@ -213,29 +813,65 @@ describe("#2483 real-binary observation helpers", () => {
 
     expect(context.executable).toContain("macos-arm64");
     expect(context.executable.endsWith("/payload/bin/opencode")).toBe(true);
-    // State and probe directories live outside the checkout so a run cannot dirty the tree.
-    expect(context.stateDir.startsWith(tmpdir())).toBe(true);
-    expect(context.probeState.startsWith(tmpdir())).toBe(true);
+    // State and probe directories live outside the checkout so a run cannot dirty the tree, and
+    // under the RESOLVED temp root: this journey forces these paths into KEIKO_E2E_STATE_DIR, which
+    // e2eStateDir returns verbatim, so an unresolved one would route the whole lane around the
+    // symlink resolution the helper exists to perform (#2955 follow-up). The pin moved from
+    // `tmpdir()` to its realpath — the same invariant, one step stricter.
+    const tempRoot = realpathSync(tmpdir());
+    for (const statePath of [context.stateDir, context.probeState]) {
+      expect(containedIn(tempRoot, statePath)).toBe(true);
+    }
+    // The negative control a prefix test cannot express: a SIBLING whose name starts with the temp
+    // root passes `startsWith` and is not inside it. Without this, a state path built by string
+    // concatenation rather than `join` would satisfy the pin.
+    expect(containedIn(tempRoot, `${tempRoot}-evil/state`)).toBe(false);
     expect(context.stateDir).not.toBe(context.probeState);
   });
 
   it("assembles an evidence report that carries counts and outcomes only", () => {
+    const declaredGeometry = productionDeclaredGeometry();
     const report = buildJourneyReport({
+      sourceHead: SOURCE_HEAD,
       exitCode: 0,
-      gateway: { requestCount: 7, outputTokenLimits: [4096] },
-      limits: [{ context: 32_768, output: 4_096 }],
+      gateway: {
+        requestCount: 7,
+        outputTokenLimits: [declaredGeometry.maxOutputTokens],
+        catalogBindingRequestCount: 7,
+      },
+      declaredGeometry,
+      limits: [
+        {
+          context: declaredGeometry.contextWindowTokens,
+          input: declaredGeometry.maxInputTokens,
+          output: declaredGeometry.maxOutputTokens,
+        },
+      ],
       missingPayload: { passed: true, unavailableReason: "payload-missing" },
+      h1Search: H1_SEARCH,
+      managedCatalog: MANAGED_CATALOG,
+      activityLog: ACTIVITY_LOG,
       observer: createNetworkObserver("/nonexistent/opencode"),
       target: "macos-arm64",
       wallClockMs: 41_128,
+      completedAt: "2026-09-06T11:30:00.000Z",
     });
 
     expect(report).toMatchObject({
       schemaVersion: 1,
       issue: 2483,
+      sourceHead: SOURCE_HEAD,
       evidenceClass: "functional-not-platform-qualified",
-      runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
-      journey: { exitCode: 0, wallClockMs: 41_128 },
+      runtime: {
+        name: "opencode-compatible",
+        version: OPENCODE_PINNED_VERSION,
+        target: "macos-arm64",
+      },
+      journey: {
+        exitCode: 0,
+        wallClockMs: 41_128,
+        completedAt: "2026-09-06T11:30:00.000Z",
+      },
     });
     expect(missingRealBinaryEvidence(report)).toEqual([]);
     // The whole report must stay free of paths, endpoints, and page or prompt text.

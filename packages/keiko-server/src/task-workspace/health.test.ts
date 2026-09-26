@@ -3,24 +3,29 @@
 // health classification over live signals (healthy, dirty, missing, archived, cleanup-ready), orphan
 // detection by cross-referencing the managed root with the store, and the content-free report (SC3).
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  GitWorktreeAdapter,
+  WorktreeListEntry,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import {
-  validateWorkspaceHealthReport,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceHealthEntry,
-  type WorkspaceHealthReport,
-  type WorkspaceInfo,
-  type WorkspaceInstance,
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceHealthEntry,
+  WorkspaceHealthReport,
+  WorkspaceInfo,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceHealthReport } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { runMigrations } from "../store/schema.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import {
   buildActiveWorkspacePointerStoreOverDatabase,
@@ -30,6 +35,43 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceHealthService } from "./health.js";
 import type { WorkspaceHealthService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+} from "./gitdir-identity.js";
+
+// A volume without creation times, or an I/O failure inside the proof, cannot be produced on a real
+// filesystem from a test, so the one identity classifier is wrapped (never replaced) and answers a
+// queued outcome exactly once where a pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
+
+// Makes the identity proof fail for ONE worktree path, targeted by path rather than by call order —
+// the store does not promise an evaluation order — while every other path reaches the real proof.
+function failProofFor(worktreePath: string, cause: Error): void {
+  const real = vi.mocked(inspectManagedGitdirIdentityOutcome).getMockImplementation();
+  if (real === undefined) throw new Error("classifier wrapper lost its implementation");
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockImplementation((candidate, ...rest) =>
+    candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
+  );
+}
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/server-log.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -40,6 +82,13 @@ let store: WorkspaceInstanceStore;
 let pointerStore: ActiveWorkspacePointerStore;
 let idCounter: number;
 let nowMs: number;
+let extraRepos: string[];
+
+type AdapterFactory = (
+  workspace: WorkspaceInfo,
+  correlationId: string,
+  fs?: WorkspaceFs,
+) => GitWorktreeAdapter;
 
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
@@ -54,8 +103,16 @@ function noopEvidence(): EvidenceStore {
   };
 }
 
-function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
-  return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+function realAdapter(
+  workspace: WorkspaceInfo,
+  _correlationId?: string,
+  fs?: WorkspaceFs,
+): GitWorktreeAdapter {
+  return createNodeGitWorktreeAdapter({
+    workspace,
+    processEnv: { PATH: process.env.PATH ?? "" },
+    ...(fs === undefined ? {} : { fs }),
+  });
 }
 
 function provisioning(): WorkspaceProvisioningService {
@@ -71,17 +128,74 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function health(): WorkspaceHealthService {
+function health(
+  adapterFactory: AdapterFactory = realAdapter,
+  activityLog?: ServerLogSink,
+): WorkspaceHealthService {
   return createWorkspaceHealthService({
     store,
     activePointerStore: pointerStore,
     evidenceStore: noopEvidence(),
     managedRoot,
-    createAdapter: realAdapter,
+    createAdapter: adapterFactory,
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
+}
+
+function retireIdentity(instance: WorkspaceInstance): void {
+  const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+  if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+  store.upsert({ ...instance, gitdirIdentity: inspection.legacyIdentity });
+}
+
+// A second disposable git repository, removed in afterEach, so a report over more than one
+// repository can be exercised.
+function makeRepo(prefix: string): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  extraRepos.push(root);
+  git(["init", "-q", "-b", "main"], root);
+  git(["config", "user.email", "test@keiko.example"], root);
+  git(["config", "user.name", "Keiko Test"], root);
+  git(["config", "commit.gpgsign", "false"], root);
+  writeFileSync(join(root, "README.md"), "# demo\n");
+  git(["add", "README.md"], root);
+  git(["commit", "-q", "-m", "initial"], root);
+  return root;
+}
+
+async function provisionTaskInRepo(
+  repositoryRequestPath: string,
+  taskId: string,
+): Promise<WorkspaceInstance> {
+  const result = await provisioning().provision({
+    repositoryRequestPath,
+    taskId,
+    baseBranch: "main",
+    requestedBy: "u",
+  });
+  return result.instance;
+}
+
+// The real adapter for every repository except `failingRoot`, whose worktree listing rejects with a
+// PLAIN error — the shape a vanished repository root or a denied path produces.
+function adapterFailingFor(failingRoot: string): AdapterFactory {
+  return (
+    workspace: WorkspaceInfo,
+    correlationId: string,
+    fs?: WorkspaceFs,
+  ): GitWorktreeAdapter => {
+    const adapter = realAdapter(workspace, correlationId, fs);
+    if (workspace.root !== failingRoot) return adapter;
+    return {
+      ...adapter,
+      listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
+        Promise.reject(new Error("spawn git ENOENT")),
+    };
+  };
 }
 
 async function provisionTask(taskId: string): Promise<WorkspaceInstance> {
@@ -117,12 +231,14 @@ beforeEach(() => {
   pointerStore = buildActiveWorkspacePointerStoreOverDatabase(db);
   idCounter = 0;
   nowMs = 1_700_000_000_000;
+  extraRepos = [];
 });
 
 afterEach(() => {
   db.close();
   rmSync(repoRoot, { recursive: true, force: true });
   rmSync(managedRoot, { recursive: true, force: true });
+  for (const extra of extraRepos) rmSync(extra, { recursive: true, force: true });
 });
 
 function entryFor(
@@ -132,7 +248,30 @@ function entryFor(
   return report.entries.find((e) => e.kind === "instance" && e.workspaceId === workspaceId);
 }
 
+function activityLogEventWithFailureKind(
+  sink: BufferedServerLogSink,
+  failureKind: string,
+): ServerLogEvent {
+  const line = sink.events.find((event) => event.extra?.failureKind === failureKind);
+  if (line === undefined) {
+    throw new Error(`no activity-log event with failureKind ${failureKind}`);
+  }
+  return line;
+}
+
 describe("operational health classification (AC1)", () => {
+  it("normalizes a malformed correlationId before every health adapter call", async () => {
+    await provisionTask("t-correlation-boundary");
+    const received: string[] = [];
+    const adapterFactory: AdapterFactory = (workspace, correlationId, fs) => {
+      received.push(correlationId);
+      return realAdapter(workspace, correlationId, fs);
+    };
+    await health(adapterFactory).report(repoRoot, "req corr\ncontrol");
+    expect(received.length).toBeGreaterThan(0);
+    expect(new Set(received)).toEqual(new Set([UNKNOWN_CORRELATION_ID]));
+  });
+
   it("classifies a clean active workspace healthy and not cleanup-eligible", async () => {
     const instance = await provisionTask("t-healthy");
     const report = await health().report(repoRoot);
@@ -143,6 +282,92 @@ describe("operational health classification (AC1)", () => {
     // content-free: no path / repo root leaks
     expect(JSON.stringify(report)).not.toContain(managedRoot);
     expect(JSON.stringify(report)).not.toContain(repoRoot);
+  });
+
+  it("probes an exact registered workspace below the default denied state directory", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-root");
+
+    const report = await health().report(repoRoot);
+
+    expect(entryFor(report, instance.workspaceId)?.classification).toBe("healthy");
+  });
+
+  it("does not report healthy when registered managed-root access cannot be re-proved", async () => {
+    const instance = await provisionTask("t-access-revoked");
+    rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME));
+
+    const report = await health().report(repoRoot);
+
+    expect(entryFor(report, instance.workspaceId)?.classification).toBe("recovery-required");
+    expect(entryFor(report, instance.workspaceId)?.cleanupEligible).toBe(false);
+  });
+
+  // A managed-access denial is an ownership/identity finding, never a containment one. Health used
+  // to rewrite the reconciliation facts to `pathContained: false` on every denial, so a workspace
+  // registered under the retired identity schema was reported as a PATH ESCAPE and sent an operator
+  // into containment incident response for a migration (#3376 review P2).
+  it("reports a retired-schema active workspace as identity drift, never as a path escape", async () => {
+    const instance = await provisionTask("t-retired-active");
+    retireIdentity(instance);
+    const activityLog = createBufferedServerLogSink();
+
+    const report = await health(realAdapter, activityLog).report(repoRoot, "health-retired-0001");
+
+    const entry = entryFor(report, instance.workspaceId);
+    expect(entry?.driftMarkers).toContain("identity-schema-retired");
+    expect(entry?.driftMarkers).not.toContain("path-escape");
+    expect(entry?.classification).toBe("stale-pointer");
+    expect(entry?.cleanupEligible).toBe(false);
+    // The denial itself is evidence on the activity log, joined to this report's correlation.
+    const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toMatchObject({
+      correlationId: "health-retired-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+  });
+
+  // The report has to predict what governed cleanup will decide: a clean terminal row whose identity
+  // can no longer be re-proven is still removable (cleanup probes it on the orphan-style contained
+  // path), so health must not mark it ineligible on the denial alone (#3376 review P1).
+  it("keeps a clean retired-schema terminal workspace cleanup-eligible", async () => {
+    const instance = await provisionTask("t-retired-terminal");
+    retireIdentity(instance);
+    setState(store.getById(instance.workspaceId) ?? instance, "cleanup-pending");
+
+    const report = await health().report(repoRoot);
+
+    const entry = entryFor(report, instance.workspaceId);
+    expect(entry?.cleanupEligible).toBe(true);
+    expect(entry?.driftMarkers).not.toContain("path-escape");
+  });
+
+  // A proof that could not run is not a verdict: the report carries that one workspace forward as
+  // unverified, logs the failure with its cause under the report's correlation, and still evaluates
+  // every other workspace (Cursor review on f50133b95).
+  it("carries a workspace whose identity proof failed forward as unverified and keeps reporting the others", async () => {
+    const failing = await provisionTask("t-proof-failed");
+    const other = await provisionTask("t-proof-ok");
+    const activityLog = createBufferedServerLogSink();
+    failProofFor(failing.managedWorktreePath, new Error("EACCES: permission denied"));
+
+    const report = await health(realAdapter, activityLog).report(repoRoot, "health-proof-0001");
+
+    const carried = entryFor(report, failing.workspaceId);
+    expect(carried?.classification).toBe("recovery-required");
+    expect(carried?.health).toBe("unknown");
+    expect(carried?.cleanupEligible).toBe(false);
+    expect(carried?.driftMarkers).toEqual([]);
+    expect(entryFor(report, other.workspaceId)?.classification).toBe("healthy");
+    expect(validateWorkspaceHealthReport(report).ok).toBe(true);
+    const line = activityLogEventWithFailureKind(activityLog, "IDENTITY_PROOF_FAILED");
+    expect(line.correlationId).toBe("health-proof-0001");
+    expect(line.errorKind).toBe("read-failed");
+    // Body-free by contract: the cause travels as a class chain, never as its message.
+    expect(line.extra).toMatchObject({ operation: "health" });
+    expect(Array.isArray(line.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(report)).not.toContain(managedRoot);
   });
 
   it("classifies a worktree with uncommitted/untracked changes as dirty (live probe)", async () => {
@@ -179,6 +404,18 @@ describe("operational health classification (AC1)", () => {
 });
 
 describe("orphan detection", () => {
+  it("probes a contained orphan below the denied state directory without persisted authority", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-orphan");
+    store.delete(instance.workspaceId);
+
+    const report = await health().report(repoRoot);
+    const orphan = report.entries.find((entry) => entry.kind === "orphan-worktree");
+
+    expect(orphan?.classification).toBe("orphaned");
+    expect(orphan?.cleanupEligible).toBe(false);
+  });
+
   it("surfaces an orphaned managed worktree (directory with no persisted record)", async () => {
     const instance = await provisionTask("t-orphan");
     store.delete(instance.workspaceId);
@@ -203,4 +440,84 @@ describe("orphan detection", () => {
     expect(entryFor(report, a.workspaceId)).toBeDefined();
     expect(entryFor(report, b.workspaceId)).toBeDefined();
   });
+});
+
+// One unreachable repository must never abort the report for every other one: the bare
+// `await adapter.listWorktrees()` per repository used to escape every boundary, so a deleted or
+// moved checkout blanked the whole health surface (audit finding, 2026-09-03).
+describe("an unreachable repository is isolated to its own rows", () => {
+  it("reports every other repository and carries the unreachable one forward unverified", async () => {
+    const other = makeRepo("keiko-health-other-");
+    const reachable = await provisionTask("t-reachable");
+    const stranded = await provisionTaskInRepo(other, "t-unreachable");
+    const activityLog = createBufferedServerLogSink();
+
+    const report = await health(adapterFailingFor(other), activityLog).report(
+      undefined,
+      "health-unreachable-0001",
+    );
+
+    expect(entryFor(report, reachable.workspaceId)?.classification).toBe("healthy");
+    const carried = entryFor(report, stranded.workspaceId);
+    expect(carried?.classification).toBe("recovery-required");
+    expect(carried?.cleanupEligible).toBe(false);
+    // Nothing was written: the last classification stands until the repository is reachable.
+    expect(store.getById(stranded.workspaceId)?.health).toBe("healthy");
+    const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
+    expect(line.correlationId).toBe("health-unreachable-0001");
+    expect(line.errorKind).toBe("unavailable");
+    expect(line.extra).toMatchObject({ operation: "health" });
+    expect(JSON.stringify(line)).not.toContain(other);
+  });
+});
+
+// The global report only knew repositories with a persisted row; a leftover directory of a
+// repository whose every row was already cleaned up never appeared in it, while the orphan sweep's
+// global scan did union the on-disk directories in (audit finding, 2026-09-03).
+describe("a global report surfaces orphans of repositories without persisted rows", () => {
+  it("lists the orphaned managed worktree of a repository that has no instance left", async () => {
+    const instance = await provisionTask("t-orphan-global");
+    store.delete(instance.workspaceId);
+
+    const report = await health().report();
+
+    const orphans = report.entries.filter((entry) => entry.kind === "orphan-worktree");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0]?.classification).toBe("orphaned");
+  });
+
+  // That shared listing THROWS for a root it cannot read, because the orphan sweep — which deletes
+  // — may never act on an inventory it could not take. This report only observes, and aborting it
+  // discarded every row already evaluated, including repositories that were perfectly readable:
+  // the same isolation the unreachable-repository path applies (PR #3381 review).
+  //
+  // `0o111` on the managed root is traverse-WITHOUT-read: the ownership marker, containment
+  // realpaths, and the per-worktree git probes all still work, so the listing is the only thing
+  // that fails and the pin cannot pass for an unrelated reason. Skipped as root, where the
+  // permission bits are not enforced.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "keeps reporting every persisted row when the managed root cannot be listed",
+    async () => {
+      const instance = await provisionTask("t-listing-denied");
+      const activityLog = createBufferedServerLogSink();
+      chmodSync(managedRoot, 0o111);
+      try {
+        const report = await health(realAdapter, activityLog).report(
+          undefined,
+          "health-listing-0001",
+        );
+
+        expect(entryFor(report, instance.workspaceId)?.classification).toBe("healthy");
+        expect(validateWorkspaceHealthReport(report).ok).toBe(true);
+        const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
+        expect(line.correlationId).toBe("health-listing-0001");
+        expect(line.errorKind).toBe("unavailable");
+        expect(line.extra).toMatchObject({ operation: "health" });
+        expect(Array.isArray(line.extra?.causeChain)).toBe(true);
+        expect(JSON.stringify(line)).not.toContain(managedRoot);
+      } finally {
+        chmodSync(managedRoot, 0o700);
+      }
+    },
+  );
 });

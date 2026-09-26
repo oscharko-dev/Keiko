@@ -15,34 +15,38 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import type {
+  EditorDirtyCloseIntent,
+  EditorLayoutNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+  WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
 import {
   activeEditorPane,
-  createEditorDirtyCloseIntent,
   editorLayoutOpenFiles,
   editorLayoutPaneIds,
   editorLayoutReducer,
-  selectWorkspaceFileTarget,
   serializeEditorLayoutStateV2,
-  type EditorDirtyCloseIntent,
-  type EditorLayoutNode,
-  type EditorLayoutSplitNode,
-  type EditorLayoutStateV2,
-  type EditorPaneStateV2,
-  type EditorSplitDirection,
-  type EditorSplitDropZone,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
+import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
 import {
   dirtyFilesUnderPath,
   reconcileEditorDirtyByPane,
   type EditorDirtyByPane,
 } from "./editorDirtyState";
 import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
+import { editorPaneWindowId } from "./editorPaneWindowId";
 import editorWidgetStyles from "./EditorWidget.module.css";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
@@ -81,6 +85,7 @@ import {
 import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
 import {
   bindingFromKeyboardEvent,
+  dispatchableWorkspaceShortcutsForContext,
   resolveEffectiveKeyboardShortcuts,
   type EffectiveKeyboardShortcutRegistry,
 } from "../../keyboardShortcutsRegistry";
@@ -221,19 +226,26 @@ function sameEditorExternalLayoutInputs(
   );
 }
 
-function editorShortcutCommandId(
+// Looked up through the same collision-safe projection `shellShortcutState.ts`'s `labelledBindings`
+// uses for this context, never the raw per-command list: a persisted `keybindingOverrides` entry
+// that bypasses `updateKeyboardShortcutOverride`'s write-time validation (e.g. a settings import)
+// can carry two editor-context commands to the identical raw binding string, and a naive
+// `registry.commands.find(...)` would dispatch whichever happens to sit first in registry order
+// instead of the command the two-phase claim algorithm (`claimChords`) actually reserved the chord
+// for.
+export function editorShortcutCommandId(
   registry: EffectiveKeyboardShortcutRegistry,
   event: globalThis.KeyboardEvent,
 ): string | null {
   const binding = bindingFromKeyboardEvent(event);
   if (binding === null) return null;
-  const match = registry.commands.find(
-    (entry) =>
-      entry.binding === binding &&
-      entry.command.dispatchOwner === "keiko" &&
-      entry.command.contexts.includes("editor"),
+  const commandIdByBinding = new Map(
+    dispatchableWorkspaceShortcutsForContext(registry, "editor").map((entry) => [
+      entry.binding,
+      entry.commandId,
+    ]),
   );
-  return match?.command.id ?? null;
+  return commandIdByBinding.get(binding) ?? null;
 }
 
 function dispatchEditorShortcut(
@@ -243,6 +255,7 @@ function dispatchEditorShortcut(
 ): boolean {
   if (commandId === "quick-access.files") return dispatchQuickAccess(trigger, "files");
   if (commandId === "quick-access.commands") return dispatchQuickAccess(trigger, "commands");
+  if (commandId === "open-editor-settings") return dispatchOpenEditorSettings(trigger);
   if (commandId === "view.splitRight") host.splitActive("row");
   else if (commandId === "view.splitDown") host.splitActive("column");
   else if (commandId === "view.closeSplit") host.closeActiveSplit();
@@ -252,6 +265,12 @@ function dispatchEditorShortcut(
   else if (commandId === "tab.reopenClosed") host.reopenClosed();
   else if (commandId === "files.saveAll") host.saveAll();
   else return false;
+  return true;
+}
+
+function dispatchOpenEditorSettings(trigger: EditorQuickAccessTrigger | null): boolean {
+  if (trigger === null) return false;
+  trigger.openEditorSettings();
   return true;
 }
 
@@ -273,18 +292,8 @@ function DirtyCloseDialog(props: {
 }): ReactNode {
   const titleId = "editor-dirty-close-title";
   const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    // GEN-UI-FOCUS-006: capture the opener before moving focus into the dialog, and restore it on
-    // close/unmount so keyboard focus returns to where the user was (never lost to <body>).
-    const opener = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => {
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
-    };
-  }, []);
   useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: dialogRef });
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape" && !props.pending.saving) props.onCancel();
@@ -294,7 +303,7 @@ function DirtyCloseDialog(props: {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [props]);
-  return (
+  const dialog = (
     <div className="ed-dialog-backdrop">
       <dialog
         open
@@ -342,6 +351,7 @@ function DirtyCloseDialog(props: {
       </dialog>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
 // The split controls rendered into each pane's toolbar. A pure function of the pane plus the stable
@@ -1961,7 +1971,7 @@ export function EditorWidget({
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
       openFiles: pane.openFiles,
       dirtyFiles: dirtyFileList,
-      windowId: `${windowId ?? "editor"}-${pane.id}`,
+      windowId: editorPaneWindowId(windowId, pane.id),
       paneId: pane.id,
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,

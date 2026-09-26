@@ -9,7 +9,8 @@
 // the old `error.message.slice(0, 200)` passthrough makes the leak assertions fail.
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   QualityIntelligence as MgQI,
   QualityIntelligenceSafeErrorException,

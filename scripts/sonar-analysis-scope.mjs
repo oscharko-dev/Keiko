@@ -109,8 +109,12 @@ const nativeSonarExclusions = Object.freeze([
 const approvedScopeValueDigests = new Map([
   ["sonar.sources", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
   ["sonar.tests", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
-  ["sonar.exclusions", "ac872116ea08198beaea8352b61e3e3b558c6b30cf8be4525ba9c95458e443c0"],
-  ["sonar.test.inclusions", "3495afcea55c6742c14f79b59f2893c777c5d2326a4739574df3d8ad3f727e4d"],
+  // Digest re-pinned after adding the `**/*.bench.*` classifier pattern to both the exclusions
+  // and the test inclusions (KEIKO-1028, #3340 review follow-up): `vitest bench` files carry the
+  // same Sonar disposition as `.test.`/`.spec.` — asserts nothing, never packaged. Re-computed
+  // the SHA-256 of the raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
+  ["sonar.exclusions", "dc113fa197390651bc9f0377b9a1395d19c5cadb60a9754b92c3f93e3c19b135"],
+  ["sonar.test.inclusions", "8db9d0077b198b3b047e46ea3c5151f1b30aef42dabc06be1e589c8c475e1704"],
   ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
   [
     "sonar.typescript.tsconfigPaths",
@@ -131,8 +135,16 @@ const testScopeRules = Object.freeze([
   ["**/testing/**", (path) => path.startsWith("testing/") || path.includes("/testing/")],
   ["**/*.test.*", (path) => /\.test\.[^/]+$/u.test(path)],
   ["**/*.spec.*", (path) => /\.spec\.[^/]+$/u.test(path)],
+  // KEIKO-1028 (#3340 review follow-up): `vitest bench` files assert nothing and are never a
+  // packaged surface — same disposition as `.test.`/`.spec.`, so they belong in the same
+  // classifier rather than a one-off exception for the first bench file added.
+  ["**/*.bench.*", (path) => /\.bench\.[^/]+$/u.test(path)],
   ["**/_support.*", (path) => /(?:^|\/)_support\.[^/]+$/u.test(path)],
   ["**/test-support.*", (path) => /(?:^|\/)test-support\.[^/]+$/u.test(path)],
+  // KEIKO-0130: shared per-package test-fixture modules live under `src/test-support/`, never
+  // in the packaged surface. Excluded from Sonar main-source scope for the same reason
+  // `**/test-support.*` is.
+  ["**/test-support/**", (path) => /(?:^|\/)test-support\//u.test(path)],
   ["**/test-fixtures.*", (path) => /(?:^|\/)test-fixtures\.[^/]+$/u.test(path)],
   ["**/testing.*", (path) => /(?:^|\/)testing\.[^/]+$/u.test(path)],
   [
@@ -147,6 +159,18 @@ const testScopeRules = Object.freeze([
     "native/runtime-supervisor/macos/test-protocol.mjs",
     (path) => path === "native/runtime-supervisor/macos/test-protocol.mjs",
   ],
+  // KEIKO-0304 (review-follow-up on #3202): shared codec/process helpers imported ONLY by the
+  // three test-protocol.mjs files above. It carries their Sonar disposition — test infrastructure,
+  // not main-code — so an exact-path classifier here matches the sibling entries rather than
+  // introducing a broader wildcard that could pick up other native `.mjs` in the future.
+  [
+    "native/runtime-supervisor/protocol-harness.mjs",
+    (path) => path === "native/runtime-supervisor/protocol-harness.mjs",
+  ],
+  // Coderabbit 3793145636: shared C source scanner (line splicing, comment/literal handling,
+  // disabled-preprocessor-branch state machine) imported ONLY by the three test-protocol.mjs
+  // harnesses. Same disposition as `protocol-harness.mjs` above.
+  ["native/lib/c-source-scanner.mjs", (path) => path === "native/lib/c-source-scanner.mjs"],
 ]);
 export const SONAR_TEST_INCLUSION_PATTERNS = Object.freeze(
   testScopeRules.map(([pattern]) => pattern),
@@ -239,17 +263,14 @@ export function isGeneratedOrBinaryPath(input) {
     path.startsWith("docs/design-system/evidence/") ||
     binaryExtensions.has(fileExtension(path)) ||
     path.endsWith(".d.ts") ||
+    path.endsWith(".d.mts") ||
+    path.endsWith(".d.cts") ||
     /\.(?:generated|min)\.[^/]+$/u.test(path)
   );
 }
 
-// Top-level orchestration scripts whose only side effects are subprocess spawns v8 coverage
-// cannot cross. Their testable logic is extracted into `scripts/lib/*.mjs` modules covered by
-// their own pods; the orchestration itself is exercised end-to-end by the matching npm gate
-// (`npm run arch:check:negative`). Kept out of the LCOV coverage track AND excluded from the
-// `check:lcov-source-mapping` gate that would otherwise demand an importing pod for every
-// changed scripts/*.mjs — same rationale pattern as the packages/keiko-ui/public/ carve-out.
-const NON_LCOV_SCRIPTS = new Set(["scripts/arch-check-negative.mjs"]);
+// Top-level subprocess gates whose behavior cannot cross the Linux v8 coverage boundary.
+export const NON_LCOV_SCRIPTS = new Set(["scripts/arch-check-negative.mjs"]);
 
 export function isCoverableProductSource(input) {
   const path = normalizePath(input);

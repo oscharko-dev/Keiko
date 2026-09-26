@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { binaryNdcgAtK, mean } from "@oscharko-dev/keiko-contracts";
+import { binaryNdcgAtK, mean } from "@oscharko-dev/keiko-contracts/runtime/eval-metrics";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const CANONICAL_SOURCE = "packages/keiko-contracts/src/eval-metrics.ts";

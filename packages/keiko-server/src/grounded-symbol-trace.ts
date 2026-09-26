@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type {
+  ContextCoverageDiagnostics,
   EvidenceAtom,
   RetrievalQuery,
   SelectedScope,
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { CONTEXT_COVERAGE_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RetrievalIntent, SearchAnchor } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
@@ -18,6 +20,7 @@ import {
   type WorkspaceFs,
   type WorkspaceIndex,
 } from "@oscharko-dev/keiko-workspace";
+import type { StructuralAdapterRequestContext } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
 
@@ -30,6 +33,9 @@ interface FollowSymbolTraceEvidenceInput {
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
+  readonly requestContext?: StructuralAdapterRequestContext | undefined;
+  readonly deadlineAtMs?: number | undefined;
+  readonly tryReserveSearchCall?: (() => boolean) | undefined;
 }
 
 interface DiscoveredSymbolTraceEvidenceInput extends FollowSymbolTraceEvidenceInput {
@@ -65,7 +71,7 @@ const IGNORED_CALLED_SYMBOLS = new Set([
   "switch",
   "while",
 ]);
-const TRACE_SEARCH_LIMITS = {
+export const GROUNDED_TRACE_SEARCH_LIMITS = {
   ...DEFAULT_SEARCH_LIMITS,
   maxMatchesReturned: TRACE_MAX_RECORDS,
 };
@@ -122,12 +128,18 @@ function traceIncomplete(
   diagnostics: FollowSymbolTraceDiagnostics,
   nowMs: () => number,
 ): UncertaintyMarker | undefined {
-  if (!diagnostics.depthCapped && !diagnostics.budgetExhausted && diagnostics.skippedEdges === 0) {
+  if (
+    !diagnostics.depthCapped &&
+    !diagnostics.budgetExhausted &&
+    !diagnostics.sourceGraphTruncated &&
+    diagnostics.skippedEdges === 0
+  ) {
     return undefined;
   }
   const reasons = [
     ...(diagnostics.depthCapped ? [`depth>${String(diagnostics.maxDepth)}`] : []),
     ...(diagnostics.budgetExhausted ? [`records>${String(diagnostics.maxRecords)}`] : []),
+    ...(diagnostics.sourceGraphTruncated ? ["source-graph-truncated"] : []),
   ];
   return {
     kind: diagnostics.budgetExhausted ? "budget-clipped" : "scope-incomplete",
@@ -184,6 +196,7 @@ async function discoveryExcerpt(
   input: DiscoveredSymbolTraceEvidenceInput,
   atom: EvidenceAtom,
 ): Promise<string> {
+  if (traceWorkStopped(input)) return "";
   const range = atom.lineRange;
   if (range === undefined) return "";
   const result = await readExcerpt(
@@ -191,10 +204,19 @@ async function discoveryExcerpt(
     { scopePath: atom.scopePath, ...range, maxBytes: MAX_DISCOVERY_EXCERPT_BYTES },
     {
       fs: input.fs,
+      nowMs: input.nowMs,
+      ...(input.deadlineAtMs === undefined ? {} : { deadlineAtMs: input.deadlineAtMs }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     },
   );
   return result.content;
+}
+
+function traceWorkStopped(input: FollowSymbolTraceEvidenceInput): boolean {
+  if (input.signal?.aborted === true) {
+    throw new CancelledError("grounded symbol trace cancelled");
+  }
+  return input.deadlineAtMs !== undefined && input.nowMs() >= input.deadlineAtMs;
 }
 
 function handlerSymbolsFromContent(content: string): readonly string[] {
@@ -228,20 +250,31 @@ function exactSymbolQuery(symbol: string, nowMs: () => number): RetrievalQuery {
 async function searchDiscoveredSymbol(
   input: DiscoveredSymbolTraceEvidenceInput,
   symbol: string,
-): Promise<readonly EvidenceAtom[]> {
-  const result = await searchText(
-    input.searchScope,
-    exactSymbolQuery(symbol, input.nowMs),
-    TRACE_SEARCH_LIMITS,
-    {
-      fs: input.fs,
-      nowMs: input.nowMs,
-      searchHints: { retrievalIntent: "targeted-code-search" },
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
-      ...(input.workspaceIndex === undefined ? {} : { workspaceIndex: input.workspaceIndex }),
-    },
-  );
-  return promoteDiscoveredSymbolAtoms(input, symbol, result.atoms);
+): Promise<DiscoveredSymbolSearchEvidence> {
+  const query = exactSymbolQuery(symbol, input.nowMs);
+  const requestDeps = {
+    searchHints: { retrievalIntent: "targeted-code-search" as const },
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.workspaceIndex === undefined ? {} : { workspaceIndex: input.workspaceIndex }),
+  };
+  const result =
+    input.requestContext === undefined
+      ? await searchText(input.searchScope, query, GROUNDED_TRACE_SEARCH_LIMITS, {
+          fs: input.fs,
+          nowMs: input.nowMs,
+          ...(input.deadlineAtMs === undefined ? {} : { deadlineAtMs: input.deadlineAtMs }),
+          ...requestDeps,
+        })
+      : await input.requestContext.searchText(query, GROUNDED_TRACE_SEARCH_LIMITS, requestDeps);
+  return {
+    atoms: await promoteDiscoveredSymbolAtoms(input, symbol, result.atoms),
+    coverage: result.coverage,
+  };
+}
+
+interface DiscoveredSymbolSearchEvidence {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly coverage: ContextCoverageDiagnostics;
 }
 
 function discoveredTraceAtom(
@@ -338,59 +371,108 @@ async function nextSymbolFrontier(
 async function searchSymbolFrontier(
   input: DiscoveredSymbolTraceEvidenceInput,
   symbols: readonly string[],
-): Promise<readonly EvidenceAtom[]> {
-  return (
-    await Promise.all(symbols.map(async (symbol) => searchDiscoveredSymbol(input, symbol)))
-  ).flat();
+): Promise<readonly DiscoveredSymbolSearchEvidence[]> {
+  const pending: Promise<DiscoveredSymbolSearchEvidence>[] = [];
+  for (const symbol of symbols) {
+    if (traceWorkStopped(input) || input.tryReserveSearchCall?.() === false) break;
+    pending.push(searchDiscoveredSymbol(input, symbol));
+  }
+  return await Promise.all(pending);
 }
 
 async function traceDiscoveredSymbols(
   input: DiscoveredSymbolTraceEvidenceInput,
   seedSymbols: readonly string[],
-): Promise<readonly EvidenceAtom[]> {
+): Promise<{
+  readonly atoms: readonly EvidenceAtom[];
+  readonly coverage: readonly ContextCoverageDiagnostics[];
+}> {
   const seen = new Set(seedSymbols.map((symbol) => symbol.toLowerCase()));
   const atoms: EvidenceAtom[] = [];
+  const coverage: ContextCoverageDiagnostics[] = [];
   let frontier = seedSymbols;
   for (let depth = 0; depth < MAX_DISCOVERED_TRACE_HOPS && frontier.length > 0; depth += 1) {
-    const hopAtoms = await searchSymbolFrontier(input, frontier);
+    const searches = await searchSymbolFrontier(input, frontier);
+    const hopAtoms = searches.flatMap((search) => search.atoms);
+    coverage.push(...searches.map((search) => search.coverage));
     const rankedHopAtoms =
       depth === 0 ? hopAtoms : hopAtoms.map((atom) => ({ ...atom, score: atom.score * 0.92 }));
     atoms.push(...rankedHopAtoms);
     frontier = await nextSymbolFrontier(input, hopAtoms, frontier, seen);
   }
-  return [...new Map(atoms.map((atom) => [atom.stableId, atom])).values()];
+  return {
+    atoms: [...new Map(atoms.map((atom) => [atom.stableId, atom])).values()],
+    coverage,
+  };
+}
+
+function discoveredTraceCoverageMarker(
+  coverage: readonly ContextCoverageDiagnostics[],
+  nowMs: () => number,
+): UncertaintyMarker | undefined {
+  const incomplete = coverage.filter((entry) => entry.incomplete);
+  if (incomplete.length === 0) return undefined;
+  const reasons = CONTEXT_COVERAGE_TRUNCATION_REASONS.filter((reason) =>
+    incomplete.some((entry) => entry.reasons.includes(reason)),
+  );
+  const sum = (field: "filesScanned" | "filesSkipped" | "matchesReturned"): number =>
+    incomplete.reduce((total, entry) => total + entry[field], 0);
+  const budgetClipped = reasons.some(
+    (reason) => reason === "file-cap" || reason === "match-cap" || reason === "timeout",
+  );
+  return {
+    kind: budgetClipped ? "budget-clipped" : "scope-incomplete",
+    claim:
+      `Discovered-symbol trace search was incomplete across ${String(incomplete.length)} ` +
+      `search(es): reasons=${reasons.join(",")}; filesScanned=${String(sum("filesScanned"))}, ` +
+      `filesSkipped=${String(sum("filesSkipped"))}, ` +
+      `matchesReturned=${String(sum("matchesReturned"))}.`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs(),
+  };
 }
 
 export async function collectDiscoveredSymbolTraceEvidence(
   input: DiscoveredSymbolTraceEvidenceInput,
 ): Promise<FollowSymbolTraceEvidence> {
+  if (traceWorkStopped(input)) return { atoms: [], uncertainty: [] };
   if (!shouldTrace(input)) return { atoms: [], uncertainty: [] };
   if (!ROUTE_TRACE_QUERY_RE.test(input.query.text)) return { atoms: [], uncertainty: [] };
   const symbols = await discoveredHandlerSymbols(input);
   if (symbols.length === 0) return { atoms: [], uncertainty: [] };
+  const trace = await traceDiscoveredSymbols(input, symbols);
+  const marker = discoveredTraceCoverageMarker(trace.coverage, input.nowMs);
   return {
-    atoms: await traceDiscoveredSymbols(input, symbols),
-    uncertainty: [],
+    atoms: trace.atoms,
+    uncertainty: marker === undefined ? [] : [marker],
   };
+}
+
+function reservedFollowTraceSymbols(input: FollowSymbolTraceEvidenceInput): readonly string[] {
+  if (!shouldTrace(input)) return [];
+  if (directDefinitionSymbol(input.query, input.anchors) !== undefined) return [];
+  const symbols = traceSymbols(input.anchors);
+  if (symbols.length === 0 || input.tryReserveSearchCall?.() === false) return [];
+  return traceWorkStopped(input) ? [] : symbols;
 }
 
 export async function collectFollowSymbolTraceEvidence(
   input: FollowSymbolTraceEvidenceInput,
 ): Promise<FollowSymbolTraceEvidence> {
-  if (!shouldTrace(input)) return { atoms: [], uncertainty: [] };
-  if (directDefinitionSymbol(input.query, input.anchors) !== undefined) {
-    return { atoms: [], uncertainty: [] };
-  }
-  if (input.signal?.aborted === true) {
-    throw new CancelledError("follow-symbol trace cancelled");
-  }
-  const symbols = traceSymbols(input.anchors);
+  if (traceWorkStopped(input)) return { atoms: [], uncertainty: [] };
+  const symbols = reservedFollowTraceSymbols(input);
   if (symbols.length === 0) return { atoms: [], uncertainty: [] };
-  const trace = await followSymbolTrace(input.searchScope, TRACE_SEARCH_LIMITS, input.fs, {
-    symbols,
-    maxDepth: TRACE_MAX_DEPTH,
-    maxRecords: TRACE_MAX_RECORDS,
-  });
+  const trace = await followSymbolTrace(
+    input.searchScope,
+    GROUNDED_TRACE_SEARCH_LIMITS,
+    input.fs,
+    {
+      symbols,
+      maxDepth: TRACE_MAX_DEPTH,
+      maxRecords: TRACE_MAX_RECORDS,
+    },
+    input.requestContext === undefined ? {} : { requestContext: input.requestContext },
+  );
   const fingerprint = traceFingerprint(input.query, symbols);
   const marker = traceIncomplete(trace.diagnostics, input.nowMs);
   return {

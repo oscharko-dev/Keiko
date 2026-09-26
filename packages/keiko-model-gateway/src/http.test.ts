@@ -18,14 +18,22 @@ import {
   connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
   gatewayFetch,
+  httpsProxyTunnelKey,
   isMissingIssuerError,
   isRecoverableTlsTrustError,
   MAX_RESPONSE_BYTES,
   OutboundHttpEgressError,
   readJsonCapped,
   readSseStream,
+  SseIdleTimeoutError,
   streamingResponseFromNode,
 } from "./http.js";
+import { requestOpenAIEmbedding } from "./openai-embedding-adapter.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDAT3UYX+IFphaO
@@ -80,7 +88,7 @@ zd4z7t+If2ThZ1V2mP4iHOUXyxhrjO8jck5v4ibwDkhpZqHZxXJnOlqR+p4Y/x0J
 // down even when a test body never reaches its own `finally { await close(...) }` — e.g. when a
 // mutant (mutation testing) or a vitest timeout aborts the body mid-await. Test-runner processes
 // are reused across hundreds of mutant runs; leaked listeners/sockets otherwise accumulate until
-// the CI runner exhausts memory (hermeticity contract, AGENTS.md §7/§9).
+// the CI runner exhausts memory (hermeticity contract, AGENTS.md §7/§10).
 const openServers = new Set<HttpServer | HttpsServer>();
 
 afterEach(async () => {
@@ -139,7 +147,7 @@ async function close(server: HttpServer | HttpsServer): Promise<void> {
 // sockets then shovels gigabytes per second until the test-runner host runs out of memory.
 // Legitimate tests move a few kilobytes, so the budget is invisible on the green path and turns
 // any flood into a fast, clean teardown (hermeticity contract: bounded resources under all
-// mutations, AGENTS.md §7/§9).
+// mutations, AGENTS.md §7/§10).
 const TUNNEL_BYTE_BUDGET = 1_048_576;
 
 interface BoundedEnd {
@@ -205,7 +213,15 @@ describe("gatewayFetch", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("forces manual redirects and blocks redirects to metadata/private targets", async () => {
+  it("forces manual redirects and passes a 3xx response through unchanged, even to a metadata/private Location (KEIKO-0791)", async () => {
+    // gatewayFetch never AUTO-follows: `redirect: "manual"` is forced on every call (http.ts), so
+    // fetch itself never connects to a Location target. Manual followers DO exist — the
+    // update-portable staging manifest (safeRedirectUrl, bounded by MAX_ASSET_REDIRECTS) and the
+    // research egress port (redirectTarget) both read Location and loop — but each re-enters
+    // gatewayFetch for the next hop, so the target is re-vetted by the full DNS/address-pinning
+    // egress policy on the hop that actually connects to it. That next-hop re-entry, NOT an absent
+    // follower, is what made the removed Location pre-check redundant. Any future follower must
+    // route back through gatewayFetch rather than a raw fetch (#3348 audit).
     const fetchImpl = vi.fn<typeof fetch>(() =>
       Promise.resolve(
         new Response(null, {
@@ -214,16 +230,13 @@ describe("gatewayFetch", () => {
         }),
       ),
     );
-    await expect(
-      gatewayFetch("https://example.com/v1/models", { fetchImpl }),
-    ).rejects.toMatchObject({
-      code: "PROXY_BLOCKED_BY_POLICY",
-    });
+    const response = await gatewayFetch("https://example.com/v1/models", { fetchImpl });
+    expect(response.status).toBe(302);
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
   });
 
-  it("checks relative redirects with the same central egress policy", async () => {
+  it("passes a relative redirect through unchanged as well", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() =>
       Promise.resolve(new Response(null, { status: 307, headers: { location: "/v2/models" } })),
     );
@@ -348,6 +361,35 @@ describe("gatewayFetch", () => {
       expect(received !== undefined && Array.from(received)).toEqual(Array.from(payload));
     } finally {
       for (const s of originSockets) s.destroy();
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("engages the custom-CA fallback for the embedding adapter exactly like chat transports", async () => {
+    // CA-parity pin: an embedding path that fails on a corporate-CA gateway the chat path talks
+    // to happily is indistinguishable from an outage in the product UI. requestOpenAIEmbedding
+    // runs over the REAL gatewayFetch here (no fetchImpl), so the recoverable-TLS fallback with
+    // the configured bundle must carry it end to end.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-embed-ca-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ data: [{ embedding: [0.6, 0.8] }], model: "probe-model" }));
+    });
+    const originPort = await listen(origin);
+    try {
+      const outcome = await requestOpenAIEmbedding({
+        endpoint: `https://127.0.0.1:${String(originPort)}/v1`,
+        apiKey: "sk-test",
+        modelId: "probe-model",
+        input: "ping",
+        egress: { caBundlePath },
+      });
+      expect(outcome.ok).toBe(true);
+      if (outcome.ok) expect(outcome.value.modelId).toBe("probe-model");
+    } finally {
       await close(origin);
       rmSync(dir, { recursive: true, force: true });
     }
@@ -594,16 +636,40 @@ describe("gatewayFetch", () => {
       socket.once("close", () => originSockets.delete(socket));
     });
     const originPort = await listen(origin);
+    const events: ModelGatewayLogEvent[] = [];
     try {
       await expect(
         gatewayFetch(`https://127.0.0.1:${String(originPort)}/secure`, {
           useCaFallback: true,
           timeoutMs: 1_000,
+          log: {
+            write: (event): void => {
+              events.push(event);
+            },
+          },
         }),
       ).rejects.toMatchObject({
         name: "OutboundHttpEgressError",
         code: "TLS_CA_FAILURE",
         message: "TLS certificate verification failed for outbound egress.",
+      });
+      // The self-signed origin has no configured CA bundle to verify it, so the direct attempt and
+      // the CA-bundle fallback both fail on the same untrusted certificate -- proving both the
+      // fallback-attempted line and the (post-fallback) trust-failed line off one real handshake.
+      const caFallback = events.find((event) => event.op === "http.gateway.tls.ca-bundle-fallback");
+      const caFallbackPersisted = expectActivityLogProof(
+        "http.gateway.tls.ca-bundle-fallback.emitted-line",
+        formatActivityLogProofLine(caFallback ?? {}),
+      );
+      expect(caFallbackPersisted).toMatchObject({ endpointClass: "loopback" });
+      const trustFailed = events.find((event) => event.op === "http.gateway.tls.trust-failed");
+      const trustFailedPersisted = expectActivityLogProof(
+        "http.gateway.tls.trust-failed.emitted-line",
+        formatActivityLogProofLine(trustFailed ?? {}),
+      );
+      expect(trustFailedPersisted).toMatchObject({
+        endpointClass: "loopback",
+        afterCaBundleFallback: true,
       });
     } finally {
       for (const socket of originSockets) socket.destroy();
@@ -709,6 +775,7 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
           egress: {
             denyLoopback: true,
             httpsProxy: "http://127.0.0.1:65535",
+            acknowledgeProxiedHostnamePolicy: true,
           },
         }),
       ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
@@ -733,33 +800,661 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     expect(response.status).toBe(200);
   });
 
-  it("re-validates and refuses a redirect hop whose DNS resolves to a blocked address", async () => {
-    // The origin is a legitimate, allowed target; its redirect Location points at a second
-    // hostname that only resolves to a blocked (metadata-class) address on the redirect-hop
-    // DNS check, simulating a rebind between the original request and the redirect follow-up.
+  it("requires delegated-policy acknowledgement before sending a hostname through a proxy", async () => {
+    let proxiedRequests = 0;
+    const logEvents: ModelGatewayLogEvent[] = [];
+    const proxy = createHttpServer((_req, res) => {
+      proxiedRequests += 1;
+      res.writeHead(200);
+      res.end("ok");
+    });
+    const proxyPort = await listen(proxy);
+    const target = "http://ordinary-proxied-hostname.invalid/egress";
+    const httpProxy = `http://127.0.0.1:${String(proxyPort)}`;
+    try {
+      await expect(
+        gatewayFetch(target, {
+          egress: { httpProxy },
+          log: { write: (event) => logEvents.push(event) },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      expect(proxiedRequests).toBe(0);
+      expect(logEvents.at(-1)?.extra).toMatchObject({
+        policyReason: "undelegated-proxied-hostname",
+      });
+
+      const allowed = await gatewayFetch(target, {
+        egress: { httpProxy, acknowledgeProxiedHostnamePolicy: true },
+      });
+      expect(allowed.status).toBe(200);
+      expect(proxiedRequests).toBe(1);
+    } finally {
+      await close(proxy);
+    }
+  });
+
+  it("passes a 3xx response through unchanged without validating its Location target (KEIKO-0791)", async () => {
+    // gatewayFetch always sends redirect: "manual", so fetch itself never connects to a Location
+    // target. Manual followers DO exist (update-portable staging's safeRedirectUrl, the research
+    // egress port's redirectTarget) — but both re-enter gatewayFetch for the next hop, so every
+    // redirect target still passes the full DNS/address-pinning egress policy on the hop that
+    // actually connects to it. The removed pre-check was redundant with that re-entry, NOT with
+    // "nothing follows redirects" (#3348 audit). A 3xx response — even one whose Location points at
+    // an address the classifier would otherwise block — is therefore returned to the caller
+    // unchanged, and it is the connecting hop, not this response, that enforces the boundary.
     const origin = createHttpServer((_req, res) => {
-      res.writeHead(302, { location: "http://rebind-hop.invalid.test/next" });
+      res.writeHead(302, { location: "http://169.254.169.254/latest/meta-data" });
       res.end();
     });
     const originPort = await listen(origin);
     try {
-      vi.resetModules();
-      vi.doMock("node:dns/promises", () => ({
-        lookup: vi.fn((hostname: string) =>
-          hostname === "rebind-hop.invalid.test"
-            ? Promise.resolve([{ address: "169.254.169.254", family: 4 }])
-            : Promise.resolve([{ address: "127.0.0.1", family: 4 }]),
-        ),
-      }));
-      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
-      await expect(
-        pinnedGatewayFetch(`http://redirect-origin.invalid.test:${String(originPort)}/first`),
-      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      const response = await gatewayFetch(`http://127.0.0.1:${String(originPort)}/start`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("http://169.254.169.254/latest/meta-data");
     } finally {
       await close(origin);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gatewayFetch proxied DNS pinning — egress.pinProxiedConnectTarget (ADR-0038 D6)
+// ---------------------------------------------------------------------------
+//
+// Off a proxy, gatewayFetch already resolves+vets DNS itself and pins the connect to the
+// validated address (AUDIT-SEC-001, above). Through a proxy it normally cannot: the proxy
+// resolves the target hostname independently at its own connect time, so a target that is not
+// LITERALLY loopback/private-shaped but RESOLVES to a blocked address slips through unvalidated
+// (planGatewayDns's `pinForConnect` is false whenever a proxy is used). `pinProxiedConnectTarget`
+// closes that gap by having Keiko resolve+vet the target itself, exactly as it already does for
+// the direct path, and then handing the proxy layer the vetted address instead of the hostname —
+// an HTTPS CONNECT authority or, for a plain-HTTP target, the forwarded absolute-URI's host.
+
+describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6)", () => {
+  it("pins a plain-HTTP proxied request to the vetted address, defeating a hostname that only resolves for Keiko's own lookup", async () => {
+    // Mirrors the AUDIT-SEC-001 direct-path test's technique exactly, through a real two-hop
+    // forward proxy instead of a direct connect. "pinned-target.invalid" is an RFC 2606 reserved
+    // TLD that does not resolve on any real network. The fake proxy's own outbound hop below
+    // dials a HARDCODED local address/port, never the request line's own authority — matching the
+    // "research egress through a proxy" fixture further down, and NOT the shape CodeQL's
+    // js/request-forgery flags (constructing an outbound request straight from an inbound
+    // request's own URL, unvalidated, is what an actual open/unrestricted proxy looks like; a
+    // real forward proxy enforces its own policy about where it will actually connect, which is
+    // what dialing a fixed local address here mirrors). Before this fix, the request line's
+    // authority the proxy captures below would still be the unresolvable hostname and the second
+    // hop would never even reach the real origin; after the fix it is the vetted "127.0.0.1" and
+    // the real origin below answers.
+    const origin = createHttpServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "pinned-proxy" }));
+    });
+    const originPort = await listen(origin);
+    let capturedHost: string | undefined;
+    let capturedRequestLine: string | undefined;
+    const proxy = createHttpServer((req, res) => {
+      capturedHost = req.headers.host;
+      capturedRequestLine = req.url ?? undefined;
+      const incoming = new URL(req.url ?? "", "http://placeholder");
+      const forward = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port: originPort,
+          path: `${incoming.pathname}${incoming.search}`,
+          method: req.method,
+          headers: req.headers,
+        },
+        (upstreamRes) => {
+          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          upstreamRes.pipe(res);
+        },
+      );
+      forward.on("error", () => {
+        res.writeHead(502);
+        res.end("proxy forward failed");
+      });
+      req.pipe(forward);
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      const response = await pinnedGatewayFetch("http://pinned-target.invalid/manual", {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          pinProxiedConnectTarget: true,
+          acknowledgeProxiedHostnamePolicy: true,
+        },
+      });
+      expect(await response.json()).toEqual({ via: "pinned-proxy" });
+      // The proxy still sees the ORIGINAL hostname via the Host header (virtual-hosting/identity
+      // is unaffected) even though the request line it received was rewritten to the address.
+      expect(capturedHost).toBe("pinned-target.invalid");
+      expect(capturedRequestLine).toBe("http://127.0.0.1/manual");
+    } finally {
+      await close(origin);
+      await close(proxy);
       vi.doUnmock("node:dns/promises");
       vi.resetModules();
     }
+  });
+
+  it("leaves the request-target authority as the literal hostname when delegated policy is acknowledged and pinning is off", async () => {
+    // Same technique as the pinned test above, MINUS pinProxiedConnectTarget: the proxy receives
+    // the request-line's authority UNCHANGED — still the original, non-resolving hostname, never
+    // rewritten to a Keiko-vetted address — captured and asserted directly off the wire. This pins
+    // the default behavior: opting in is what changes anything, nothing is silently different, and
+    // gatewayFetch itself never even attempts its own DNS work here (planGatewayDns.pinForProxyConnect
+    // is false without the flag). The proxy responds immediately rather than attempting a second
+    // hop to the (deliberately unresolvable) authority it received — for the same reason given in
+    // the pinned test above, and because the wire-level assertion below is the direct proof either
+    // way, not an inference from whether a forward attempt happened to succeed or fail.
+    let capturedRequestLine: string | undefined;
+    const proxy = createHttpServer((req, res) => {
+      capturedRequestLine = req.url ?? undefined;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "unpinned-proxy" }));
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: unpinnedGatewayFetch } = await import("./http.js");
+      const response = await unpinnedGatewayFetch("http://pinned-target.invalid/manual", {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
+        },
+      });
+      expect(response.status).toBe(200);
+      expect(capturedRequestLine).toBe("http://pinned-target.invalid/manual");
+    } finally {
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("reuses the client-to-proxy connection across an unpinned then a pinned request without leaking either one's target (#3156 ADR-0038 D6 correction)", async () => {
+    // Codex P2: ADR-0038 D6 originally said this plain-HTTP absolute-URI path has no pooling
+    // because Node's global agent defaults keepAlive:false. False on this repo's pinned Node 24 --
+    // http.globalAgent.keepAlive is true (Node made the GLOBAL singleton agents, specifically,
+    // default to keep-alive; a freshly constructed `new http.Agent()` still defaults false, which
+    // is the easy way to misremember this). fetchHttpViaProxy passes no explicit `agent`, so it
+    // goes through that global, keep-alive-by-default agent -- connection reuse to the proxy DOES
+    // happen here, contrary to what the ADR claimed.
+    //
+    // The conclusion survives anyway, for a different reason than the ADR gave: Node's Agent pools
+    // by `getName()`, which keys purely on host/port (verified directly: identical for two
+    // requests differing only in `path`) -- it has no notion of "target" or "pinned", so it can
+    // and does hand the SAME socket to an unpinned call and a later pinned call to the same proxy.
+    // But unlike the CONNECT-tunnel pool (the actual #3156 bug, fixed above), that shared socket's
+    // FAR end never moves -- it is always the proxy. The real destination lives entirely in each
+    // request's OWN absolute-URI (`proxyRequestTarget(target, pinnedAddress)`, computed fresh
+    // inside fetchHttpViaProxy from THAT call's own pinnedAddress, never cached or inherited), sent
+    // fresh on every request the proxy reads and re-routes independently. Reusing the transport to
+    // an already-trusted intermediary is not the same as reusing a resource that fixes the ultimate
+    // peer, so there is nothing here for resolveGatewayDns's per-call vetting to lose track of.
+    //
+    // Both halves are asserted directly: proxyConnections stays at 1 (the connection really was
+    // reused, not just theoretically reusable) while requestUrls[1] is the pinned call's OWN vetted
+    // address, never contaminated by requestUrls[0]'s unpinned literal hostname.
+    let proxyConnections = 0;
+    const requestUrls: string[] = [];
+    const proxy = createHttpServer((req, res) => {
+      requestUrls.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ seen: req.url }));
+    });
+    proxy.on("connection", () => {
+      proxyConnections += 1;
+    });
+    const proxyPort = await listen(proxy);
+    const egress = {
+      httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+      acknowledgeProxiedHostnamePolicy: true,
+    };
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "203.0.113.5", family: 4 }])),
+      }));
+      const { gatewayFetch: freshGatewayFetch } = await import("./http.js");
+
+      // First: unpinned. The literal hostname travels unchanged in the request line.
+      const first = await freshGatewayFetch("http://pool-identity-plain.invalid/first", {
+        egress,
+      });
+      expect(first.status).toBe(200);
+      expect(requestUrls[0]).toBe("http://pool-identity-plain.invalid/first");
+
+      // Second: pinned, same proxy, immediately after (well inside any keep-alive idle window).
+      const second = await freshGatewayFetch("http://pool-identity-plain.invalid/second", {
+        egress: { ...egress, pinProxiedConnectTarget: true },
+      });
+      expect(second.status).toBe(200);
+      // The load-bearing pair: one physical connection served both calls, yet the second request
+      // line correctly carries ITS OWN vetted address -- not the first call's literal hostname,
+      // and not left unpinned by some inherited connection-level state.
+      expect(proxyConnections).toBe(1);
+      expect(requestUrls[1]).toBe("http://203.0.113.5/second");
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      await close(proxy);
+    }
+  });
+
+  it("pins an HTTPS proxied CONNECT tunnel's authority to the vetted address instead of the hostname", async () => {
+    // "localhost" is used as the target (rather than an *.invalid host, as above) because this
+    // path goes through startTargetTls, which validates the origin's certificate against the SNI
+    // servername — TEST_TLS_CERT's SAN only covers localhost/127.0.0.1, and generating a
+    // throwaway cert for a second hostname is unnecessary: the mechanism under test is what
+    // authority the CONNECT line carries, which this asserts DIRECTLY off the wire rather than
+    // inferring it from whether the connection happened to succeed. See the plain-HTTP test above
+    // for the genuine "defeats a hostname that cannot resolve on its own" proof.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-proxy-pin-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ secure: true }));
+    });
+    const originSockets = new Set<Socket>();
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    let capturedConnectAuthority: string | undefined;
+    const proxySockets = new Set<Socket>();
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      capturedConnectAuthority = req.url ?? "";
+      const [host, portText] = capturedConnectAuthority.split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      const response = await pinnedGatewayFetch(`https://localhost:${String(originPort)}/secure`, {
+        egress: {
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          caBundlePath,
+          pinProxiedConnectTarget: true,
+        },
+      });
+      expect(await response.json()).toEqual({ secure: true });
+      expect(capturedConnectAuthority).toBe(`127.0.0.1:${String(originPort)}`);
+    } finally {
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never serves a pinned request the pooled tunnel an earlier unpinned call left idle (#3156 pool identity)", async () => {
+    // Codex P1, follow-up to the DNS-rebinding fix above: httpsProxyTunnelKey used to be
+    // (proxy, target, ca) only, blind to whether the pooled tunnel's peer was ever vetted. An
+    // unpinned caller (e.g. the manual research crawler, which never sets
+    // pinProxiedConnectTarget) and a pinned caller fetching the identical (proxy, target, ca)
+    // triple within the 30s idle window would compute the SAME key, so the pinned call could be
+    // served the unpinned call's already-pooled tunnel verbatim -- a peer the PROXY chose on its
+    // own, never touched by resolveGatewayDns's vetting for the pinned call. Both calls target the
+    // same literal "127.0.0.1" (no real DNS needed for the unpinned leg, and the mock below covers
+    // the pinned leg) so the only thing that can legitimately differ between them is pinning
+    // posture -- isolating the pool-identity question from address vetting itself, which the
+    // dedicated CONNECT-authority test above already covers. Both calls share ONE dynamically
+    // re-imported module instance (a single vi.doMock + import, no resetModules between them) so
+    // they see the SAME idleHttpsProxyTunnels pool -- using two separate module instances would
+    // give each an empty pool of its own and prove nothing.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-pool-identity-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let proxyConnects = 0;
+    let originRequests = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originRequests += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ path: req.url, count: originRequests }));
+    });
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    const egress = { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath };
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: freshGatewayFetch } = await import("./http.js");
+
+      // First: an UNPINNED fetch -- no pinProxiedConnectTarget -- exactly the shape a non-Atlassian
+      // caller like the manual crawler makes. Establishes tunnel #1 and pools it (the origin
+      // answers keep-alive).
+      const first = await freshGatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
+        egress,
+      });
+      expect(await first.json()).toEqual({ path: "/first", count: 1 });
+      expect(proxyConnects).toBe(1);
+
+      // Second: a PINNED fetch to the IDENTICAL (proxy, target, ca) triple, inside the idle
+      // window (immediately after, no sleep needed -- HTTPS_PROXY_TUNNEL_IDLE_TTL_MS is 30s).
+      const second = await freshGatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
+        egress: { ...egress, pinProxiedConnectTarget: true },
+      });
+      expect(await second.json()).toEqual({ path: "/second", count: 2 });
+      // The load-bearing assertion: a genuinely NEW CONNECT tunnel was established for the pinned
+      // request rather than reusing tunnel #1 from the pool. Before the fix this stayed at 1 --
+      // the pooled, unpinned tunnel silently served the pinned request, and resolveGatewayDns's
+      // vetting for that request never touched the peer it actually rode.
+      expect(proxyConnects).toBe(2);
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never pools two calls whose CA bundles differ, even when the old length+prefix summary would have collided (#3157)", async () => {
+    // Codex P1: the CA term of the tunnel key used to be `${cert.length}:${cert.slice(0, 32)}` per
+    // certificate. For PEM input the first 32 characters are almost entirely the near-universal
+    // "-----BEGIN CERTIFICATE-----\n" header -- TEST_TLS_CERT's own first 32 characters are that
+    // header plus just 3-4 base64 characters of real content, confirmed directly below. Two
+    // genuinely different CA bundles sharing a byte length would collide on that summary and share
+    // a pooled tunnel, so a call that deliberately tightened or changed its trusted roots could
+    // silently ride a connection its OWN bundle would have refused to establish.
+    //
+    // caBundleB is constructed to guarantee exactly that collision under the OLD scheme: identical
+    // .length and identical .slice(0, 32) to TEST_TLS_CERT (caBundleA), but different content past
+    // that point. It is deliberately not a parseable certificate -- this test does not need the
+    // second call's TLS handshake to the origin to succeed, only that a fresh CONNECT attempt is
+    // made for it (proven by proxyConnects, which increments the moment the proxy receives the
+    // CONNECT method, strictly before any TLS-to-origin handshake using either bundle even begins).
+    // Call #2 is therefore allowed to fail after that point; only proxyConnects is load-bearing.
+    expect(TEST_TLS_CERT.slice(0, 32)).toBe("-----BEGIN CERTIFICATE-----\nMIID");
+    const caBundleA = TEST_TLS_CERT;
+    const caBundleB = `${TEST_TLS_CERT.slice(0, 32)}${"Z".repeat(TEST_TLS_CERT.length - 32)}`;
+    expect(caBundleB).toHaveLength(caBundleA.length);
+    expect(caBundleB.slice(0, 32)).toBe(caBundleA.slice(0, 32));
+    expect(caBundleB).not.toBe(caBundleA);
+
+    const dir = mkdtempSync(join(tmpdir(), "keiko-ca-collision-"));
+    const caBundlePathA = join(dir, "ca-a.pem");
+    const caBundlePathB = join(dir, "ca-b.pem");
+    writeFileSync(caBundlePathA, caBundleA, "utf8");
+    writeFileSync(caBundlePathB, caBundleB, "utf8");
+    let proxyConnects = 0;
+    let originRequests = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originRequests += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ path: req.url, count: originRequests }));
+    });
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    const httpsProxy = `http://127.0.0.1:${String(proxyPort)}`;
+    try {
+      // First: a valid bundle (caBundleA === TEST_TLS_CERT, which validates the origin's own
+      // self-signed certificate). Establishes tunnel #1 and pools it (keep-alive).
+      const first = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
+        egress: { httpsProxy, caBundlePath: caBundlePathA },
+      });
+      expect(await first.json()).toEqual({ path: "/first", count: 1 });
+      expect(proxyConnects).toBe(1);
+
+      // Second: the colliding-summary, genuinely different bundle, same proxy/target, inside the
+      // idle window. Tolerate either outcome from the TLS handshake itself -- caBundleB is garbage
+      // past byte 32, so Node may accept or reject it, and this test does not care which; only
+      // whether a FRESH tunnel was attempted for it.
+      await gatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
+        egress: { httpsProxy, caBundlePath: caBundlePathB },
+      }).catch(() => undefined);
+
+      // The load-bearing assertion: a genuinely NEW CONNECT tunnel was established for the
+      // differently-CA'd second call rather than reusing tunnel #1 from the pool. Before the fix
+      // this stayed at 1 -- the length+prefix summary collided, so the pool served caBundleB's
+      // call the tunnel that was only ever authenticated under caBundleA's trust set.
+      expect(proxyConnects).toBe(2);
+    } finally {
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still refuses a proxied request when the vetted address is blocked (e.g. metadata), before contacting the proxy", async () => {
+    let proxyHits = 0;
+    const proxy = createHttpServer(() => {
+      proxyHits += 1;
+    });
+    proxy.on("connect", (_req, clientSocket) => {
+      proxyHits += 1;
+      clientSocket.destroy();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "169.254.169.254", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      await expect(
+        pinnedGatewayFetch("https://metadata-behind-proxy.invalid/latest/meta-data", {
+          egress: {
+            httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            pinProxiedConnectTarget: true,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      expect(proxyHits).toBe(0);
+    } finally {
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("fails closed rather than falling back to unpinned proxying when resolution yields no usable address", async () => {
+    let proxyHits = 0;
+    const proxy = createHttpServer(() => {
+      proxyHits += 1;
+    });
+    proxy.on("connect", (_req, clientSocket) => {
+      proxyHits += 1;
+      clientSocket.destroy();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      await expect(
+        pinnedGatewayFetch("https://empty-resolution.invalid/path", {
+          egress: {
+            httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            pinProxiedConnectTarget: true,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      expect(proxyHits).toBe(0);
+    } finally {
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("allows research egress through a proxy once pinning covers it, instead of the blanket refusal", async () => {
+    // Companion to "refuses research egress through a proxy" above: denyLoopback refuses a
+    // proxied request because it cannot normally pin the address. Adding pinProxiedConnectTarget
+    // removes exactly that obstacle, so the combination is no longer refused. The mocked address
+    // is deliberately public (203.0.113.10, RFC 5737 TEST-NET-3, matching the ORIGINAL refusal
+    // test's own choice) — 127.0.0.1 would itself be blocked by denyLoopback and the test would
+    // pass for the wrong reason. The target hostname is likewise a non-loopback-looking string
+    // (outboundTargetBlockedReason's LITERAL check runs before any DNS lookup, so "localhost"
+    // would be blocked regardless of what the mock answers). The proxy forwards to the local
+    // origin by path only, ignoring the absolute-URI's host, so this test never actually dials
+    // 203.0.113.10 (reserved/non-routable, but not a real connection this hermetic suite should
+    // attempt either way) — it isolates "is the blanket refusal lifted" from "does the specific
+    // address get dialed", which the dedicated CONNECT-authority test above already covers.
+    const origin = createHttpServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "research-proxy" }));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer((req, res) => {
+      const incoming = new URL(req.url ?? "", "http://placeholder");
+      const forward = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port: originPort,
+          path: `${incoming.pathname}${incoming.search}`,
+          method: req.method,
+          headers: req.headers,
+        },
+        (upstreamRes) => {
+          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          upstreamRes.pipe(res);
+        },
+      );
+      forward.on("error", () => {
+        res.writeHead(502);
+        res.end("proxy forward failed");
+      });
+      req.pipe(forward);
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "203.0.113.10", family: 4 }])),
+      }));
+      const { gatewayFetch: researchGatewayFetch } = await import("./http.js");
+      const response = await researchGatewayFetch("http://research-target.invalid/docs", {
+        egress: {
+          denyLoopback: true,
+          pinProxiedConnectTarget: true,
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
+        },
+      });
+      expect(await response.json()).toEqual({ via: "research-proxy" });
+    } finally {
+      await close(origin);
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// httpsProxyTunnelKey — order-insensitivity of the CA-set digest (#3157)
+// ---------------------------------------------------------------------------
+// Tested directly rather than through the full gatewayFetch/proxy pipeline: the real caller,
+// gatewayTrustedCaCertificates, always assembles the ca array in the same fixed sequence
+// (default -> root -> system -> extra) for a given configuration, so it never naturally produces
+// the same SET in a different ORDER -- there is no way to exercise this invariant end-to-end
+// without contriving an artificial caller. httpsProxyTunnelKey's own contract (its comment above
+// says the sort makes "the SAME set in a different array order hash identically") is the thing
+// worth pinning, independent of whether today's one caller happens to vary it.
+
+describe("httpsProxyTunnelKey", () => {
+  const target = new URL("https://example.com/path");
+  const proxy = new URL("http://proxy.example.com:8080");
+
+  it("is insensitive to the CA array's input order", () => {
+    const certA = "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END-----";
+    const certB = "-----BEGIN CERTIFICATE-----\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END-----";
+    const certC = "-----BEGIN CERTIFICATE-----\nCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n-----END-----";
+    const forward = httpsProxyTunnelKey(target, proxy, [certA, certB, certC], undefined);
+    const reversed = httpsProxyTunnelKey(target, proxy, [certC, certB, certA], undefined);
+    const shuffled = httpsProxyTunnelKey(target, proxy, [certB, certC, certA], undefined);
+    expect(reversed).toBe(forward);
+    expect(shuffled).toBe(forward);
+  });
+
+  it("still distinguishes two genuinely different CA sets", () => {
+    const certA = "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END-----";
+    const certB = "-----BEGIN CERTIFICATE-----\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END-----";
+    const certC = "-----BEGIN CERTIFICATE-----\nCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n-----END-----";
+    const withA = httpsProxyTunnelKey(target, proxy, [certA, certB], undefined);
+    const withC = httpsProxyTunnelKey(target, proxy, [certC, certB], undefined);
+    expect(withC).not.toBe(withA);
   });
 });
 
@@ -962,6 +1657,42 @@ describe("readSseStream", () => {
     }) as Response;
     const chunks = await collect(readSseStream(nullBody));
     expect(chunks).toEqual([]);
+  });
+
+  // A consumer that leaves the loop early closes the generator through return(). The body must
+  // still be released, or every mid-stream failure the adapter throws on would leave the
+  // provider's connection open (PR #3452 review).
+  it.each([
+    ["throws", "consumer stopped"],
+    ["breaks", undefined],
+  ])("releases the body when its consumer %s mid-stream", async (_exit, failure) => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        for (const line of ['data: {"a":1}\n', 'data: {"b":2}\n', "data: [DONE]\n"]) {
+          controller.enqueue(encoder.encode(line));
+        }
+        controller.close();
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const seen: unknown[] = [];
+    const consume = async (): Promise<void> => {
+      for await (const payload of readSseStream(new Response(body))) {
+        seen.push(payload);
+        if (seen.length < 2) continue;
+        if (failure !== undefined) throw new TypeError(failure);
+        break;
+      }
+    };
+    if (failure === undefined) await consume();
+    else await expect(consume()).rejects.toThrow(failure);
+
+    expect(seen).toEqual([{ a: 1 }, { b: 2 }]);
+    expect(cancelled).toBe(true);
   });
 });
 
@@ -1235,6 +1966,7 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
         egress: {
           httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
           noProxy: ["corp.example:1234"],
+          acknowledgeProxiedHostnamePolicy: true,
         },
       });
       expect(await response.json()).toEqual({ via: "proxy" });
@@ -1679,5 +2411,93 @@ describe("Host header via proxy (no default port)", () => {
       await close(proxy);
       await close(origin);
     }
+  });
+});
+
+// Provider stalls (coding run 30): the bound is on DATA events. A keep-alive comment (LiteLLM's
+// `: ping`) is not one, time a slow consumer takes does not count, and an aborted signal ends a
+// pending read with its reason, releasing the body even when the body was built without it.
+describe("readSseStream silence and abort bounds", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openStream(): {
+    readonly response: Response;
+    readonly push: (line: string) => void;
+    readonly cancelled: () => boolean;
+  } {
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(started): void {
+        controller = started;
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    return {
+      response: new Response(body),
+      push: (line): void => {
+        controller?.enqueue(new TextEncoder().encode(line));
+      },
+      cancelled: (): boolean => cancelled,
+    };
+  }
+
+  it("ends the read when only keep-alive comments arrive", async () => {
+    vi.useFakeTimers();
+    const stream = openStream();
+    const reading = collect(readSseStream(stream.response, undefined, 1_000));
+    const rejected = expect(reading).rejects.toBeInstanceOf(SseIdleTimeoutError);
+    for (let ping = 0; ping < 3; ping += 1) {
+      stream.push(": ping\n\n");
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(stream.cancelled()).toBe(true);
+  });
+
+  it("restarts the bound with every data event", async () => {
+    vi.useFakeTimers();
+    const stream = openStream();
+    const values: unknown[] = [];
+    const reading = (async (): Promise<void> => {
+      for await (const value of readSseStream(stream.response, undefined, 1_000))
+        values.push(value);
+    })();
+    for (let event = 0; event < 4; event += 1) {
+      await vi.advanceTimersByTimeAsync(900);
+      stream.push(`data: {"n":${String(event)}}\n\n`);
+    }
+    stream.push("data: [DONE]\n\n");
+    await reading;
+    expect(values).toEqual([{ n: 0 }, { n: 1 }, { n: 2 }, { n: 3 }]);
+  });
+
+  it("does not count the consumer's own time as silence", async () => {
+    vi.useFakeTimers();
+    const stream = openStream();
+    const iterator = readSseStream(stream.response, undefined, 1_000)[Symbol.asyncIterator]();
+    stream.push('data: {"n":1}\n\n');
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: { n: 1 } });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const next = iterator.next();
+    await vi.advanceTimersByTimeAsync(999);
+    stream.push('data: {"n":2}\n\n');
+    await expect(next).resolves.toEqual({ done: false, value: { n: 2 } });
+  });
+
+  it("ends a pending read with the signal's reason and releases the body", async () => {
+    const stream = openStream();
+    const controller = new AbortController();
+    const reading = collect(
+      readSseStream(stream.response, undefined, undefined, controller.signal),
+    );
+    controller.abort(new DOMException("budget spent", "TimeoutError"));
+    await expect(reading).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(stream.cancelled()).toBe(true);
   });
 });

@@ -4,24 +4,34 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  atomicPublishRename,
+  WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+} from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import {
   REGISTRATION_FILE,
   defaultManagedRoot,
   isPortableTarget,
+  parseWindowsGenerationBinding,
   type PortableLayout,
   type PortableTarget,
   type SetupManifest,
   type SetupStatus,
+  type WindowsGenerationBinding,
 } from "./portable-shared.js";
+import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 interface SetupRegistrationBase {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly status: SetupStatus;
   readonly updateEligible: boolean;
   readonly platformTarget: PortableTarget;
@@ -32,17 +42,24 @@ interface SetupRegistrationBase {
 
 export interface ManagedSetupRegistration extends SetupRegistrationBase {
   readonly status: "managed";
-  readonly updateEligible: true;
+  readonly updateEligible: boolean;
   readonly managedRootLocator?: ManagedRootLocator | undefined;
   readonly setupManifestSha256?: string | undefined;
   readonly installRootIdentitySha256?: string | undefined;
   readonly launcherIdentitySha256?: string | undefined;
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
 }
 
 export interface FailedSetupRegistration extends SetupRegistrationBase {
+  readonly schemaVersion: 1;
   readonly status: "setup-failed";
   readonly updateEligible: false;
   readonly failureReason?: string | undefined;
+  readonly installRootPlatformTarget?: PortableTarget | undefined;
+  readonly setupManifestSha256?: string | undefined;
+  readonly installRootIdentitySha256?: string | undefined;
+  readonly launcherIdentitySha256?: string | undefined;
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
 }
 
 export type PortableInstallRegistration = ManagedSetupRegistration | FailedSetupRegistration;
@@ -52,6 +69,30 @@ export type ManagedRootLocator =
   | { readonly kind: "absolute-local"; readonly path: string };
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+const SHA256_RE = /^[0-9a-f]{64}$/u;
+const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const WINDOWS_REGISTRATION_V2_KEYS = [
+  "schemaVersion",
+  "status",
+  "updateEligible",
+  "platformTarget",
+  "packageVersion",
+  "stable",
+  "managedRootLocator",
+  "setupManifestSha256",
+  "installRootIdentitySha256",
+  "launcherIdentitySha256",
+  "windowsGeneration",
+  "updatedAt",
+] as const;
+const WINDOWS_GENERATION_KEYS = [
+  "schemaVersion",
+  "resourceRoot",
+  "treeHashSchema",
+  "treeSha256",
+  "launcherPath",
+  "launcherSha256",
+] as const;
 
 const SETUP_FAILURE_REASON_PATTERNS = [
   [".keiko runtime state", "managed-root-state-conflict"],
@@ -74,8 +115,28 @@ function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+export function portableInstallRootIdentitySha256(path: string): string {
+  return sha256Text(realpathSync(path));
+}
+
+// #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file
+// so a crash mid-write leaves callers with "no registration recorded" instead of a
+// thrown SyntaxError. Matches launcher-state.ts loadState's behavior for the sibling
+// state file: an unreadable state artifact is a signal, not a crash.
+//
+// PR-review follow-up: narrow the swallowed failure to JSON.parse's SyntaxError only.
+// A filesystem error (EACCES, EMFILE, EIO) is NOT a "no registration" signal — the
+// registration may still exist and be authoritative. Callers must see those failures
+// so they do not skip managed-update / cleanup behaviour or overwrite retained
+// installation attestation while the actual storage failure stays hidden.
 function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const raw = readFileSync(path, "utf8");
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,15 +161,78 @@ function assertStateDirSafe(stateDir: string): void {
   }
 }
 
+function registrationFileExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export function hasPortableInstallRegistration(stateDir: string): boolean {
+  assertStateDirSafe(stateDir);
+  const path = join(stateDir, REGISTRATION_FILE);
+  if (!registrationFileExists(path)) return false;
+  assertRegistrationFileSafe(path);
+  return true;
+}
+
+// #KEIKO-0333: write through mkdtemp -> write -> rename so a crash mid-write can never
+// leave a truncated registration on disk. Reuses launcher-state.ts saveState's atomic
+// idiom so the two state files that live side by side in the same `.keiko` directory
+// have consistent durability semantics.
 function writeRegistration(stateDir: string, registration: PortableInstallRegistration): void {
   assertStateDirSafe(stateDir);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const path = join(stateDir, REGISTRATION_FILE);
   assertRegistrationFileSafe(path);
-  writeFileSync(path, `${JSON.stringify(registration, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  const tmpDir = mkdtempSync(join(stateDir, ".portable-registration-"));
+  // PR-review follow-up (KfQ thread 3770583048): mkdtempSync creates 0700 by default on
+  // POSIX (glibc mkdtemp) but the guarantee is implementation-defined. Belt-and-suspenders:
+  // explicitly chmod the staging directory to 0700 so a hostile umask (or a non-POSIX FS
+  // that widened the default) cannot leave the temp readable to other users during the
+  // brief writeFileSync → renameSync window.
+  try {
+    chmodSync(tmpDir, 0o700);
+  } catch {
+    // Best-effort on non-POSIX filesystems where chmod has no effect.
+  }
+  const tmpFile = join(tmpDir, "registration.json");
+  try {
+    // PR-review follow-up (Codex thread 3770922333): drop the ownership marker so
+    // state-paths.ts's isMkdtempOwnedDir classifier can distinguish this Keiko staging dir
+    // from a customer-created directory that happens to match the same prefix + 6-alphanum
+    // shape. Without the marker, `keiko uninstall --state` walks past a look-alike rather
+    // than recursively deleting user data.
+    //
+    // PR-review follow-up (Codex thread 3772030496): the marker write is now inside the
+    // shared try/finally so its failure propagates and the rmSync in finally reclaims the
+    // tmpDir immediately. Swallowing left a marker-less staging dir that a later
+    // `uninstall --state` sweep would skip, matching launcher-state.ts saveState's
+    // atomic-transaction contract. Mode 0o600 so the marker cannot leak the presence of
+    // Keiko staging directories to other local users.
+    writeFileSync(join(tmpDir, STAGING_OWNERSHIP_MARKER), "", { encoding: "utf8", mode: 0o600 });
+    writeFileSync(tmpFile, `${JSON.stringify(registration, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    atomicPublishRename(tmpFile, path, {
+      rename: renameSync,
+      backoffMs: WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
+    });
+  } finally {
+    // PR-review follow-up (Codex thread 3771256638): rmSync failure MUST NOT masquerade as
+    // a failed atomic rewrite. If renameSync succeeded, the registration is already
+    // published; a cleanup failure on the marker-only tmpDir is a separate concern the
+    // state-paths.ts sweep can address on a later run. Mirrors init.ts.
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort staging cleanup.
+    }
+  }
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -124,10 +248,18 @@ function managedRegistration(input: {
   readonly now: Date;
 }): ManagedSetupRegistration {
   const realInstallRoot = realpathSync(input.layout.installRoot);
+  const windowsGeneration =
+    input.manifest.platformTarget === "windows-x64" && input.manifest.schemaVersion === 2
+      ? input.manifest.windowsGeneration
+      : undefined;
+  if (windowsGeneration !== undefined && !input.manifest.stable) {
+    throw new Error("portable Windows generation registration requires a stable package");
+  }
   return {
-    schemaVersion: 1,
+    schemaVersion: windowsGeneration === undefined ? 1 : 2,
     status: "managed",
-    updateEligible: true,
+    updateEligible:
+      input.manifest.platformTarget !== "windows-x64" || windowsGeneration !== undefined,
     platformTarget: input.manifest.platformTarget,
     packageVersion: input.manifest.packageVersion,
     stable: input.manifest.stable,
@@ -140,6 +272,7 @@ function managedRegistration(input: {
     setupManifestSha256: sha256File(input.layout.setupManifestPath),
     installRootIdentitySha256: sha256Text(realInstallRoot),
     launcherIdentitySha256: sha256File(input.layout.primaryLauncherPath),
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
     updatedAt: input.now.toISOString(),
   };
 }
@@ -168,6 +301,43 @@ function setupFailureReasonCode(message: string): string {
   return match?.[1] ?? "setup-failed";
 }
 
+function retainedInstallAttestation(registration: PortableInstallRegistration | undefined):
+  | {
+      readonly packageVersion: string;
+      readonly stable: boolean;
+      readonly installRootPlatformTarget: PortableTarget;
+      readonly setupManifestSha256: string;
+      readonly installRootIdentitySha256: string;
+      readonly launcherIdentitySha256: string;
+      readonly windowsGeneration?: WindowsGenerationBinding | undefined;
+    }
+  | undefined {
+  if (registration === undefined) return undefined;
+  const installRootPlatformTarget =
+    registration.status === "managed"
+      ? registration.platformTarget
+      : registration.installRootPlatformTarget;
+  if (
+    installRootPlatformTarget === undefined ||
+    registration.setupManifestSha256 === undefined ||
+    registration.installRootIdentitySha256 === undefined ||
+    registration.launcherIdentitySha256 === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    packageVersion: registration.packageVersion,
+    stable: registration.stable,
+    installRootPlatformTarget,
+    setupManifestSha256: registration.setupManifestSha256,
+    installRootIdentitySha256: registration.installRootIdentitySha256,
+    launcherIdentitySha256: registration.launcherIdentitySha256,
+    ...(registration.windowsGeneration === undefined
+      ? {}
+      : { windowsGeneration: registration.windowsGeneration }),
+  };
+}
+
 export function writeManagedRegistration(input: {
   readonly stateDir: string;
   readonly layout: PortableLayout;
@@ -185,14 +355,17 @@ export function writeFailedRegistration(
   now: Date,
   failureReason: string,
 ): void {
+  const existingRegistration = readPortableInstallRegistration(stateDir);
+  const retainedAttestation = retainedInstallAttestation(existingRegistration);
   writeRegistration(stateDir, {
     schemaVersion: 1,
     status: "setup-failed",
     updateEligible: false,
     platformTarget: target,
-    packageVersion: "unknown",
-    stable: false,
+    packageVersion: retainedAttestation?.packageVersion ?? "unknown",
+    stable: retainedAttestation?.stable ?? false,
     failureReason: setupFailureReasonCode(failureReason),
+    ...retainedAttestation,
     updatedAt: now.toISOString(),
   });
 }
@@ -200,14 +373,42 @@ export function writeFailedRegistration(
 export function readPortableInstallRegistration(
   stateDir: string,
 ): PortableInstallRegistration | undefined {
-  assertStateDirSafe(stateDir);
+  if (!hasPortableInstallRegistration(stateDir)) return undefined;
   const path = join(stateDir, REGISTRATION_FILE);
-  if (!existsSync(path)) return undefined;
-  assertRegistrationFileSafe(path);
+  // #KEIKO-0333: readJson returns undefined for a truncated / non-JSON file so
+  // downstream callers observe "no registration recorded" instead of a thrown
+  // SyntaxError. That matches launcher-state.ts's fail-closed-to-empty semantics
+  // for the sibling state file.
   const raw = readJson(path);
+  if (raw === undefined) return undefined;
   if (isManagedRegistrationRecord(raw)) return managedRegistrationFromRecord(raw);
   if (isFailedRegistrationRecord(raw)) return failedRegistrationFromRecord(raw);
   return undefined;
+}
+
+// PR-review follow-up (Codex threads 3771011311 + 3771684322 + 3771815001): destructive
+// callers such as `keiko uninstall --state` and `keiko portable setup` must refuse when the
+// registration file EXISTS but is not a recognized-schema record. Two failure modes:
+//
+//   1. Unparseable bytes (truncated / non-JSON): would be treated as absent and either
+//      deleted (uninstall) or overwritten with a new setup-failed record (setup).
+//   2. Parseable JSON that does not match any known schema (future Keiko schema, hand-edited
+//      record, corrupted fields): `readPortableInstallRegistration` returns undefined for
+//      the same reason — so `portable setup` would still overwrite via
+//      recordPreLockSetupFailure and `uninstall --state` would still delete the file as
+//      generic owned state, losing the locator and attestation the operator needs to recover
+//      the pre-existing installation.
+//
+// Both cases fail closed with the same operator remediation: repair or remove the file
+// before retrying. The adoption gate downstream ("existing same-path managed install root is
+// not attested") only fires when a managed root is discoverable, which schema-invalid
+// records may not carry — so this guard is the load-bearing check for that class.
+export function isPortableInstallRegistrationCorrupt(stateDir: string): boolean {
+  if (!hasPortableInstallRegistration(stateDir)) return false;
+  const path = join(stateDir, REGISTRATION_FILE);
+  const raw = readJson(path);
+  if (raw === undefined) return true;
+  return !isManagedRegistrationRecord(raw) && !isFailedRegistrationRecord(raw);
 }
 
 export function readManagedRegistration(stateDir: string): ManagedSetupRegistration | undefined {
@@ -216,14 +417,61 @@ export function readManagedRegistration(stateDir: string): ManagedSetupRegistrat
 }
 
 function isManagedRegistrationRecord(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value) || value.schemaVersion !== 1) return false;
-  if (value.status !== "managed" || value.updateEligible !== true) return false;
+  if (!hasManagedRegistrationBase(value)) return false;
+  if (value.schemaVersion === 2) return isWindowsManagedRegistrationV2(value);
+  return value.platformTarget === "windows-x64" || value.updateEligible === true;
+}
+
+function hasManagedRegistrationBase(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) return false;
+  if (value.status !== "managed" || typeof value.updateEligible !== "boolean") return false;
   if (
     !isPortableTarget(typeof value.platformTarget === "string" ? value.platformTarget : undefined)
   ) {
     return false;
   }
-  return typeof value.packageVersion === "string" && typeof value.stable === "boolean";
+  if (typeof value.packageVersion !== "string" || typeof value.stable !== "boolean") return false;
+  return true;
+}
+
+function isWindowsManagedRegistrationV2(value: Record<string, unknown>): boolean {
+  if (!isEligibleWindowsRegistrationV2(value)) return false;
+  if (!hasExactKeys(value, WINDOWS_REGISTRATION_V2_KEYS)) return false;
+  try {
+    const generation = parseWindowsGenerationBinding(value.windowsGeneration);
+    return (
+      hasStrictWindowsRegistrationIdentity(value) &&
+      isCanonicalIsoTimestamp(value.updatedAt) &&
+      generation.launcherSha256 === value.launcherIdentitySha256
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isEligibleWindowsRegistrationV2(value: Record<string, unknown>): boolean {
+  return (
+    value.platformTarget === "windows-x64" &&
+    value.updateEligible === true &&
+    value.stable === true &&
+    typeof value.packageVersion === "string" &&
+    STABLE_SEMVER_RE.test(value.packageVersion)
+  );
+}
+
+function hasStrictWindowsRegistrationIdentity(value: Record<string, unknown>): boolean {
+  return (
+    isStrictManagedRootLocator(value.managedRootLocator) &&
+    parseSha256(value.setupManifestSha256) !== undefined &&
+    parseSha256(value.installRootIdentitySha256) !== undefined &&
+    parseSha256(value.launcherIdentitySha256) !== undefined
+  );
+}
+
+function isCanonicalIsoTimestamp(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value;
 }
 
 function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSetupRegistration {
@@ -235,21 +483,38 @@ function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSet
     throw new Error("portable registration target is invalid");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: raw.schemaVersion === 2 ? 2 : 1,
     status: "managed",
-    updateEligible: true,
+    updateEligible:
+      raw.schemaVersion === 1 && platformTarget === "windows-x64"
+        ? false
+        : raw.updateEligible === true,
     platformTarget,
     packageVersion: String(raw.packageVersion),
     stable: raw.stable === true,
     managedRootLocator: parseManagedRootLocator(raw.managedRootLocator),
-    setupManifestSha256:
-      typeof raw.setupManifestSha256 === "string" ? raw.setupManifestSha256 : undefined,
-    installRootIdentitySha256:
-      typeof raw.installRootIdentitySha256 === "string" ? raw.installRootIdentitySha256 : undefined,
-    launcherIdentitySha256:
-      typeof raw.launcherIdentitySha256 === "string" ? raw.launcherIdentitySha256 : undefined,
+    setupManifestSha256: parseSha256(raw.setupManifestSha256),
+    installRootIdentitySha256: parseSha256(raw.installRootIdentitySha256),
+    launcherIdentitySha256: parseSha256(raw.launcherIdentitySha256),
+    ...(raw.schemaVersion === 2
+      ? { windowsGeneration: parseWindowsGenerationBinding(raw.windowsGeneration) }
+      : {}),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
   };
+}
+
+function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(record).sort((left, right) => left.localeCompare(right, "en-US"));
+  return (
+    actual.length === expected.length &&
+    [...expected]
+      .sort((left, right) => left.localeCompare(right, "en-US"))
+      .every((key, i) => actual[i] === key)
+  );
+}
+
+function parseSha256(value: unknown): string | undefined {
+  return typeof value === "string" && SHA256_RE.test(value) ? value : undefined;
 }
 
 function parseManagedRootLocator(value: unknown): ManagedRootLocator | undefined {
@@ -265,6 +530,12 @@ function parseManagedRootLocator(value: unknown): ManagedRootLocator | undefined
     return { kind: "absolute-local", path };
   }
   return undefined;
+}
+
+function isStrictManagedRootLocator(value: unknown): boolean {
+  const locator = parseManagedRootLocator(value);
+  if (locator === undefined || !isRecord(value)) return false;
+  return hasExactKeys(value, locator.kind === "default" ? ["kind"] : ["kind", "path"]);
 }
 
 function parseManagedRootLocatorPath(value: unknown): string | undefined {
@@ -292,7 +563,18 @@ function isFailedRegistrationRecord(value: unknown): value is Record<string, unk
   ) {
     return false;
   }
-  return typeof value.packageVersion === "string" && typeof value.stable === "boolean";
+  if (typeof value.packageVersion !== "string" || typeof value.stable !== "boolean") return false;
+  return hasValidOptionalWindowsGeneration(value.windowsGeneration);
+}
+
+function hasValidOptionalWindowsGeneration(value: unknown): boolean {
+  if (value === undefined) return true;
+  try {
+    parseWindowsGenerationBinding(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function failedRegistrationFromRecord(raw: Record<string, unknown>): FailedSetupRegistration {
@@ -311,6 +593,17 @@ function failedRegistrationFromRecord(raw: Record<string, unknown>): FailedSetup
     packageVersion: String(raw.packageVersion),
     stable: raw.stable === true,
     failureReason: typeof raw.failureReason === "string" ? raw.failureReason : undefined,
+    installRootPlatformTarget:
+      typeof raw.installRootPlatformTarget === "string" &&
+      isPortableTarget(raw.installRootPlatformTarget)
+        ? raw.installRootPlatformTarget
+        : undefined,
+    setupManifestSha256: parseSha256(raw.setupManifestSha256),
+    installRootIdentitySha256: parseSha256(raw.installRootIdentitySha256),
+    launcherIdentitySha256: parseSha256(raw.launcherIdentitySha256),
+    ...(raw.windowsGeneration === undefined
+      ? {}
+      : { windowsGeneration: parseWindowsGenerationBinding(raw.windowsGeneration) }),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
   };
 }
@@ -321,11 +614,47 @@ export function registrationMatches(
   manifest: SetupManifest,
 ): boolean {
   return (
+    registrationIdentityMatches(registration, layout, manifest) &&
+    registrationGenerationMatches(registration, layout, manifest)
+  );
+}
+
+function registrationIdentityMatches(
+  registration: ManagedSetupRegistration,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+): boolean {
+  return (
     registration.platformTarget === manifest.platformTarget &&
     registration.packageVersion === manifest.packageVersion &&
     registration.stable === manifest.stable &&
     registration.setupManifestSha256 === sha256File(layout.setupManifestPath) &&
-    registration.installRootIdentitySha256 === sha256Text(realpathSync(layout.installRoot)) &&
+    registration.installRootIdentitySha256 ===
+      portableInstallRootIdentitySha256(layout.installRoot) &&
     registration.launcherIdentitySha256 === sha256File(layout.primaryLauncherPath)
   );
+}
+
+function registrationGenerationMatches(
+  registration: ManagedSetupRegistration,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+): boolean {
+  if (manifest.platformTarget !== "windows-x64" || manifest.schemaVersion === 1) {
+    return registration.windowsGeneration === undefined;
+  }
+  const generation = registration.windowsGeneration;
+  if (registration.schemaVersion !== 2 || generation === undefined) return false;
+  return (
+    resolve(layout.resourceRoot) ===
+      resolve(layout.installRoot, ...manifest.windowsGeneration.resourceRoot.split("/")) &&
+    windowsGenerationBindingsMatch(generation, manifest.windowsGeneration)
+  );
+}
+
+function windowsGenerationBindingsMatch(
+  left: WindowsGenerationBinding,
+  right: WindowsGenerationBinding,
+): boolean {
+  return WINDOWS_GENERATION_KEYS.every((key) => left[key] === right[key]);
 }

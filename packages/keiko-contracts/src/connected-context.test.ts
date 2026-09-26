@@ -11,6 +11,7 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   EVIDENCE_ATOM_PROVENANCE_KINDS,
   EVIDENCE_ATOM_REDACTION_STATES,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   MAX_RANKED_CANDIDATE_DIAGNOSTICS,
   RETRIEVAL_QUERY_KINDS,
   SELECTED_SCOPE_KINDS,
@@ -331,6 +332,27 @@ describe("isWithinBudget", () => {
   it("returns false on NaN usage", () => {
     const usage: ExplorationUsage = { ...happyUsage(), elapsedMs: Number.NaN };
     expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(false);
+  });
+
+  // KEIKO-0447: only the USED side of each pair was validated. `used > cap` is false whenever cap is
+  // undefined or NaN, so a partially-constructed budget — a dropped field in a persisted plan, a
+  // cross-version manifest, a JSON round-trip — reported every usage as in-budget and the guard that
+  // stops a runaway exploration loop failed OPEN. checkBudgetDimension in the same file already
+  // validates the cap first; this brings the spend guard in line with it.
+  it("fails closed on a budget with a missing cap instead of reporting every usage in-budget", () => {
+    expect(isWithinBudget(happyUsage(), {} as ExplorationBudget)).toBe(false);
+  });
+
+  it.each([
+    ["NaN cap", { filesReadMax: Number.NaN }],
+    ["negative cap", { elapsedMsMax: -1 }],
+    ["Infinity cap", { excerptBytesMax: Number.POSITIVE_INFINITY }],
+    ["fractional cap", { searchCallsMax: 2.5 }],
+    ["undefined cap", { rerankCallsMax: undefined as unknown as number }],
+  ])("fails closed on a %s", (_label, override) => {
+    expect(isWithinBudget(happyUsage(), { ...DEFAULT_EXPLORATION_BUDGET, ...override })).toBe(
+      false,
+    );
   });
 });
 
@@ -1469,5 +1491,81 @@ describe("ExplorationBudget shape", () => {
         .map((key) => `${key}Max`)
         .sort(),
     );
+  });
+});
+
+// ─── KEIKO-0880: runtime immutability of the frozen contract tables ────────────
+// `as const` / `readonly` are compile-time only and are erased at build time, so without
+// Object.freeze a consumer holding one of these tables (or an unsafe cast) could rewrite a scope
+// kind, provenance kind, omission reason, uncertainty kind, or the default exploration budget for
+// the remaining lifetime of the process.
+describe("KEIKO-0880 frozen contract tables", () => {
+  it("freezes SELECTED_SCOPE_KINDS", () => {
+    expect(Object.isFrozen(SELECTED_SCOPE_KINDS)).toBe(true);
+    expect(() => {
+      (SELECTED_SCOPE_KINDS as string[])[0] = "bogus-kind";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes EVIDENCE_ATOM_PROVENANCE_KINDS", () => {
+    expect(Object.isFrozen(EVIDENCE_ATOM_PROVENANCE_KINDS)).toBe(true);
+    expect(() => {
+      (EVIDENCE_ATOM_PROVENANCE_KINDS as string[])[0] = "bogus-kind";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes CANDIDATE_OMISSION_REASONS", () => {
+    expect(Object.isFrozen(CANDIDATE_OMISSION_REASONS)).toBe(true);
+    expect(() => {
+      (CANDIDATE_OMISSION_REASONS as string[])[0] = "bogus-reason";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes UNCERTAINTY_MARKER_KINDS", () => {
+    expect(Object.isFrozen(UNCERTAINTY_MARKER_KINDS)).toBe(true);
+    expect(() => {
+      (UNCERTAINTY_MARKER_KINDS as string[])[0] = "bogus-kind";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes DEFAULT_EXPLORATION_BUDGET", () => {
+    expect(Object.isFrozen(DEFAULT_EXPLORATION_BUDGET)).toBe(true);
+    expect(() => {
+      (DEFAULT_EXPLORATION_BUDGET as { searchCallsMax: number }).searchCallsMax = 999;
+    }).toThrow(TypeError);
+  });
+});
+
+// ─── KEIKO-0849: pack.omitted cap short-circuits the O(n^2) overlap scan ───────
+describe("MAX_OMITTED_CONTEXT_ENTRIES", () => {
+  it("rejects more than MAX_OMITTED_CONTEXT_ENTRIES entries without running the overlap scan", () => {
+    const omitted = Array.from({ length: MAX_OMITTED_CONTEXT_ENTRIES + 1 }, (_, i) => ({
+      scopePath: `generated/file-${String(i)}.ts`,
+      reason: "ignored" as const,
+      omittedAtMs: 1,
+    }));
+    const pack: ConnectedContextPack = { ...happyPack(), omitted };
+    const result = validateConnectedContextPack(pack);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.reasons.some((reason) =>
+          reason.includes(`pack.omitted exceeds ${String(MAX_OMITTED_CONTEXT_ENTRIES)}`),
+        ),
+      ).toBe(true);
+      // Short-circuited BEFORE the per-entry overlap scan: no per-entry reasons (e.g. duplicate /
+      // overlapping scopePath) were produced, only the single cap reason.
+      expect(result.reasons).toHaveLength(1);
+    }
+  });
+
+  it("accepts exactly MAX_OMITTED_CONTEXT_ENTRIES distinct, non-overlapping entries", () => {
+    const omitted = Array.from({ length: MAX_OMITTED_CONTEXT_ENTRIES }, (_, i) => ({
+      scopePath: `generated/file-${String(i)}.ts`,
+      reason: "ignored" as const,
+      omittedAtMs: 1,
+    }));
+    const pack: ConnectedContextPack = { ...happyPack(), omitted };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 });

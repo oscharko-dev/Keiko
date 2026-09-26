@@ -3,7 +3,7 @@
 // Output is content-free: per-file recency/churn metrics only, filtered back to the selected root.
 
 import { createHash } from "node:crypto";
-import { isAbsolute, relative, resolve } from "node:path";
+import { relative } from "node:path";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   isValidScopePath,
@@ -18,12 +18,25 @@ import {
   resolveWithinWorkspace,
   type SearchScope,
   type WorkspaceFs,
+  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import {
   containsPath,
   defaultGitProcessRunner,
+  GIT_BASE_ARGS,
+  resolveGitMembership,
+  type GitProcessResult,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import {
+  AbortDeadlineRaceError,
+  raceAbortDeadline,
+  type AbortDeadlineContext,
+} from "./abort-race.js";
+import type { ServerLogSink } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const GIT_HISTORY_RECORD_SEP = "\x1e";
 const GIT_HISTORY_COMMIT_LIMIT = 200;
@@ -42,6 +55,23 @@ export interface GitFileHistoryEvidenceInputs {
   readonly signal?: AbortSignal | undefined;
   readonly runner?: GitProcessRunner | undefined;
   readonly maxFiles?: number | undefined;
+  // Optional request-wide absolute deadline. The orchestrator owns the elapsed budget; this seam
+  // lets both bounded Git subprocesses use only the time that remains instead of starting a fresh
+  // five-second timeout near the end of the request.
+  readonly deadlineAtMs?: number | undefined;
+  /**
+   * The grounded ask's own correlation id, threaded from `RouteContext.correlationId` through
+   * `OrchestratorDeps` and `SearchInputs` (ADR-0173 D5). Required for the activity-log lines below
+   * to be worth anything: a git failure recorded here belongs to ONE ask, and a line stamped with
+   * the `UNKNOWN_CORRELATION_ID` fallback could not be joined back to the answer it degraded —
+   * which is the only question an operator asks of it.
+   */
+  readonly correlationId?: string | undefined;
+  /**
+   * Activity-log sink, defaulting to the shared process log. A test seam in exactly the same sense
+   * as `runner` above; production omits it.
+   */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export type GitFileHistoryEvidenceProvider = (
@@ -147,8 +177,46 @@ function isWithinSelectedScope(searchScope: SearchScope, scopePath: string): boo
   );
 }
 
-function fileExistsInScope(searchScope: SearchScope, fs: WorkspaceFs, scopePath: string): boolean {
+function gitHistoryDeadlineReached(inputs: GitFileHistoryEvidenceInputs): boolean {
+  return inputs.deadlineAtMs !== undefined && inputs.nowMs() >= inputs.deadlineAtMs;
+}
+
+function boundedGitHistoryInputs(
+  inputs: GitFileHistoryEvidenceInputs,
+): GitFileHistoryEvidenceInputs {
+  const localDeadlineAtMs = inputs.nowMs() + GIT_HISTORY_TIMEOUT_MS;
+  const parentDeadlineAtMs = inputs.deadlineAtMs;
+  const deadlineAtMs =
+    parentDeadlineAtMs === undefined || !Number.isFinite(parentDeadlineAtMs)
+      ? localDeadlineAtMs
+      : Math.min(parentDeadlineAtMs, localDeadlineAtMs);
+  return { ...inputs, deadlineAtMs };
+}
+
+async function runGitHistoryStage<T>(
+  inputs: GitFileHistoryEvidenceInputs,
+  operation: (context: AbortDeadlineContext) => Promise<T>,
+): Promise<T | undefined> {
+  try {
+    return await raceAbortDeadline(operation, {
+      deadlineAtMs: inputs.deadlineAtMs ?? inputs.nowMs(),
+      nowMs: inputs.nowMs,
+      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+    });
+  } catch (error) {
+    if (!(error instanceof AbortDeadlineRaceError)) throw error;
+    if (error.reason === "aborted") {
+      throw new CancelledError("git history evidence cancelled");
+    }
+    return undefined;
+  }
+}
+
+function fileExistsInScope(inputs: GitFileHistoryEvidenceInputs, scopePath: string): boolean {
+  const { searchScope, fs } = inputs;
+  throwIfCancelled(inputs.signal);
   if (
+    gitHistoryDeadlineReached(inputs) ||
     !isValidScopePath(scopePath, { mustBeRelative: true }) ||
     !isWithinSelectedScope(searchScope, scopePath) ||
     isDenied(scopePath)
@@ -156,57 +224,119 @@ function fileExistsInScope(searchScope: SearchScope, fs: WorkspaceFs, scopePath:
     return false;
   }
   try {
+    throwIfCancelled(inputs.signal);
     const abs = resolveWithinWorkspace(searchScope.workspace.root, scopePath);
     const contained = containedRealPathInfo(fs, searchScope.workspace.root, abs);
-    return fs.stat(contained.path).isFile;
+    throwIfCancelled(inputs.signal);
+    if (!isCanonicalAllowedContainedPath(contained, searchScope.workspace.root, scopePath)) {
+      return false;
+    }
+    if (gitHistoryDeadlineReached(inputs)) {
+      return false;
+    }
+    throwIfCancelled(inputs.signal);
+    const stat = fs.stat(contained.path);
+    throwIfCancelled(inputs.signal);
+    // The metadata read itself can consume the last of the budget. Re-read the clock after it:
+    // admitting a path on a `stat` that only returned once the deadline had already passed would
+    // record evidence the request is no longer allowed to produce.
+    if (gitHistoryDeadlineReached(inputs)) {
+      return false;
+    }
+    return isSafeRegularFile(stat);
   } catch {
+    throwIfCancelled(inputs.signal);
     return false;
   }
+}
+
+function isSafeRegularFile(stat: WorkspaceStat): boolean {
+  return (
+    stat.isFile &&
+    !stat.isSymbolicLink &&
+    (stat.hardLinkCount === undefined || stat.hardLinkCount <= 1)
+  );
 }
 
 async function resolveGitRepositoryForHistory(
   inputs: GitFileHistoryEvidenceInputs,
   runner: GitProcessRunner,
 ): Promise<GitRepositoryForHistory | undefined> {
+  throwIfCancelled(inputs.signal);
+  if (gitHistoryDeadlineReached(inputs)) {
+    return undefined;
+  }
   let selectedRoot: string;
   try {
     selectedRoot = inputs.fs.realPath(inputs.searchScope.workspace.root);
   } catch {
+    throwIfCancelled(inputs.signal);
     return undefined;
   }
-  const revParse = await runner(
-    ["--no-pager", "--no-optional-locks", "-C", selectedRoot, "rev-parse", "--show-toplevel"],
-    { cwd: selectedRoot, maxBytes: 16 * 1024, timeoutMs: GIT_HISTORY_TIMEOUT_MS },
+  throwIfCancelled(inputs.signal);
+  if (gitHistoryDeadlineReached(inputs)) {
+    return undefined;
+  }
+  // KEIKO-0516: reuse the shared resolveGitMembership primitive instead of hand-rolling
+  // a rev-parse. It ships the same call with --show-prefix in one round trip so we get
+  // the selected root's prefix without a separate relative()-of-realPath computation,
+  // and it centralises the ownership/toplevel-parsing hardening.
+  const membership = await runGitHistoryStage(inputs, ({ signal, timeoutMs }) =>
+    resolveGitMembership(selectedRoot, runner, { timeoutMs, abortSignal: signal }),
   );
-  if (revParse.exitCode !== 0) {
+  if (membership === undefined || !membership.ok || gitHistoryDeadlineReached(inputs)) {
     return undefined;
   }
-  const rawRepositoryRoot = revParse.stdout.split(/\r?\n/u)[0]?.trim();
-  if (rawRepositoryRoot === undefined || rawRepositoryRoot.length === 0) {
-    return undefined;
-  }
-  const repositoryRoot = isAbsolute(rawRepositoryRoot)
-    ? resolve(rawRepositoryRoot)
-    : resolve(selectedRoot, rawRepositoryRoot);
+  const repositoryRoot = membership.membership.repositoryRoot;
   let realRepositoryRoot: string;
+  throwIfCancelled(inputs.signal);
   try {
     realRepositoryRoot = inputs.fs.realPath(repositoryRoot);
   } catch {
+    throwIfCancelled(inputs.signal);
+    if (gitHistoryDeadlineReached(inputs)) {
+      return undefined;
+    }
     realRepositoryRoot = repositoryRoot;
   }
+  throwIfCancelled(inputs.signal);
   if (!containsPath(realRepositoryRoot, selectedRoot)) {
     return undefined;
   }
+  // The prefix is derived from the resolved paths rather than read off
+  // membership.prefix: resolveGitMembership applies `.trim()` to the --show-prefix line,
+  // which mangles a directory name that legitimately begins or ends with whitespace, and
+  // stripSelectedPrefix would then fail to match any returned filename (leaving history
+  // evidence silently empty). relative() is byte-exact and costs no extra process — the
+  // shared resolver is still what buys us the single bounded round trip and the hardened
+  // toplevel/ownership parsing this call site previously hand-rolled.
   return {
     repositoryRoot: realRepositoryRoot,
     selectedRootPrefix: toPosix(relative(realRepositoryRoot, selectedRoot)),
   };
 }
 
-function gitHistoryArgs(repositoryRoot: string): readonly string[] {
+function remainingGitHistoryTimeMs(inputs: GitFileHistoryEvidenceInputs): number {
+  if (inputs.deadlineAtMs === undefined) {
+    return GIT_HISTORY_TIMEOUT_MS;
+  }
+  return Math.max(
+    0,
+    Math.min(GIT_HISTORY_TIMEOUT_MS, Math.floor(inputs.deadlineAtMs - inputs.nowMs())),
+  );
+}
+
+// Path-scope the log so the GIT_HISTORY_COMMIT_LIMIT cap is spent inside the selected
+// root rather than repo-wide, which starved subfolder scopes in busy monorepos
+// (issue #2901 / KEIKO-0421). Empty prefix maps explicitly to "." — git treats an
+// empty-string pathspec differently from omitting one. A non-empty prefix is wrapped in
+// `:(literal)` so a directory whose name looks like a git pathspec magic word (e.g.
+// `feature-*` or `:(exclude)docs`) cannot be re-read as a glob or a magic signature.
+// Mirrors gitRoutes.ts's literalGitPathspec used by every other keiko-server git read.
+function gitHistoryArgs(repositoryRoot: string, selectedRootPrefix: string): readonly string[] {
+  const pathspec = selectedRootPrefix.length > 0 ? `:(literal)${selectedRootPrefix}` : ".";
   return [
-    "--no-pager",
-    "--no-optional-locks",
+    ...GIT_BASE_ARGS,
     "-C",
     repositoryRoot,
     "-c",
@@ -218,6 +348,7 @@ function gitHistoryArgs(repositoryRoot: string): readonly string[] {
     `--format=${GIT_HISTORY_RECORD_SEP}%ct`,
     "--name-only",
     "--",
+    pathspec,
   ];
 }
 
@@ -236,7 +367,7 @@ function scopePathForHistoryLine(
     return undefined;
   }
   const scopePath = stripSelectedPrefix(repoPath, repo.selectedRootPrefix);
-  if (scopePath === undefined || !fileExistsInScope(inputs.searchScope, inputs.fs, scopePath)) {
+  if (scopePath === undefined || !fileExistsInScope(inputs, scopePath)) {
     return undefined;
   }
   return scopePath;
@@ -256,13 +387,53 @@ function recordFileHistory(
   existing.lastCommitUnix = Math.max(existing.lastCommitUnix, timestamp);
 }
 
+// Returns false once the request deadline trips while validating this commit's paths, so the
+// caller can discard the lane instead of keeping what happened to be validated first.
+function collectCommitFileHistory(
+  byPath: Map<string, FileHistoryStats>,
+  rawPaths: readonly string[],
+  timestamp: number,
+  repo: GitRepositoryForHistory,
+  inputs: GitFileHistoryEvidenceInputs,
+): boolean {
+  const seenInCommit = new Set<string>();
+  for (const rawPath of rawPaths) {
+    throwIfCancelled(inputs.signal);
+    if (gitHistoryDeadlineReached(inputs)) {
+      return false;
+    }
+    const scopePath = scopePathForHistoryLine(rawPath, repo, inputs);
+    if (scopePath === undefined || seenInCommit.has(scopePath)) {
+      continue;
+    }
+    seenInCommit.add(scopePath);
+    recordFileHistory(byPath, scopePath, timestamp);
+  }
+  return true;
+}
+
+/**
+ * Parses the bounded `git log --name-only` output into per-file stats, or returns the stopped
+ * sentinel `undefined` when the request deadline trips anywhere inside parsing.
+ *
+ * Stopping is deliberately terminal for the whole lane rather than a loop `break`. Path validation
+ * performs metadata I/O, so the deadline can expire between two records — or inside the `stat` that
+ * admitted the last path. Returning the partially built map would hand ranking a set whose
+ * membership depends on where the clock ran out, and those atoms would then be emitted after the
+ * request deadline: exactly the outcome the all-or-empty post-subprocess check in the provider
+ * below exists to prevent. Discarding the lane keeps both paths on one rule.
+ */
 function parseGitHistoryStats(
   stdout: string,
   repo: GitRepositoryForHistory,
   inputs: GitFileHistoryEvidenceInputs,
-): readonly FileHistoryStats[] {
+): readonly FileHistoryStats[] | undefined {
   const byPath = new Map<string, FileHistoryStats>();
   for (const record of stdout.split(GIT_HISTORY_RECORD_SEP)) {
+    throwIfCancelled(inputs.signal);
+    if (gitHistoryDeadlineReached(inputs)) {
+      return undefined;
+    }
     if (record.length === 0) {
       continue;
     }
@@ -271,17 +442,13 @@ function parseGitHistoryStats(
     if (timestamp === undefined) {
       continue;
     }
-    const seenInCommit = new Set<string>();
-    for (const rawPath of lines.slice(1)) {
-      const scopePath = scopePathForHistoryLine(rawPath, repo, inputs);
-      if (scopePath === undefined || seenInCommit.has(scopePath)) {
-        continue;
-      }
-      seenInCommit.add(scopePath);
-      recordFileHistory(byPath, scopePath, timestamp);
+    if (!collectCommitFileHistory(byPath, lines.slice(1), timestamp, repo, inputs)) {
+      return undefined;
     }
   }
-  return [...byPath.values()];
+  // The final record's last path validation can expire the clock with no later iteration left to
+  // observe it, so the lane is re-checked once after the loop.
+  return gitHistoryDeadlineReached(inputs) ? undefined : [...byPath.values()];
 }
 
 function compareStats(
@@ -346,29 +513,31 @@ function historyAtom(
   };
 }
 
-export const defaultGitFileHistoryEvidenceProvider: GitFileHistoryEvidenceProvider = async (
-  inputs,
-) => {
-  const runner = inputs.runner ?? defaultGitProcessRunner;
-  throwIfCancelled(inputs.signal);
-  const repo = await resolveGitRepositoryForHistory(inputs, runner);
-  if (repo === undefined) {
-    return [];
-  }
-  throwIfCancelled(inputs.signal);
-  const result = await runner(gitHistoryArgs(repo.repositoryRoot), {
-    cwd: repo.repositoryRoot,
-    maxBytes: GIT_HISTORY_MAX_BYTES,
-    timeoutMs: GIT_HISTORY_TIMEOUT_MS,
-  });
-  if (result.exitCode !== 0) {
-    return [];
-  }
-  throwIfCancelled(inputs.signal);
-  const stats = parseGitHistoryStats(result.stdout, repo, inputs);
-  if (stats.length === 0) {
-    return [];
-  }
+async function readGitHistoryResult(
+  inputs: GitFileHistoryEvidenceInputs,
+  runner: GitProcessRunner,
+  repo: GitRepositoryForHistory,
+): Promise<GitProcessResult | undefined> {
+  if (remainingGitHistoryTimeMs(inputs) <= 0) return undefined;
+  return runGitHistoryStage(inputs, ({ signal, timeoutMs }) =>
+    runner(gitHistoryArgs(repo.repositoryRoot, repo.selectedRootPrefix), {
+      cwd: repo.repositoryRoot,
+      maxBytes: GIT_HISTORY_MAX_BYTES,
+      timeoutMs,
+      abortSignal: signal,
+    }),
+  );
+}
+
+function rankedHistoryAtoms(
+  inputs: GitFileHistoryEvidenceInputs,
+  repo: GitRepositoryForHistory,
+  stdout: string,
+): readonly EvidenceAtom[] {
+  const stats = parseGitHistoryStats(stdout, repo, inputs);
+  // `undefined` is the stopped sentinel: the deadline tripped during parsing, so there is no
+  // ranking to do — the lane is discarded whole rather than emitted from a partial map.
+  if (stats === undefined || stats.length === 0) return [];
   const maxCommitCount = Math.max(...stats.map((entry) => entry.commitCount));
   const maxFiles = Math.max(
     0,
@@ -379,4 +548,34 @@ export const defaultGitFileHistoryEvidenceProvider: GitFileHistoryEvidenceProvid
     .sort(compareStats(inputs.nowMs(), maxCommitCount))
     .slice(0, maxFiles)
     .map((entry) => historyAtom(inputs, fingerprint, entry, maxCommitCount));
+}
+
+export const defaultGitFileHistoryEvidenceProvider: GitFileHistoryEvidenceProvider = async (
+  inputs,
+) => {
+  const boundedInputs = boundedGitHistoryInputs(inputs);
+  // Both git reads below — the membership resolution inside `resolveGitRepositoryForHistory` and
+  // the history read itself — answer a failure by returning no evidence. That is the right ANSWER
+  // (a grounded pack degrades rather than fails), but on its own it left no trace at all: an ask
+  // whose git-history ring silently went empty was indistinguishable in the log from one where the
+  // repository simply had no matching history. Observing the runner reports both without either
+  // call site opting in, and reuses the routes' own helper rather than growing a second mechanism
+  // (AGENTS.md §5, §8 Rule 1).
+  const runner = observedGitRunner(
+    boundedInputs.runner ?? defaultGitProcessRunner,
+    boundedInputs.activityLog ?? processServerLogSink(),
+    boundedInputs.correlationId,
+  );
+  throwIfCancelled(boundedInputs.signal);
+  if (remainingGitHistoryTimeMs(boundedInputs) <= 0) return [];
+  const repo = await resolveGitRepositoryForHistory(boundedInputs, runner);
+  if (repo === undefined) return [];
+  throwIfCancelled(boundedInputs.signal);
+  const result = await readGitHistoryResult(boundedInputs, runner, repo);
+  if (result?.exitCode !== 0) return [];
+  throwIfCancelled(boundedInputs.signal);
+  // A completed subprocess does not widen the request's absolute deadline. Ranking and evidence
+  // emission after the deadline would make the outcome depend on event-loop timer ordering.
+  if (gitHistoryDeadlineReached(boundedInputs)) return [];
+  return rankedHistoryAtoms(boundedInputs, repo, result.stdout);
 };

@@ -30,6 +30,7 @@ export const QUICK_ACCESS_CARD_TYPES: readonly WindowType[] = [
 
 export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
   "chatHistory",
+  "codingHistory",
   "memoria",
   "settings",
   "workspaceTrust",
@@ -40,6 +41,7 @@ export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
   "notifications",
   "resources",
   "localKnowledge",
+  "integ",
   "governedGit",
   // Issue #2476 — Code task reachability. The Coding Workbench is a `singleton: true, tool: true`
   // window, so it belongs on the palette's tool list (the idempotent `toggleTool` seam the Left Rail

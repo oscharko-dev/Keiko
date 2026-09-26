@@ -12,6 +12,18 @@ import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import { EventEmitter } from "node:events";
+import type { ServerResponse } from "node:http";
+import { handleBrowserEvents, openBrowserSseStream } from "./browser.js";
+import type { SseBackpressureSignal } from "./sse-write.js";
+import type { RouteContext } from "./routes.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import {
   BrowserToolError,
   type BrowserEventEmitter,
@@ -659,5 +671,252 @@ describe("GET /api/browser/sessions/:id/events (SSE)", () => {
       clearTimeout(timeout);
     }
     expect(received).toContain("event: browser:session-closed");
+  });
+});
+
+// KEIKO-0142: browser.ts hand-rolled the write+destroy backpressure check instead of the shared
+// writeOrDestroy helper, so it had no per-connection AbortController, no unsubscribe on a
+// backpressure kill, and no observable signal. Mirrors command-runner-routes.test.ts's block.
+interface FakeSseRes {
+  res: ServerResponse;
+  readonly writes: string[];
+  destroyCount: number;
+  ended: boolean;
+  writeReturns: boolean;
+  readonly emitClose: () => void;
+}
+
+function makeFakeSseRes(): FakeSseRes {
+  const writes: string[] = [];
+  const emitter = new EventEmitter();
+  const state: FakeSseRes = {
+    res: undefined as unknown as ServerResponse,
+    writes,
+    destroyCount: 0,
+    ended: false,
+    writeReturns: true,
+    emitClose: (): void => {
+      emitter.emit("close");
+    },
+  };
+  const res = {
+    writeHead(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    write(chunk: string): boolean {
+      writes.push(chunk);
+      return state.writeReturns;
+    },
+    end(): ServerResponse {
+      state.ended = true;
+      return res as unknown as ServerResponse;
+    },
+    destroy(): void {
+      state.destroyCount += 1;
+    },
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+  };
+  state.res = res as unknown as ServerResponse;
+  return state;
+}
+
+function browserEvent(sessionId: string, kind: string, seq: number): BrowserEventEnvelope {
+  return {
+    schemaVersion: "1",
+    type: `browser:${kind}`,
+    runId: "run-bp",
+    fingerprint: "fp-bp",
+    seq,
+    ts: 1_700_000_000_000,
+    kind,
+    sessionId,
+    payload: { reason: "chrome-disconnected" },
+  } as unknown as BrowserEventEnvelope;
+}
+
+describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
+  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-bp",
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emit("session-bp", browserEvent("session-bp", "navigated", 1));
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+
+    const writesAfterKill = fake.writes.length;
+    manager.emit("session-bp", browserEvent("session-bp", "navigated", 2));
+    expect(fake.writes).toHaveLength(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+
+    expect(() => {
+      fake.emitClose();
+    }).not.toThrow();
+  });
+
+  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-ready",
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it("kills on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    const signals: SseBackpressureSignal[] = [];
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-late",
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+    expect(fake.destroyCount).toBe(0);
+
+    fake.writeReturns = false;
+    manager.emit("session-late", browserEvent("session-late", "navigated", 1));
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it("keeps the session-closed early-return intact while wired to the controller", () => {
+    // The session-closed branch must still unsubscribe and end the response — migrating to
+    // writeOrDestroy must not drop or reorder it.
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    openBrowserSseStream(fake.res, manager, "session-close", (value) => value);
+
+    manager.emit("session-close", browserEvent("session-close", "session-closed", 1));
+
+    expect(fake.ended).toBe(true);
+    expect(fake.destroyCount).toBe(0);
+    // Unsubscribed: a further event for the same session produces no additional write.
+    const writesAfterClose = fake.writes.length;
+    manager.emit("session-close", browserEvent("session-close", "navigated", 2));
+    expect(fake.writes).toHaveLength(writesAfterClose);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line — openBrowserSseStream had no parameter to receive it. The ready frame
+// (not the heartbeat, whose own write is deferred to its interval timer) is the actual first write
+// on the stream, so that is where correlationId must be threaded.
+describe("openBrowserSseStream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-corr",
+      (value) => value,
+      undefined,
+      "corr-browser-1",
+    );
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "sse.stream.closed",
+      correlationId: "corr-browser-1",
+    });
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+
+    openBrowserSseStream(fake.res, manager, "session-no-corr", (value) => value);
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]?.correlationId).toBeUndefined();
+  });
+});
+
+describe("handleBrowserEvents backpressure correlation (ADR-0173 D5 / g12)", () => {
+  it("threads the request's own correlation id into the backpressure diagnostic instead of minting one", () => {
+    const fake = makeFakeSseRes();
+    fake.writeReturns = false; // rejects the ready frame -> immediate backpressure kill.
+    const manager = new FakeBrowserSessionManager();
+    manager.opened.push("session-thread");
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const baseDeps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: (): string => "",
+        list: (): readonly string[] => [],
+        get: (): undefined => undefined,
+        delete: (): undefined => undefined,
+      },
+      env: process.env,
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: (): undefined => undefined,
+      store: createInMemoryUiStore(),
+      browser: manager,
+      diagnostics,
+    };
+    const ctx: RouteContext = {
+      req: { on: (): void => undefined } as unknown as RouteContext["req"],
+      res: fake.res,
+      params: { sessionId: "session-thread" },
+      url: new URL("http://127.0.0.1/api/browser/sessions/session-thread/events"),
+      correlationId: "req-browser-thread-01",
+    };
+
+    handleBrowserEvents(ctx, baseDeps);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("sse.browser.backpressure");
+    expect(records[0]?.correlationId).toBe("req-browser-thread-01");
   });
 });

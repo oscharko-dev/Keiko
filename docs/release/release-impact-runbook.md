@@ -20,9 +20,14 @@ Every release-impacting issue and PR must record:
 - Supported-from versions.
 - Affected state stores.
 - User action required and remediation.
-- Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or release approval record.
+- Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or
+  release decision record.
 
-Before publish, `release:publish` and `prepublishOnly` require a machine-checkable approval reference in the form `github-pr-review:<owner>/<repo>#<pr>#<review>`. The referenced review must exist in the current GitHub repository, be `APPROVED`, and come from a login listed in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`. Issue references are acceptable while metadata is being prepared, but they are not sufficient to publish.
+The catalog gate validates that every current-version entry is structurally reviewed and carries a
+non-empty durable approval reference. It does not call GitHub or infer authorization from a comment
+phrase. Publication authority comes from the protected signed merge and, for the Actions path, the
+exact allowlisted non-bot dispatch guarded by `.github/workflows/release.yml`. Keep the reference
+useful for audit reconstruction; do not invent a review id or approval comment.
 
 User findings stay reporter-simple. Reporters provide reproduction and impact; maintainers or agents fill the normalized release-impact triage block after confirming the defect and intended fix.
 
@@ -34,10 +39,10 @@ append the change to an already published package version. The PR must state tha
 is deferred and preserve the prepared metadata for release planning.
 
 The release-cut or release-metadata PR appends the prepared record to
-`release-impact.catalog.json` after the target package version is decided and the required
-release-owner approval evidence exists. That PR owns catalog deduplication, version/tag binding, and
-the publish-mode approval-reference check. This lifecycle split keeps feature review complete without
-mutating an append-only release artifact prematurely.
+`release-impact.catalog.json` after the target package version is decided and the release owner has
+reviewed it. That PR owns catalog deduplication, version/tag binding, and the durable approval
+reference. This lifecycle split keeps feature review complete without mutating an append-only release
+artifact prematurely.
 
 ## Taxonomy
 

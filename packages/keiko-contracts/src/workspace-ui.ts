@@ -60,7 +60,9 @@ export interface WorkspaceKeyChord {
 
 export interface WorkspaceCommandContext {
   readonly userConfirmed: boolean;
-  readonly sourceObjectId?: string;
+  // KEIKO-0773: `| undefined` matches the package's own exactOptionalPropertyTypes discipline so
+  // an explicit `undefined` value round-trips through the wire the way an omitted key does.
+  readonly sourceObjectId?: string | undefined;
 }
 
 export interface WorkspaceCommand {
@@ -68,8 +70,9 @@ export interface WorkspaceCommand {
   readonly label: string;
   readonly category: WorkspaceCommandCategory;
   readonly authority: WorkspaceCommandAuthority;
-  readonly shortcut?: WorkspaceKeyChord;
-  readonly disabled?: () => string | null;
+  // KEIKO-0773: same rationale as above.
+  readonly shortcut?: WorkspaceKeyChord | undefined;
+  readonly disabled?: (() => string | null) | undefined;
   readonly run: (ctx: WorkspaceCommandContext) => Promise<void> | void;
 }
 
@@ -132,10 +135,15 @@ export type WorkspaceUiAction =
       readonly before: boolean;
       readonly after: boolean;
       /**
-       * Present only for a Search open transition. Keeping the selected root on the in-memory
-       * action lets redo recreate the singleton with the same workspace ownership.
+       * Present for Search transitions. Keeping the selected root on both open and close lets
+       * undo and redo recreate the singleton with the same workspace ownership.
        */
       readonly searchRoot?: string | undefined;
+      /**
+       * Present for Git transitions. Undo and redo must recreate the singleton with the same
+       * explicit project ownership instead of silently inheriting another repository.
+       */
+      readonly projectRoot?: string | undefined;
     }
   | {
       readonly kind: "ui.selection.change";
@@ -185,7 +193,7 @@ export interface WorkspaceKeyboardShortcutConflict {
   readonly commandIds: readonly string[];
 }
 
-export const WORKSPACE_RESERVED_CHORDS: readonly WorkspaceKeyChord[] = [
+export const WORKSPACE_RESERVED_CHORDS: readonly WorkspaceKeyChord[] = Object.freeze([
   { key: "t", mod: ["cmd"] },
   { key: "t", mod: ["ctrl"] },
   { key: "r", mod: ["cmd"] },
@@ -194,7 +202,7 @@ export const WORKSPACE_RESERVED_CHORDS: readonly WorkspaceKeyChord[] = [
   { key: "n", mod: ["ctrl", "shift"] },
   { key: "w", mod: ["cmd"] },
   { key: "w", mod: ["ctrl"] },
-];
+]);
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────
 
@@ -329,6 +337,14 @@ export function isWorkspaceReservedChord(chord: WorkspaceKeyChord): boolean {
     if (workspaceChordsCollide(chord, reserved)) return true;
   }
   return false;
+}
+
+// The two predicates above are a must-call-BOTH pair: dispatchable alone still admits a chord the
+// host OS or browser has reserved. Every caller had to remember the composition, and nothing tested
+// it, so this is the single predicate a caller should reach for. The individual predicates stay
+// exported — they are how a caller reports WHICH rule a chord failed.
+export function isWorkspaceChordAcceptable(chord: WorkspaceKeyChord): boolean {
+  return isWorkspaceDispatchableChord(chord) && !isWorkspaceReservedChord(chord);
 }
 
 // ─── Inverse-action helper for the undo stack ─────────────────────────────

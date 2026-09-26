@@ -16,7 +16,7 @@
 //     stable regardless of the order or duplicates the client sent, and dedupe across reconnections and
 //     re-check is exact.
 
-import { sortedStrings } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 
 /** Upper bound on the number of scoped screen ids in one figma-snapshot source (DoS / payload guard). */
 export const MAX_FIGMA_SCREEN_IDS = 200;

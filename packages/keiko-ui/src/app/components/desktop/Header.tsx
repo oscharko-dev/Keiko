@@ -39,7 +39,7 @@ function HeaderImpl({
             names the brand; alt="Keiko" made screen readers announce "Keiko Keiko"
             (same treatment as the footer logo). */}
         {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG; next/image would inject a wrapper that breaks .hd-logo */}
-        <img className="hd-logo" src="/assets/keiko-logo.svg" alt="" />
+        <img className="hd-logo" src="/keiko-logo.svg" alt="" />
         <span className="hd-wordmark">Keiko</span>
       </div>
 

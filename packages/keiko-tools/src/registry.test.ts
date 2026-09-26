@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceToolHost } from "./registry.js";
+import { workspaceToolDescriptor } from "./catalog.js";
 import {
   CommandCancelledError,
   CommandDeniedError,
@@ -116,6 +117,29 @@ describe("WorkspaceToolHost — read-only tools (happy path)", () => {
 });
 
 describe("WorkspaceToolHost — argument validation", () => {
+  it("rejects extra canonical arguments before reading or spawning", async () => {
+    write("src/a.txt", "hello");
+    await expect(
+      host().execute(request("read_file", { path: "src/a.txt", shell: true })),
+    ).rejects.toBeInstanceOf(ToolArgumentError);
+  });
+
+  it("rejects accessor arguments without evaluating them", async () => {
+    let reads = 0;
+    write("src/a.txt", "hello");
+    const args = Object.defineProperty({}, "path", {
+      enumerable: true,
+      get: (): string => {
+        reads += 1;
+        return "src/a.txt";
+      },
+    });
+    await expect(host().execute(request("read_file", args))).rejects.toBeInstanceOf(
+      ToolArgumentError,
+    );
+    expect(reads).toBe(0);
+  });
+
   it("rejects a missing required string", async () => {
     await expect(host().execute(request("read_file", {}))).rejects.toBeInstanceOf(
       ToolArgumentError,
@@ -149,6 +173,81 @@ describe("WorkspaceToolHost — argument validation", () => {
         signal: ctrl.signal,
       }),
     ).rejects.toBeInstanceOf(CommandCancelledError);
+  });
+});
+
+describe("WorkspaceToolHost canonical handler boundary", () => {
+  it("matches the owning descriptor and checks the final read boundary", async () => {
+    write("src/a.txt", "bounded-content");
+    const descriptor = workspaceToolDescriptor("read_file");
+    const observeExecution = vi.fn();
+    const beforeEffect = vi.fn(() => false);
+    const invocation = {
+      toolCallId: "invocation-1",
+      toolRef: descriptor.toolRef,
+      descriptorDigest: descriptor.descriptorDigest,
+      arguments: { path: "src/a.txt" },
+      signal: new AbortController().signal,
+      beforeEffect,
+      observeExecution,
+    };
+    await expect(host().executeCatalog(invocation)).rejects.toBeInstanceOf(CommandCancelledError);
+    expect(beforeEffect).toHaveBeenCalledOnce();
+    expect(observeExecution).not.toHaveBeenCalled();
+    beforeEffect.mockReturnValue(true);
+    const result = await host().executeCatalog(invocation);
+    expect(result.output).toContain("bounded-content");
+    expect(observeExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolRef: descriptor.toolRef,
+        toolCallId: "invocation-1",
+        commandExecuted: false,
+      }),
+    );
+    expect(JSON.stringify(observeExecution.mock.calls)).not.toContain("bounded-content");
+  });
+  it("rejects a mismatched descriptor before asking for an effect", async () => {
+    const read = workspaceToolDescriptor("read_file");
+    const command = workspaceToolDescriptor("run_command");
+    const beforeEffect = vi.fn(() => true);
+    await expect(
+      host().executeCatalog({
+        toolCallId: "invocation-1",
+        toolRef: read.toolRef,
+        descriptorDigest: command.descriptorDigest,
+        arguments: { path: "src/a.txt" },
+        signal: new AbortController().signal,
+        beforeEffect,
+        observeExecution: vi.fn(),
+      }),
+    ).rejects.toBeInstanceOf(ToolArgumentError);
+    expect(beforeEffect).not.toHaveBeenCalled();
+  });
+  it("rechecks the command guard after executable resolution and before the actual spawn", async () => {
+    const spawn = recordingSpawn();
+    const descriptor = workspaceToolDescriptor("run_command");
+    let allowed = true;
+    const toolHost = host({
+      spawn: spawn.fn,
+      resolveExecutable: () => {
+        allowed = false;
+        return process.execPath;
+      },
+    });
+    const observeExecution = vi.fn();
+    await expect(
+      toolHost.executeCatalog({
+        toolCallId: "invocation-1",
+        toolRef: descriptor.toolRef,
+        descriptorDigest: descriptor.descriptorDigest,
+        arguments: { command: "npm", args: ["ls"] },
+        signal: new AbortController().signal,
+        beforeEffect: () => allowed,
+        observeExecution,
+      }),
+    ).rejects.toBeInstanceOf(CommandCancelledError);
+    expect(spawn.calls()).toHaveLength(0);
+    expect(observeExecution).not.toHaveBeenCalled();
   });
 });
 

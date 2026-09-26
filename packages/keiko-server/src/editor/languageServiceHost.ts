@@ -8,10 +8,8 @@
 
 import { Buffer } from "node:buffer";
 import { dirname, resolve } from "node:path";
-import {
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  type LanguageServiceLimits,
-} from "@oscharko-dev/keiko-contracts";
+import type { LanguageServiceLimits } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
 import ts from "typescript";

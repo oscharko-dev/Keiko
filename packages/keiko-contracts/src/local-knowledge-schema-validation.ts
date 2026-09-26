@@ -137,6 +137,36 @@ function replaceDrivePrefix(value: string): string {
   return `<drive>/${match[1] ?? ""}`;
 }
 
+function basenameOf(value: string): string {
+  const trimmed = trimTrailingSlashes(value);
+  const lastSlash = trimmed.lastIndexOf("/");
+  return lastSlash === -1 ? trimmed : trimmed.slice(lastSlash + 1);
+}
+
+// Fail-closed fallback. The two rewrites above are an ALLOWLIST of transforms, so an absolute path
+// that matched neither — one outside the configured HOME, which isSafeScopePath explicitly accepts
+// as a legitimate Knowledge Pod scope (an external volume, another account, a mounted share) — was
+// returned byte-for-byte. That leaks filesystem layout, another local account's username, or a
+// volume label into diagnostic text the rest of this package redacts aggressively. Only the final
+// segment survives, mirroring redactCandidate() in keiko-local-knowledge's diagnostic-redactor.
+//
+// A drive-masked path (replaceDrivePrefix's output, "<drive>/…") is the SAME risk class as a
+// non-home POSIX or UNC path, not the safe, identity-preserving "~/…" home rewrite: it still
+// reveals another Windows account's username and full directory layout. It just no longer starts
+// with "/", so it fell through this check unredacted until KEIKO-0302 follow-on closed the gap
+// below. Recognizing that prefix here — rather than collapsing inside replaceDrivePrefix — keeps
+// this function the single place that owns "collapse an absolute path outside home to a basename."
+const DRIVE_MASKED_PREFIX = "<drive>/";
+
+function redactRemainingAbsolutePath(value: string): string {
+  if (value.startsWith(DRIVE_MASKED_PREFIX)) {
+    return `${DRIVE_MASKED_PREFIX}${basenameOf(value.slice(DRIVE_MASKED_PREFIX.length))}`;
+  }
+  if (!value.startsWith("/")) return value;
+  if (value.startsWith("//")) return `<unc>/${basenameOf(value)}`;
+  return `<path>/${basenameOf(value)}`;
+}
+
 export interface RedactPathOptions {
   readonly homePrefix?: string;
 }
@@ -155,6 +185,7 @@ export function redactPathInDiagnostic(rawPath: string, options: RedactPathOptio
   const normalized = normalizeSeparators(noControls);
   const homeRewritten = replaceHomePrefix(normalized, homePrefix);
   const driveRewritten = replaceDrivePrefix(homeRewritten);
-  if (driveRewritten.length <= REDACTED_MAX_CHARS) return driveRewritten;
-  return `${driveRewritten.slice(0, REDACTED_MAX_CHARS)}…`;
+  const redacted = redactRemainingAbsolutePath(driveRewritten);
+  if (redacted.length <= REDACTED_MAX_CHARS) return redacted;
+  return `${redacted.slice(0, REDACTED_MAX_CHARS)}…`;
 }

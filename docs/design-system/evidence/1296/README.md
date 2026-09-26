@@ -60,19 +60,18 @@ animations freeze under `prefers-reduced-motion`.
 
 ## Editor-agent context evidence
 
-`npm run test:e2e:editor-fidelity-1296` starts the packaged CLI UI path, renders a focused editor-agent
-context scene with the real product `globals.css`, and captures:
+`npm run test:e2e:editor-fidelity-1296` starts the packaged CLI UI, opens a synthetic project in the
+running Monaco editor, drives the live inline-completion route, and captures:
 
 - `editor/dark-editor-agent.png`
 - `editor/light-editor-agent.png`
 - `editor/high-contrast-editor-agent.png`
 - `editor/manifest.json`
 
-The manifest records the Design System reference (`design-system/editor-agent.html`), the product CSS
-source, the three captured modes, and computed evidence that Monaco/editor ghost text resolves through
-`--ed-agent-ghost` while matching the legacy `--ed-ghost` colour. The editor permission and
-sensitive-action prompts are included as token-backed primitives only; live authority wiring remains
-deferred to #1405.
+The manifest records the Design System reference (`design-system/editor-agent.html`), product CSS source,
+the packaged app route, synthetic workspace, three captured modes, live Monaco rendering, and the
+inline-completion ghost-text assertion. It also verifies that `--ed-agent-ghost` matches the legacy
+`--ed-ghost` token. Permissioned agent mutation flows remain deferred to #1405.
 
 ## Accessibility
 
@@ -104,5 +103,5 @@ npm run test:e2e:editor-fidelity-1296
 
 The computed-value harness exits non-zero if PRE resolves to POST, any Group-A computed value differs,
 or any Group-D assertion regresses. The editor-agent Playwright gate exits non-zero if the packaged UI
-path cannot start, screenshots cannot be written safely, or the editor-agent ghost token drifts from
-the editor ghost colour.
+path cannot start, the running Monaco editor or live inline completion cannot be reached, screenshots
+cannot be written safely, or the editor-agent ghost token drifts from the editor ghost colour.

@@ -15,6 +15,8 @@ const CODING_WORKBENCH_MESSAGES: Record<Locale, CodingWorkbenchMessageCatalog> =
   de: DE_CODING_WORKBENCH_MESSAGES,
 };
 
+type RuntimeCodingWorkbenchMessageCatalog = Partial<Record<CodingWorkbenchMessageKey, string>>;
+
 export type CodingWorkbenchTranslate = (
   key: CodingWorkbenchMessageKey,
   values?: MessageValues,
@@ -27,12 +29,22 @@ function formatCodingWorkbenchMessage(template: string, values: MessageValues = 
   });
 }
 
+function codingWorkbenchCatalog(locale: Locale): RuntimeCodingWorkbenchMessageCatalog {
+  return CODING_WORKBENCH_MESSAGES[locale];
+}
+
+function codingWorkbenchTemplate(locale: Locale, key: CodingWorkbenchMessageKey): string {
+  const localized = codingWorkbenchCatalog(locale)[key];
+  if (localized !== undefined) return localized;
+  return codingWorkbenchCatalog("en")[key] ?? key;
+}
+
 export function translateCodingWorkbench(
   locale: Locale,
   key: CodingWorkbenchMessageKey,
   values?: MessageValues,
 ): string {
-  return formatCodingWorkbenchMessage(CODING_WORKBENCH_MESSAGES[locale][key], values);
+  return formatCodingWorkbenchMessage(codingWorkbenchTemplate(locale, key), values);
 }
 
 export function useCodingWorkbenchTranslate(): CodingWorkbenchTranslate {

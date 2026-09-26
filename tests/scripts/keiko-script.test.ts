@@ -1,5 +1,14 @@
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -19,6 +28,12 @@ const STATIC_DIR = join(REPO_ROOT, "dist", "ui", "static");
 // absent (it does not build), so that one test skips there and runs wherever the package is built.
 const DIST_READY = existsSync(ENTRY) && existsSync(STATIC_DIR);
 
+// Probes an OS-assigned ephemeral port and releases it immediately. The port is then handed to
+// a SEPARATE process (scripts/keiko.sh, which spawns its own `node` child), so the probe-then-
+// release-then-reuse handoff is inherently non-atomic: nothing holds the port reserved between
+// this function returning and that other process's own bind(). On a busy machine an unrelated
+// process can win that gap. Callers that spawn a real listener on the returned port must treat a
+// resulting EADDRINUSE as retryable-with-a-fresh-port, not as a defect (see startLifecycle below).
 function freeLoopbackPort(): Promise<number> {
   return new Promise<number>((resolvePort, reject) => {
     const server = createServer();
@@ -53,13 +68,49 @@ describe("scripts/keiko.sh", () => {
   let lifecyclePort: number;
 
   beforeEach(async () => {
-    stateDir = mkdtempSync(join(tmpdir(), "keiko-script-"));
+    // macOS exposes its temporary directory through `/var`, which resolves through the
+    // `/var -> /private/var` compatibility symlink. The production path boundary correctly
+    // refuses symlinked ancestors, so the fixture must hand it the canonical directory it created.
+    stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-script-")));
     lifecyclePort = await freeLoopbackPort();
   });
 
   afterEach(() => {
     rmSync(stateDir, { recursive: true, force: true });
   });
+
+  // freeLoopbackPort()'s probe-then-release is not atomic with a spawned process's own bind (see
+  // that function's comment), so an unrelated process occasionally wins the race and the child
+  // exits with EADDRINUSE. A port collision and a child that was never scheduled to bind before
+  // its own caller gave up (KEIKO-3157 Codex P2, second round) are the same *shape* of problem: an
+  // environmental precondition this test needs that the machine did not guarantee on this
+  // specific try. One bounded-retry mechanism serves both, parameterized only by how each caller
+  // recognizes its own failure signature -- reprobing a fresh port before each retry, so any
+  // other failure -- a real product defect -- still surfaces through whatever assertion the
+  // caller makes on the result a persistent failure is returned as-is.
+  const ENVIRONMENTAL_RETRY_LIMIT = 2;
+
+  async function retryOnEnvironmentalFailure(
+    attempt: () => SpawnSyncReturns<string>,
+    isEnvironmentalFailure: (result: SpawnSyncReturns<string>) => boolean,
+  ): Promise<SpawnSyncReturns<string>> {
+    for (let i = 0; ; i += 1) {
+      const result = attempt();
+      if (!isEnvironmentalFailure(result) || i >= ENVIRONMENTAL_RETRY_LIMIT) {
+        return result;
+      }
+      lifecyclePort = await freeLoopbackPort();
+    }
+  }
+
+  async function retryOnPortCollision(
+    attempt: () => SpawnSyncReturns<string>,
+  ): Promise<SpawnSyncReturns<string>> {
+    return retryOnEnvironmentalFailure(
+      attempt,
+      (result) => result.status !== 0 && result.stderr.includes("EADDRINUSE"),
+    );
+  }
 
   describe("usage", () => {
     it("prints help and exits 0", () => {
@@ -172,6 +223,43 @@ describe("scripts/keiko.sh", () => {
         decoy.kill("SIGKILL");
       }
     });
+
+    it("parses a Node-CLI two-line pid file and reports the numeric pid only", async () => {
+      const fixtureDir = join(stateDir, "dist", "cli");
+      mkdirSync(fixtureDir, { recursive: true });
+      const fixtureEntry = join(fixtureDir, "index.js");
+      writeFileSync(fixtureEntry, "setInterval(() => undefined, 60000);\n");
+      const ui = spawn(process.execPath, [fixtureEntry], { stdio: "ignore" });
+      await new Promise<void>((res, rej) => {
+        ui.once("spawn", res);
+        ui.once("error", rej);
+      });
+      const uiPid = ui.pid;
+      expect(uiPid).toBeTypeOf("number");
+      if (uiPid === undefined) throw new Error("fixture UI process did not report a pid");
+      try {
+        writeFileSync(join(stateDir, "ui.pid"), `${String(uiPid)}\n${"a".repeat(32)}\n`);
+        const status = run(["status"], { KEIKO_STATE_DIR: stateDir });
+        expect(status.status).toBe(0);
+        expect(status.stdout).toContain(`pid ${String(uiPid)}`);
+        expect(status.stdout).not.toContain("a".repeat(32));
+      } finally {
+        ui.kill("SIGKILL");
+      }
+    });
+
+    it.each(["", "12 3", "0123", "not-a-pid", "1;echo pwned"])(
+      "rejects a malformed pid-file first line %j without coercing a pid",
+      (firstLine) => {
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, "ui.pid"), `${firstLine}\n${"a".repeat(32)}\n`);
+        const status = run(["status"], { KEIKO_STATE_DIR: stateDir });
+        expect(status.status).toBe(0);
+        expect(status.stdout).toContain("not running");
+        expect(status.stdout).not.toMatch(/\bpid\s+\d+/u);
+        expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
+      },
+    );
   });
 
   describe("build-asset guard", () => {
@@ -202,8 +290,14 @@ describe("scripts/keiko.sh", () => {
       run(["stop"], lifecycleEnv());
     });
 
+    // scripts/keiko.sh's health poll bounds every curl attempt, so losing the port-collision
+    // race (see retryOnPortCollision above) fails promptly and visibly instead of hanging.
+    async function startLifecycle(): Promise<SpawnSyncReturns<string>> {
+      return retryOnPortCollision(() => run(["start"], lifecycleEnv()));
+    }
+
     it("starts healthy, reports running, and stops cleanly", async () => {
-      const start = run(["start"], lifecycleEnv());
+      const start = await startLifecycle();
       expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
       expect(start.stdout).toContain("running");
 
@@ -229,5 +323,128 @@ describe("scripts/keiko.sh", () => {
       const after = run(["status"], lifecycleEnv());
       expect(after.stdout).toContain("not running");
     }, 30_000);
+  });
+
+  describe("cmd_start health-poll deadline (KfQ #3156, scripts/keiko.sh)", () => {
+    // A real port collision does not exercise this: the spawned `node dist/cli/index.js` crashes
+    // on EADDRINUSE via an unhandled rejection well under a second after the attempt, so `kill -0`
+    // stops seeing it as alive almost immediately -- it never stays around long enough to hang a
+    // health check. To reproduce "accepts connections but never answers" (the scenario the code
+    // comment above the curl call describes) without mocking keiko.sh itself, per this file's own
+    // no-mocks rule, this points the REAL, unmodified script at a substitute dist/cli/index.js
+    // under a throwaway root: identical script, identical logic, only the downstream server is a
+    // stub. `ENTRY` is derived from the invoked script's own path (`$ROOT/dist/cli/index.js`), so
+    // running a copy of keiko.sh from a fake root is the only way to control what it spawns.
+    function writeFakeRoot(): string {
+      const fakeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-fake-root-")));
+      mkdirSync(join(fakeRoot, "scripts"), { recursive: true });
+      cpSync(SCRIPT, join(fakeRoot, "scripts", "keiko.sh"));
+      mkdirSync(join(fakeRoot, "dist", "cli"), { recursive: true });
+      mkdirSync(join(fakeRoot, "dist", "ui", "static"), { recursive: true });
+      writeFileSync(join(fakeRoot, "dist", "ui", "csp-hashes.json"), "{}");
+      // CommonJS, and deliberately dependency-free: accepts a connection on --host/--port and
+      // never writes a response, so every curl attempt against it runs to its own --max-time.
+      // Also appends one byte to HEALTH_ATTEMPT_COUNTER_FILE per accepted connection when that
+      // env var is set -- a discrete, scheduler-independent record of how many times the health
+      // poll actually attempted a connection, used instead of wall-clock timing (KEIKO-3157
+      // Codex P2 round 1). And writes HEALTH_STUB_READY_FILE the instant its own listen()
+      // callback confirms the bind succeeded -- listen()'s callback fires only on a real,
+      // completed bind, never speculatively -- so a caller can tell the difference between "the
+      // stub never got scheduled to run this far" and "it ran and is genuinely listening"
+      // (KEIKO-3157 Codex P2 round 2: see the assertion below for why this matters).
+      writeFileSync(
+        join(fakeRoot, "dist", "cli", "index.js"),
+        [
+          'const net = require("node:net");',
+          'const fs = require("node:fs");',
+          "const args = process.argv.slice(2);",
+          'const port = Number(args[args.indexOf("--port") + 1]);',
+          'const host = args[args.indexOf("--host") + 1];',
+          "const counterFile = process.env.HEALTH_ATTEMPT_COUNTER_FILE;",
+          "const readyFile = process.env.HEALTH_STUB_READY_FILE;",
+          "const server = net.createServer((socket) => {",
+          '  if (counterFile) fs.appendFileSync(counterFile, "x");',
+          "});",
+          "server.listen(port, host, () => {",
+          '  if (readyFile) fs.writeFileSync(readyFile, "1");',
+          "});",
+          "",
+        ].join("\n"),
+      );
+      return fakeRoot;
+    }
+
+    it("bounds the number of health-check attempts by the deadline, not a fixed iteration count, when the health endpoint hangs", async () => {
+      const fakeRoot = writeFakeRoot();
+      const attemptCounterFile = join(fakeRoot, "attempts.count");
+      const readyFile = join(fakeRoot, "stub.ready");
+      try {
+        const startTimeoutSecs = 4;
+        // Codex P2 (#3157), round 2: the attempt counter proves the deadline behavior only if
+        // the stub was actually listening while cmd_start's poll loop ran -- if the freshly
+        // spawned Node stub is not scheduled to reach its own listen() call before the 4s
+        // deadline elapses, every curl fails on connection-refused (not a timeout) before ever
+        // reaching the stub's connection callback, attemptCount stays at 0, and the assertion
+        // below would fail even though cmd_start expired exactly as it should. That is a
+        // process-scheduling dependency in place of the wall-clock one round 1 removed --
+        // deterministic *given* the stub is listening, and that precondition was not guaranteed.
+        //
+        // retryOnPortCollision does not cover this: a stub that was merely slow to be scheduled
+        // produces no EADDRINUSE. But a stub that never got scheduled at all and a stub that
+        // crashed on a port collision look identical from here -- neither ever reaches its own
+        // listen() success callback, so neither ever writes HEALTH_STUB_READY_FILE. Checking for
+        // that file's absence is a strict superset of the EADDRINUSE check: it is retried through
+        // the same environmental-failure mechanism instead of a second, narrower one, so
+        // retryOnPortCollision itself is not called here. The precondition this test needs -- the
+        // stub was truly listening at some point during the kept run -- holds by construction of
+        // the retry, not by hope for a single try: a run that never got there is discarded and
+        // retried with a fresh port, bounded, exactly like every other environmental race this
+        // file absorbs; a failure that survives every retry surfaces for real via the
+        // existsSync(readyFile) assertion below rather than being silently accepted.
+        const start = await retryOnEnvironmentalFailure(
+          () => {
+            writeFileSync(attemptCounterFile, "");
+            rmSync(readyFile, { force: true });
+            return spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
+              encoding: "utf8",
+              timeout: 45_000,
+              env: {
+                ...process.env,
+                KEIKO_STATE_DIR: stateDir,
+                KEIKO_UI_PORT: String(lifecyclePort),
+                KEIKO_START_TIMEOUT_SECS: String(startTimeoutSecs),
+                HEALTH_ATTEMPT_COUNTER_FILE: attemptCounterFile,
+                HEALTH_STUB_READY_FILE: readyFile,
+              },
+            });
+          },
+          () => !existsSync(readyFile) || readFileSync(attemptCounterFile, "utf8").length === 0,
+        );
+
+        expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(1);
+        expect(start.stderr).toContain("did not become healthy");
+        expect(existsSync(readyFile)).toBe(true);
+
+        // The number of connection attempts the health poll actually made, now that the stub is
+        // known to have been listening throughout, is a discrete, deterministic proxy for the
+        // regression itself: a scheduler pause changes how long each attempt takes, never how
+        // many the loop reaches, so this count cannot be inflated or deflated by machine load --
+        // only by the loop's own control flow, which is exactly what regressed. Pre-fix,
+        // cmd_start always made exactly startTimeoutSecs*2 attempts (a hardcoded iteration count,
+        // independent of timing) -- 8 for this 4s budget, deterministically, every single run.
+        // Post-fix, each attempt against a hung endpoint takes most of curl's --max-time, so the
+        // wall-clock deadline caps it at roughly startTimeoutSecs/2 attempts plus at most one
+        // more in flight when the deadline passes -- 2-3 here. Asserting strictly fewer than
+        // startTimeoutSecs attempts sits at half of the pre-fix formula: unreachable under the
+        // old iteration-counting bug (which never produces fewer than double this ceiling, for
+        // any startTimeoutSecs), and clears the new deadline-bounded behavior with margin to
+        // spare regardless of how fast or slow this specific run was.
+        const attemptCount = readFileSync(attemptCounterFile, "utf8").length;
+        expect(attemptCount).toBeGreaterThan(0);
+        expect(attemptCount).toBeLessThan(startTimeoutSecs);
+      } finally {
+        rmSync(fakeRoot, { recursive: true, force: true });
+      }
+    }, 20_000);
   });
 });

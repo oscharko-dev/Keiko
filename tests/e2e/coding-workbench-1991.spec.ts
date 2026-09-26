@@ -16,8 +16,10 @@ test("governed-assist authority is server-capped rather than fixture-projected @
   await expect(fixture.autonomySettings.getByRole("status")).toContainText("Ask for approval");
 
   // The widening request is accepted by the control and refused by the server: the Workbench must
-  // report the clamped effective mode, never the locally requested one.
+  // report the clamped effective mode, never the locally requested one. #3494 moved this fact into
+  // an information popover, so reveal it before asserting the clamped value.
   await page.getByRole("button", { name: "Close Settings window" }).click();
+  await fixture.openInformation();
   await expect(fixture.workbench.locator("[data-mode]")).toHaveAttribute(
     "data-mode",
     "governed-assist",

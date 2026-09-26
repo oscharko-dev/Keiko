@@ -6,20 +6,27 @@
 // never re-derived through the contract helper — so the routes are proven against the ADR, not
 // against themselves.
 
+import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  AtlassianConnectorActivityRecord,
+  AtlassianConnectorPendingApproval,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   validateAtlassianConnectorActivityRecord,
   validateAtlassianConnectorPendingApproval,
-  type AtlassianConnectorActivityRecord,
-  type AtlassianConnectorPendingApproval,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import type {
   AtlassianCredentialCustody,
   AtlassianCredentialMetadata,
@@ -33,7 +40,10 @@ import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "../editor/agentAuthorityRegistry.js";
-import { atlassianActionApprovalRegistry } from "./actionApprovals.js";
+import {
+  ATLASSIAN_ACTION_APPROVAL_MAX_PENDING,
+  atlassianActionApprovalRegistry,
+} from "./actionApprovals.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import { atlassianSyncJobRegistry, connectorIdForAuthRef } from "./syncService.js";
 import {
@@ -461,6 +471,378 @@ describe("write-action route — pending approvals (AC2)", () => {
     );
     expect(records.map((record) => record.outcome)).toEqual(["pending-review", "cancelled"]);
   });
+
+  // Round-3 review finding (PR #3289): registry.consume() atomically claims the pending entry
+  // BEFORE executeApprovedEntry runs, so once that claim succeeds the approval can never be
+  // retried -- it is gone from the registry either way. Before this fix, a credential that vanished
+  // (revoked/expired/deleted) between approval-creation and the approve click left NO terminal
+  // activity record at all: the pending-review record stood alone forever, and an operator
+  // reconstructing the trail from the activity log would see the action was pending review and
+  // then simply nothing -- never learning it was attempted and failed.
+  it("finalizes a failed/auth-failed activity record when the credential vanishes between approval and execute", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const availableGuard = guardWith(counter);
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    const { body } = await postAction("create-issue", authority, "governed-assist", availableGuard);
+    const approval = body.approval as AtlassianConnectorPendingApproval;
+
+    // Simulates the credential being revoked/expired/deleted while the approval sat pending: the
+    // SAME guard shape, but getMetadata now reports nothing for any auth ref.
+    const vanishedGuard: AtlassianConnectorCredentialDeps = {
+      ...availableGuard,
+      custody: { ...availableGuard.custody, getMetadata: (): undefined => undefined },
+    };
+
+    const approved = (await handleApproveAtlassianConnectorActionApproval(
+      ctx({}, { approvalId: approval.approvalId }),
+      deps(vanishedGuard, "governed-assist"),
+    )) as { status: number; body: { error: { code: string } } };
+    expect(approved.status).toBe(404);
+    expect(approved.body.error.code).toBe("CREDENTIAL_NOT_FOUND");
+    expect(counter.count).toBe(0);
+
+    // The single-use claim stayed atomic -- a retry (even with the credential restored) finds
+    // nothing, exactly like the reject-then-approve and approve-then-approve cases above.
+    const replayed = (await handleApproveAtlassianConnectorActionApproval(
+      ctx({}, { approvalId: approval.approvalId }),
+      deps(availableGuard, "governed-assist"),
+    )) as { status: number };
+    expect(replayed.status).toBe(404);
+    expect(counter.count).toBe(0);
+
+    // The actual fix: the terminal outcome is finalized, not silently dropped, and carries the
+    // approval's own correlationId (not a fresh/unrelated one).
+    const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+    expect(records.map((record) => record.outcome)).toEqual(["pending-review", "failed"]);
+    const terminal = records[1];
+    if (terminal === undefined) throw new Error("expected a terminal activity record");
+    expect(validateAtlassianConnectorActivityRecord(terminal).ok).toBe(true);
+    expect(terminal.disposition).toBe("review-required");
+    expect(terminal.reasonCode).toBe("auth-failed");
+    expect(terminal.correlationId).toBe(approval.correlationId);
+  });
+});
+
+// KEIKO-0186: a human approving a governed Atlassian write could see only the action type and a
+// bare identifier — never the content about to be written — making the review-required check an
+// uninformed rubber-stamp. This is the finding's own acceptance scenario: create a pending
+// approval for each write action with known text, read back the AtlassianConnectorPendingApproval
+// the approve endpoint would return, and assert it contains that text (bounded) — while the SAME
+// action's permanent activity record stays exactly as content-free as before (ADR-0128 D6).
+// transition-issue is deliberately absent from EXPECTED_PREVIEW_SUBSTRINGS: it carries no text
+// field, so it must have no preview.
+const EXPECTED_PREVIEW_SUBSTRINGS: Readonly<
+  Record<WriteActionType, readonly string[] | undefined>
+> = {
+  "create-issue": ["Fix the flaky gate", "Fails on"],
+  "update-issue-fields": ["Sharper"],
+  "transition-issue": undefined,
+  "add-issue-comment": ["Verified on staging"],
+  "create-page": ["Runbook", "Steps here"],
+  "update-page": ["Runbook", "New body"],
+  "add-page-comment": ["Looks right"],
+};
+
+describe("write-action route — content preview on pending approvals (KEIKO-0186)", () => {
+  it("carries a bounded content preview reflecting each action's own text, absent from the permanent activity record", async () => {
+    for (const action of WRITE_ACTIONS) {
+      editorAgentAuthorityRegistry.reset();
+      atlassianActionApprovalRegistry.reset();
+      atlassianSyncJobRegistry.reset();
+      const counter: FetchCounter = { count: 0, requests: [] };
+      const guard = guardWith(counter);
+      const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+      const { body } = await postAction(action, authority, "governed-assist", guard);
+      const approval = body.approval as AtlassianConnectorPendingApproval;
+      expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
+
+      const expectedSubstrings = EXPECTED_PREVIEW_SUBSTRINGS[action];
+      if (expectedSubstrings === undefined) {
+        expect(approval.contentPreview, `${action} should have no content preview`).toBeUndefined();
+      } else {
+        for (const substring of expectedSubstrings) {
+          expect(approval.contentPreview, `${action} should preview its own text`).toContain(
+            substring,
+          );
+        }
+      }
+
+      // Redaction-boundary pin: the SAME action's activity record must stay exactly as
+      // content-free as before — present on the approval, absent from the permanent record.
+      const records = atlassianSyncJobRegistry.listActivity(
+        connectorIdForAuthRef(authRefFor(action)),
+      );
+      const pendingRecord = records.find((record) => record.disposition === "review-required");
+      if (pendingRecord === undefined) {
+        throw new Error(`expected a pending-review activity record for ${action}`);
+      }
+      expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok).toBe(true);
+      const serializedRecord = JSON.stringify(pendingRecord);
+      expect(serializedRecord).not.toContain("contentPreview");
+      if (expectedSubstrings !== undefined) {
+        for (const substring of expectedSubstrings) {
+          expect(serializedRecord).not.toContain(substring);
+        }
+      }
+    }
+  });
+});
+
+// KEIKO-0186 P1 (Codex): a write action's text can be non-empty on the wire yet sanitize (or
+// truncate) to nothing presentable -- e.g. an all-zero-width-space comment. Emitting an empty
+// contentPreview in that case would show a reviewer what looks like a contentless action while
+// invisible content is actually written: the exact failure this class of finding is about. Every
+// case below must produce contentPreviewUnavailable === true and contentPreview === undefined,
+// through the SAME route as the test above, with the SAME activity-record redaction pin.
+// transition-issue is excluded: it has no text field, so hostile-text substitution does not apply.
+type TextBearingWriteActionType = Exclude<WriteActionType, "transition-issue">;
+
+function hostileActionRequest(
+  action: TextBearingWriteActionType,
+  hostileText: string,
+): Record<string, unknown> {
+  switch (action) {
+    case "create-issue":
+      return {
+        type: "create-issue",
+        projectKey: "PROJ",
+        issueTypeId: "10004",
+        summary: hostileText,
+      };
+    case "update-issue-fields":
+      return { type: "update-issue-fields", issueKey: "PROJ-9", summary: hostileText };
+    case "add-issue-comment":
+      return { type: "add-issue-comment", issueKey: "PROJ-9", commentText: hostileText };
+    case "create-page":
+      return { type: "create-page", spaceId: "777", title: hostileText, bodyText: "" };
+    case "update-page":
+      return {
+        type: "update-page",
+        pageId: "123",
+        title: hostileText,
+        bodyText: "",
+        currentVersion: 4,
+      };
+    case "add-page-comment":
+      return { type: "add-page-comment", pageId: "123", commentText: hostileText };
+  }
+}
+
+async function postHostileAction(
+  action: TextBearingWriteActionType,
+  hostileText: string,
+  authority: AuthorityContext,
+  guard: AtlassianConnectorCredentialDeps,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const result = await handleExecuteAtlassianConnectorAction(
+    ctx(
+      { action: hostileActionRequest(action, hostileText), authority },
+      { authRef: authRefFor(action) },
+    ),
+    deps(guard, "governed-assist"),
+  );
+  return result as { status: number; body: Record<string, unknown> };
+}
+
+// Every write action with a text field (all but transition-issue).
+const TEXT_BEARING_WRITE_ACTIONS: readonly TextBearingWriteActionType[] = [
+  "create-issue",
+  "update-issue-fields",
+  "add-issue-comment",
+  "create-page",
+  "update-page",
+  "add-page-comment",
+];
+
+// Shared assertion sequence for "the action had text, but nothing presentable survived
+// sanitization/bounding": the approval must validate, must carry contentPreviewUnavailable
+// (never an empty or absent-without-explanation contentPreview), and the SAME action's permanent
+// activity record must stay exactly as content-free as any other pending-review action.
+async function expectUnavailablePreview(
+  action: TextBearingWriteActionType,
+  hostileText: string,
+): Promise<void> {
+  editorAgentAuthorityRegistry.reset();
+  atlassianActionApprovalRegistry.reset();
+  atlassianSyncJobRegistry.reset();
+  const counter: FetchCounter = { count: 0, requests: [] };
+  const guard = guardWith(counter);
+  const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+  const { body } = await postHostileAction(action, hostileText, authority, guard);
+  const approval = body.approval as AtlassianConnectorPendingApproval;
+  expect(validateAtlassianConnectorPendingApproval(approval).ok, action).toBe(true);
+  expect(approval.contentPreviewUnavailable, action).toBe(true);
+  expect(approval.contentPreview, action).toBeUndefined();
+
+  // Redaction-boundary pin, exactly as the KEIKO-0186 test above: still content-free on the
+  // permanent record.
+  const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(authRefFor(action)));
+  const pendingRecord = records.find((record) => record.disposition === "review-required");
+  if (pendingRecord === undefined) {
+    throw new Error(`expected a pending-review activity record for ${action}`);
+  }
+  expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok, action).toBe(true);
+  expect(JSON.stringify(pendingRecord), action).not.toContain("contentPreview");
+}
+
+describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1-P4)", () => {
+  it("an all-zero-width-space payload is reported unavailable for every text-bearing action, never as an empty preview", async () => {
+    const allZeroWidth = String.fromCharCode(0x200b).repeat(12);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, allZeroWidth);
+    }
+  });
+
+  it("an all-bidi-override payload is reported unavailable, not an empty preview", async () => {
+    const allBidi = String.fromCharCode(0x202e).repeat(12);
+    await expectUnavailablePreview("create-issue", allBidi);
+  });
+
+  it("a mixed bidi+zero-width payload that sanitizes to empty is reported unavailable, not an empty preview", async () => {
+    const mixedInvisible =
+      String.fromCharCode(0x202e) +
+      String.fromCharCode(0x200b) +
+      String.fromCharCode(0x202e) +
+      String.fromCharCode(0x200b);
+    await expectUnavailablePreview("add-page-comment", mixedInvisible);
+  });
+
+  // KEIKO-0186 P2 (Codex): the P1 predicate's anchored pattern (^\p{M}+$) stopped matching the
+  // moment any OTHER character was present, including whitespace -- a whitespace-only preview, or
+  // whitespace next to a P1 shape, rendered as an apparently blank "available" preview. Same
+  // failure mode as P1 (a reviewer approving content they cannot see), reached through a
+  // different input; same fix (isAtlassianContentPreviewUnpresentable), so the same route/helper
+  // pins it here too.
+
+  it("a whitespace-only (space) payload is reported unavailable for every text-bearing action", async () => {
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, " ");
+    }
+  });
+
+  it("TAB, LF, and mixed-whitespace payloads are reported unavailable via the comment fields (summary/title reject multi-line text on the wire, so a single space is the only whitespace value the loop above can share across every action)", async () => {
+    const tab = String.fromCharCode(9);
+    const lf = String.fromCharCode(10);
+    await expectUnavailablePreview("add-issue-comment", tab);
+    await expectUnavailablePreview("add-page-comment", lf);
+    await expectUnavailablePreview("add-issue-comment", " " + tab + lf + " ");
+  });
+
+  it("whitespace next to a combining mark, in either order, is reported unavailable", async () => {
+    const spaceThenMark = " " + String.fromCharCode(0x301);
+    const markThenSpace = String.fromCharCode(0x301) + " ";
+    await expectUnavailablePreview("create-issue", spaceThenMark);
+    await expectUnavailablePreview("create-issue", markThenSpace);
+  });
+
+  it("whitespace next to a zero-width character sanitizes to whitespace-only and is reported unavailable", async () => {
+    const spaceThenZeroWidth = " " + String.fromCharCode(0x200b);
+    await expectUnavailablePreview("add-page-comment", spaceThenZeroWidth);
+  });
+
+  it("truncation can produce a whitespace-only tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    // create-issue's summary/create-page's title are capped at 255 chars on the wire (well under
+    // MAX+1) -- commentText has no such ceiling (bounded at 100,000 chars), so it is the field
+    // that can actually carry a payload long enough to exercise truncation through the real route.
+    const spacePrefix = " ".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    const commentText = spacePrefix + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  it("truncation can produce a whitespace-plus-combining-mark tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    // No separate "truncation-induced whitespace-plus-zero-width" pin: zero-width characters are
+    // removed by sanitization, which runs BEFORE truncation, so they can never be part of what
+    // survives INTO a truncation window (see the equivalent note in actionApprovals.test.ts).
+    const pairs = (" " + String.fromCharCode(0x301)).repeat(
+      Math.ceil(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS / 2),
+    );
+    const commentText = pairs.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS) + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  // KEIKO-0186 P3 (Codex): U+3164 HANGUL FILLER renders as nothing but belongs to Unicode general
+  // category Lo (a letter), so it matches none of \s, \p{M}, or the P2 predicate's \p{Cf} -- a
+  // third input class reaching the same "apparently blank, classified available" failure. It
+  // survives sanitization exactly like whitespace/combining marks (stripUnsafeFormatChars only
+  // targets bidi/zero-width/control code points), so it can also populate a truncation window,
+  // same as they can.
+
+  it("an all-HANGUL-FILLER payload is reported unavailable for every text-bearing action", async () => {
+    const hangulFiller = String.fromCodePoint(0x3164).repeat(5);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, hangulFiller);
+    }
+  });
+
+  it("a bare variation selector payload is reported unavailable", async () => {
+    const variationSelector16 = String.fromCodePoint(0xfe0f);
+    await expectUnavailablePreview("add-page-comment", variationSelector16);
+  });
+
+  it("truncation can produce an all-HANGUL-FILLER tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    const fillerPrefix = String.fromCodePoint(0x3164).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const commentText = fillerPrefix + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  // KEIKO-0186 P4 (Codex): U+2800 BRAILLE PATTERN BLANK is deliberately blank by design, yet
+  // Unicode general category So (a symbol) -- it defeated \s, \p{M}, and Default_Ignorable_Code_Point
+  // in turn. The predicate is now an allowlist (Letter, Number, Punctuation); a symbol is never in
+  // that set, whether or not anyone ever named it specifically.
+
+  it("an all-BRAILLE-PATTERN-BLANK payload is reported unavailable for every text-bearing action", async () => {
+    const braillePatternBlank = String.fromCodePoint(0x2800).repeat(5);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, braillePatternBlank);
+    }
+  });
+
+  it("truncation can produce an all-BRAILLE-PATTERN-BLANK tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    const braillePrefix = String.fromCodePoint(0x2800).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const commentText = braillePrefix + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  // P4's allowlist excludes \p{S} (Symbol, including emoji) entirely -- a deliberate, documented
+  // cost (see isAtlassianContentPreviewUnpresentable's definition), not an oversight. \p{L}
+  // already covers CJK ideographs, so this is pinned end-to-end through the real route too: an
+  // emoji-only comment is unavailable, but a CJK-only comment still carries its bounded preview.
+
+  it("an emoji-only payload is reported unavailable through the real route", async () => {
+    const grinningFace = String.fromCodePoint(0x1f600);
+    await expectUnavailablePreview("add-page-comment", grinningFace);
+  });
+
+  it("a CJK-only payload carries its bounded content preview through the real route, unaffected by the \\p{S} exclusion", async () => {
+    const done = "已完成"; // Chinese: "done"
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    const { body } = await postHostileAction("add-issue-comment", done, authority, guard);
+    const approval = body.approval as AtlassianConnectorPendingApproval;
+    expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
+    expect(approval.contentPreviewUnavailable).toBeUndefined();
+    expect(approval.contentPreview).toBe(done);
+  });
+
+  // KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are
+  // Unicode general category Lo (letters) that render blank -- a fifth input class defeating
+  // character-property classification, closed here (KNOWN_BLANK_LETTER_PATTERN) but no longer the
+  // sole defence; see ConnectorApprovalsPanel's character-count signal.
+  it("an all-EGYPTIAN-HIEROGLYPH-BLANK payload is reported unavailable for every text-bearing action", async () => {
+    const blanks = String.fromCodePoint(0x13441) + String.fromCodePoint(0x13442);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, blanks);
+    }
+  });
 });
 
 // ─── AC3: Full access executes; envelope failures deny with the EXISTING codes ─
@@ -644,6 +1026,64 @@ describe("write-action route — audit completeness (AC4)", () => {
       expect(serialized).not.toContain(leaked);
     }
   });
+
+  // KEIKO-0339: a review-required creation that fails on registry capacity (429
+  // APPROVALS_EXHAUSTED) must still emit exactly one denied activity record with the
+  // closed `approvals-registry-exhausted` reason, so the "one record per attempt" invariant
+  // survives capacity denials.
+  it("records the rejected attempt when APPROVALS_EXHAUSTED capacity denies a review-required creation", async () => {
+    // Fill the registry to the 64-entry cap with distinct entries so the 65th create() lands
+    // on the capacity-exhausted branch. Using registry.create() directly (rather than driving
+    // 64 route calls) keeps the fixture bounded and does not depend on any per-approval
+    // deduplication logic that a route might introduce.
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    for (let index = 0; index < ATLASSIAN_ACTION_APPROVAL_MAX_PENDING; index += 1) {
+      const filler = atlassianActionApprovalRegistry.create({
+        approval: {
+          schemaVersion: "1",
+          approvalId: `apr_filler-${String(index).padStart(4, "0")}`,
+          connectorId: connectorIdForAuthRef(JIRA_AUTH_REF),
+          provider: "jira",
+          actionType: "add-issue-comment",
+          actionClass: "connector-write",
+          requiredScope: "issue-tracker.write",
+          risk: "low",
+          reviewReason: "deterministic-risk-approval-required",
+          correlationId: `req_filler-${String(index).padStart(4, "0")}`,
+          requestedAt: 1,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        },
+        authority: {
+          runId: authority.runId,
+          envelopeDigest: authority.envelopeDigest,
+          workspaceRoot: authority.workspaceRoot,
+        },
+        authRef: JIRA_AUTH_REF,
+        payload: {
+          kind: "write-action",
+          action: {
+            type: "add-issue-comment",
+            issueKey: `PROJ-${String(index + 100)}`,
+            commentText: "filler",
+          },
+        },
+      });
+      expect(filler.ok).toBe(true);
+    }
+    const guard = guardWith({ count: 0, requests: [] });
+    const { status, body } = await postAction("create-issue", authority, "governed-assist", guard);
+    expect(status).toBe(429);
+    expect((body.error as { code: string }).code).toBe("APPROVALS_EXHAUSTED");
+    const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+    const rejected = records.filter(
+      (record) => record.actionType === "create-issue" && record.disposition === "denied",
+    );
+    expect(rejected).toHaveLength(1);
+    const only = rejected[0];
+    expect(only?.outcome).toBe("denied");
+    expect(only?.reasonCode).toBe("approvals-registry-exhausted");
+    expect(validateAtlassianConnectorActivityRecord(only ?? {}).ok).toBe(true);
+  });
 });
 
 // ─── AC5: typed provider results through the route ─────────────────────────────
@@ -693,5 +1133,155 @@ describe("write-action route — typed provider failures (AC5)", () => {
       deps(guard, "autonomous-delivery"),
     )) as { status: number };
     expect(unexpectedField.status).toBe(400);
+  });
+});
+
+// ─── KEIKO-0488: BFF must reuse the connector package's exported bounds ─────────
+describe("write-action route — reuses connector-package text bounds (KEIKO-0488)", () => {
+  it("declares no local SINGLE_LINE_TEXT_MAX_CHARS constant", () => {
+    const routesUrl = new URL("./writeActionRoutes.ts", import.meta.url);
+    const source = readFileSync(fileURLToPath(routesUrl), "utf8");
+    expect(source).not.toMatch(/SINGLE_LINE_TEXT_MAX_CHARS\s*=/u);
+  });
+});
+
+// ─── KEIKO-0319: allow explicit "clear this field" for labels and composable body
+describe("write-action route — clear-field validation (KEIKO-0319)", () => {
+  it("accepts labels: [] on update-issue-fields as an explicit clear-all", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "update-issue-fields", issueKey: "PROJ-9", labels: [] },
+          authority,
+        },
+        { authRef: JIRA_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+    expect(result.status).toBe(200);
+    expect(result.body.disposition).toBe("allowed");
+  });
+
+  it("accepts descriptionText: '' on update-issue-fields as an explicit clear", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "update-issue-fields", issueKey: "PROJ-9", descriptionText: "" },
+          authority,
+        },
+        { authRef: JIRA_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+    expect(result.status).toBe(200);
+    expect(result.body.disposition).toBe("allowed");
+  });
+
+  it("accepts bodyText: '' on update-page as an explicit clear", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: {
+            type: "update-page",
+            pageId: "123",
+            title: "Runbook",
+            bodyText: "",
+            currentVersion: 4,
+          },
+          authority,
+        },
+        { authRef: CONFLUENCE_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+    expect(result.status).toBe(200);
+    expect(result.body.disposition).toBe("allowed");
+  });
+
+  it("still rejects commentText: '' on add-issue-comment (empty comment is not meaningful)", async () => {
+    const guard = guardWith({ count: 0, requests: [] });
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "add-issue-comment", issueKey: "PROJ-9", commentText: "" },
+          authority,
+        },
+        { authRef: JIRA_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number };
+    expect(result.status).toBe(400);
+  });
+
+  it("still rejects commentText: '' on add-page-comment (empty comment is not meaningful)", async () => {
+    const guard = guardWith({ count: 0, requests: [] });
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "add-page-comment", pageId: "123", commentText: "" },
+          authority,
+        },
+        { authRef: CONFLUENCE_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number };
+    expect(result.status).toBe(400);
+  });
+});
+
+describe("write-action route — governed action correlation", () => {
+  it("threads the request's own correlation id into a policy-denied response instead of minting one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope in handleExecuteAtlassianConnectorAction — the governed-action denial record must
+    // reuse it, not a disconnected randomUUID(). An envelope with no write scope denies fast
+    // (policy-denied) without needing a provider round-trip.
+    const guard = guardWith({ count: 0, requests: [] });
+    const deniedAuthority = registerEnvelope("autonomous-delivery", []);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      {
+        ...ctx(
+          { action: ACTION_REQUESTS["transition-issue"], authority: deniedAuthority },
+          { authRef: JIRA_AUTH_REF },
+        ),
+        correlationId: "req-write-thread-01",
+      },
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      disposition: "denied",
+      correlationId: "req-write-thread-01",
+    });
+  });
+
+  it("threads the request's correlation id into the list-approvals unavailable guard too (#2906 round 3)", async () => {
+    // Every sibling approval handler (get/approve/reject) already threads ctx.correlationId into
+    // requireConnectorDeps; the list endpoint was the one holdout that dropped it (and even took
+    // an unused `_ctx` parameter), so its 503 could not be joined to a support-bundle record.
+    const unavailableDeps = { atlassianConnectorCredentials: undefined } as UiHandlerDeps;
+    const result = (await handleListAtlassianConnectorActionApprovals(
+      { ...ctx({}, {}), correlationId: "req-list-approvals-01" },
+      unavailableDeps,
+    )) as { status: number; body: Record<string, unknown> };
+
+    expect(result.status).toBe(503);
+    expect(result.body).toMatchObject({
+      error: {
+        code: "ATLASSIAN_CONNECTORS_UNAVAILABLE",
+        correlationId: "req-list-approvals-01",
+      },
+    });
   });
 });

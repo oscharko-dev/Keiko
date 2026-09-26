@@ -5,7 +5,8 @@
 // idempotence of the persistability enforcement.
 
 import { describe, expect, it } from "vitest";
-import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   MemoryProposal,
   MemoryProposalId,

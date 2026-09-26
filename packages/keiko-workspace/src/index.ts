@@ -54,7 +54,12 @@ export { type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./
 
 export { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 
-export { assertContainedRealPath, containedRealPathInfo } from "./realpath.js";
+export {
+  assertContainedRealPath,
+  boundWorkspaceFs,
+  containedRealPathInfo,
+  resolveExistingAllowedWorkspaceRealRoot,
+} from "./realpath.js";
 
 export {
   compileIgnore,
@@ -69,6 +74,7 @@ export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 export {
   discoverFiles,
   discoverWithStats,
+  discoverWithStatsAsync,
   readWorkspaceFile,
   type DiscoveryResult,
 } from "./discovery.js";
@@ -188,6 +194,10 @@ export {
 export type { ImportEdgeStableIdInput, SymbolGraphRecordStableIdInput } from "./stableId.js";
 
 // ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
+//
+// These root exports are a stable compatibility contract through the public product barrel.
+// The TypeScript compiler itself remains lazy in codeIntelligence.ts, so importing this barrel
+// does not pay the compiler startup cost unless a code-intelligence value is actually used.
 export type {
   AdapterError,
   RunAllResult,
@@ -259,6 +269,9 @@ export { followSymbolTrace } from "./followSymbolTrace.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";
+
+// The explicit subpath remains available for consumers that want to depend only on this feature,
+// but the documented root aliases are retained for product-package compatibility.
 export {
   buildCodeIntelligenceIndex,
   lookupCodeIntelligenceAtoms,

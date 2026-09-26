@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  WORKSPACE_INDEX_SNAPSHOT_VERSION,
+  buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexSnapshot,
   type WorkspaceIndexScopeKey,
   type WorkspaceIndexSnapshot,
 } from "@oscharko-dev/keiko-workspace";
@@ -26,24 +27,39 @@ function tempDir(prefix: string): string {
 }
 
 function scopeKey(workspaceRoot: string): WorkspaceIndexScopeKey {
-  return {
-    workspaceRoot,
-    relativePaths: [],
-    policyMode: "workspace-root-default",
-    applyGitignore: true,
-    omitLowValueWorkspaceFiles: true,
-    maxBytesPerFileScanned: 1024,
-    maxFilesScanned: 100,
-  };
+  return buildWorkspaceIndexScopeKey(
+    {
+      workspace: {
+        root: workspaceRoot,
+        selectedRoot: workspaceRoot,
+        name: undefined,
+        version: undefined,
+        testFramework: "unknown",
+        sourceDirs: [],
+        testDirs: [],
+        languages: [],
+        ignoreLines: [],
+      },
+      relativePaths: [],
+    },
+    {
+      policyMode: "workspace-root-default",
+      applyGitignore: true,
+      omitLowValueWorkspaceFiles: true,
+    },
+    1024,
+    100,
+  );
 }
 
 function emptySnapshot(): WorkspaceIndexSnapshot {
-  return {
-    version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
-    relativePaths: [],
-    policyMode: "workspace-root-default",
-    applyGitignore: true,
-    omitLowValueWorkspaceFiles: true,
+  return buildWorkspaceIndexSnapshot({
+    scope: { relativePaths: [] },
+    policy: {
+      policyMode: "workspace-root-default",
+      applyGitignore: true,
+      omitLowValueWorkspaceFiles: true,
+    },
     maxBytesPerFileScanned: 1024,
     maxFilesScanned: 100,
     discovery: {
@@ -56,7 +72,7 @@ function emptySnapshot(): WorkspaceIndexSnapshot {
       truncated: false,
     },
     records: [],
-  };
+  });
 }
 
 function snapshotWithFile(scopePath: string): WorkspaceIndexSnapshot {
@@ -420,6 +436,49 @@ describe("workspace index provider", () => {
       expect(JSON.stringify(records)).not.toContain(workspaceRoot);
       expect(JSON.stringify(records)).not.toContain(key);
       expect(readdirSync(snapshotDir).some((name) => name.endsWith(".tmp"))).toBe(false);
+    } finally {
+      rmSync(workspaceRoot, { force: true, recursive: true });
+      rmSync(runtimeStateDir, { force: true, recursive: true });
+    }
+  });
+
+  // ADR-0173 D5 / g12: a load failure and a save failure reported for the SAME generation used to
+  // each mint their own disconnected `randomUUID()`, so an operator (or an agent joining lines by
+  // correlation id) could never tell they were evidence about the same underlying epoch. Fails
+  // before the fix — two independent random UUIDs never match — and passes after, once both
+  // reporters read the one id minted when the generation was created.
+  it("keeps a generation's load and save failures joined under one correlation id", async () => {
+    const workspaceRoot = tempDir("keiko-index-workspace-private-");
+    const runtimeStateDir = tempDir("keiko-index-state-");
+    const records: ServerDiagnosticRecord[] = [];
+    const key = Buffer.alloc(32, 19).toString("base64");
+    try {
+      const provider = createServerWorkspaceIndexProvider({
+        runtimeStateDir,
+        env: { KEIKO_WORKSPACE_INDEX_KEY: key },
+        diagnostics: { record: (record): void => void records.push(record) },
+      });
+      const index = provider(workspaceRoot);
+      if (index === undefined) throw new Error("expected workspace index");
+      const keyShape = scopeKey(workspaceRoot);
+      await index.saveSnapshot(keyShape, emptySnapshot());
+      const snapshotDir = join(runtimeStateDir, "workspace-index");
+      const snapshotName = readdirSync(snapshotDir).find((name) => name.endsWith(".json"));
+      if (snapshotName === undefined) throw new Error("expected encrypted snapshot");
+      const snapshotPath = join(snapshotDir, snapshotName);
+
+      writeFileSync(snapshotPath, "{corrupt", "utf8");
+      await expect(index.loadSnapshot(keyShape)).resolves.toBeUndefined();
+
+      unlinkSync(snapshotPath);
+      mkdirSync(snapshotPath);
+      await expect(index.saveSnapshot(keyShape, emptySnapshot())).rejects.toThrow();
+
+      expect(records).toHaveLength(2);
+      expect(records[0]).toMatchObject({ operation: "workspace.index.load" });
+      expect(records[1]).toMatchObject({ operation: "workspace.index.save" });
+      expect(records[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(records[1]?.correlationId).toBe(records[0]?.correlationId);
     } finally {
       rmSync(workspaceRoot, { force: true, recursive: true });
       rmSync(runtimeStateDir, { force: true, recursive: true });

@@ -1,10 +1,23 @@
-import type { LineRange, ValidationResult } from "./connected-context.js";
+import type {
+  ContextCoverageTruncationReason,
+  LineRange,
+  ValidationResult,
+} from "./connected-context.js";
 import { isValidLineRange, isValidScopePath } from "./connected-context.js";
 import type { EditorPatchRejectionReason } from "./editor-patch-apply.js";
 
+declare global {
+  interface RegExpConstructor {
+    escape(value: string): string;
+  }
+}
+
 export type WorkspaceSearchMode = "literal" | "regex";
 
-export const WORKSPACE_SEARCH_MODES: readonly WorkspaceSearchMode[] = ["literal", "regex"];
+export const WORKSPACE_SEARCH_MODES: readonly WorkspaceSearchMode[] = Object.freeze([
+  "literal",
+  "regex",
+]);
 
 export interface WorkspaceSearchRequest {
   readonly root: string;
@@ -94,6 +107,18 @@ export interface WorkspaceReplacePreviewResponse {
   readonly editCount: number;
   readonly truncated: boolean;
   readonly omittedFileCount: number;
+  // KEIKO-0645/KEIKO-0645-r3: distinguishes the cause of `truncated`. `omittedFileCount` counts
+  // files that matched the query but were dropped by the per-request `maxFiles` cap inside
+  // buildReplacePreviewFiles -- a precise "replace-file-omitted" signal. `searchTruncationReasons`
+  // is the upstream `searchText` coverage cause list (see `ContextCoverageTruncationReason`): it
+  // covers bounded-search exits generally, not just a distinct matching file being dropped -- for
+  // example "match-cap" fires when the overall match budget is exhausted while still inside one
+  // already-enumerated file, with no other matching file omitted. A caller that wants "was a
+  // distinct matching file left out of the upstream search" checks
+  // `searchTruncationReasons.includes("file-cap")`, not the presence of any reason. An empty array
+  // means the upstream search itself did not truncate; `truncated` is still the union with
+  // `omittedFileCount > 0`.
+  readonly searchTruncationReasons: readonly ContextCoverageTruncationReason[];
 }
 
 export interface WorkspaceReplaceApplyFile {
@@ -329,12 +354,129 @@ export function regexSafetyIssue(source: string): string | undefined {
   if (hasDangerousGroupOrClassRepetition(source)) return "query regex unsafe";
   if (hasAdjacentQuantifiedAtoms(source)) return "query regex unsafe";
   if (hasConcatenatedQuantifiedGroups(source)) return "query regex unsafe";
+  const safeSource = safeRegexSource(source);
+  if (safeSource === undefined) return "query regex invalid";
   try {
-    new RegExp(source);
+    new RegExp(safeSource);
   } catch {
     return "query regex invalid";
   }
   return undefined;
+}
+
+function regexEscapeToken(character: string): string | undefined {
+  switch (character) {
+    case "b":
+      return String.raw`\b`;
+    case "B":
+      return String.raw`\B`;
+    case "d":
+      return String.raw`\d`;
+    case "D":
+      return String.raw`\D`;
+    case "s":
+      return String.raw`\s`;
+    case "S":
+      return String.raw`\S`;
+    case "w":
+      return String.raw`\w`;
+    case "W":
+      return String.raw`\W`;
+    default:
+      return undefined;
+  }
+}
+
+function regexOperatorToken(character: string): string | undefined {
+  switch (character) {
+    case ".":
+      return ".";
+    case "(":
+      return "(";
+    case ")":
+      return ")";
+    case "*":
+      return "*";
+    case "+":
+      return "+";
+    case "?":
+      return "?";
+    case "^":
+      return "^";
+    case "$":
+      return "$";
+    default:
+      return undefined;
+  }
+}
+
+interface SafeRegexCharacterClass {
+  readonly end: number;
+  readonly source: string;
+}
+
+function safeRegexCharacterClass(
+  source: string,
+  start: number,
+): SafeRegexCharacterClass | undefined {
+  let output = "[";
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index] ?? "";
+    if (character === "]") return { end: index, source: `${output}]` };
+    if (character === "\\") {
+      const escapedCharacter = source[index + 1];
+      if (escapedCharacter === undefined) return undefined;
+      output += regexEscapeToken(escapedCharacter) ?? RegExp.escape(escapedCharacter);
+      index += 1;
+    } else if (character === "^" && index === start + 1) {
+      output += "^";
+    } else {
+      output += RegExp.escape(character);
+    }
+  }
+  return undefined;
+}
+
+function safeRegexSource(source: string): string | undefined {
+  let output = "";
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index] ?? "";
+    if (source.startsWith("(?:", index)) {
+      output += "(?:";
+      index += 3;
+      continue;
+    }
+    if (character === "[") {
+      const characterClass = safeRegexCharacterClass(source, index);
+      if (characterClass === undefined) return undefined;
+      output += characterClass.source;
+      index = characterClass.end + 1;
+      continue;
+    }
+    if (character === "\\") {
+      const escapedCharacter = source[index + 1];
+      if (escapedCharacter === undefined) return undefined;
+      output += regexEscapeToken(escapedCharacter) ?? RegExp.escape(escapedCharacter);
+      index += 1;
+    } else {
+      output += regexOperatorToken(character) ?? RegExp.escape(character);
+    }
+    index += 1;
+  }
+  return output;
+}
+
+/**
+ * Compiles the supported, ReDoS-checked workspace-search grammar without ever passing the raw
+ * request text to the RegExp constructor. Unsupported metacharacters are literal search text.
+ */
+export function compileSafeWorkspaceSearchRegex(source: string, caseSensitive: boolean): RegExp {
+  const issue = regexSafetyIssue(source);
+  if (issue !== undefined) throw new TypeError(issue);
+  const safeSource = safeRegexSource(source);
+  if (safeSource === undefined) throw new TypeError("query regex invalid");
+  return new RegExp(safeSource, caseSensitive ? "g" : "gi");
 }
 
 function validateRoot(root: unknown, reasons: string[]): void {
@@ -406,12 +548,12 @@ function validateReplaceEdit(value: unknown, reasons: string[]): void {
     return;
   }
   const range = value.range;
-  if (
-    !isPositiveInteger(range.startLine) ||
-    !isPositiveInteger(range.startColumn) ||
-    !isPositiveInteger(range.endLine) ||
-    !isPositiveInteger(range.endColumn)
-  ) {
+  // The four bounds and their ORDERING are one rule with one reason string: each bound was
+  // previously checked in isolation, so a backwards range reached the patch applier, which would
+  // slice from a start position after its end. The sibling isValidLineRange in connected-context.ts
+  // already enforces this ordering for line ranges; an out-of-order range is malformed and is
+  // rejected, never silently swapped.
+  if (!isWellFormedEditRange(range)) {
     reasons.push("edit range invalid");
   }
   if (typeof value.originalText !== "string" || typeof value.newText !== "string") {
@@ -421,6 +563,29 @@ function validateReplaceEdit(value: unknown, reasons: string[]): void {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function isWellFormedEditRange(range: Record<string, unknown>): boolean {
+  if (
+    !isPositiveInteger(range.startLine) ||
+    !isPositiveInteger(range.startColumn) ||
+    !isPositiveInteger(range.endLine) ||
+    !isPositiveInteger(range.endColumn)
+  ) {
+    return false;
+  }
+  return !isBackwardsRange(range.startLine, range.startColumn, range.endLine, range.endColumn);
+}
+
+// A zero-width range (end === start) is a legal insertion point and stays accepted.
+function isBackwardsRange(
+  startLine: number,
+  startColumn: number,
+  endLine: number,
+  endColumn: number,
+): boolean {
+  if (endLine < startLine) return true;
+  return endLine === startLine && endColumn < startColumn;
 }
 
 function validateApplyFile(value: unknown, reasons: string[]): void {

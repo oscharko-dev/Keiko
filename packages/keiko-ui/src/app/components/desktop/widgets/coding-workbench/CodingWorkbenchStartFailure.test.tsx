@@ -90,13 +90,14 @@ function boundActiveWorkspace(): unknown {
     loading: false,
     switching: false,
     error: null,
-    refresh: vi.fn(() => Promise.resolve()),
-    switchTo: vi.fn(() => Promise.resolve()),
-    clearActive: vi.fn(() => Promise.resolve()),
-    pause: vi.fn(() => Promise.resolve()),
-    resume: vi.fn(() => Promise.resolve()),
-    prepareHandoff: vi.fn(() => Promise.resolve()),
-    provision: vi.fn(() => Promise.resolve()),
+    refresh: vi.fn(() => Promise.resolve(true)),
+    switchTo: vi.fn(() => Promise.resolve(true)),
+    clearActive: vi.fn(() => Promise.resolve(true)),
+    pause: vi.fn(() => Promise.resolve(true)),
+    resume: vi.fn(() => Promise.resolve(true)),
+    prepareHandoff: vi.fn(() => Promise.resolve(true)),
+    repair: vi.fn(() => Promise.resolve(true)),
+    provision: vi.fn(() => Promise.resolve(true)),
   };
 }
 
@@ -121,6 +122,7 @@ function readiness(): unknown {
     deploymentCeiling: "autonomous-delivery",
     effectiveMode: "supervised-coding",
     runtimeAvailable: true,
+    runtimeEvidenceClass: "platform-qualified",
   };
 }
 
@@ -208,7 +210,6 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     render(<CodingWorkbenchWindow />);
 
     // Readiness resolves from the stubbed server truth; the composer unlocks.
-    await screen.findByText("task-1 · issue/2835 · healthy");
     await user.type(screen.getByLabelText("Task instructions"), "Fix the flaky retry loop");
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(

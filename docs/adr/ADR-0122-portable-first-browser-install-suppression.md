@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Accepted; amended for the Windows setup companion by Issue #2966; setup-companion wording aligned to
+the Keiko-owned native bootstrap by Issue #2992 (2026-08-29).
 
 ## Date
 
@@ -41,13 +42,14 @@ cache/update recovery where they do not create a second user-facing product inst
 The service worker remains a static-shell cache and update-recovery component only; it must not
 be described or tested as an install-enabling mechanism.
 
-Portable ZIP/native launcher installation is the promoted path:
+Governed portable setup/native launcher installation is the promoted path:
 
-1. Download the platform-specific GitHub Release Asset.
-2. Extract it.
-3. Double-click `Keiko.exe` or `Keiko.app`.
-4. Complete one-button managed setup.
-5. Use the managed app registration and portable updater v2 for future starts and updates.
+1. On Windows, download and run the signed `keiko-windows-x64-setup.exe` companion. It embeds the
+   reviewed Windows archive and invokes the governed portable lifecycle without replacing an
+   existing managed installation. The Windows ZIP remains a manual troubleshooting fallback.
+2. On macOS, download the platform archive, extract it, and double-click `Keiko.app`.
+3. Complete the governed managed setup for the selected platform.
+4. Use the managed app registration and portable updater v2 for future starts and updates.
 
 Users who previously installed a browser-managed Keiko PWA may remove that shortcut from their
 browser or operating-system app list. Removing it does not uninstall Keiko, remove `.keiko`
@@ -70,12 +72,18 @@ runtime state, or affect portable updater v2.
 - Existing PWA-specific verification artifacts become historical rather than active release gates.
 - Users who already created browser-managed shortcuts may need to remove them manually if they
   cause confusion.
+- Follow-up (KEIKO-0549 / #3313): the `icon-192-maskable.png` / `icon-512-maskable.png` manifest
+  entries were byte-identical to their non-maskable siblings with no safe-area padding, so they
+  were retired as vestigial rather than regenerated — servicing a proper maskable icon would be
+  investment in a browser-install surface this ADR already stepped away from.
 
 ### Neutral
 
 - This ADR does not remove the npm package or npm/Yarn compatibility update path.
-- This ADR does not introduce Electron, Tauri, WebView embedding, installers, tray apps, or
-  enterprise-managed rollout.
+- This ADR does not introduce Electron, Tauri, WebView embedding, MSI/MSIX/PKG/DMG packaging, tray
+  apps, or enterprise-managed rollout. The Windows setup companion remains a thin delivery wrapper
+  around the governed portable archive and lifecycle (a Keiko-owned native bootstrap since ADR-0121's
+  Issue #2992 amendment; previously an IExpress self-extractor).
 - This ADR does not change API caching prohibitions, CSP, loopback host binding, evidence
   redaction, or update authority.
 

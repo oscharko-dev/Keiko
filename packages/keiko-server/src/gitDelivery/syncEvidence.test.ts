@@ -250,6 +250,11 @@ describe("recordGitSyncEvidence — best-effort and fail-closed", () => {
       expect(records[0]?.source).toBe("gitDelivery.syncEvidence");
       expect(records[0]?.code).toBe("ENOSPC");
       expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      // ADR-0173 D5 / g12: the failure's correlationId is the SAME date-bucket runId the write
+      // itself targeted (from the real producer, not a re-derived formula), not a disconnected
+      // `randomUUID()` — an operator can join the failure back to the bucket it belongs to. Before
+      // the fix this was a random UUID and never equalled the bucket runId.
+      expect(records[0]?.correlationId).toBe(gitSyncEvidenceRunIdFor(AT));
       expect(JSON.stringify(records)).not.toContain(secret);
       expect(consoleError).not.toHaveBeenCalled();
     } finally {

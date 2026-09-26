@@ -1,0 +1,215 @@
+// Hermetic coverage for the script-owned MSVC toolchain resolution (#3072/#3075): the real
+// chain only ever executes on a Windows host with Visual Studio, so vswhere and the vcvars
+// import are exercised here through module-level mocks of spawnSync/existsSync — no process
+// is spawned and no Windows host is required.
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnSyncMock = vi.fn();
+const existsSyncMock = vi.fn();
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawnSync: (...args) => spawnSyncMock(...args) };
+});
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, existsSync: (...args) => existsSyncMock(...args) };
+});
+
+const realFs = await vi.importActual("node:fs");
+existsSyncMock.mockImplementation((path) => realFs.existsSync(path));
+
+const { buildWindowsGenerationLauncher, resolveWindowsMsvcEnv } =
+  await import("../stage-portable-runtime.mjs");
+const { windowsToolFromPath } = await import("../lib/windows-msvc.mjs");
+
+const VSWHERE_SUFFIX = ["Microsoft Visual Studio", "Installer", "vswhere.exe"].join(
+  process.platform === "win32" ? "\\" : "/",
+);
+
+function vcvarsDump(lines) {
+  return { status: 0, stdout: `${lines.join("\r\n")}\r\n` };
+}
+
+describe("resolveWindowsMsvcEnv", () => {
+  let exitSpy;
+  let errorSpy;
+
+  beforeEach(() => {
+    exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+    spawnSyncMock.mockReset();
+    existsSyncMock.mockImplementation((path) => realFs.existsSync(path));
+  });
+
+  it("uses a Developer Command Prompt environment as-is without spawning anything", () => {
+    const baseEnv = { INCLUDE: String.raw`C:\inc`, LIB: String.raw`C:\lib` };
+    expect(resolveWindowsMsvcEnv(baseEnv)).toBe(baseEnv);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("imports vcvars when only one of INCLUDE and LIB is present", () => {
+    // A half-initialized environment is NOT a Developer Command Prompt: both partial shapes
+    // must take the full import path and come back complete.
+    for (const partial of [{ INCLUDE: String.raw`C:\inc` }, { LIB: String.raw`C:\lib` }]) {
+      spawnSyncMock.mockReset();
+      existsSyncMock.mockImplementation((path) => String(path).endsWith("vswhere.exe"));
+      spawnSyncMock
+        .mockReturnValueOnce({ status: 0, stdout: "C:\\VS\\2022\n" })
+        .mockReturnValueOnce(
+          vcvarsDump(["Path=C:\\VS\\bin", "INCLUDE=C:\\VS\\include", "LIB=C:\\VS\\lib"]),
+        );
+      const resolved = resolveWindowsMsvcEnv(partial);
+      expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+      expect(resolved.INCLUDE).toBe("C:\\VS\\include");
+      expect(resolved.LIB).toBe("C:\\VS\\lib");
+    }
+  });
+
+  it("imports the vcvars64 environment and merges every PATH case variant onto one key", () => {
+    existsSyncMock.mockImplementation((path) => String(path).endsWith("vswhere.exe"));
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "C:\\VS\\2022\n" })
+      .mockReturnValueOnce(
+        vcvarsDump([
+          "Path=C:\\VS\\bin;C:\\Windows\\system32",
+          "INCLUDE=C:\\VS\\include",
+          "LIB=C:\\VS\\lib",
+        ]),
+      );
+
+    const resolved = resolveWindowsMsvcEnv({
+      SystemRoot: String.raw`C:\Windows`,
+      PATH: String.raw`C:\old`,
+      "ProgramFiles(x86)": String.raw`C:\Program Files (x86)`,
+    });
+
+    expect(resolved.INCLUDE).toBe("C:\\VS\\include");
+    expect(resolved.LIB).toBe("C:\\VS\\lib");
+    // cmd emits `Path=`, the parent carried `PATH=`: exactly one canonical key must survive.
+    const pathKeys = Object.keys(resolved).filter((key) => key.toUpperCase() === "PATH");
+    expect(pathKeys).toEqual(["PATH"]);
+    expect(resolved.PATH).toBe("C:\\VS\\bin;C:\\Windows\\system32");
+
+    expect(String(spawnSyncMock.mock.calls[0]?.[0])).toContain(VSWHERE_SUFFIX);
+    // Both discovery outputs must be forced to UTF-8, or a non-ASCII installation path is
+    // corrupted by the console code page before the toolchain lookup ever runs.
+    expect(spawnSyncMock.mock.calls[0]?.[1]).toContain("-utf8");
+    expect(String(spawnSyncMock.mock.calls[1]?.[0])).toContain("cmd.exe");
+    expect(String(spawnSyncMock.mock.calls[1]?.[1]?.[3])).toContain("vcvars64.bat");
+    expect(String(spawnSyncMock.mock.calls[1]?.[1]?.[3])).toContain("chcp 65001");
+    // The dump extends exactly the caller's environment, never the implicit process.env.
+    expect(spawnSyncMock.mock.calls[1]?.[2]?.env).toEqual({
+      SystemRoot: String.raw`C:\Windows`,
+      PATH: String.raw`C:\old`,
+      "ProgramFiles(x86)": String.raw`C:\Program Files (x86)`,
+    });
+  });
+
+  it("locates a tool by absolute path on the resolved PATH and throws when absent", () => {
+    existsSyncMock.mockImplementation((path) => String(path).endsWith("cl.exe"));
+    const sep = process.platform === "win32" ? "\\" : "/";
+    expect(windowsToolFromPath("C:\\VS\\bin;C:\\other", "cl.exe")).toBe(`C:\\VS\\bin${sep}cl.exe`);
+    existsSyncMock.mockImplementation(() => false);
+    expect(() => windowsToolFromPath("C:\\VS\\bin", "rc.exe")).toThrow(
+      "MSVC tool rc.exe was not found",
+    );
+    expect(() => windowsToolFromPath(undefined, "cl.exe")).toThrow("was not found");
+  });
+
+  it("resolves vswhere under the canonical Program Files (x86) when the variable is relative", () => {
+    const probed = [];
+    existsSyncMock.mockImplementation((path) => {
+      probed.push(String(path));
+      return false;
+    });
+    expect(() => resolveWindowsMsvcEnv({ "ProgramFiles(x86)": "relative\\pf" })).toThrow(
+      "process.exit(1)",
+    );
+    expect(probed.at(-1)?.startsWith("C:\\Program Files (x86)")).toBe(true);
+    expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain("vswhere missing");
+  });
+
+  it("fails closed when vswhere finds no C++ build tools installation", () => {
+    existsSyncMock.mockImplementation((path) => String(path).endsWith("vswhere.exe"));
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "\n" });
+    expect(() => resolveWindowsMsvcEnv({})).toThrow("process.exit(1)");
+    expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain("not installed");
+  });
+
+  it("fails closed when the vcvars64 import itself fails", () => {
+    existsSyncMock.mockImplementation((path) => String(path).endsWith("vswhere.exe"));
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "C:\\VS\\2022\n" })
+      .mockReturnValueOnce({ status: 1, stdout: "" });
+    expect(() => resolveWindowsMsvcEnv({})).toThrow("process.exit(1)");
+    expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain("vcvars64");
+  });
+
+  it("fails closed when the imported environment still lacks INCLUDE and LIB", () => {
+    existsSyncMock.mockImplementation((path) => String(path).endsWith("vswhere.exe"));
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "C:\\VS\\2022\n" })
+      .mockReturnValueOnce(vcvarsDump(["Path=C:\\VS\\bin"]));
+    expect(() => resolveWindowsMsvcEnv({})).toThrow("process.exit(1)");
+    expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain("did not define INCLUDE and LIB");
+  });
+});
+
+describe("buildWindowsGenerationLauncher", () => {
+  const generationId = "a".repeat(64);
+
+  it("binds the exact generation ID to the injected Windows launcher compiler", () => {
+    const root = realFs.mkdtempSync(join(tmpdir(), "keiko-generation-launcher-"));
+    const destination = join(root, "nested", "Keiko.exe");
+    const compile = vi.fn((_target, output) => realFs.writeFileSync(output, "launcher fixture"));
+
+    try {
+      expect(buildWindowsGenerationLauncher(destination, generationId, { compile })).toBe(
+        destination,
+      );
+      expect(compile).toHaveBeenCalledOnce();
+      expect(compile.mock.calls[0]?.[0]?.platformTarget).toBe("windows-x64");
+      expect(compile.mock.calls[0]?.slice(1)).toEqual([destination, generationId]);
+      expect(realFs.statSync(destination).isFile()).toBe(true);
+    } finally {
+      realFs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed bindings and compiler output that is not a fixed executable", () => {
+    const root = realFs.mkdtempSync(join(tmpdir(), "keiko-generation-launcher-"));
+    const destination = join(root, "Keiko.exe");
+    const compile = vi.fn();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      expect(() =>
+        buildWindowsGenerationLauncher(destination, "not-a-generation", { compile }),
+      ).toThrow("process.exit(1)");
+      expect(compile).not.toHaveBeenCalled();
+      expect(() => buildWindowsGenerationLauncher(destination, generationId, { compile })).toThrow(
+        "process.exit(1)",
+      );
+      expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain(
+        "generation launcher build did not produce the fixed executable",
+      );
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+      realFs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

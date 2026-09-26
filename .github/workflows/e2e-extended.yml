@@ -38,10 +38,21 @@ jobs:
         suite:
           - test:e2e:editor-baseline-1377
           - test:e2e:editor-layout-1375
-          - test:e2e:editor-run-verification-2215
+          - test:e2e:editor-chat-2119
+          # Restored #1395 invariant as a targeted pin against today's surface (ADR-0058,
+          # ADR-0066): sensitive-path denial, the authority-missing fail-closed default, and the
+          # redacted audit feed. Wired from day one on purpose. The #1394 undo/redo round-trip
+          # joins this suite once #3070 lands the product fix.
+          - test:e2e:editor-agent-pins
           # Issues #2852/#2867: these release-evidence journeys had silently rotted while present
           # only as npm scripts. Keep their current Workbench and editor contracts exercised.
           - test:e2e:coding-workbench-2253
+          - test:e2e:coding-issue-intake
+          - test:e2e:coding-issue-commit
+          - test:e2e:coding-issue-publish
+          - test:e2e:coding-issue-ci
+          - test:e2e:coding-issue-handoff
+          - test:e2e:git-change-chat
           - test:e2e:formatting-1380
           - test:e2e:language-intelligence-1383
           - test:e2e:git-changes-1575
@@ -68,6 +79,16 @@ jobs:
           - test:e2e:editor-profiles-2528
           - test:e2e:profile-portability-2529
           - test:e2e:file-history-2531
+          # Issue #2955 (audits KEIKO-0078 / KEIKO-0080): eleven specs existed in tests/e2e that no
+          # test:e2e:* script could reach, so nothing ran them and the wiring gate could not see
+          # them — it enumerated scripts and configs, never spec files. (Ten had no config either;
+          # human-loop-1405 had one, but no script naming that config.) These three entries
+          # are grouped rather than one-per-spec on purpose: every suite here pays a full dev-server
+          # boot, and three boots cover ten specs where ten would cover ten. Playwright still
+          # reports each spec's result individually inside the job.
+          - test:e2e:workspace-surfaces
+          - test:e2e:operations-surfaces
+          - test:e2e:assistive-surfaces
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -80,18 +101,15 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
         run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # #2485: test:e2e:editor-run-verification-2215 executes verification commands through
-          # the real verification runner, which always enforces the mandatory network:none
-          # boundary (enforce-or-fail-closed) — without the isolation backend every verification
-          # fails closed on this runner and the suite can never pass. Ubuntu 24.04 restricts
-          # unprivileged user namespaces via AppArmor, so enable the proven Bubblewrap path
-          # exactly as the required ci job and the code-task lane below do; never weaken the
-          # verification runner to inherited networking for tests.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # KEIKO-0610 / #2485: suites executing verification commands go through the real
+      # verification runner, which always enforces the mandatory network:none boundary
+      # (enforce-or-fail-closed) — without the isolation backend every verification
+      # fails closed on this runner and the suite cannot pass. Ubuntu 24.04 restricts
+      # unprivileged user namespaces via AppArmor, so enable the proven Bubblewrap path
+      # exactly as the required ci job and the code-task lane below do; never weaken
+      # the verification runner to inherited networking for tests.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages
         run: npm run build:packages
       - name: Install Playwright browser
@@ -140,16 +158,13 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
         run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Both journeys execute the vetted verification step through the real verification
-          # runner, which always enforces the mandatory network:none boundary
-          # (enforce-or-fail-closed). Ubuntu 24.04 restricts unprivileged user namespaces via
-          # AppArmor, so enable the proven Bubblewrap path exactly as the required ci job does;
-          # never weaken the verification runner to inherited networking for tests.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # KEIKO-1020: both journeys execute the vetted verification step through the real
+      # verification runner, which always enforces the mandatory network:none boundary
+      # (enforce-or-fail-closed). Ubuntu 24.04 restricts unprivileged user namespaces via
+      # AppArmor, so enable the proven Bubblewrap path exactly as the required ci job does;
+      # never weaken the verification runner to inherited networking for tests.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages
         run: npm run build:packages
       - name: Build UI static export

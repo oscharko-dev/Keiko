@@ -25,7 +25,7 @@ import {
   RELATIONSHIP_QUERY_BOUNDS,
   RELATIONSHIP_SCHEMA_VERSION,
   RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 
 // GEN-PERF-RELACT-002 — per-database prepared-statement cache (same idiom as

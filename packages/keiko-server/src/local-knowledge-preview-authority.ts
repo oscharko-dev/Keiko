@@ -7,7 +7,7 @@ import type {
 import {
   normalizePdfCitationPreviewMarkerIndex,
   pdfCitationPreviewAnchorQuality,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
 import {
   lookupCitationPreviewSnapshot,
   type KnowledgeStore,

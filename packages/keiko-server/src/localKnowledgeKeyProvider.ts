@@ -19,6 +19,7 @@ import {
   resolveLocalVaultKey,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   KnowledgeStoreKeyProvider,
   KnowledgeStoreKeyProviderContext,
@@ -37,6 +38,9 @@ export interface CreateLocalKnowledgeKeyProviderOptions {
   // Test/non-darwin seam, mirroring the credential vault: inject a stub to force the keyfile tier
   // deterministically without touching the real login keychain.
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 // Builds the key provider keiko-server injects into openKnowledgeStore so production capsule stores
@@ -55,6 +59,7 @@ export function createLocalKnowledgeKeyProvider(
         keychainService: LOCAL_KNOWLEDGE_KEYCHAIN_SERVICE,
         keyfileName: LOCAL_KNOWLEDGE_KEYFILE,
         ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
+        sink: options.securityLogSink,
       });
       return key;
     },

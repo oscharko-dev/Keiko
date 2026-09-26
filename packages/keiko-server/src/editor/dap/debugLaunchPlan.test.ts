@@ -22,6 +22,7 @@ import {
 } from "./debugCapsulePlan.js";
 import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
+import { createFileServerLogSink } from "../../observability/server-log.js";
 import {
   assertDebugTargetCandidate,
   assertDebugLaunchEnvironment,
@@ -40,6 +41,11 @@ import {
   type DebugLaunchRuntimeContext,
   validateDebugLaunchContext,
 } from "./debugLaunchPlan.js";
+import {
+  expectActivityLogProof,
+  readPersistedActivityLog,
+} from "../../../../../tests/support/activity-log-proof.js";
+import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "../../observability/server-log.js";
 
 describe("opaque debug target parser security boundary", () => {
   it("accepts only plain or null-prototype records", () => {
@@ -279,12 +285,14 @@ function validator(
   epoch = 4,
   now = 100,
   planCapsule?: DebugLaunchPlanDeps["planCapsule"],
+  activityLog?: DebugLaunchPlanDeps["activityLog"],
 ): DebugCapsuleLayer2Validator {
   return createDebugLaunchLayer2Validator({
     resolveContext: () => Promise.resolve(context),
     epoch: () => epoch,
     now: () => now,
     planCapsule,
+    activityLog,
   });
 }
 
@@ -488,14 +496,7 @@ describe("stateless debug launch Layer-2 planning", () => {
       },
     });
     expect(plan.runtimeIdentityDigest).toMatch(/^[a-f0-9]{64}$/u);
-    const mounts = [
-      context.adapter,
-      context.node,
-      context.npm,
-      context.shell,
-      context.npmUserConfig,
-      context.npmGlobalConfig,
-    ].map((artifact) => ({
+    const mounts = [context.adapter, context.node].map((artifact) => ({
       hostPath: artifact.realPath,
       capsulePath: artifact.capsulePath,
       identityDigest: artifact.identityDigest,
@@ -504,7 +505,9 @@ describe("stateless debug launch Layer-2 planning", () => {
       .update(JSON.stringify([context.runtimeMount.identityDigest, mounts]))
       .digest("hex");
     expect(plan.runtimeIdentityDigest).toBe(expectedRuntimeDigest);
-    expect(plan.provisioningDigest).toBe(deriveDebugProvisioningDigest(context));
+    expect(plan.provisioningDigest).toBe(
+      deriveCanonicalDebugProvisioningDigest(plan.spawnEnvelope.artifacts),
+    );
     expect(plan.spawnEnvelope.provisioningDigest).toBe(plan.provisioningDigest);
     expect(plan.launchIdentityDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(plan.launchRequest)).not.toMatch(
@@ -519,14 +522,13 @@ describe("stateless debug launch Layer-2 planning", () => {
         "--new-session",
         "--ro-bind",
         "/opt/keiko-debug/adapter",
-        "/opt/keiko-debug/npm-user-config",
-        "/opt/keiko-debug/npm-global-config",
       ]),
     );
-    expect(plan.spawnEnvelope.artifacts).toEqual(
+    expect(plan.capsule.args).not.toContain("/opt/keiko-debug/npm-user-config");
+    expect(plan.capsule.args).not.toContain("/opt/keiko-debug/npm-global-config");
+    expect(plan.spawnEnvelope.artifacts).not.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ capsulePath: "/opt/keiko-debug/npm-user-config", size: 0 }),
-        expect.objectContaining({ capsulePath: "/opt/keiko-debug/npm-global-config", size: 0 }),
+        expect.objectContaining({ capsulePath: "/opt/keiko-debug/npm-user-config" }),
       ]),
     );
   });
@@ -584,6 +586,103 @@ describe("stateless debug launch Layer-2 planning", () => {
     await expect(validator(drift).validateAndRederive(catalogInput)).rejects.toMatchObject({
       code: "INVALID_CAPSULE_PLAN",
     });
+  });
+
+  it("mounts the npm closure only for catalog targets that can execute npm", async () => {
+    const { context, input } = fixture();
+    const closureRoot = context.backendExecutable.approvedRoot;
+    const nodeLibraryPath = join(closureRoot, "node-library");
+    const npmLibraryPath = join(closureRoot, "npm-library");
+    writeFileSync(nodeLibraryPath, "node-library", "utf8");
+    writeFileSync(npmLibraryPath, "npm-library", "utf8");
+    const nodeLibrary = artifact(nodeLibraryPath, "/lib/node-library.so");
+    const npmLibrary = artifact(npmLibraryPath, "/opt/keiko-runtime/npm/lib/npm-library.js");
+    const closedContext = { ...context, runtimeClosure: [nodeLibrary, npmLibrary] };
+    const logRoot = temporary("keiko-debug-selection-log-");
+    const activityLog = createFileServerLogSink(logRoot);
+
+    const filePlan = await validator(
+      closedContext,
+      4,
+      100,
+      undefined,
+      activityLog,
+    ).validateAndRederive({ ...input, correlationId: "debug-session-file" });
+    const catalogPlan = await validator(
+      closedContext,
+      4,
+      100,
+      undefined,
+      activityLog,
+    ).validateAndRederive({
+      ...input,
+      correlationId: "debug-session-catalog",
+      candidate: { kind: "catalog", targetId: "npm-script:start" },
+      binding: { ...input.binding, targetKind: "catalog" },
+    });
+    activityLog.close?.();
+    const fileCapsulePaths = filePlan.capsule.immutableMounts.map(({ capsulePath }) => capsulePath);
+    const catalogCapsulePaths = catalogPlan.capsule.immutableMounts.map(
+      ({ capsulePath }) => capsulePath,
+    );
+    const fileEnvelopePaths = filePlan.spawnEnvelope.artifacts.map(
+      ({ capsulePath }) => capsulePath,
+    );
+
+    expect(fileCapsulePaths).toContain(nodeLibrary.capsulePath);
+    expect(fileCapsulePaths).not.toContain(npmLibrary.capsulePath);
+    expect(fileCapsulePaths).not.toContain(context.npm.capsulePath);
+    expect(fileCapsulePaths).not.toContain(context.shell.capsulePath);
+    expect(fileEnvelopePaths.slice(1)).toStrictEqual(fileCapsulePaths);
+    expect(filePlan.provisioningDigest).toBe(
+      deriveCanonicalDebugProvisioningDigest(filePlan.spawnEnvelope.artifacts),
+    );
+    expect(catalogCapsulePaths).toEqual(
+      expect.arrayContaining([
+        nodeLibrary.capsulePath,
+        npmLibrary.capsulePath,
+        context.npm.capsulePath,
+        context.shell.capsulePath,
+      ]),
+    );
+    expect(filePlan.provisioningDigest).not.toBe(catalogPlan.provisioningDigest);
+    const persisted = readPersistedActivityLog(logRoot)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => !ACTIVITY_LOG_STORAGE_OPERATIONS.has(String(line.op)));
+    expect(persisted).toEqual([
+      expect.objectContaining({
+        op: "dap.debug-runtime.selected",
+        correlationId: "debug-session-file",
+        targetKind: "file",
+        selectedArtifactCount: filePlan.capsule.immutableMounts.length,
+        provisionedArtifactCount: filePlan.spawnEnvelope.artifacts.length,
+        runtimeIdentityDigest: filePlan.runtimeIdentityDigest,
+        provisioningDigest: filePlan.provisioningDigest,
+      }),
+      expect.objectContaining({
+        op: "dap.debug-runtime.selected",
+        correlationId: "debug-session-catalog",
+        targetKind: "catalog",
+        selectedArtifactCount: catalogPlan.capsule.immutableMounts.length,
+        provisionedArtifactCount: catalogPlan.spawnEnvelope.artifacts.length,
+        runtimeIdentityDigest: catalogPlan.runtimeIdentityDigest,
+        provisioningDigest: catalogPlan.provisioningDigest,
+      }),
+    ]);
+    expect(JSON.stringify(persisted)).not.toContain(context.workspaceRoot);
+    expect(JSON.stringify(persisted)).not.toContain(context.npm.realPath);
+
+    const rawLine = readPersistedActivityLog(logRoot)
+      .trim()
+      .split("\n")
+      .find(
+        (line) => (JSON.parse(line) as Record<string, unknown>).op === "dap.debug-runtime.selected",
+      );
+    if (rawLine === undefined) throw new Error("expected a dap.debug-runtime.selected line");
+    const proven = expectActivityLogProof("dap.debug-runtime.selected.emitted-line", rawLine);
+    expect(proven).toMatchObject({ op: "dap.debug-runtime.selected", targetKind: "file" });
   });
 
   it.each([
@@ -1141,15 +1240,7 @@ describe("stateless debug launch Layer-2 planning", () => {
       temp: input.adapter.temp,
       cwd: "/keiko-execution-root",
       endpoint: plan.endpoint,
-      artifacts: [
-        context.backendExecutable,
-        context.adapter,
-        context.node,
-        context.npm,
-        context.shell,
-        context.npmUserConfig,
-        context.npmGlobalConfig,
-      ].map((value) => ({
+      artifacts: [context.backendExecutable, context.adapter, context.node].map((value) => ({
         hostPath: value.hostPath,
         realPath: value.realPath,
         approvedRootRealPath: realpathSync(value.approvedRoot),

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-07-13).
+Accepted (2026-07-13); amended 2026-09-03 to make pull-request and `dev` scanner breadth identical.
 
 ## Context
 
@@ -61,14 +61,41 @@ are excluded. The scanner archive, installation, working directory, and full log
 Scanner warnings are blocking. A future exception requires an exact, documented signature and a
 bounded count with a regression test. Wildcard warning suppression is forbidden.
 
+Each full-tree job runs `node scripts/check-ci-merge-candidate.mjs` immediately after checkout and
+Node setup, before any other repository command. The check catches checkout/event skew, an
+unexpected parent pair, and a dirty candidate tree. It is deliberately not described as an
+adversarial trust boundary: a `pull_request` candidate controls both `ci.yml` and this script.
+Workflow-change review, CODEOWNERS, branch protection, and exact-current-head required checks own
+that boundary. The direct check is a deterministic consistency assertion, not a self-authorizing
+"trusted action". There is no second post-toolchain check and no commit-pin maintenance protocol.
+
+Required scans also run with both the documented `sonar.analysisCache.enabled=false` control and
+SonarQube Cloud's effective `sonar.sensor.cache.enable=false` control. Incident #3380 proved the
+documented server control alone did not override Cloud's injected sensor-cache setting. The
+scanner-log gate treats the JavaScript/TypeScript sensor's own cache denominator as its
+exclusion-aware eligible inventory. Exactly zero cache hits and one miss receipt covering that
+entire inventory are required. Both that inventory and the largest completed source set must cover
+at least 80 percent of the scanner's indexed files; this explicit breadth floor rejects a narrow,
+self-consistent three-file analysis while allowing the hosted analyzer's non-JS/TS exclusions.
+Incident #3377's incremental PR analysis (4,753 cache hits out of 4,788 eligible files) therefore
+cannot masquerade as the fresh analysis that `dev` performs. The gate separately requires
+SonarJasmin's own planned-file count to equal the combined JS/TS architecture receipt totals and
+requires every individual receipt to report all of its UDGs loaded. The earlier UDG-cache inventory
+is not the same denominator and is used only as a legacy-log fallback when the analyzer emits no
+SonarJasmin plan. These receipt contracts are pinned to hosted scanner CLI `8.1.0.6389` and
+JavaScript/TypeScript plugin `13.8.0.44569`, whose 2026-09-03 log analyzed about 87 percent of the
+indexed inventory. This makes unchanged production sources part of the pre-merge scanner-warning
+verdict while retaining Sonar's PR-scoped issue and coverage evaluation.
+
 ### D3 — Manual analysis always means the remote `dev` revision
 
-For `workflow_dispatch`, the coverage/Sonar job checks out `dev` independently of the branch
-selected in the GitHub UI. It fetches and compares the checked-out SHA with `origin/dev`, runs
-coverage and scope checks, performs a main-branch scan, verifies scanner warnings, and evaluates
-the resulting main analysis against the exact SHA. The New Code Definition remains
-`previous_version`; neither `sonar.projectVersion` nor the leak period may be manipulated to hide
-findings.
+For `workflow_dispatch`, the coverage/Sonar job and its three coverage-producer jobs check out
+`dev` independently of the branch selected in the GitHub UI. This keeps every LCOV and blob
+artifact on the same revision that the scanner checks, compares with `origin/dev`, and analyzes.
+Every unrelated manually dispatched lane keeps the selected immutable `github.sha`; dispatching the
+Sonar repair lane must not silently retarget the rest of the matrix. The New Code Definition remains
+`previous_version`; neither
+`sonar.projectVersion` nor the leak period may be manipulated to hide findings.
 
 ### D4 — LCOV covers the complete instrumentable production scope
 
@@ -98,10 +125,15 @@ executes hermetic launcher/keychain-boundary checks. On Windows, MSVC compiles a
 launcher with `/std:c17 /W4 /WX /analyze`; .NET builds the RFC3161 implementation with current
 built-in analyzers and warnings-as-errors before the existing hermetic fixtures run.
 
-These checks are part of `cross-platform-smoke`, which is a mandatory dependency of the required
-`ci` aggregate. A failed, skipped, cancelled, neutral, stale, or missing platform result blocks the
-merge. Release signing, notarization, and portable-asset evidence remain separate and are not
-replaced by these PR gates.
+These checks are part of the cross-platform smoke estate, which is a mandatory dependency of the
+required `ci` aggregate. Windows remains a full `cross-platform-smoke` matrix leg, so it runs the
+same typecheck, build, package preparation, UI build, install smoke, and optional-native install
+smoke as Linux and macOS before the Windows-native compensation steps. To avoid allocating a
+Windows runner for changes that cannot affect that platform, the matrix omits only the Windows leg
+when the trusted change-scope classifier reports `windows-relevant=false`; pushes and manual
+dispatches still include Windows. A failed, cancelled, neutral, stale, or missing platform result
+blocks the merge. Release signing, notarization, and portable-asset evidence remain separate and
+are not replaced by these PR gates.
 
 ### D6 — Count-aware Free-plan gate semantics
 

@@ -13,21 +13,23 @@
 //
 // Determinism: pure. No IO, clock, or randomness. Identical inputs always yield an identical selection.
 
+import type {
+  EnhancedPrompt,
+  MissingInformationStrategy,
+  PromptCandidateRejection,
+  PromptCandidateScorecard,
+  PromptCandidateSelection,
+  PromptCriticDimension,
+  PromptEnhancementProfileId,
+  PromptOptimizationBounds,
+  PromptSafetyAssessment,
+  PromptTaskAnalysis,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type EnhancedPrompt,
-  type MissingInformationStrategy,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-  type PromptCandidateRejection,
-  type PromptCandidateScorecard,
-  type PromptCandidateSelection,
-  type PromptCriticDimension,
-  type PromptEnhancementProfileId,
-  type PromptOptimizationBounds,
-  type PromptSafetyAssessment,
-  type PromptTaskAnalysis,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import {
   createBudget,
   remainingBudget,

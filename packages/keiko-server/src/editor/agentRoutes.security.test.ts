@@ -12,15 +12,17 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { request, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentGovernedAuthorityReference,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  EDITOR_AGENT_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
-  validateCodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchAuthorityEnvelope,
-  type EditorAgentGovernedAuthorityReference,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import { createUiServer, UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";

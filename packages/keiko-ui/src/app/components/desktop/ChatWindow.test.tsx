@@ -4,22 +4,25 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  KnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
+import { KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 import {
-  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
-  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   resolveKnowledgePodModelUsePolicy,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-  type CapsuleSetId,
-  type KnowledgeCapsuleId,
-  type KnowledgePodSummary,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
+  normalizeMemoryBudgetInput,
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
@@ -38,6 +41,10 @@ import type {
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { queueChatEditorApply } from "@/lib/chat-editor-apply";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+} from "./widgets/shared/gatewaySetupBus";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -137,7 +144,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    memoryEnabled: true,
+    memoryEnabled: false,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
     setMemoryBudgetTokens: vi.fn(),
@@ -179,6 +186,9 @@ function renderStatefulWindow(
   session: ChatSessionApi,
   props: { readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined } = {},
 ): void {
+  const chatWindowProps: ComponentProps<typeof ChatWindow> = {
+    ...(props.onOpenRunResult === undefined ? {} : { onOpenRunResult: props.onOpenRunResult }),
+  };
   function StatefulWindow(): React.JSX.Element {
     const [draft, setDraftState] = useState(session.draft);
     return (
@@ -192,7 +202,7 @@ function renderStatefulWindow(
           },
         }}
       >
-        <ChatWindow onOpenRunResult={props.onOpenRunResult} />
+        <ChatWindow {...chatWindowProps} />
       </ChatSessionProvider>
     );
   }
@@ -467,7 +477,14 @@ describe("ChatWindow cancel button", () => {
     expect(cancelSend).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps connected resource details out of the chat header", () => {
+  // Issue #982 originally pinned this header to the grounding dropdown alone, with no
+  // `.scope-pill` and no `.chat-ctx` blob. Epic #3384 (#3400) reverses the first half: the
+  // desktop connection/relationship engine's ConnectedScopePill is now mounted next to the
+  // grounding control precisely so a connected source is visible with its own disconnect
+  // action (this repo's #184/#532 UI has existed since #982 but was never wired in — a gap
+  // the epic closes). The narrower invariant survives unrelaxed: no raw path or excerpt blob
+  // (`.chat-ctx`) ever renders here — only the pill's basename label and disconnect control.
+  it("shows the connected resource as a named, disconnectable scope pill in the chat header", () => {
     const chat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
     });
@@ -481,8 +498,75 @@ describe("ChatWindow cancel button", () => {
       "Live Files context",
     );
     expect(container.querySelector(".scope-grounding")).toHaveAttribute("data-connected", "true");
-    expect(container.querySelector(".scope-pill")).toBeNull();
+    expect(document.querySelector(".chat-scope-header")).toContainElement(
+      container.querySelector(".scope-pill"),
+    );
+    expect(screen.getByText("File: a.ts")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Disconnect File: a.ts (src/a.ts) from chat" }),
+    ).toBeInTheDocument();
     expect(container.querySelector(".chat-ctx")).toBeNull();
+  });
+
+  // Issue #3400 — before GitChangeScopePill was mounted into ChatScopeHeaderImpl, a chat
+  // connected to a git-change comparison rendered no indication of it anywhere: the status,
+  // counts, and refresh/disconnect actions this component provides were unreachable.
+  it("renders the connected git-change scope in the chat header", () => {
+    const chat = makeChat({
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-chat-header-1",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/chat-header",
+          baseRef: "main",
+          headRef: "feature/chat-header",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 3,
+          totalFiles: 3,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+    const { container } = render(
+      <ChatSessionProvider value={makeSession({ activeChat: chat })}>
+        <ChatWindow linkedRoot="/proj" />
+      </ChatSessionProvider>,
+    );
+
+    expect(document.querySelector(".chat-scope-header")).toContainElement(
+      container.querySelector(".scope-pill"),
+    );
+    expect(screen.getByText("main...feature/chat-header")).toBeInTheDocument();
+  });
+
+  it("marks the chat header as grounded while a Git connector edge is still preparing", () => {
+    const chat = makeChat();
+    const { container } = render(
+      <ChatSessionProvider value={makeSession({ activeChat: chat })}>
+        <ChatWindow
+          linkedRoot="/proj"
+          linkedGitChangeComparisons={[
+            {
+              connectionId: "git-1~chat-1",
+              baseRef: "main",
+              headRef: "feature/header-pending",
+              pending: true,
+            },
+          ]}
+        />
+      </ChatSessionProvider>,
+    );
+
+    expect(container.querySelector(".chat-scope-header")).toHaveAttribute("data-grounded", "true");
+    expect(screen.getByText("main...feature/header-pending")).toBeInTheDocument();
+    expect(screen.getByText("Connecting")).toBeInTheDocument();
   });
 
   it("does not render the cancel button when not sending", () => {
@@ -858,24 +942,57 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 
-  it("renders the memory brain as visually disabled when no memories were included", () => {
-    renderWindow(makeSession({ activeChat: makeChat() }));
+  it("keeps an explicitly activated chat enabled before its first response", async () => {
+    const user = userEvent.setup();
+    renderWindow(makeSession({ activeChat: makeChat(), memoryEnabled: true }));
 
-    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
-    expect(disclosureButton).toHaveAttribute("data-empty", "true");
-    expect(document.querySelector(".chat-scope-header")).toContainElement(disclosureButton);
-    expect(disclosureButton.querySelector(".chat-memory-count")).toBeNull();
-    expect(disclosureButton.querySelector("svg")).not.toBeNull();
+    const activationButton = screen.getByRole("button", {
+      name: "Disable MemoriaViva for this chat",
+    });
+    expect(activationButton).toHaveAttribute("data-enabled", "true");
+    expect(activationButton).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".chat-scope-header")).toContainElement(activationButton);
+    expect(activationButton.querySelector("svg")).not.toBeNull();
+    const disclosure = screen.getByRole("button", { name: /no memories included/i });
+    expect(disclosure.querySelector("svg")).not.toBeNull();
+    await user.click(disclosure);
+    expect(screen.getByLabelText("Memory context budget")).toHaveValue(1200);
     expect(screen.queryByText("No memories included")).toBeNull();
   });
 
   it("uses unique disclosure ids for multiple chat windows", () => {
     render(
       <>
-        <ChatSessionProvider value={makeSession({ activeChat: makeChat({ id: "chat-a" }) })}>
+        <ChatSessionProvider
+          value={makeSession({
+            activeChat: makeChat({ id: "chat-a" }),
+            latestMemory: {
+              context: {
+                enabled: false,
+                text: "",
+                memories: [],
+                budget: { tokens: 0, used: 0 },
+              },
+              actions: [],
+            },
+          })}
+        >
           <ChatWindow />
         </ChatSessionProvider>
-        <ChatSessionProvider value={makeSession({ activeChat: makeChat({ id: "chat-b" }) })}>
+        <ChatSessionProvider
+          value={makeSession({
+            activeChat: makeChat({ id: "chat-b" }),
+            latestMemory: {
+              context: {
+                enabled: false,
+                text: "",
+                memories: [],
+                budget: { tokens: 0, used: 0 },
+              },
+              actions: [],
+            },
+          })}
+        >
           <ChatWindow />
         </ChatSessionProvider>
       </>,
@@ -1372,6 +1489,135 @@ describe("ChatWindow repository file focus picker", () => {
 });
 
 describe("ChatWindow local knowledge scope disclosure", () => {
+  it("refreshes the mounted grounding catalog on each reopen and keeps a removed selection unavailable", async () => {
+    const user = userEvent.setup();
+    const staleCapsuleId = makeCapsuleId("cap-stale");
+    const freshCapsuleId = makeCapsuleId("cap-fresh");
+    fetchCapsulesMock
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: staleCapsuleId,
+            displayName: "Stale knowledge",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 1,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: freshCapsuleId,
+            displayName: "Fresh knowledge",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+          {
+            id: staleCapsuleId,
+            displayName: "Stale knowledge",
+            lifecycleState: "indexing",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ capsules: [] });
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: staleCapsuleId,
+            connectedAtMs: 1,
+          },
+        }),
+      }),
+    );
+
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    await openCombobox(user, "Grounding mode");
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Stale knowledge" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Fresh knowledge" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Knowledge Pod: Stale knowledge" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole("option", { name: "Knowledge Pod: Fresh knowledge" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeVisible();
+  });
+
+  it("clears stale options on a reopen failure and recovers on the next reopen", async () => {
+    const user = userEvent.setup();
+    const staleCapsuleId = makeCapsuleId("cap-failed-refresh");
+    const recoveredCapsuleId = makeCapsuleId("cap-recovered-refresh");
+    fetchCapsulesMock
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: staleCapsuleId,
+            displayName: "Previously available",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 1,
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new Error("knowledge catalog unavailable"))
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: recoveredCapsuleId,
+            displayName: "Recovered knowledge",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+        ],
+      });
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: staleCapsuleId,
+            connectedAtMs: 1,
+          },
+        }),
+      }),
+    );
+
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    await openCombobox(user, "Grounding mode");
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("knowledge catalog unavailable");
+    });
+    expect(
+      screen.queryByRole("option", { name: "Knowledge Pod: Previously available" }),
+    ).toBeNull();
+    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "Knowledge Pod: Recovered knowledge" }),
+      ).toBeVisible();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shares the capsule catalog request across mounted chat windows", async () => {
     fetchCapsulesMock.mockResolvedValueOnce({
       capsules: [
@@ -2051,6 +2297,33 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     expect(screen.getByRole("option", { name: "test-chat-2" })).toBeInTheDocument();
   });
 
+  it("refreshes the eligible-model catalog whenever the visible picker is reopened", async () => {
+    const user = userEvent.setup();
+    const onCatalogRefresh = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+    const onConfigUpdated = vi.fn();
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    try {
+      renderWindow(
+        makeSession({
+          models: [chatModelCapability("test-chat-1")],
+          selectedModel: "test-chat-1",
+          activeChat: makeChat(),
+        }),
+      );
+
+      await openCombobox(user, "Models");
+      await user.keyboard("{Escape}");
+      await openCombobox(user, "Models");
+
+      expect(onCatalogRefresh).toHaveBeenCalledTimes(2);
+      expect(onConfigUpdated).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    }
+  });
+
   it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", async () => {
     const user = userEvent.setup();
     // UI rendering path only: ChatWindow renders whatever session.models
@@ -2186,7 +2459,7 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "118px" });
   });
 
-  it("uses the memory brain disclosure icon and hides history controls in minimal mode", () => {
+  it("uses the memory activation icon and hides history controls in minimal mode", () => {
     const { container } = render(
       <ChatSessionProvider
         value={makeSession({
@@ -2198,45 +2471,162 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     );
 
     expect(container.querySelector(".chatw")).toHaveClass("chatw-minimal");
-    const disclosure = screen.getByRole("button", { name: "No memories included" });
-    expect(disclosure).toHaveClass("chat-memory-disclosure-toggle");
-    expect(disclosure).toHaveAttribute("data-empty", "true");
-    expect(disclosure).toHaveAttribute("data-tip", "No memories included");
-    expect(disclosure.querySelector("svg")).not.toBeNull();
+    const activation = screen.getByRole("button", {
+      name: "Enable MemoriaViva for this chat",
+    });
+    expect(activation).toHaveClass("chat-memory-activation-toggle");
+    expect(activation).toHaveAttribute("data-enabled", "false");
+    expect(activation).toHaveAttribute("data-tip", "Enable MemoriaViva for this chat");
+    expect(activation.querySelector("svg")).not.toBeNull();
     expect(screen.queryByText(/Approximate context:/)).toBeNull();
     expect(screen.queryByRole("button", { name: /clear history/i })).toBeNull();
   });
 });
 
 describe("ChatWindow memory controls", () => {
-  it("keeps MemoriaViva configuration out of the chat window while preserving disclosure", () => {
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-      }),
-    );
-
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(document.querySelector(".chat-memory-budget")).toBeNull();
-    expect(document.querySelector(".chat-memory-toggle")).toBeNull();
-    expect(screen.getByRole("button", { name: /no memories included/i })).toHaveClass(
-      "chat-memory-disclosure-toggle",
-    );
-  });
-
-  it("shows the pending summary before any memory result has arrived", async () => {
+  it("uses the branded brain icon as the per-conversation MemoriaViva control", async () => {
+    const setMemoryEnabled = vi.fn();
+    const setMemoryBudgetTokens = vi.fn();
     const user = userEvent.setup();
     renderWindow(
       makeSession({
         activeChat: makeChat(),
+        memoryEnabled: true,
+        setMemoryEnabled,
+        memoryBudgetTokens: 1200,
+        setMemoryBudgetTokens,
+      }),
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Disable MemoriaViva for this chat",
+    });
+    expect(toggle).toHaveClass("chat-memory-activation-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute("data-enabled", "true");
+    expect(toggle.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByRole("switch", { name: /MemoriaViva/i })).toBeNull();
+    await user.click(toggle);
+    expect(setMemoryEnabled).toHaveBeenCalledWith(false);
+    expect(document.querySelector(".chat-memory-budget")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    const budget = screen.getByLabelText("Memory context budget");
+    fireEvent.change(budget, { target: { value: "2400" } });
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(2400);
+    const normalizationCases: readonly (readonly [string, number])[] = [
+      ["", 0],
+      ["0", 0],
+      ["-100", 0],
+      ["1200.75", 1200],
+      ["1e309", 0],
+    ];
+    for (const [value, expected] of normalizationCases) {
+      fireEvent.change(budget, { target: { value } });
+      expect(normalizeMemoryBudgetInput(value)).toBe(expected);
+      expect(setMemoryBudgetTokens).toHaveBeenLastCalledWith(expected);
+    }
+  });
+
+  it("routes each memory icon only to its owning chat session", async () => {
+    const setPrivateMemoryEnabled = vi.fn();
+    const setBusinessMemoryEnabled = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <>
+        <section data-testid="private-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "private" }),
+              memoryEnabled: true,
+              setMemoryEnabled: setPrivateMemoryEnabled,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+        <section data-testid="business-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "business" }),
+              memoryEnabled: false,
+              setMemoryEnabled: setBusinessMemoryEnabled,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+      </>,
+    );
+
+    const privateControl = within(screen.getByTestId("private-chat")).getByRole("button", {
+      name: "Disable MemoriaViva for this chat",
+    });
+    const businessControl = within(screen.getByTestId("business-chat")).getByRole("button", {
+      name: "Enable MemoriaViva for this chat",
+    });
+    expect(privateControl).toHaveAttribute("data-enabled", "true");
+    expect(businessControl).toHaveAttribute("data-enabled", "false");
+    expect(screen.queryByRole("switch", { name: /MemoriaViva/i })).toBeNull();
+
+    await user.click(businessControl);
+    expect(setBusinessMemoryEnabled).toHaveBeenCalledWith(true);
+    expect(setPrivateMemoryEnabled).not.toHaveBeenCalled();
+  });
+
+  it("routes each memory budget control only to its owning chat session", async () => {
+    const privateBudget = vi.fn();
+    const businessBudget = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <>
+        <section data-testid="private-budget-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "private-budget" }),
+              setMemoryBudgetTokens: privateBudget,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+        <section data-testid="business-budget-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "business-budget" }),
+              setMemoryBudgetTokens: businessBudget,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+      </>,
+    );
+
+    const business = within(screen.getByTestId("business-budget-chat"));
+    await user.click(business.getByRole("button", { name: /no memories included/i }));
+    fireEvent.change(business.getByLabelText("Memory context budget"), {
+      target: { value: "1800" },
+    });
+
+    expect(businessBudget).toHaveBeenCalledWith(1800);
+    expect(privateBudget).not.toHaveBeenCalled();
+  });
+
+  it("opens per-chat memory settings before any memory result has arrived", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        memoryEnabled: true,
         latestMemory: undefined,
       }),
     );
 
-    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
-    await user.click(disclosureButton);
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByLabelText("Memory context budget")).toHaveValue(1200);
+    expect(screen.getByText(/appears after the next response/i)).toBeInTheDocument();
     expect(
-      screen.getByText("MemoriaViva disclosure appears after the next response."),
+      screen.getByRole("button", { name: "Disable MemoriaViva for this chat" }),
     ).toBeInTheDocument();
   });
 
@@ -3095,7 +3485,7 @@ describe("ChatWindow message copy", () => {
     expect(screen.getByRole("img", { name: "Keiko logo" })).toBeInTheDocument();
     expect(assistantBubble?.querySelector(".chat-msg-brand img")).toHaveAttribute(
       "src",
-      "/assets/keiko-logo.svg",
+      "/keiko-logo.svg",
     );
     expect(assistantBubble?.querySelector(".chat-msg-brand")).toHaveAttribute(
       "data-pulsing",

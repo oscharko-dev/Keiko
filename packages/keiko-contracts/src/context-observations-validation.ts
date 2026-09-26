@@ -119,6 +119,13 @@ function collectInjectionOptionals(value: Record<string, unknown>, prefix: strin
   return reasons;
 }
 
+// Both caps in this module are declared in BYTES, so they are measured in bytes. `String.length`
+// counts UTF-16 code units — a 512-unit string of 3-byte BMP characters is 1,536 UTF-8 bytes and
+// passed a 512-byte cap — and a producer-declared `bytes` field is not a measurement at all: an
+// entry declaring `bytes: 0` alongside a multi-megabyte `text` satisfied the 4 KiB excerpt cap.
+// Instantiated once at module scope, matching connected-context.ts and dap-debug.ts.
+const TEXT_ENCODER = new TextEncoder();
+
 // ─── ShapedStreamExcerpt ────────────────────────────────────────────────────────
 function collectExcerpts(value: unknown, prefix: string): string[] {
   if (!Array.isArray(value)) {
@@ -139,9 +146,17 @@ function collectExcerpts(value: unknown, prefix: string): string[] {
     );
     pushIf(reasons, !isFiniteNonNegativeNumber(entry.bytes), `${at}.bytes invalid`);
     pushIf(reasons, typeof entry.text !== "string", `${at}.text invalid`);
-    if (isFiniteNonNegativeNumber(entry.bytes)) {
-      totalBytes += entry.bytes;
-    }
+    // The declared count is cross-checked against the measured one rather than trusted: the same
+    // field feeds downstream budget accounting, so a producer bug must surface here, not silently
+    // propagate into lane sizing.
+    const measuredBytes =
+      typeof entry.text === "string" ? TEXT_ENCODER.encode(entry.text).length : 0;
+    pushIf(
+      reasons,
+      typeof entry.text === "string" && entry.bytes !== measuredBytes,
+      `${at}.bytes must equal the encoded byte length of text`,
+    );
+    totalBytes += measuredBytes;
   });
   pushIf(reasons, totalBytes > MAX_OBSERVATION_EXCERPT_BYTES, `${prefix}.excerpts exceed byte cap`);
   return reasons;
@@ -273,7 +288,7 @@ function collectSearch(value: Record<string, unknown>, prefix: string): string[]
   const query = value.query;
   pushIf(
     reasons,
-    typeof query !== "string" || query.length > MAX_OBSERVATION_QUERY_BYTES,
+    typeof query !== "string" || TEXT_ENCODER.encode(query).length > MAX_OBSERVATION_QUERY_BYTES,
     `${prefix}.query invalid`,
   );
   pushIf(reasons, !isNonEmptyTrimmed(value.searchKind), `${prefix}.searchKind invalid`);

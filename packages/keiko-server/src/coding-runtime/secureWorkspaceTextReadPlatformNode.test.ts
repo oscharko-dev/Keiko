@@ -106,6 +106,7 @@ describe("node portable secure workspace-read inspection", (): void => {
   it("executes the fixed platform signature verifiers without an ambient shell", async (): Promise<void> => {
     const inspection = createNodePortableSecureWorkspaceReadInspection();
 
+    await expect(inspection.verifySignature("/opt/Keiko/helper", "linux-x64")).resolves.toBe(true);
     await expect(inspection.verifySignature("/usr/bin/true", "darwin-arm64")).resolves.toBe(false);
     await expect(
       inspection.verifySignature("/definitely/missing/keiko-helper", "darwin-x64"),
@@ -157,6 +158,9 @@ describe("node portable secure workspace-read inspection", (): void => {
       ),
     ).resolves.toBe(true);
     await expect(provePortableImmutableResourceTree("C:\\Keiko", "win32-x64", run)).resolves.toBe(
+      true,
+    );
+    await expect(provePortableImmutableResourceTree("/opt/Keiko", "linux-x64", run)).resolves.toBe(
       true,
     );
     expect(calls).toEqual([

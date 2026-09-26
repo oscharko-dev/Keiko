@@ -38,7 +38,6 @@
 import type {
   MemoryId,
   MemoryRecord,
-  MemoryScope,
   MemoryStatus,
   MemorySupersession,
 } from "@oscharko-dev/keiko-contracts/memory";
@@ -46,6 +45,7 @@ import {
   checkStatusTransition,
   hasMemoryNegationToken,
   memoryNegationTokens,
+  scopeCoordinateKey,
   validateMemorySupersession,
 } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -93,22 +93,11 @@ function tokenize(body: string): readonly string[] {
   return norm.split(" ");
 }
 
-// Exported for reuse by health-scan.ts (Issue #2129) — same partition key used by every pairwise
-// memory scan in this package, kept as the single definition rather than a second copy.
-export function scopeCoordinateKey(scope: MemoryScope): string {
-  switch (scope.kind) {
-    case "user":
-      return `user:${scope.userId}`;
-    case "workspace":
-      return `workspace:${scope.workspaceId}`;
-    case "project":
-      return `project:${scope.projectId}`;
-    case "workflow":
-      return `workflow:${scope.workflowDefinitionId}`;
-    case "global":
-      return "global";
-  }
-}
+// Re-exported for reuse by health-scan.ts (Issue #2129) and by the package index. The
+// canonical definition lives in @oscharko-dev/keiko-contracts/memory so governance,
+// consolidation, and retrieval validation all read the same partition-key projection
+// (#2906 KEIKO-0546). Do NOT re-implement locally.
+export { scopeCoordinateKey };
 
 // Exported for reuse by health-scan.ts (Issue #2129) — the missing-cross-reference detector needs
 // the same body-similarity primitive; kept as the single definition rather than a second copy.

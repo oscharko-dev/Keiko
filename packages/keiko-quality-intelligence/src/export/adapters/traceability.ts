@@ -10,7 +10,7 @@
 // (ADR-0019 direction rule). Deterministic: rows are sorted by id, confidence is fixed-precision,
 // and there are no timestamps — so the export is byte-stable for identical inputs.
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { classifyCoverageMapping, type CoverageStatus } from "../../domain/coverageRelevance.js";
 import { escapeMarkdownActiveSyntax, inlineField } from "../textSafety.js";
 import { encodeSpreadsheetSafeRow, startsWithFormulaLead } from "./spreadsheetSafeCsv.js";

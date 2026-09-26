@@ -5,9 +5,9 @@
 // them. See Epic #2266 and Issue #2267.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonFile } from "./lib/json.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const NATIVE_SPEC = "npm:typescript@~7.0.2";
@@ -140,8 +140,14 @@ export function evaluateTypeScriptToolchain({
   return { compilerVersion, apiVersion, failures };
 }
 
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
+/** The two manifests the gate compares: the repository root and the pinned native compiler. */
+export function readToolchainManifests(root = repoRoot) {
+  return {
+    manifest: readJsonFile(join(root, "package.json")),
+    nativeManifest: readJsonFile(
+      join(root, "node_modules", "@typescript", "native", "package.json"),
+    ),
+  };
 }
 
 async function main() {
@@ -157,10 +163,7 @@ async function main() {
   let manifest;
   let nativeManifest;
   try {
-    manifest = readJson(join(repoRoot, "package.json"));
-    nativeManifest = readJson(
-      join(repoRoot, "node_modules", "@typescript", "native", "package.json"),
-    );
+    ({ manifest, nativeManifest } = readToolchainManifests());
   } catch {
     console.error(
       "typescript-toolchain: FAIL\n  - native compiler metadata is unavailable; run npm ci.",

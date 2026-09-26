@@ -45,7 +45,7 @@ import {
 } from "./WindowsRegistry";
 import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
-import type { WorkspaceApi } from "../hooks/useWorkspace.types";
+import type { WorkspaceApi, WorkspaceLinkedGitChangeComparison } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 
@@ -170,6 +170,7 @@ interface BodySelection {
 // directly when building the render props below.
 interface SelectBodyOptions {
   readonly windowId: string;
+  readonly suspended: boolean;
   readonly type: WindowType;
   readonly ew: number;
   readonly eh: number;
@@ -181,6 +182,7 @@ interface SelectBodyOptions {
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
+  readonly currentWindowStack: (() => readonly string[]) | undefined;
   readonly restoreWindow: ((id: string) => void) | undefined;
   readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: WorkspaceApi["openEditorFile"];
@@ -189,6 +191,7 @@ interface SelectBodyOptions {
 
 function selectBody({
   windowId,
+  suspended,
   type,
   ew,
   eh,
@@ -200,6 +203,7 @@ function selectBody({
   updateCfg,
   openWindow,
   focusWindow,
+  currentWindowStack,
   restoreWindow,
   updateWindow,
   openEditorFile,
@@ -219,6 +223,7 @@ function selectBody({
       mode: mini ? "mini" : "full",
       node: def.render(typedCfg, {
         windowId,
+        suspended,
         mini,
         minimalChat,
         compact,
@@ -232,6 +237,7 @@ function selectBody({
         updateCfg,
         openWindow,
         focusWindow,
+        currentWindowStack,
         restoreWindow,
         updateWindow,
         openEditorFile,
@@ -261,6 +267,7 @@ function selectBody({
       updateCfg,
       openWindow,
       focusWindow,
+      currentWindowStack,
       restoreWindow,
       updateWindow,
       openEditorFile,
@@ -656,6 +663,9 @@ function attachResizeListeners(
 // yields the SAME array identity — required for the body useMemo below to hold
 // across re-renders (issue #1580).
 const EMPTY_STRINGS: readonly string[] = Object.freeze([]);
+const EMPTY_GIT_CHANGE_COMPARISONS: readonly WorkspaceLinkedGitChangeComparison[] = Object.freeze(
+  [],
+);
 
 interface LinkedContext {
   readonly linkedRoot: string | null;
@@ -667,6 +677,7 @@ interface LinkedContext {
   readonly linkedFigmaSnapshotSources:
     readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
+  readonly linkedGitChangeComparisons: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
 }
 
 // Shared "no linked context" identity. A window with no connected sources resolves
@@ -682,19 +693,27 @@ const EMPTY_LINKED: LinkedContext = Object.freeze({
   linkedFigmaSnapshotRunIds: EMPTY_STRINGS,
   linkedFigmaSnapshotSources: undefined,
   linkedImageSources: undefined,
+  linkedGitChangeComparisons: undefined,
 });
 
 function isEmptyLinkedContext(c: LinkedContext): boolean {
-  return (
-    c.linkedRoot === null &&
-    c.linkedFilePath === undefined &&
-    c.linkedRoots.length === 0 &&
-    c.linkedCapsuleIds.length === 0 &&
-    c.linkedCapsuleSetIds.length === 0 &&
-    c.linkedFigmaSnapshotRunIds.length === 0 &&
-    (c.linkedFigmaSnapshotSources === undefined || c.linkedFigmaSnapshotSources.length === 0) &&
-    (c.linkedImageSources === undefined || c.linkedImageSources.length === 0)
-  );
+  return c.linkedRoot === null && c.linkedFilePath === undefined && !hasLinkedArrayContext(c);
+}
+
+function hasArrayItems(value: readonly unknown[] | undefined): boolean {
+  return value !== undefined && value.length > 0;
+}
+
+function hasLinkedArrayContext(c: LinkedContext): boolean {
+  return [
+    c.linkedRoots,
+    c.linkedCapsuleIds,
+    c.linkedCapsuleSetIds,
+    c.linkedFigmaSnapshotRunIds,
+    c.linkedFigmaSnapshotSources,
+    c.linkedImageSources,
+    c.linkedGitChangeComparisons,
+  ].some(hasArrayItems);
 }
 
 // Resolve linkedRoots per window type: the multi-root types read the full linked-roots
@@ -710,6 +729,56 @@ function resolveLinkedRoots(
   return EMPTY_STRINGS;
 }
 
+function resolveConnectorContext(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): {
+  readonly linkedCapsuleIds: readonly string[];
+  readonly linkedCapsuleSetIds: readonly string[];
+} {
+  if (type !== "quality" && type !== "editor") {
+    return { linkedCapsuleIds: EMPTY_STRINGS, linkedCapsuleSetIds: EMPTY_STRINGS };
+  }
+  return {
+    linkedCapsuleIds: api.linkedConnectorCapsuleIds(id),
+    linkedCapsuleSetIds: api.linkedConnectorCapsuleSetIds(id),
+  };
+}
+
+function resolveQualitySources(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): {
+  readonly linkedFigmaSnapshotRunIds: readonly string[];
+  readonly linkedFigmaSnapshotSources:
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
+  readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
+} {
+  if (type !== "quality") {
+    return {
+      linkedFigmaSnapshotRunIds: EMPTY_STRINGS,
+      linkedFigmaSnapshotSources: undefined,
+      linkedImageSources: undefined,
+    };
+  }
+  return {
+    linkedFigmaSnapshotRunIds: api.linkedFigmaSnapshotRunIds(id),
+    linkedFigmaSnapshotSources: api.linkedFigmaSnapshotSources?.(id),
+    linkedImageSources: api.linkedImageSources?.(id),
+  };
+}
+
+function resolveGitChangeComparisons(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): readonly WorkspaceLinkedGitChangeComparison[] | undefined {
+  if (type !== "chat") return undefined;
+  return api.linkedGitChangeComparisons?.(id) ?? EMPTY_GIT_CHANGE_COMPARISONS;
+}
+
 // Resolve every cross-window linked* context a window of `type` reads. Pulled out
 // of the render body so it can be wrapped in a single useMemo keyed on the link
 // revision — the resolvers each scan conns+wins, so re-running them on every
@@ -717,32 +786,21 @@ function resolveLinkedRoots(
 function computeLinkedContext(api: WorkspaceApi, type: WindowType, id: string): LinkedContext {
   const readsFilesContext = receivesFilesContext(type);
   const readsFocusedFileContext = receivesFocusedFileContext(type);
-  const receivesConnectorContext = type === "quality" || type === "editor";
   const linkedRoot = readsFilesContext ? api.linkedFilesRoot(id) : null;
   const linkedFilePath = readsFocusedFileContext
     ? api.linkedFilesContext(id)?.activeFilePath
     : undefined;
   const linkedRoots = resolveLinkedRoots(type, linkedRoot, api, id);
-  const linkedCapsuleIds = receivesConnectorContext
-    ? api.linkedConnectorCapsuleIds(id)
-    : EMPTY_STRINGS;
-  const linkedCapsuleSetIds = receivesConnectorContext
-    ? api.linkedConnectorCapsuleSetIds(id)
-    : EMPTY_STRINGS;
-  const linkedFigmaSnapshotRunIds =
-    type === "quality" ? api.linkedFigmaSnapshotRunIds(id) : EMPTY_STRINGS;
-  const linkedFigmaSnapshotSources =
-    type === "quality" ? api.linkedFigmaSnapshotSources?.(id) : undefined;
-  const linkedImageSources = type === "quality" ? api.linkedImageSources?.(id) : undefined;
+  const connectorContext = resolveConnectorContext(api, type, id);
+  const qualitySources = resolveQualitySources(api, type, id);
+  const linkedGitChangeComparisons = resolveGitChangeComparisons(api, type, id);
   const resolved: LinkedContext = {
     linkedRoot,
     linkedFilePath,
     linkedRoots,
-    linkedCapsuleIds,
-    linkedCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
+    ...connectorContext,
+    ...qualitySources,
+    linkedGitChangeComparisons,
   };
   return isEmptyLinkedContext(resolved) ? EMPTY_LINKED : resolved;
 }
@@ -772,6 +830,60 @@ function portEdgeLabel(port: Port, t: I18nTranslate): string {
 
 function booleanDataAttribute(value: boolean): "true" | undefined {
   return value ? "true" : undefined;
+}
+
+// Raise counter across ALL frames: a pending delayed focus yields to any later interaction.
+let windowInteractionCount = 0;
+
+// EVERY direct window-raising interaction that bypasses activateWindowForTarget (resize grips,
+// the maximize control) must advance the counter AT PRESS TIME. Those handlers suppress or
+// bypass the browser's default focus move, so DOM focus can stay inside a previously armed
+// text-entry target — the token advance is then the only thing stopping that pending delayed
+// raise from re-raising the old window over the one the user is interacting with (PR #3212).
+function noteWindowInteraction(): void {
+  windowInteractionCount += 1;
+}
+
+// Direct user-interaction raises outside activateWindowForTarget (resize grips) count the
+// interaction and raise in one step, at the press that starts the gesture.
+function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
+  noteWindowInteraction();
+  api.focus(id);
+}
+
+// Audit C061 / WCAG 2.4.11 is about TABBING into a lower, overlapped window: the focused control
+// must not stay hidden behind the top window. It is not about focus a window's own content takes
+// while it initializes. Monaco mounting, a workspace-trust banner or a dialog autofocusing all fire
+// the same capture-phase focus event, and raising on those let a still-loading window jump over the
+// window the user had moved to in the meantime — observed as a "Close Files window" click that
+// could never land because the editor kept re-raising itself over it.
+//
+// Two facts separate the two cases, both already recorded by the product:
+//   * the app shell writes `document.documentElement.dataset.inputModality` and sets it to
+//     `keyboard` only for a bare Tab keydown (pointer presses set `pointer`), and
+//   * a focus stolen by a window's own content arrives while the previously focused element sits
+//     in ANOTHER window.
+// Raise when the modality says the user tabbed here, or when the focus did not come out of a
+// different window at all. A pointer press never needs this path: `onPointerDown` raises first.
+function focusCameFromAnotherWindow(relatedTarget: EventTarget | null): boolean {
+  if (!(relatedTarget instanceof Element)) return false;
+  const previousWindow = relatedTarget.closest(".window");
+  if (previousWindow === null) return false;
+  return previousWindow !== relatedTarget.ownerDocument.activeElement?.closest(".window");
+}
+
+function raisesOnKeyboardFocus(relatedTarget: EventTarget | null): boolean {
+  const tabbed =
+    typeof document !== "undefined" &&
+    document.documentElement.dataset.inputModality === "keyboard";
+  return tabbed || !focusCameFromAnotherWindow(relatedTarget);
+}
+
+function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  const activeElement = document.activeElement;
+  if (activeElement === null || activeElement === document.body) return true;
+  return target.closest(".window")?.contains(activeElement) === true;
 }
 
 // `linkRevision` only feeds the React.memo comparison and the linked-context
@@ -831,7 +943,24 @@ function WindowFrameImpl({
     [api, win.id],
   );
   const openWindow = useCallback(
-    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
+    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => {
+      const id = api.add(type, cfg);
+      // #3390: a window opened from inside another window receives focus, as on any desktop. The
+      // opener's own deferred raise (see `activateWindowForTarget`) yields to wherever focus has
+      // moved, so the new window also stays on top instead of landing behind its opener. Deferred
+      // one frame: the element exists only after React has committed the added window.
+      if (id !== null) {
+        requestAnimationFrame(() => {
+          const opened = document.querySelector<HTMLElement>(
+            `.window[data-window-id="${CSS.escape(id)}"]`,
+          );
+          if (opened !== null && !opened.contains(document.activeElement)) {
+            opened.focus({ preventScroll: true });
+          }
+        });
+      }
+      return id;
+    },
     [api],
   );
   const openEditorFile = useCallback<WorkspaceApi["openEditorFile"]>(
@@ -839,6 +968,7 @@ function WindowFrameImpl({
     [api],
   );
   const focusWindow = useCallback((id: string): void => api.focus(id), [api]);
+  const currentWindowStack = api.currentWindowStack;
   const restoreWindow = useCallback((id: string): void => api.restore(id), [api]);
   const updateWindow = useCallback(
     (id: string, patch: Partial<AppWindow>): void => api.update(id, patch),
@@ -855,6 +985,7 @@ function WindowFrameImpl({
     () =>
       selectBody({
         windowId: win.id,
+        suspended: win.minimized === true,
         type: win.type,
         ew,
         eh,
@@ -866,6 +997,7 @@ function WindowFrameImpl({
         updateCfg,
         openWindow,
         focusWindow,
+        currentWindowStack,
         restoreWindow,
         updateWindow,
         openEditorFile,
@@ -874,6 +1006,7 @@ function WindowFrameImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ew/eh intentionally excluded; bodyBreakpoints is their discrete-crossing proxy (GEN-PERF-RENDER-003) so a same-band resize does not rebuild the body
     [
       win.id,
+      win.minimized,
       win.type,
       win.cfg,
       bodyBreakpoints,
@@ -884,6 +1017,7 @@ function WindowFrameImpl({
       updateCfg,
       openWindow,
       focusWindow,
+      currentWindowStack,
       restoreWindow,
       updateWindow,
       openEditorFile,
@@ -955,17 +1089,31 @@ function WindowFrameImpl({
     [],
   );
 
-  const focusWindowForTarget = useCallback(
+  const activateWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
+      windowInteractionCount += 1;
       if (isTextEntryTarget(target)) {
-        window.setTimeout(() => api.focus(win.id), 180);
+        const armedInteraction = windowInteractionCount;
+        window.setTimeout((): void => {
+          // The delay preserves text selection, but a later click may have moved focus to another
+          // window. Never let this stale callback raise the old window over the user's new target.
+          // The counter catches later interactions whose preventDefault() left DOM focus here.
+          if (windowInteractionCount !== armedInteraction) return;
+          if (delayedFocusStillTargetsWindow(target)) api.activateWindow(win.id);
+        }, 180);
         return;
       }
       if (isInteractiveControlTarget(target)) {
-        window.setTimeout(() => api.focus(win.id), 0);
+        window.setTimeout(() => {
+          // #3390: a control inside this window may itself have opened ANOTHER window, which
+          // took focus and the top of the stack in the meantime. Raising this window regardless
+          // put the Coding Workbench back over the Pull Request window its own "Review exact
+          // draft" had just opened, every time -- the same guard the text-entry branch applies.
+          if (delayedFocusStillTargetsWindow(target)) api.activateWindow(win.id);
+        }, 0);
         return;
       }
-      api.focus(win.id);
+      api.activateWindow(win.id);
     },
     [api, win.id],
   );
@@ -992,10 +1140,7 @@ function WindowFrameImpl({
         attachGroupDragListeners(api, geo, e.clientX, e.clientY, () => setDraggingWindow(false));
         return;
       }
-      focusWindowForTarget(e.target);
-      if (!selected) {
-        api.replaceSelection([win.id]);
-      }
+      activateWindowForTarget(e.target);
       const wasMax = win.max;
       const restoredW = wasMax ? (win.prev?.w ?? 480) : win.w;
       const restoredH = wasMax ? (win.prev?.h ?? 360) : win.h;
@@ -1020,7 +1165,7 @@ function WindowFrameImpl({
       connState,
       selected,
       selectedWindowCount,
-      focusWindowForTarget,
+      activateWindowForTarget,
     ],
   );
 
@@ -1032,7 +1177,7 @@ function WindowFrameImpl({
         e.stopPropagation();
         resizeCleanupRef.current?.();
         resizeCleanupRef.current = null;
-        api.focus(win.id);
+        raiseWindowForInteraction(api, win.id);
         attachResizeListeners(
           api,
           {
@@ -1139,6 +1284,11 @@ function WindowFrameImpl({
     restoreFocusAfterRemoval();
   }, [api, win.id, restoreFocusAfterRemoval]);
 
+  const maximizeWithActivation = useCallback((): void => {
+    api.activateWindow(win.id);
+    api.maximize(win.id);
+  }, [api, win.id]);
+
   // GEN-UI-KEYBOARD-011 — complete an in-flight connect from the keyboard when the
   // window SECTION itself holds focus (Tabbed to a highlighted valid target) and
   // Enter is pressed. The connection ports still own Enter/Space when focus is on a
@@ -1175,7 +1325,13 @@ function WindowFrameImpl({
   // content-visibility is limited to full-mode windows (mini/tiny are already
   // cheap) and skipped for the editor so an off-screen Monaco never mis-measures.
   const enableContentVisibility = bodyMode === "full" && win.type !== "editor";
-  const bodyOverflow = win.type === "chat" && bodyMode === "full" ? "hidden" : undefined;
+  // Dense working surfaces own their internal scroll regions (chat log, Git file list, diff, and
+  // history). Letting the generic window body scroll would create a second, unbounded canvas below
+  // the visible Git workspace when a repository has many changed files.
+  const bodyOverflow =
+    bodyMode === "full" && (win.type === "chat" || win.type === "governedGit")
+      ? "hidden"
+      : undefined;
   const bodyStyle = useMemo<CSSProperties>(
     () => ({
       ...(enableContentVisibility
@@ -1196,9 +1352,10 @@ function WindowFrameImpl({
       width: win.w,
       height: win.h,
       zIndex: win.z,
+      display: win.minimized === true ? "none" : undefined,
       transform: `translate3d(${String(win.x)}px, ${String(win.y)}px, 0)`,
     }),
-    [win.x, win.y, win.w, win.h, win.z],
+    [win.x, win.y, win.w, win.h, win.z, win.minimized],
   );
   const contentZoomStyle = useMemo<CSSProperties>(
     () => ({
@@ -1213,11 +1370,10 @@ function WindowFrameImpl({
     }),
     [ew, eh, zoom],
   );
-  // Issue #2150 — the selected-state ring is rendered by Workspace.tsx as a
-  // z-indexed overlay above every window (see WorkspaceSelection.module.css
-  // .selectionRing), not as styling here, so it stays visible regardless of
-  // window overlap. `data-selected` below remains the source of truth for a11y
-  // and for that overlay to find this window's geometry.
+  // The selected-state ring is rendered by Workspace.tsx as a z-indexed overlay
+  // on this window's stacking layer (see WorkspaceSelection.module.css
+  // .selectionRing), not as extra chrome here. `data-selected` below remains
+  // the source of truth for a11y and for that overlay to find this geometry.
   const windowClassName = `window ${selectionStyles.workspaceWindow}`;
 
   return (
@@ -1238,12 +1394,15 @@ function WindowFrameImpl({
       data-selected={booleanDataAttribute(selected)}
       data-dragging={booleanDataAttribute(draggingWindow)}
       data-window-id={win.id}
+      hidden={win.minimized === true}
       style={sectionStyle}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- window regions are keyboard-reachable so Space can toggle multi-selection without a drag gesture
       tabIndex={0}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
-        focusWindowForTarget(e.target);
+        if (connState === "valid") api.focus(win.id);
+        else if (isPrimaryActivationPointer(e)) activateWindowForTarget(e.target);
+        else api.focus(win.id);
       }}
       // GEN-UI-KEYBOARD-011 — Enter on a focused, highlighted valid target window
       // completes the connect (the section's keyboard counterpart to the pointer
@@ -1254,8 +1413,10 @@ function WindowFrameImpl({
       // behind the top window; Cmd/Alt+Arrows also only act on the topZ window.
       // The !top guard matters: makeFocus bumps z unconditionally, so without it
       // every Tab step inside the top window would trigger a state update.
-      onFocusCapture={() => {
-        if (!top) window.setTimeout(() => api.focus(win.id), 0);
+      onFocusCapture={(event) => {
+        if (!top && raisesOnKeyboardFocus(event.relatedTarget)) {
+          window.setTimeout(() => api.focus(win.id), 0);
+        }
       }}
     >
       <div className="win-frame-clip">
@@ -1363,11 +1524,19 @@ function WindowFrameImpl({
                     ? t("window.restore", { label: windowTitle })
                     : t("window.fullscreen", { label: windowTitle })
                 }
-                onPointerDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  // This traffic-button press bypasses activateWindowForTarget via
+                  // stopPropagation(), so invalidate stale delayed raises at PRESS time. Click
+                  // time is too late: a press-and-hold across the 180ms delay would let a pending
+                  // text-entry raise fire mid-hold, covering this window and even retargeting the
+                  // release. The click still owns the intentional activation + maximize/restore.
+                  if (isPrimaryActivationPointer(e)) noteWindowInteraction();
+                }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                 }}
-                onClick={() => api.maximize(win.id)}
+                onClick={maximizeWithActivation}
               >
                 {win.max ? <RestoreIcon size={17} /> : <MaximizeIcon size={17} />}
               </button>

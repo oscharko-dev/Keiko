@@ -49,6 +49,27 @@ interface EmptyWorkspaceBlobProps {
   readonly onNewWindow: () => void;
 }
 
+interface OrganicWorkspaceBubbleBaseProps {
+  readonly accessibleDescription: string;
+  readonly centeredLogo?: boolean;
+  readonly className?: string | undefined;
+  readonly subtitle?: string;
+  readonly title?: string;
+  readonly titleFontSize?: number;
+}
+
+type OrganicWorkspaceBubbleProps = OrganicWorkspaceBubbleBaseProps &
+  (
+    | {
+        readonly actionLabel: string;
+        readonly onActivate: () => void;
+      }
+    | {
+        readonly actionLabel?: never;
+        readonly onActivate?: never;
+      }
+  );
+
 function prefersReducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -57,13 +78,18 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-export function EmptyWorkspaceBlob({ onNewWindow }: EmptyWorkspaceBlobProps): ReactNode {
-  const t = useTranslate();
+export function OrganicWorkspaceBubble({
+  accessibleDescription,
+  actionLabel,
+  centeredLogo = false,
+  className,
+  onActivate,
+  subtitle,
+  title,
+  titleFontSize = 16,
+}: OrganicWorkspaceBubbleProps): ReactNode {
   const rawMaskId = useId();
   const maskId = `ewb-${rawMaskId.replaceAll(":", "")}`;
-  // GEN-UI-A11Y-026 — the "Empty workspace / Open a window to start working" copy lives only inside
-  // the aria-hidden SVG mask, so AT never receives that context. A visually-hidden description node,
-  // associated via aria-describedby, carries it to screen readers without changing the visual design.
   const descriptionId = `ewb-desc-${rawMaskId.replaceAll(":", "")}`;
   const pathRef = useRef<SVGPathElement>(null);
   const groupRef = useRef<SVGGElement>(null);
@@ -113,59 +139,98 @@ export function EmptyWorkspaceBlob({ onNewWindow }: EmptyWorkspaceBlobProps): Re
       group.getBoundingClientRect();
       group.classList.add("is-pulse");
     }
-    onNewWindow();
-  }, [onNewWindow]);
+    onActivate?.();
+  }, [onActivate]);
 
-  return (
-    <button
-      type="button"
-      className="empty-workspace-blob"
-      aria-label={t("workspace.empty.openWindow")}
-      aria-describedby={descriptionId}
-      onClick={handleClick}
-    >
+  const rootClassName =
+    className === undefined ? "empty-workspace-blob" : `empty-workspace-blob ${className}`;
+  const graphic = (
+    <>
       <span id={descriptionId} className="visually-hidden">
-        {t("workspace.empty.description")}
+        {accessibleDescription}
       </span>
       <svg width="320" height="320" viewBox="0 0 280 280" aria-hidden="true">
         <defs>
           <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="280" height="280">
             <rect x="0" y="0" width="280" height="280" fill="#fff" />
-            <g transform="translate(107,64) scale(0.080625)">
-              <g transform="translate(1024 0) scale(-1 1)">
-                <g transform="translate(1024,1024) scale(-0.1,-0.1)" fill="#000">
-                  <path d={LOGO_D} />
+            <g
+              transform={
+                centeredLogo ? "translate(140 140) scale(1.35) translate(-140 -140)" : undefined
+              }
+            >
+              <g transform={`translate(107,${centeredLogo ? "99" : "64"}) scale(0.080625)`}>
+                <g transform="translate(1024 0) scale(-1 1)">
+                  <g transform="translate(1024,1024) scale(-0.1,-0.1)" fill="#000">
+                    <path d={LOGO_D} />
+                  </g>
                 </g>
               </g>
             </g>
-            <text
-              x="140"
-              y="172"
-              textAnchor="middle"
-              fill="#000"
-              fontFamily="var(--font-ui)"
-              fontSize="16"
-              fontWeight="700"
-            >
-              {t("workspace.empty.title")}
-            </text>
-            <text
-              x="140"
-              y="191"
-              textAnchor="middle"
-              fill="#000"
-              fontFamily="var(--font-ui)"
-              fontSize="11"
-              fontWeight="400"
-            >
-              {t("workspace.empty.subtitle")}
-            </text>
+            {title === undefined ? null : (
+              <text
+                x="140"
+                y="172"
+                textAnchor="middle"
+                fill="#000"
+                fontFamily="var(--font-ui)"
+                fontSize={titleFontSize}
+                fontWeight="700"
+              >
+                {title}
+              </text>
+            )}
+            {subtitle === undefined ? null : (
+              <text
+                x="140"
+                y="191"
+                textAnchor="middle"
+                fill="#000"
+                fontFamily="var(--font-ui)"
+                fontSize="11"
+                fontWeight="400"
+              >
+                {subtitle}
+              </text>
+            )}
           </mask>
         </defs>
         <g ref={groupRef} className="empty-workspace-blob__group">
           <path ref={pathRef} className="empty-workspace-blob__fill" mask={`url(#${maskId})`} />
         </g>
       </svg>
+    </>
+  );
+
+  if (onActivate === undefined) {
+    return (
+      <div className={rootClassName} role="img" aria-label={accessibleDescription}>
+        {graphic}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={rootClassName}
+      aria-label={actionLabel}
+      aria-describedby={descriptionId}
+      onClick={handleClick}
+    >
+      {graphic}
     </button>
+  );
+}
+
+export function EmptyWorkspaceBlob({ onNewWindow }: EmptyWorkspaceBlobProps): ReactNode {
+  const t = useTranslate();
+  return (
+    <OrganicWorkspaceBubble
+      accessibleDescription={t("workspace.empty.description")}
+      actionLabel={t("workspace.empty.openWindow")}
+      title={t("workspace.empty.title")}
+      subtitle={t("workspace.empty.subtitle")}
+      onActivate={onNewWindow}
+    />
   );
 }

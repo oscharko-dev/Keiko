@@ -13,7 +13,7 @@ import {
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   VOICE_PERSONAS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type {
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -36,7 +36,7 @@ import type {
 export {
   isConversationEligibleModel,
   explainConversationIneligibility,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 export type { ConversationIneligibilityReason } from "@oscharko-dev/keiko-contracts";
 
 // Issue #1210 / ADR-0042 D5: infilling (FIM) capability helpers and the content-free
@@ -48,7 +48,7 @@ export {
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
   INFILLING_ALIGNMENTS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 export type {
   InfillingAlignment,
   CompletionInteractionMode,
@@ -74,7 +74,7 @@ export {
   listVoicePersonas,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 export type {
   VoiceProviderLocality,
   VoicePersona,
@@ -158,9 +158,18 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
   return {
     id: modelId,
     kind: "chat",
-    contextWindow: 0,
+    // Conservative non-zero default (audit KEIKO-0520): a chat capability with contextWindow<=0
+    // is a degraded sentinel that only surfaces later through disconnected downstream symptoms
+    // (GEN-GATE-CONTEXT-001/004). parseModelCapability and buildProviderCapabilityBody now reject
+    // chat capabilities with contextWindow<=0 at config-parse time, so this default must be a real
+    // positive number for the setup workflow's unenriched placeholder capabilities to parse. 4096
+    // is the smallest window any modern chat model advertises; discovery and enrichment will
+    // widen it to the true value before the model is actually used.
+    contextWindow: 4096,
     maxOutputTokens: 0,
-    toolCalling: true,
+    // A deployment name is never evidence that its endpoint accepts forced tool calls. Setup and
+    // readiness upgrade this only after the live, configuration-bound probe succeeds.
+    toolCalling: false,
     structuredOutput: false,
     streaming: true,
     // Conservative defaults for an UNKNOWN discovered chat model (Issue #143 / AC #2):

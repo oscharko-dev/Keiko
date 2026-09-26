@@ -17,28 +17,31 @@
 // Determinism: pure. No IO, clock, or randomness. The caller supplies the `EnhancedPromptId` so id
 // construction stays deterministic. Output always satisfies `validateEnhancedPrompt` (#1309).
 
+import type {
+  CitationDiscipline,
+  ContradictionPolicy,
+  EnhancedPrompt,
+  EnhancedPromptId,
+  GroundingNeed,
+  GroundingPlan,
+  GroundingSourceKind,
+  GroundingSourcePolicy,
+  OutputSchemaDescriptor,
+  PromptClarification,
+  PromptDomain,
+  PromptEnhancementProfileId,
+  PromptRiskClass,
+  PromptTaskAnalysis,
+  PromptTaskClass,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
 import {
   PROMPT_ENHANCEMENT_PROFILES,
   normalizePromptDraft,
-  planGrounding,
-  validatePromptTaskAnalysis,
-  type CitationDiscipline,
-  type ContradictionPolicy,
-  type EnhancedPrompt,
-  type EnhancedPromptId,
-  type GroundingNeed,
-  type GroundingPlan,
-  type GroundingSourceKind,
-  type GroundingSourcePolicy,
-  type OutputSchemaDescriptor,
-  type PromptClarification,
-  type PromptDomain,
-  type PromptEnhancementProfileId,
-  type PromptRiskClass,
-  type PromptTaskAnalysis,
-  type PromptTaskClass,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { planGrounding } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-grounding";
+import { validatePromptTaskAnalysis } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+import { OUTPUT_CONTROLLABILITY_CRITERION } from "./critic.js";
 import type { PromptEnhancementPlan } from "./planner.js";
 import { getPromptEnhancerExecutionProfile } from "./profiles.js";
 import type { PromptEnhancerExecutionProfile, ReasoningStrategy } from "./profiles.js";
@@ -157,9 +160,15 @@ interface PromptIntentFrame {
   readonly uncertaintyHandling: readonly string[];
 }
 
+/**
+ * Lexical cue for an intent rule: plain entries match as substrings of the folded search text,
+ * RegExp entries match with their own semantics (e.g. word boundaries for standalone words).
+ */
+type IntentNeedle = string | RegExp;
+
 interface PromptIntentRule extends PromptIntentFrame {
-  readonly strong: readonly string[];
-  readonly weak: readonly string[];
+  readonly strong: readonly IntentNeedle[];
+  readonly weak: readonly IntentNeedle[];
   readonly taskClasses?: readonly PromptTaskClass[];
   readonly domains?: readonly PromptDomain[];
 }
@@ -172,10 +181,11 @@ function foldForSearch(text: string): string {
     .replaceAll("ß", "ss");
 }
 
-const countMatches = (haystack: string, needles: readonly string[]): number => {
+const countMatches = (haystack: string, needles: readonly IntentNeedle[]): number => {
   let count = 0;
   for (const needle of needles) {
-    if (haystack.includes(needle)) count += 1;
+    const matched = typeof needle === "string" ? haystack.includes(needle) : needle.test(haystack);
+    if (matched) count += 1;
   }
   return count;
 };
@@ -531,8 +541,38 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
   },
   {
     id: "travel-planning",
-    strong: ["reise", "urlaub", "itinerary", "travel", "trip", "japan", "hotel", "flug"],
-    weak: ["oktober", "route", "budget", "transport", "unterkunft", "sightseeing"],
+    strong: [
+      "plane eine reise",
+      "reise nach",
+      "reiseplan",
+      "reiseplanung",
+      "urlaubsreise",
+      "urlaub",
+      "itinerary",
+      "travel",
+      "trip",
+      "japan",
+      "hotel",
+      "flug",
+    ],
+    weak: [
+      // Standalone "Reise" scores travel only with a planning verb (plan/plane/planen,
+      // organisiere(n), buche(n)) within a 40-char window on either side. A bare or merely
+      // possessive mention is not planning intent — "Was bedeutet das Wort Reise?" and a
+      // translation request quoting "meine Reise" must stay out of the expert travel frame,
+      // while "Plane meine Reise durch Europa" keeps scoring. Embeddings such as "Preise" or
+      // "Reisepass" must not revive the substring false positive that removed the plain
+      // "reise" needle. The folded search text is lowercase and diacritic-free, but \b is
+      // ASCII-only, so Unicode letter/number lookarounds are the word boundary.
+      /(?<![\p{L}\p{N}])(?:plan(?:e|en)?|organisieren?|buchen?)(?![\p{L}\p{N}]).{0,40}(?<![\p{L}\p{N}])reise(?![\p{L}\p{N}])/su,
+      /(?<![\p{L}\p{N}])reise(?![\p{L}\p{N}]).{0,40}(?<![\p{L}\p{N}])(?:plan(?:e|en)?|organisieren?|buchen?)(?![\p{L}\p{N}])/su,
+      "oktober",
+      "route",
+      "budget",
+      "transport",
+      "unterkunft",
+      "sightseeing",
+    ],
     taskClasses: ["decision-support", "research"],
     role: "You are an expert travel planner.",
     goal: "Create a realistic itinerary with timing, route logic, budget assumptions, logistics, tradeoffs, and open questions.",
@@ -691,7 +731,17 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
   },
   {
     id: "decision-support",
-    strong: ["should i", "soll ich", "pros and cons", "vor- und nachteile", "help me decide"],
+    strong: [
+      "should i",
+      "soll ich",
+      "pros and cons",
+      "vor- und nachteile",
+      "help me decide",
+      "entscheidung treffen",
+      "entscheidung vorbereiten",
+      "bereite eine belastbare entscheidung uber",
+      "entscheide zwischen",
+    ],
     weak: ["recommend", "empfehlung", "option", "tradeoff", "vergleich", "compare"],
     taskClasses: ["decision-support"],
     role: "You are a decision-support analyst.",
@@ -958,7 +1008,7 @@ function buildQualityCriteria(
     optional.push("Token efficiency: the response is concise and free of padding.");
   }
   if (plan.selectedProfile === "technical" || plan.outputSchema.structured) {
-    optional.push("Output controllability: the response conforms exactly to the required format.");
+    optional.push(OUTPUT_CONTROLLABILITY_CRITERION);
   }
   if (plan.groundingMandatory || plan.executionProfile.emphasizeGrounding) {
     optional.push("Grounding: claims are supported and traceable to evidence.");

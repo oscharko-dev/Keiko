@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { NormalizedResponse, ToolDefinition } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  ChatMessage,
+  NormalizedResponse,
+  ToolDefinition,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { HarnessCompactionPort } from "./context-compaction-port.js";
 import { runLoop } from "./loop.js";
 import type { ModelPort, ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessEvent, TaskInput } from "./types.js";
@@ -332,7 +337,7 @@ describe("runLoop — limit breaches each map to their category", () => {
         }),
       listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
     };
-    const { ctx, sink } = buildContext({
+    const { ctx } = buildContext({
       task: INVESTIGATE,
       model: port,
       tools: readTool,
@@ -341,7 +346,6 @@ describe("runLoop — limit breaches each map to their category", () => {
     const outcome = await runLoop(ctx);
     expect(outcome).toBe("completed");
     expect(ctx.counters.commandExecutions).toBe(0);
-    void sink;
   });
 
   it("non-retryable model error -> failed with HARNESS_MODEL_ERROR", async () => {
@@ -566,7 +570,7 @@ describe("runLoop — limit breaches each map to their category", () => {
   });
 
   it("HARNESS_INTERNAL when a non-run_command tool claims commandExecuted:true", async (): Promise<void> => {
-    // Issue #2638 hardening: the pre-execution budget check is name-scoped to `run_command` while
+    // Issue #2638 hardening: the pre-execution budget check uses canonical descriptor effects while
     // the counter increments on any result. A tool that claims a command under a different name
     // could bypass the budget; the post-execution contract guard in runOneTool must fail closed.
     const { port } = scriptedModel([
@@ -627,5 +631,273 @@ describe("runLoop — limit breaches each map to their category", () => {
     const outcomeB = await runLoop(ctxB);
     expect(outcomeB).toBe("limit-exceeded");
     expect(failureCategory(sinkB.events())).toBe("HARNESS_LIMIT_WALL_TIME");
+  });
+
+  it("keeps the handler's failure when a model error and the wall-time deadline coincide", async () => {
+    // A provider that errors slowly must be reported as a model error, not relabelled as budget
+    // exhaustion: the manifest's failure block is the audit surface for why a run stopped
+    // (ADR-0004 D1, KEIKO-0098).
+    const { AuthenticationError } = await import("@oscharko-dev/keiko-model-gateway");
+    const { clock, set } = stubClock(0);
+    const slowFailingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => {
+        set(1000); // the deadline passes while the call is in flight
+        return Promise.reject(new AuthenticationError("provider returned 400 invalid request"));
+      },
+    };
+    const { ctx, sink } = buildContext({
+      task: EXPLAIN,
+      model: slowFailingModel,
+      clock,
+      limits: { maxWallTimeMs: 100 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("failed");
+    expect(failureCategory(sink.events())).toBe("HARNESS_MODEL_ERROR");
+  });
+
+  it("still converts a successful one-hop completion to limit-exceeded past the deadline", async () => {
+    // Only a handler's own recorded outcome (a real failure, an abort) may be protected from the
+    // post-dispatch deadline check — an ordinary successful completion must not be, per the
+    // wall-time budget's own acceptance criterion ("a model port that never errors ... still
+    // resolves to limit-exceeded"). reporting's dispatch goes straight to "completed" in one hop
+    // with no clock read in between, so a blanket "any terminal state bypasses the check" (as
+    // opposed to protecting only failed/cancelled) would silently drop enforcement here.
+    let calls = 0;
+    // Calls 1-16 land before reporting's own pre-dispatch guard (so dispatch is not blocked);
+    // call 17+ (this guard's own post-dispatch read) crosses the deadline — verified empirically
+    // against this exact EXPLAIN/scriptedModel/single-response shape.
+    const clock = {
+      now: (): number => (calls++ < 16 ? 0 : 1000),
+      sleep: (): Promise<void> => Promise.resolve(),
+    };
+    const { port, calls: modelCalls } = scriptedModel([response()]);
+    const { ctx, sink } = buildContext({
+      task: EXPLAIN,
+      model: port,
+      clock,
+      limits: { maxWallTimeMs: 100 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_WALL_TIME");
+    // Both wall-time guards produce limit-exceeded/HARNESS_LIMIT_WALL_TIME, so the two assertions
+    // above cannot tell them apart: if a refactor shifted the clock reads so the deadline were
+    // crossed at the PRE-dispatch guard, runLoop would exit before dispatch and this test would
+    // still pass — while no longer exercising the post-dispatch guard it exists to pin. runLoop
+    // reaches the model only inside dispatch(), after that guard, so a non-zero model call count
+    // is what makes this pin non-vacuous.
+    expect(modelCalls()).toBe(1);
+  });
+});
+
+// KEIKO-0726 (#3323): checkModelCallLimits' hard-fail gate must give an injected
+// HarnessCompactionPort one chance to evict/compact history before failing on context-size
+// alone. This is the growth the tool-observation shaper (executor.ts) never covered: the model's
+// OWN assistant-turn content, appended unchecked in handleModelCall, only becomes visible again at
+// the next model-call entry guard (loop.ts's checkModelCallLimits) — reached directly, without an
+// intervening handleContextSelection or tool-result byte check, when a tool-call round trip
+// resolves with zero tool calls (finishReason "tool_calls" + an empty toolCalls array). That is
+// therefore the only way to exercise checkModelCallLimits' own byte check with fresh, uncompacted
+// growth rather than a check some earlier call site already performed on the same bytes.
+describe("runLoop — checkModelCallLimits compaction (KEIKO-0726)", () => {
+  // A large assistant turn appended with no tool calls to execute: handleModelCall appends it
+  // unchecked, routeAfterModel sends the run to tool-call (editor-agent-turn allows tools), and
+  // handleToolCall's empty-calls loop feeds straight back to model-call without ever computing
+  // context bytes itself — so checkModelCallLimits is the FIRST and only guard that sees the
+  // overflow.
+  function overflowingFirstResponse(): NormalizedResponse {
+    return response({
+      finishReason: "tool_calls",
+      toolCalls: [],
+      content: "x".repeat(2000),
+    });
+  }
+
+  const TASK = {
+    taskType: "editor-agent-turn" as const,
+    input: { goal: "investigate", sessionId: "session-1" },
+  };
+
+  it("still hard-fails with no compactionPort injected (unchanged behavior)", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("compacts and completes when the injected compactionPort frees enough room", async () => {
+    const { port, calls } = scriptedModel([
+      overflowingFirstResponse(),
+      response({ content: "final" }),
+    ]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      // Drops everything but the leading system seed — a deliberately blunt stand-in for the
+      // real allocator-backed compactor; checkModelCallLimits re-validates the byte result
+      // itself, so this test only needs "small enough to fit", not a faithful algorithm.
+      messages: input.messages.filter((m) => m.role === "system"),
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(calls()).toBe(2);
+    expect(failureCategory(sink.events())).toBeUndefined();
+    // AGENTS.md §8 Rule 1: a run whose history was evicted must be reconstructable from the
+    // emitted event stream alone — assert the body-free compaction signal, not just the outcome.
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      expect(compacted.messagesDropped).toBeGreaterThan(0);
+      expect(compacted.bytesAfter).toBeLessThanOrEqual(compacted.bytesBefore);
+      expect(compacted.bytesAfter).toBeLessThanOrEqual(1000);
+    }
+  });
+
+  it("prefers a port-reported messagesEvicted over net array shrinkage (Codex, #3348)", async () => {
+    // A port that removes 2 messages but also inserts 1 placeholder notice, net-shrinking the
+    // array by only 1 -- the exact shape the production compactor's eviction-notice produces.
+    // Net shrinkage would report 1; the real eviction count is 2.
+    const { port, calls } = scriptedModel([
+      overflowingFirstResponse(),
+      response({ content: "final" }),
+    ]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      messages: [
+        ...input.messages.filter((m) => m.role === "system"),
+        { role: "system", content: "compacted-history-notice" } satisfies ChatMessage,
+      ],
+      messagesEvicted: 2,
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(calls()).toBe(2);
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      expect(compacted.messagesDropped).toBe(2);
+    }
+  });
+
+  it("falls back to net array shrinkage when the port omits messagesEvicted (back-compat)", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      messages: input.messages.filter((m) => m.role === "system"),
+      // messagesEvicted intentionally omitted.
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      // No messagesEvicted supplied: the pre-existing net-shrinkage figure is used unchanged.
+      expect(compacted.messagesDropped).toBeGreaterThan(0);
+    }
+  });
+
+  it("ignores an implausible port-reported messagesEvicted and falls back to net shrinkage", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      messages: input.messages.filter((m) => m.role === "system"),
+      // A hostile/broken port cannot be trusted to report a sane count — more messages evicted
+      // than the input ever held.
+      messagesEvicted: 1_000_000,
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      expect(compacted.messagesDropped).toBeLessThan(1_000_000);
+      expect(compacted.messagesDropped).toBeGreaterThan(0);
+    }
+  });
+
+  it("still hard-fails when the compactionPort cannot free enough room", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = () => ({
+      // Returns something smaller but still over the 1000-byte ceiling — checkModelCallLimits
+      // must re-check the result, not trust the port blindly.
+      messages: [{ role: "assistant", content: "y".repeat(1500) } satisfies ChatMessage],
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("still hard-fails when the compactionPort declines (returns undefined)", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = () => undefined;
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("fails closed (unchanged hard-fail) when the compactionPort throws", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = () => {
+      throw new Error("boom");
+    };
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("never invokes the compactionPort when already within budget", async () => {
+    let invoked = 0;
+    const compactionPort: HarnessCompactionPort = () => {
+      invoked += 1;
+      return undefined;
+    };
+    const { port } = scriptedModel([response({ content: "final" })]);
+    const { ctx } = buildContext({ task: EXPLAIN, model: port, compactionPort });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(invoked).toBe(0);
   });
 });

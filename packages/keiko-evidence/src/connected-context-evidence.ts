@@ -3,14 +3,14 @@
 
 import { createHash } from "node:crypto";
 
-import {
-  HARNESS_VERSION,
-  sortedStrings,
-  type AuditSummary,
-  type ConnectedContextPack,
-  type ContextAssemblyDiagnostics,
-  type CostClass,
+import type {
+  AuditSummary,
+  ConnectedContextPack,
+  ContextAssemblyDiagnostics,
+  CostClass,
 } from "@oscharko-dev/keiko-contracts";
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { redactContextAssemblyDiagnostics } from "./context-assembly-redaction.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
@@ -217,9 +217,12 @@ function planOf(
     anchorKinds,
     anchorTermHashes,
     ringKinds: sortedStrings(rings.map((ring) => ring.kind)),
-    clarificationReason:
+    // KEIKO-1032: hash the redacted reason (matching planIdHash / anchorTermHashes). Raw
+    // free-text reasons were previously passed through unchanged, breaking the module's stated
+    // "never persist query text" invariant for this one field.
+    clarificationReasonHash:
       typeof input.plan.clarification?.reason === "string"
-        ? input.plan.clarification.reason
+        ? sha256Hex(redactString(redact, input.plan.clarification.reason))
         : undefined,
   };
 }

@@ -25,6 +25,7 @@ function scopeFor(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "polyglot-fixture",
     version: "0.0.0",
     testFramework: "unknown",

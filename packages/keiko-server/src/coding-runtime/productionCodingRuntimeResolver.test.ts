@@ -1,12 +1,24 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local resolver fixtures are contextually typed. */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import {
+  operatorDecisionRequester,
+  runManifestAdmission,
+} from "./productionCodingRuntimeResolver.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
-import { createProductionCodingRuntimeHost } from "./productionCodingRuntimeHost.js";
+import {
+  createProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeHost,
+} from "./productionCodingRuntimeHost.js";
 import { RESEARCH_GRANT_DEFAULT_MAX_TTL_MS } from "./researchGrantRegistry.js";
 import type { CodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type {
@@ -16,9 +28,27 @@ import type {
 import {
   createProductionCodingRuntimeResolver,
   resolveProductionRuntimeStartConfirmationClaim,
+  type ProductionCodingRuntimeResolverInput,
   type ProductionRuntimeBackendInput,
   type ProductionRuntimeBackendResolver,
 } from "./productionCodingRuntimeResolver.js";
+
+const ciRepairNotifierCapture = vi.hoisted(() => ({
+  current: undefined as ((runId: string) => void) | undefined,
+}));
+
+vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./productionCiRepairRuntime.js")>();
+  return {
+    ...original,
+    createProductionCiRepairBudget: (
+      ...args: Parameters<typeof original.createProductionCiRepairBudget>
+    ): ReturnType<typeof original.createProductionCiRepairBudget> => {
+      ciRepairNotifierCapture.current = args[3];
+      return original.createProductionCiRepairBudget(...args);
+    },
+  };
+});
 
 const roots: string[] = [];
 
@@ -27,6 +57,99 @@ afterEach(() => {
 });
 
 describe("production coding runtime resolver", () => {
+  it("shares provider context usage between the backend and public host projection", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) => {
+      input.contextUsage?.recordProviderSample(input.request.runId, {
+        sampleId: "sample-1",
+        capacityTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        inputTokens: 42_000,
+        updatedAt: "2026-09-15T06:30:00.000Z",
+      });
+      return backendRun(input.request.runId);
+    });
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    host.launchResolver.resolve(request);
+
+    expect(host.contextUsage?.read(request.runId)).toMatchObject({
+      state: "available",
+      usedInputTokens: 42_000,
+      cumulativePromptTokens: 42_000,
+    });
+  });
+
+  it("carries the admitted issue through the production context and start confirmation", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const issueBinding = {
+      schemaVersion: "1" as const,
+      repositoryId: "repository-private",
+      remoteDigest: "a".repeat(64),
+      issueNumber: 42,
+      issueIdDigest: "b".repeat(64),
+      defaultBaseRef: "dev",
+      contentRevisionDigest: "c".repeat(64),
+      bindingDigest: "d".repeat(64),
+    };
+    const request = { ...launchRequest(fixture.workspace), issueBinding };
+    const approved = resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request);
+    const generic = resolveProductionRuntimeStartConfirmationClaim(
+      fixture.authority,
+      launchRequest(fixture.workspace),
+    );
+    expect(approved.bindingDigest).not.toBe(generic.bindingDigest);
+    confirmations.issue(approved);
+    host.launchResolver.resolve(request);
+    expect(createRun.mock.calls[0]?.[0].context.issueBinding).toEqual(issueBinding);
+  });
+
+  // #3417: one server-approved skill catalog, composed once. Every run's tools are built from it,
+  // and the operator's projection reads that same catalog, with the readiness it can tell itself.
+  it("answers the operator's approved skills from the one catalog every run shares", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        vi.fn((input: ProductionRuntimeBackendInput) => backendRun(input.request.runId)),
+        confirmations.consumer,
+      ),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    // Before any run exists: a catalog composed per run could answer nothing here.
+    const composed = host.approvedSkills?.();
+
+    expect(composed === undefined ? undefined : validateSkillDiscoveryResultV1(composed).ok).toBe(
+      true,
+    );
+    expect(composed?.skills.map((skill) => skill.skillId)).toEqual([
+      "skl_repo-structure-summary@1",
+    ]);
+    expect(composed?.skills[0]?.readiness).toEqual({ state: "ready" });
+
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+
+    // The run composes its tools from that same catalog, so the operator's digest does not move.
+    expect(host.approvedSkills?.().catalogDigest).toBe(composed?.catalogDigest);
+  });
+
   it("starts an approved research grant lifetime at operator approval time", async () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();
@@ -42,8 +165,11 @@ describe("production coding runtime resolver", () => {
         }),
       },
     }));
+    let gatewayConfigured = true;
     const host = createProductionCodingRuntimeHost(
-      resolverFor(fixture, createRun, confirmations.consumer),
+      resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+        gatewayEgress: () => (gatewayConfigured ? { noProxy: [] } : undefined),
+      }),
     );
     if (host === undefined) throw new Error("expected qualified host");
     const request = launchRequest(fixture.workspace);
@@ -56,6 +182,7 @@ describe("production coding runtime resolver", () => {
       workspaceRoot: fixture.workspace,
       requestedMode: request.requestedMode,
     });
+    expect(researchUnavailable(host, request.runId)).toBe(false);
     const researchRequestId = host.pendingResearchApprovals?.request({
       runId: request.runId,
       url: new URL("https://example.com/reference"),
@@ -79,6 +206,132 @@ describe("production coding runtime resolver", () => {
     expect(host.researchGrants?.activeGrants(request.runId, approvalNowMs)).toEqual([
       expect.objectContaining({ expiresAtMs: approvalNowMs + RESEARCH_GRANT_DEFAULT_MAX_TTL_MS }),
     ]);
+    // Availability is evaluated when the gateway builds each offer. A live grant never widens a
+    // missing transport binding, and restoring the binding is visible without recreating the run.
+    gatewayConfigured = false;
+    expect(researchUnavailable(host, request.runId)).toBe(true);
+    gatewayConfigured = true;
+    expect(researchUnavailable(host, request.runId)).toBe(false);
+  });
+
+  it("keeps child-agent unavailable when its per-run provider model cannot be resolved", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const childModelPortFactory = vi.fn(() => undefined);
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+        childModelId: () => "coding-safe-model",
+        childModelPortFactory,
+      }),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+
+    expect(childUnavailable(host, request.runId)).toBe(true);
+    expect(childUnavailable(host, request.runId)).toBe(true);
+    expect(childModelPortFactory).toHaveBeenCalledOnce();
+    expect(childModelPortFactory).toHaveBeenCalledWith("coding-safe-model");
+  });
+
+  // #3399 (epic #3384 correction 4): threaded through the exact same chain
+  // `gitDeliveryAuthority` already uses. Before this change the resolver's composed runtime
+  // carried no `gitDeliveryDescriptionAuthority` field at all, so it never reached the host.
+  it("exposes a live, callable description-authority port from the real production chain", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    expect(host.gitDeliveryDescriptionAuthority).toBeDefined();
+    // Fail-closed default: nothing was minted, so a re-check for any scope finds no record.
+    expect(
+      host.gitDeliveryDescriptionAuthority?.current(
+        {
+          remoteDigest: "a".repeat(64),
+          pr: { ownerAndRepo: "owner/repo", prNumber: 1 },
+          snapshotDigest: "b".repeat(64),
+        },
+        new Date().toISOString(),
+      ),
+    ).toBeUndefined();
+  });
+
+  // #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability, closing
+  // the gap the comment above's own predecessor left open. Before this change the resolver's
+  // composed runtime carried no `mintDescriptionAuthority` field at all, so
+  // `createProductionWorkbenchDescriptionDispatcher` deterministically denied every scope
+  // (`model-egress-denied`) in production regardless of what `gitDeliveryDescriptionAuthority`
+  // would have found, because nothing ever minted a record for it to find.
+  it("mints a live description authority from the accepted mode through the real production chain", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    expect(host.mintDescriptionAuthority).toBeDefined();
+    const scope = {
+      remoteDigest: "a".repeat(64),
+      pr: { ownerAndRepo: "owner/repo", prNumber: 1 },
+      snapshotDigest: "b".repeat(64),
+    };
+    const nowIso = new Date(fixture.nowMs()).toISOString();
+    host.mintDescriptionAuthority?.({
+      scope,
+      requestedMode: "governed-assist",
+      nowIso,
+      correlationId: "description-test",
+    });
+    expect(host.gitDeliveryDescriptionAuthority?.current(scope, nowIso)).toMatchObject({
+      scope,
+      // The accepted action mode reaches the owning mint and stays narrower than the fixture's
+      // supervised deployment ceiling. The ceiling is never used as a requested-mode default.
+      effectiveMode: "governed-assist",
+    });
+
+    const unknownModeScope = { ...scope, snapshotDigest: "c".repeat(64) };
+    host.mintDescriptionAuthority?.({
+      scope: unknownModeScope,
+      requestedMode: undefined,
+      nowIso,
+    } as never);
+    expect(host.gitDeliveryDescriptionAuthority?.current(unknownModeScope, nowIso)).toBeUndefined();
+  });
+
+  it("routes the resolver's CI-repair settlement callback through the latest attached notifier", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const first = vi.fn();
+    const latest = vi.fn();
+    host.attachVerifiedHeadNotifier?.(first);
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    host.attachVerifiedHeadNotifier?.(latest);
+
+    ciRepairNotifierCapture.current?.("run-1");
+
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {
@@ -123,6 +376,8 @@ describe("production coding runtime resolver", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();
     const turns: string[] = [];
+    // ADR-0147 D3, autonomous-delivery amendment: the run's manifest admissions end with the run.
+    const revokeRunAdmissions = vi.fn((): number => 1);
     const createRun = vi.fn((input: ProductionRuntimeBackendInput) => ({
       manager: runtimeManager(input.request.runId),
       launch: {
@@ -147,7 +402,9 @@ describe("production coding runtime resolver", () => {
         waitForTerminal: () => Promise.resolve("succeeded" as const),
       },
     }));
-    const resolver = resolverFor(fixture, createRun, confirmations.consumer);
+    const resolver = resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+      workspaceScriptTrust: { admitRunManifest: vi.fn(), revokeRunAdmissions },
+    });
     const host = createProductionCodingRuntimeHost(resolver);
     if (host === undefined) throw new Error("expected qualified host");
     const manager = host.createManager(vi.fn());
@@ -160,6 +417,7 @@ describe("production coding runtime resolver", () => {
       workspaceId: "workspace-private",
       workspaceRoot: fixture.workspace,
       serverPrincipal: "operator-private",
+      correlationId: "request-runtime-start-0001",
     } as const;
     confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
     const launch = host.launchResolver.resolve(request);
@@ -192,8 +450,20 @@ describe("production coding runtime resolver", () => {
 
     expect(turns).toEqual(["initial private task", "follow-up private task"]);
     expect(createRun).toHaveBeenCalledOnce();
+    const backendInput = createRun.mock.calls[0]?.[0];
+    expect(backendInput?.resolveWorkspaceRootAccess()).toMatchObject({
+      kind: "managed-task",
+      canonicalRoot: fixture.workspace,
+    });
+    fixture.revokeWorkspaceAccess();
+    expect(backendInput?.resolveWorkspaceRootAccess()).toBeUndefined();
     expect(JSON.stringify(createRun.mock.calls[0]?.[0].minted)).not.toContain("private task");
     expect(createRun.mock.calls[0]?.[0].authorityLifecycle.revokeRuntime("run-1")).toBe(true);
+    // Revoking the run drops its manifest admissions with it (ADR-0147 D3, autonomous-delivery).
+    expect(revokeRunAdmissions).toHaveBeenCalledExactlyOnceWith(
+      "run-1",
+      "request-runtime-start-0001",
+    );
     await expect(
       host.taskDispatcher.dispatch({
         runId: "run-1",
@@ -299,13 +569,76 @@ describe("production coding runtime resolver", () => {
     ).toThrow();
     expect(expiredCreateRun).not.toHaveBeenCalled();
   });
+
+  // KfQ 3954841973: a backend process (plus its HTTP/SSE client and tool bridge) was already
+  // spawned by `createRun` below by the time the lease broker rejects attachment -- verifies the
+  // already-built backend is disposed instead of leaked when that happens.
+  it("disposes an already-spawned backend when lease attachment fails after creation", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const dispose = vi.fn(() => Promise.resolve());
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) => ({
+      ...backendRun(input.request.runId),
+      dispose,
+    }));
+    const runtimeMutationLeaseBroker = { attach: () => undefined };
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer, runtimeMutationLeaseBroker),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    expect(() => host.launchResolver.resolve(request)).toThrow(
+      "runtime-mutation-lease-broker-unavailable",
+    );
+    expect(createRun).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes an already-spawned backend when launch validation rejects its shape", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const dispose = vi.fn(() => Promise.resolve());
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) => ({
+      ...backendRun(input.request.runId),
+      launch: { ...backendRun(input.request.runId).launch, executablePath: "" },
+      dispose,
+    }));
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    expect(() => host.launchResolver.resolve(request)).toThrow();
+    expect(createRun).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
 });
+
+function researchUnavailable(
+  host: ProductionCodingRuntimeHost,
+  runId: string,
+): boolean | undefined {
+  return host.runtimeCapabilityAuthenticator
+    ?.unavailableOptionalTools?.(runId)
+    ?.has("keiko_research_fetch");
+}
+
+function childUnavailable(host: ProductionCodingRuntimeHost, runId: string): boolean | undefined {
+  return host.runtimeCapabilityAuthenticator
+    ?.unavailableOptionalTools?.(runId)
+    ?.has("keiko_child_agent");
+}
 
 function resolverFor(
   fixture: ReturnType<typeof workspaceFixture>,
   createRun: ProductionRuntimeBackendResolver["createRun"],
   confirmationConsumer?: CodingRuntimeStartConfirmationConsumer,
   runtimeMutationLeaseBroker?: Pick<CodingRuntimeEditorMutationLeaseBroker, "attach">,
+  overrides: Partial<ProductionCodingRuntimeResolverInput> = {},
 ) {
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: fixture.authority,
@@ -320,8 +653,18 @@ function resolverFor(
         }),
     },
     verificationRunner: { runToReport: vi.fn() },
+    resolveWorkspaceRootAccess: (requestedRoot) =>
+      fixture.workspaceAccessAvailable()
+        ? {
+            kind: "managed-task",
+            canonicalRoot: requestedRoot,
+            fs: nodeWorkspaceFs,
+            repositoryRoot: requestedRoot,
+          }
+        : undefined,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
     ...(runtimeMutationLeaseBroker ? { runtimeMutationLeaseBroker } : {}),
+    ...overrides,
   });
 }
 
@@ -425,6 +768,7 @@ function workspaceFixture() {
   const workspace = join(managed, "repo", "workspace");
   mkdirSync(workspace, { recursive: true });
   let head = "1".repeat(40);
+  let workspaceAccessAvailable = true;
   let nowMs = Date.parse("2026-07-13T12:00:00.000Z");
   const instance = {
     workspaceId: "workspace-private",
@@ -457,5 +801,107 @@ function workspaceFixture() {
     setHead: (value: string): void => {
       head = value;
     },
+    workspaceAccessAvailable: (): boolean => workspaceAccessAvailable,
+    revokeWorkspaceAccess: (): void => {
+      workspaceAccessAvailable = false;
+    },
   };
 }
+
+// Run 11 (2026-09-10): the requester built `event-operator-decision-1`, the contract rejected the id
+// as evidence text, and the first version validated and discarded in one expression — the tool waited
+// its full window while the run never learned it was waiting. These pins drive the REAL requester
+// through the real validator; the tool fixture that only stubbed `requestOperatorDecision` proved the
+// wait and never this seam.
+describe("operatorDecisionRequester", () => {
+  const now = (): Date => new Date("2026-09-10T17:17:05.000Z");
+  const runId = "run-162123733010859537403366256760456230003";
+
+  // ADR-0147 D3, autonomous-delivery amendment: the admission the tool facade calls after a completed
+  // effect is bound to THIS run's worktree, run id and authority expiry, and is absent when the
+  // composition has no trust service — every mode then keeps asking exactly as before.
+  it("binds the run-manifest admission to the run's worktree, id and authority expiry", () => {
+    const admitRunManifest = vi.fn();
+    const composed = runManifestAdmission(
+      { workspaceScriptTrust: { admitRunManifest, revokeRunAdmissions: vi.fn() } },
+      { workspaceRoot: "/managed/worktree", expiresAt: "2026-09-10T20:00:00.000Z" },
+      { authorityRef: { runId: "run-7", envelopeDigest: "d".repeat(64) } },
+      "request-runtime-parent-0007",
+    );
+    composed.admitRunManifest?.();
+    expect(admitRunManifest).toHaveBeenCalledExactlyOnceWith(
+      "/managed/worktree",
+      "run-7",
+      "2026-09-10T20:00:00.000Z",
+      "request-runtime-parent-0007",
+    );
+    expect(
+      runManifestAdmission(
+        {},
+        { workspaceRoot: "/managed/worktree", expiresAt: "2026-09-10T20:00:00.000Z" },
+        { authorityRef: { runId: "run-7", envelopeDigest: "d".repeat(64) } },
+      ),
+    ).toEqual({});
+  });
+
+  it("emits contract-valid open and settled events for the run", () => {
+    const emitted: CodingWorkbenchRuntimeEvent[] = [];
+    const request = operatorDecisionRequester(now, undefined, runId, (event) => {
+      emitted.push(event);
+    });
+    request("workspace-script-trust");
+    request("workspace-script-trust", "limit-reached");
+
+    expect(emitted.map((event) => validateCodingWorkbenchRuntimeEvent(event).ok)).toEqual([
+      true,
+      true,
+    ]);
+    expect(emitted[0]).toMatchObject({
+      kind: "operator-decision",
+      runId,
+      operatorDecision: "workspace-script-trust",
+    });
+    expect(emitted[0]?.auxiliaryOutcome).toBeUndefined();
+    expect(emitted[1]).toMatchObject({ auxiliaryOutcome: "limit-reached" });
+  });
+
+  // The run id is the one caller-supplied field the contract can refuse; every shape it refuses
+  // must reach the log as the diagnostic and never as a dropped event, and every shape it accepts
+  // must reach the run. Table-driven over the boundaries of the evidence-label rule (a label is at
+  // most 96 characters of `[A-Za-z0-9.:/_-]`): empty, spaces, a control character, the longest
+  // accepted run id, and the first one beyond it (CodeRabbit review, 2026-09-10).
+  it.each([
+    ["an empty run id", "", false],
+    ["a run id with spaces (run 11's shape)", "run id with spaces", false],
+    ["a run id carrying a control character", `run-1${String.fromCharCode(7)}`, false],
+    ["the longest accepted run id", `run-${"9".repeat(92)}`, true],
+    ["the first run id beyond the label bound", `run-${"9".repeat(93)}`, false],
+  ])("routes %s through the real validator", (_label, runId, accepted) => {
+    const emitted: CodingWorkbenchRuntimeEvent[] = [];
+    const records: ServerDiagnosticRecord[] = [];
+    const request = operatorDecisionRequester(
+      now,
+      { record: (record): void => void records.push(record) },
+      runId,
+      (event) => {
+        emitted.push(event);
+      },
+    );
+    request("workspace-script-trust");
+
+    if (accepted) {
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({ runId, kind: "operator-decision" });
+      expect(records).toEqual([]);
+      return;
+    }
+    expect(emitted).toEqual([]);
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.operator-decision",
+        errorClass: "OperatorDecisionEventRejected",
+        message: "coding-runtime-operator-decision-event-rejected",
+      }),
+    ]);
+  });
+});

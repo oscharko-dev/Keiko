@@ -5,7 +5,7 @@
 // randomness, or model dispatch, so the suite gives reproducible CI coverage.
 
 import { ALL_PROMPT_ENHANCER_FIXTURES } from "./fixtures/index.js";
-import { runEnhancement } from "./pipeline.js";
+import { checkTaskClassInvariant, runEnhancement } from "./pipeline.js";
 import { aggregatePromptQuality, scorePromptQuality } from "./scorer.js";
 import {
   PROMPT_ENHANCER_EVAL_SCHEMA_VERSION,
@@ -24,23 +24,35 @@ function summarize(
   const safety = dimensions.find((d) => d.dimension === "safety");
   const safetyGatePassed = (safety?.failCount ?? 0) === 0;
   const allClean = dimensions.every((d) => d.failCount === 0);
+  const taskClassInvariantFailureCount = fixtureResults.filter(
+    (result) => result.taskClassInvariant.outcome === "fail",
+  ).length;
   return {
     totalFixtures: fixtureResults.length,
     fullyPassedFixtures: fixtureResults.filter((f) => f.fullyPassed).length,
+    taskClassInvariantPassed: taskClassInvariantFailureCount === 0,
+    taskClassInvariantFailureCount,
     safetyGatePassed,
-    goNoGo: allClean ? "GO" : "NO-GO",
+    goNoGo: allClean && taskClassInvariantFailureCount === 0 ? "GO" : "NO-GO",
   };
 }
 
 function runFixture(fixture: PromptEnhancerEvalFixture): PromptEnhancerFixtureResult {
   const observation = runEnhancement(fixture.name, fixture.request);
+  const taskClassInvariant = checkTaskClassInvariant(
+    observation.analysis,
+    fixture.oracle.expectedTaskClasses,
+  );
   const dimensionResults = scorePromptQuality(fixture, observation);
   return {
     fixtureName: fixture.name,
     category: fixture.category,
     observation,
+    taskClassInvariant,
     dimensionResults,
-    fullyPassed: dimensionResults.every((d) => d.outcome !== "fail"),
+    fullyPassed:
+      taskClassInvariant.outcome === "pass" &&
+      dimensionResults.every((dimension) => dimension.outcome !== "fail"),
   };
 }
 

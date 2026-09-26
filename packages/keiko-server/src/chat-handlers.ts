@@ -8,22 +8,24 @@ import { basename } from "node:path";
 import {
   GatewayError,
   ContextOverflowError,
-  findCapability,
-  findConfiguredCapability,
   listCapabilities,
   listConfiguredCapabilities,
   type ModelCapability,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import {
-  isDiscussionMode,
-  isCodingWorkbenchMode,
-  DEFAULT_CONTEXT_PROFILE,
-  type ConversationDocumentContextWire,
-  type CodingWorkbenchMode,
-  type DiscussionMode,
-  type ChatMessageContentPart,
+import type {
+  ConversationDocumentContextWire,
+  CodingWorkbenchMode,
+  DiscussionMode,
+  ChatMessageContentPart,
 } from "@oscharko-dev/keiko-contracts";
+import { isDiscussionMode } from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  electConversationDefault,
+  preferredConversationModelOrder,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
@@ -65,6 +67,10 @@ import {
 } from "./memory-retrieval-signals.js";
 import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
 import {
+  ensureAnyConversationReadyChatModel,
+  ensureOnDemandConversationReadiness,
+} from "./gateway-readiness.js";
+import {
   extractCandidatesFromUserText,
   type CaptureContext,
   type CaptureOutcome,
@@ -73,6 +79,7 @@ import {
   UiStoreError,
   isProjectAvailable,
   type Chat,
+  type ChatGitChangeScope,
   type ChatMessage,
   type ChatTurnInspection,
   type Project,
@@ -86,14 +93,49 @@ import { validateProjectPath } from "./store/validation.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
+// Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
+// (#3399) that admits model egress of git-change snapshot content outside a running Code task.
+// Read-only consumption of the existing owning module — never redefined here.
+import { authorizeGitDeliveryModelEgress } from "./gitDelivery/runBoundAuthority.js";
+import {
+  generateGitChangeChatDescription,
+  gitChangeDescriptionAuthorityScopeFor,
+} from "./gitChangeChatContext.js";
+// Issue #3400 (epic #3384, Frozen Product Decision 6 / issue correction 1): the apply action
+// routes ONLY through the existing body-only description application service (#3399), never
+// through `executeGovernedPullRequest`'s coupled title+body+base update path. Read-only
+// consumption of the existing owning module — never redefined here.
+import type { PrDescriptionApplicationResult } from "./gitDelivery/prDescriptionTypes.js";
+// Final-audit F5 (#3400): reuses the SAME admitted, per-(project, repository, PR) service factory
+// this route group's own preview/approve/apply handlers already run through — never a second,
+// independently-composed service surface (AGENTS.md §5).
+import {
+  resolvePrDescriptionApplicationServiceForRequest,
+  type BaseFields as PrDescriptionBaseFields,
+  type PrDescriptionRouteOptions,
+} from "./gitDelivery/prDescriptionRoutes.js";
+// Re-derives the SAME trusted repository root the connect flow resolved, through the SAME
+// git-membership check -- never a second, independently-drifting copy of that trust boundary.
+import { resolveChatRepository } from "./gitChangeRepository.js";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
+import {
+  githubRemoteOwnerAndRepoFor,
+  isGitHubIssueReaderAuthorized,
+} from "./coding-context/githubIssueReaderAuthorization.js";
+import { hasOnlyAllowedKeys } from "./gitDelivery/requestGuards.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   currentAuditRedactString,
+  currentConversationReady,
+  currentConversationReadinessObservation,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
 } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -118,7 +160,30 @@ import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { scheduleMemorySalienceCapture } from "./memory-salience.js";
-import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  logChatCreationRejectionEvent,
+  logChatRejectionEvent,
+  logChatTurnStartedEvent,
+  logChatResponse,
+  logGitChangeApply,
+  logGitChangeDescriptionTargetDenied,
+  logGitChangeTurnAuthorityEvent,
+  type ChatReadinessObservation,
+  type ChatRejectionReason,
+  type GitChangeDescriptionTargetDenial,
+  type GitChangeDescriptionTurnDenial,
+} from "./chat-activity.js";
+// #3557 review finding A: the one owning projection from a candidate model id to Activity Log
+// evidence. `chatCapability` below delegates its resolution here too, so the "is this configured"
+// answer a 400 response relies on and the answer the log line relies on can never drift apart.
+import { modelIdEvidence, resolvedModelCapability } from "./observability/model-id-evidence.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
+import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
   assertUsableAssistantContent,
   isLegacyEmptyAssistantPlaceholder,
@@ -207,9 +272,21 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number" && "body" in value;
 }
 
+/**
+ * An identity call every "parsed value, or a typed `RouteResult` on failure" return below funnels
+ * through, with `T` given explicitly at each call site rather than inferred. Without it, a
+ * function whose branches return a bare parsed primitive in one place and a `RouteResult` object
+ * literal in another gets reported as "returning different types" even though every branch is
+ * assignable to the one declared union -- the checker sees each return's own narrower literal
+ * type instead of the annotated union. Routing every return through this call gives the checker
+ * the SAME concrete type (`T | RouteResult`) at every return statement in the function.
+ */
+function asParsedOrRouteResult<T>(value: T | RouteResult): T | RouteResult {
+  return value;
+}
+
 function chatCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
-  const config = currentGatewayConfig(deps);
-  return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
+  return resolvedModelCapability(deps, modelId);
 }
 
 function defaultChatModelId(deps: UiHandlerDeps): string {
@@ -217,28 +294,52 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   if (config === undefined) {
     return DEFAULT_CHAT_MODEL;
   }
-  const configured = listConfiguredCapabilities(config);
+  // Rank-ordered (keiko-contracts conversationDefaultRank): mode-declared chat models first,
+  // mode-less special-purpose ids (the customer's first-listed OCR model) last — so neither a
+  // fresh generation nor a warm-probed OCR model can capture the default while a better
+  // candidate exists. Stable: configured order still breaks ties within a tier.
+  const chatModels = preferredConversationModelOrder(
+    listConfiguredCapabilities(config).filter((model) => model.kind === "chat"),
+  );
+  const conversationReady = (model: ModelCapability): boolean =>
+    currentConversationReady(deps, model.id);
+  const readinessObservation = (model: ModelCapability): boolean | undefined =>
+    currentConversationReadinessObservation(deps, model.id);
+  // The public create contract makes modelId optional, so the default must not hand
+  // modelFromBody an unready model while another configured chat model has a current
+  // successful probe — that turned an otherwise valid request into a 400. Readiness only
+  // reorders the preference; when nothing is ready the unready default still flows into
+  // the guard so the caller keeps the precise "not ready" error.
+  // Tier-first election (review finding on the first cut): a verified probe breaks ties only
+  // WITHIN the best rank tier — a warm special-purpose model that happened to pass one probe
+  // must not outrank an unprobed declared chat model.
   return (
     (
-      configured.find((model) => model.id === DEFAULT_CHAT_MODEL && model.kind === "chat") ??
-      configured.find((model) => model.kind === "chat")
+      chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL && conversationReady(model)) ??
+      electConversationDefault(chatModels, readinessObservation)
     )?.id ?? DEFAULT_CHAT_MODEL
   );
 }
 
+function explicitChatModelId(body: Record<string, unknown>): string | undefined {
+  return typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined;
+}
+
 function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): string | RouteResult {
-  const modelId =
-    typeof body.modelId === "string" && body.modelId.length > 0
-      ? body.modelId
-      : defaultChatModelId(deps);
+  // ONE explicitness predicate: the readiness path (create walk vs single probe) and this
+  // admission must never disagree on what counts as an explicit model id.
+  const modelId = explicitChatModelId(body) ?? defaultChatModelId(deps);
   const capability = chatCapability(deps, modelId);
   if (capability?.kind !== "chat") {
-    return {
+    return asParsedOrRouteResult<string>({
       status: 400,
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
-    };
+    });
   }
-  return modelId;
+  if (deps.gatewayConfig !== undefined && !currentConversationReady(deps, modelId)) {
+    return asParsedOrRouteResult<string>(unreadyChatModelResult());
+  }
+  return asParsedOrRouteResult<string>(modelId);
 }
 
 function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): string {
@@ -314,16 +415,40 @@ export function redactErrorMessage(message: string, deps: UiHandlerDeps): string
 
 function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  // KEIKO-0353: a circuit-open failure IS "temporarily unavailable" from the caller's
+  // point of view — the same 503 the transport-error branch below already emits. The
+  // breaker's own retryable=false signals internal auto-recovery, not that the client
+  // should treat the outage as permanent, so it must not fall through to 502.
+  if (error.code === "GATEWAY_CIRCUIT_OPEN") return 503;
   if (error.retryable) return 503;
   return 502;
 }
 
-function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
+// ADR-0173 D5 g25 — every GatewayError this path maps to a response also reaches the redacted
+// operator diagnostic sink, the same symmetry `chat-stream-handlers.ts`'s SSE path already had.
+// `emitDiagnostic` defaults on for the normal (response-returning) callers below and is turned off
+// by the ONE caller that already emitted its own broader diagnostic for this exact error a moment
+// earlier and calls back in purely to reuse the code/message mapping (`chat-stream-handlers.ts`'s
+// `errorEvent`) — without it that caller would double-log the same failure.
+function gatewayErrorResult(
+  error: GatewayError,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  emitDiagnostic: boolean,
+): RouteResult {
+  if (emitDiagnostic) {
+    emitGatewayErrorDiagnostic(deps, error, correlationId, "POST /api/desktop/chat", "chat.send");
+  }
   const status = gatewayErrorStatus(error);
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 
-export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
+export function desktopChatErrorResult(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId?: string,
+  emitDiagnostic = true,
+): RouteResult {
   if (error instanceof ConversationAttachmentStoreError) {
     return {
       status: 409,
@@ -331,7 +456,7 @@ export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): Rou
     };
   }
   if (error instanceof GatewayError) {
-    return gatewayErrorResult(error, deps);
+    return gatewayErrorResult(error, deps, correlationId, emitDiagnostic);
   }
   if (error instanceof UiStoreError) {
     return {
@@ -408,21 +533,24 @@ function parseMemoryContext(value: unknown): Record<string, unknown> | RouteResu
 }
 
 function parseMemoryEnabled(raw: Record<string, unknown>): boolean | RouteResult {
-  if (raw.enabled === undefined) return true;
-  if (typeof raw.enabled === "boolean") return raw.enabled;
-  return { status: 400, body: errorBody("BAD_REQUEST", "memory.enabled must be a boolean.") };
+  if (raw.enabled === undefined) return asParsedOrRouteResult<boolean>(true);
+  if (typeof raw.enabled === "boolean") return asParsedOrRouteResult<boolean>(raw.enabled);
+  return asParsedOrRouteResult<boolean>({
+    status: 400,
+    body: errorBody("BAD_REQUEST", "memory.enabled must be a boolean."),
+  });
 }
 
 function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult | undefined {
   const budgetTokens = pickNumber(raw, "budgetTokens");
   if (budgetTokens === undefined) return undefined;
   if (Number.isFinite(budgetTokens) && Number.isInteger(budgetTokens) && budgetTokens >= 0) {
-    return budgetTokens;
+    return asParsedOrRouteResult<number>(budgetTokens);
   }
-  return {
+  return asParsedOrRouteResult<number>({
     status: 400,
     body: errorBody("BAD_REQUEST", "memory.budgetTokens must be a non-negative integer."),
-  };
+  });
 }
 
 function parseMemoryMode(
@@ -654,12 +782,12 @@ export function parseClientTurnId(value: unknown): string | RouteResult | undefi
     value.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS ||
     value.trim().length === 0
   ) {
-    return {
+    return asParsedOrRouteResult<string>({
       status: 400,
       body: errorBody("BAD_REQUEST", "clientTurnId must be a bounded non-blank string."),
-    };
+    });
   }
-  return value;
+  return asParsedOrRouteResult<string>(value);
 }
 
 export function parseExpectedGroundingScopeIdentity(
@@ -758,12 +886,91 @@ function regenerateRequestFromBody(
 function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResult | undefined {
   const capability = chatCapability(deps, modelId);
   if (capability?.kind === "chat") {
-    return undefined;
+    return deps.gatewayConfig === undefined || currentConversationReady(deps, modelId)
+      ? undefined
+      : unreadyChatModelResult();
   }
   return {
     status: 400,
     body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
   };
+}
+
+function unreadyChatModelResult(): RouteResult {
+  return conversationModelNotReadyResult();
+}
+
+// Which readiness state refused the model: no current observation in this process, or a check that
+// ran and failed. A model observed as ready yields none, since then readiness did not refuse it.
+function readinessObservationOf(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ChatReadinessObservation | undefined {
+  const observed = currentConversationReadinessObservation(deps, modelId);
+  if (observed === undefined) return "unobserved";
+  return observed ? undefined : "not-ready";
+}
+
+function logChatCreationRejection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  modelId: string,
+  status: number,
+): void {
+  const modelKind = chatCapability(deps, modelId)?.kind ?? "unknown";
+  const readinessFailure = modelKind === "chat";
+  logChatCreationRejectionEvent({
+    correlationId: ctx.correlationId,
+    status,
+    reason: readinessFailure ? "readiness" : "configuration",
+    modelKind,
+    ...modelIdEvidence(modelId),
+    readinessObservation: readinessFailure ? readinessObservationOf(deps, modelId) : undefined,
+  });
+}
+
+export function logChatRejection(
+  operation: "chat.send.rejected" | "chat.regeneration.rejected",
+  correlationId: string | undefined,
+  modelId: string,
+  deps: UiHandlerDeps,
+  status: number,
+  reason: ChatRejectionReason = "readiness",
+): void {
+  logChatRejectionEvent(operation, {
+    correlationId,
+    status,
+    reason,
+    modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
+    ...modelIdEvidence(modelId),
+    readinessObservation:
+      reason === "readiness" ? readinessObservationOf(deps, modelId) : undefined,
+  });
+}
+
+function routeErrorFields(
+  result: RouteResult,
+): { readonly code: string; readonly message: string } | undefined {
+  if (!isRecord(result.body) || !isRecord(result.body.error)) return undefined;
+  const { code, message } = result.body.error;
+  return typeof code === "string" && typeof message === "string" ? { code, message } : undefined;
+}
+
+function chatExecutionRejectionReason(result: RouteResult): ChatRejectionReason | undefined {
+  const actual = routeErrorFields(result);
+  if (actual?.code === "GROUNDING_SCOPE_CHANGED") return "grounding-scope";
+  const expected = routeErrorFields(conversationModelNotReadyResult());
+  if (actual === undefined || expected === undefined) return undefined;
+  return result.status === 400 &&
+    actual.code === expected.code &&
+    actual.message === expected.message
+    ? "readiness"
+    : undefined;
+}
+
+interface ChatReadinessRejectionContext {
+  readonly operation: "chat.send.rejected" | "chat.regeneration.rejected";
+  readonly correlationId: string | undefined;
 }
 
 export function createUserMessage(
@@ -784,7 +991,11 @@ export function createUserMessage(
 }
 
 export type DesktopChatTurnAdmission =
-  | { readonly kind: "admitted"; readonly userMessage: ChatMessage }
+  | {
+      readonly kind: "admitted";
+      readonly userMessage: ChatMessage;
+      readonly legacyTouchedUpdatedAt?: number | undefined;
+    }
   | { readonly kind: "replay"; readonly response: DesktopChatSendResponse }
   | { readonly kind: "rejected"; readonly result: RouteResult };
 
@@ -881,7 +1092,12 @@ export function admitDesktopChatTurn(
 ): DesktopChatTurnAdmission {
   const { request, chat, turnIdentityContent } = prepared;
   if (request.clientTurnId === undefined) {
-    return { kind: "admitted", userMessage: createUserMessage(deps, request) };
+    const userMessage = createUserMessage(deps, request);
+    // Captured synchronously right after the insert (SQLite calls cannot interleave here):
+    // the exact updated_at value our createMessage touch wrote. The rejection-path restore
+    // compare-and-sets against it so a concurrent accepted update keeps its newer recency.
+    const legacyTouchedUpdatedAt = deps.store.findChatById(request.chatId)?.updatedAt;
+    return { kind: "admitted", userMessage, legacyTouchedUpdatedAt };
   }
   const admission = deps.store.admitChatTurn(
     request.clientTurnId,
@@ -938,6 +1154,38 @@ export function failDesktopChatTurn(
   if (request.clientTurnId !== undefined) {
     deps.store.failChatTurn(request.chatId, request.clientTurnId, terminalState);
   }
+}
+
+// A turn rejected after admission but before any provider output must leave no state behind:
+// ledger turns settle through the turn record, but for a legacy request (no clientTurnId) the
+// ledger no-ops, so the just-admitted user row is discarded — restoring the pre-#3182
+// invariant that a rejected legacy request has no side effect. Post-provider failures keep
+// the row on purpose: the send was attempted and history stays honest.
+export interface AdmittedTurnHandle {
+  readonly userMessage: ChatMessage;
+  readonly legacyTouchedUpdatedAt?: number | undefined;
+}
+
+export function settleRejectedDesktopChatTurn(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  admitted: AdmittedTurnHandle,
+  terminalState: "failed" | "cancelled" = "failed",
+): void {
+  const { request } = prepared;
+  if (request.clientTurnId !== undefined) {
+    deps.store.failChatTurn(request.chatId, request.clientTurnId, terminalState);
+    return;
+  }
+  // The pre-admission updatedAt undoes the createMessage touch so a rejected legacy request
+  // cannot promote its chat in the recency-ordered history; the admission-time touch value
+  // makes that rollback a compare-and-set, so a concurrent accepted update survives.
+  deps.store.discardLegacyTurnUserMessage(
+    request.chatId,
+    admitted.userMessage.id,
+    prepared.chat.updatedAt,
+    admitted.legacyTouchedUpdatedAt,
+  );
 }
 
 export function createAssistantMessage(
@@ -1050,11 +1298,23 @@ export function maybeRunChatAutoMaintenance(
   vault: MemoryVaultStore,
   state: AutoMaintenanceState = memoryMaintenanceCursor,
   nowMs: number = Date.now(),
+  // The triggering chat request's own correlation id, when known (ADR-0173 D5 / g12). This pass
+  // is genuinely background-originated (opportunistic, rate-limited, may run well after the turn
+  // that triggered it), so it mints its own id below rather than reusing the request's outright —
+  // but a known request id still rides as `parentCorrelationId` so an operator can join this
+  // pass's diagnostics back to the request that opportunistically triggered it.
+  requestCorrelationId?: string,
 ): void {
   if (deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "0") return;
   if (!isMaintenanceDue(state.lastRunAtMs, nowMs)) return;
+  // Minted ONCE here, at the start of this maintenance pass, rather than inside each helper's own
+  // catch block: the retention-policy read, the autonomy-mode read, and the maintenance sweep
+  // itself are three separate failure points of the SAME pass, and used to mint three disconnected
+  // ids — making it impossible for an operator to tell they came from one invocation (ADR-0173 D5
+  // / g12).
+  const correlationId = randomUUID();
   const multipliers = memorySemanticizationMultipliers(deps.env);
-  const retention = resolveMemoryRetentionPolicy(deps);
+  const retention = resolveMemoryRetentionPolicy(deps, correlationId);
   // A malformed retention setting disables only the retention phase. The resolver already emits a
   // diagnostic; promotion, consolidation, supersession, and fade must keep running so one invalid
   // optional setting cannot silently suspend all pre-existing vault maintenance.
@@ -1062,17 +1322,21 @@ export function maybeRunChatAutoMaintenance(
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), state, {
     nowMs,
     enabled: true,
-    autonomyMode: resolveMaintenanceAutonomyMode(deps),
+    correlationId,
+    autonomyMode: resolveMaintenanceAutonomyMode(deps, correlationId),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
     onFailure: (error): void => {
       emitServerDiagnostic(deps.diagnostics, {
-        correlationId: randomUUID(),
+        correlationId,
         timestamp: new Date(Date.now()).toISOString(),
         operation: "chat.memory.auto-maintenance",
         source: "chat.memory.maintenance",
         errorClass: contentFreeErrorClass(error),
         message: "chat-memory-auto-maintenance-failed",
+        ...(requestCorrelationId === undefined
+          ? {}
+          : { parentCorrelationId: requestCorrelationId }),
       });
     },
   });
@@ -1499,6 +1763,68 @@ export function buildGatewayAssembly(
   return selected;
 }
 
+// ADR-0173 D5 g9 — the INPUT shape of a chat turn, never its content: how many messages the
+// assembled prompt carries (split by role) and how many image attachments rode along (count +
+// bytes). Logged once, at the point the assembled prompt and the parsed attachments are both
+// already in hand, so an agent reconstructing a defect from the activity log can tell "a
+// 40-message context with two images" from "a bare one-line question" without ever seeing a
+// token of either. Deliberately NOT the speculative JSON shape-skeleton feature (positional
+// locator tuples over the request/response bodies) — that stays a documented forward guardrail,
+// not built here (final-design.md Decisions Log D14).
+const CHAT_TURN_ROLES = ["system", "user", "assistant", "tool"] as const;
+type ChatTurnRole = (typeof CHAT_TURN_ROLES)[number];
+const CHAT_TURN_ROLE_SET: ReadonlySet<string> = new Set(CHAT_TURN_ROLES);
+
+export interface ChatTurnShapeFields {
+  readonly messageCount: number;
+  readonly systemCount: number;
+  readonly userCount: number;
+  readonly assistantCount: number;
+  readonly toolCount: number;
+  readonly imageAttachmentCount: number;
+  readonly imageAttachmentBytes: number;
+}
+
+// Exported so its co-located test derives its expectations by calling this exact production
+// formula (AGENTS.md §7) rather than restating the counting logic as a second copy that could
+// drift from it.
+export function chatTurnShapeFields(
+  messages: readonly { readonly role: string }[],
+  attachments: readonly ConversationAttachment[],
+): ChatTurnShapeFields {
+  const roleCounts: Record<ChatTurnRole, number> = { system: 0, user: 0, assistant: 0, tool: 0 };
+  for (const message of messages) {
+    if (CHAT_TURN_ROLE_SET.has(message.role)) {
+      roleCounts[message.role as ChatTurnRole] += 1;
+    }
+  }
+  let imageAttachmentCount = 0;
+  let imageAttachmentBytes = 0;
+  for (const attachment of attachments) {
+    if (attachment.kind === "image") {
+      imageAttachmentCount += 1;
+      imageAttachmentBytes += attachment.sizeBytes;
+    }
+  }
+  return {
+    messageCount: messages.length,
+    systemCount: roleCounts.system,
+    userCount: roleCounts.user,
+    assistantCount: roleCounts.assistant,
+    toolCount: roleCounts.tool,
+    imageAttachmentCount,
+    imageAttachmentBytes,
+  };
+}
+
+function logChatTurnStarted(
+  correlationId: string | undefined,
+  messages: readonly { readonly role: string }[],
+  attachments: readonly ConversationAttachment[],
+): void {
+  logChatTurnStartedEvent(correlationId, chatTurnShapeFields(messages, attachments));
+}
+
 export interface ChatCompactionTurn {
   readonly compaction: ConversationCompactionOutcome["compaction"];
   readonly request: SendDesktopChatRequest;
@@ -1506,6 +1832,10 @@ export interface ChatCompactionTurn {
   readonly messageCount: number;
   readonly startedAt: number;
   readonly historyPrefix: readonly ChatMessage[];
+  // ADR-0173 D5 g25 — the request's correlation id, carried through so a scheduled-enrichment
+  // failure (logged well after the response left, from inside a detached setImmediate) still
+  // joins back to the request that triggered it instead of standing alone in the activity log.
+  readonly correlationId: string | undefined;
 }
 
 // ADR-0057 D3: best-effort persist of the turn's compaction record AFTER the response completes.
@@ -1522,13 +1852,14 @@ export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTu
     finishedAt: Date.now(),
   } satisfies ChatCompactionEvidenceInput;
   persistChatCompactionEvidence(deps, input);
-  scheduleCompactionModelSummary(deps, input, turn.historyPrefix);
+  scheduleCompactionModelSummary(deps, input, turn.historyPrefix, turn.correlationId);
 }
 
 function scheduleCompactionModelSummary(
   deps: UiHandlerDeps,
   input: ChatCompactionEvidenceInput,
   historyPrefix: readonly ChatMessage[],
+  correlationId: string | undefined,
 ): void {
   if (
     input.compaction === undefined ||
@@ -1538,9 +1869,9 @@ function scheduleCompactionModelSummary(
   }
   pendingCompactionSummaries += 1;
   const handle = setImmediate(() => {
-    void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix })
+    void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix, correlationId })
       .catch((error: unknown) => {
-        logCompactionSummaryFailure(error);
+        logCompactionSummaryFailure(deps, correlationId, error);
       })
       .finally(() => {
         pendingCompactionSummaries -= 1;
@@ -1549,9 +1880,25 @@ function scheduleCompactionModelSummary(
   handle.unref();
 }
 
-function logCompactionSummaryFailure(error: unknown): void {
-  // eslint-disable-next-line no-console
-  console.warn("chat-compaction-model-summary: scheduled enrichment failed", error);
+// Replaces a bare `console.warn` (ADR-0173 D5 g25): the scheduled enrichment runs detached from
+// the request/response cycle, so its own internal try/catch (`enrichChatCompactionWithModelSummary`)
+// already routes the ordinary failure paths to a diagnostic — this outer catch only fires for a
+// failure that escapes THAT guard, and must not go back to being invisible.
+function logCompactionSummaryFailure(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      operation: "chat.compaction.summary.scheduled",
+      source: "chat.compaction.model-summary",
+      error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
+  );
 }
 
 function buildRegenerateGatewayAssembly(
@@ -1667,57 +2014,132 @@ function requestSignalAborted(signal: AbortSignal): boolean {
 
 type BufferedModelPort = NonNullable<ReturnType<UiHandlerDeps["modelPortFactory"]>>;
 
-interface BufferedModelPreflight {
-  readonly legacyModel: BufferedModelPort | undefined;
+function bufferedModelAtProviderBoundary(
+  deps: UiHandlerDeps,
+  modelId: string,
+  executionAdmission: DesktopChatExecutionAdmission,
+  correlationId: string | undefined,
+  operation: "chat.send.rejected" | "chat.regeneration.rejected" = "chat.send.rejected",
+): BufferedModelPort | RouteResult {
+  const invalidProviderBoundary = validateDesktopChatProviderBoundary(
+    modelId,
+    executionAdmission,
+    deps,
+  );
+  if (invalidProviderBoundary !== undefined) {
+    logChatRejection(
+      operation,
+      correlationId,
+      modelId,
+      deps,
+      invalidProviderBoundary.status,
+      desktopChatProviderBoundaryRejectionReason(modelId, executionAdmission, deps),
+    );
+    return invalidProviderBoundary;
+  }
+  return (
+    deps.modelPortFactory(modelId) ?? {
+      status: 400,
+      body: errorBody("NO_MODEL", "No model provider is configured."),
+    }
+  );
 }
 
-function preflightBufferedModelTurn(
+function bufferedTurnCancellationResult(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  signal: AbortSignal,
+  preProviderAdmitted?: AdmittedTurnHandle,
+): RouteResult | undefined {
+  if (!requestSignalAborted(signal)) return undefined;
+  // Before any provider output the settle may still discard a legacy row; after the
+  // provider ran, history keeps the user message and only the ledger settles.
+  if (preProviderAdmitted !== undefined) {
+    settleRejectedDesktopChatTurn(deps, prepared, preProviderAdmitted, "cancelled");
+  } else {
+    failDesktopChatTurn(deps, prepared.request, "cancelled");
+  }
+  return requestCancelledResult();
+}
+
+// Buffered mirror of the streaming memory guard: the turn is already admitted, so a memory
+// failure must settle it — and for a legacy request settling means discarding the
+// just-admitted user row, because nothing was sent to a provider yet.
+async function resolveBufferedMemory(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
-): BufferedModelPreflight | RouteResult {
-  const { request, chat, modelId } = prepared;
-  if (request.clientTurnId !== undefined) return { legacyModel: undefined };
-  const invalidExecution = validateDesktopChatExecution(request, chat, modelId, deps);
-  if (invalidExecution !== undefined) return invalidExecution;
-  const legacyModel = deps.modelPortFactory(modelId);
-  return legacyModel === undefined
-    ? { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") }
-    : { legacyModel };
+  admitted: AdmittedTurnHandle,
+  abortSignal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<ConversationMemoryResultWire | RouteResult> {
+  const { request, memoryContext } = prepared;
+  let memory: ConversationMemoryResultWire;
+  try {
+    memory =
+      memoryContext === undefined
+        ? emptyMemoryResult(false)
+        : await buildMemoryResult(request, deps, memoryContext);
+  } catch (error) {
+    const cancelled = requestSignalAborted(abortSignal);
+    settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
+    return cancelled
+      ? requestCancelledResult()
+      : desktopChatErrorResult(error, deps, correlationId);
+  }
+  // Cancellation that lands during retrieval must be settled HERE, before assembly and the
+  // provider call — this is still pre-provider, so a legacy row is discarded rather than
+  // left behind by the ledger no-op.
+  return bufferedTurnCancellationResult(deps, prepared, abortSignal, admitted) ?? memory;
 }
 
 function admitBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
+  correlationId: string | undefined,
 ):
   | {
-      readonly userMessage: ChatMessage;
-      readonly model: BufferedModelPort;
+      readonly admitted: AdmittedTurnHandle;
+      readonly executionAdmission: DesktopChatExecutionAdmission;
     }
   | RouteResult {
   const { request, chat, modelId } = prepared;
-  const preflight = preflightBufferedModelTurn(deps, prepared);
-  if (isRouteResult(preflight)) return preflight;
+  const legacyAdmission =
+    request.clientTurnId === undefined
+      ? captureDesktopChatExecutionAdmission(request, chat, modelId, deps, {
+          operation: "chat.send.rejected",
+          correlationId,
+        })
+      : undefined;
+  if (isRouteResult(legacyAdmission)) return legacyAdmission;
+  // Probe the provider for EVERY legacy request while nothing is persisted yet: a NO_MODEL
+  // rejection after admission cannot settle the turn (failDesktopChatTurn is a no-op without
+  // a clientTurnId) and would orphan the user message — the pre-#3182 invariant. The
+  // clientTurnId path keeps resolving after the memory await for provider freshness.
+  if (legacyAdmission !== undefined) {
+    const probe = bufferedModelAtProviderBoundary(deps, modelId, legacyAdmission, correlationId);
+    if (isRouteResult(probe)) return probe;
+  }
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind === "replay") return { status: 200, body: admission.response };
   if (admission.kind === "rejected") return admission.result;
-  const invalidExecution =
-    request.clientTurnId === undefined
-      ? undefined
-      : validateDesktopChatExecution(request, chat, modelId, deps);
-  if (invalidExecution !== undefined) {
-    failDesktopChatTurn(deps, request);
-    return invalidExecution;
+  const executionAdmission =
+    legacyAdmission ??
+    captureDesktopChatExecutionAdmission(request, chat, modelId, deps, {
+      operation: "chat.send.rejected",
+      correlationId,
+    });
+  if (isRouteResult(executionAdmission)) {
+    settleRejectedDesktopChatTurn(deps, prepared, admission);
+    return executionAdmission;
   }
-  const model = preflight.legacyModel ?? deps.modelPortFactory(modelId);
-  if (model !== undefined) return { userMessage: admission.userMessage, model };
-  failDesktopChatTurn(deps, request);
-  return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+  return { admitted: admission, executionAdmission };
 }
 
 async function persistModelChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
   abortSignal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
   const { request } = prepared;
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
@@ -1731,11 +2153,14 @@ async function persistModelChatTurn(
       abortSignal,
       messageCountBeforeTurn,
       startedAt,
+      correlationId,
     );
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
     failDesktopChatTurn(deps, request, cancelled ? "cancelled" : "failed");
-    return cancelled ? requestCancelledResult() : desktopChatErrorResult(error, deps);
+    return cancelled
+      ? requestCancelledResult()
+      : desktopChatErrorResult(error, deps, correlationId);
   }
 }
 
@@ -1745,34 +2170,34 @@ async function executeBufferedModelTurn(
   abortSignal: AbortSignal,
   messageCountBeforeTurn: number,
   startedAt: number,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { request, modelId, memoryContext } = prepared;
-  const admitted = admitBufferedModelTurn(deps, prepared);
-  if (isRouteResult(admitted)) return admitted;
-  const { userMessage, model } = admitted;
+  const { request, modelId } = prepared;
+  const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
+  if (isRouteResult(outcome)) return outcome;
+  const { admitted, executionAdmission } = outcome;
+  const { userMessage } = admitted;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
-  const memory =
-    memoryContext === undefined
-      ? emptyMemoryResult(false)
-      : await buildMemoryResult(request, deps, memoryContext);
-  if (requestSignalAborted(abortSignal)) {
-    failDesktopChatTurn(deps, request, "cancelled");
-    return requestCancelledResult();
+  const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
+  if (isRouteResult(memory)) return memory;
+  const baseAssembly = buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn);
+  // Logged from the base assembly, BEFORE image content parts are spliced in: image delivery can
+  // still fail its own (unrelated) authority/session check below, and this shape evidence must
+  // exist either way. Splicing only augments the final message's contentParts, never message
+  // count or role — so the counted shape is identical from either assembly.
+  logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
+  const assembly = assemblyWithConversationImages(deps, request, modelId, baseAssembly);
+  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
+  if (isRouteResult(model)) {
+    settleRejectedDesktopChatTurn(deps, prepared, admitted);
+    return model;
   }
-  const assembly = assemblyWithConversationImages(
-    deps,
-    request,
-    modelId,
-    buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn),
-  );
   const response = await model.call(
-    { modelId, messages: assembly.messages, stream: false },
+    { modelId, messages: assembly.messages, stream: false, logContext: { correlationId } },
     abortSignal,
   );
-  if (requestSignalAborted(abortSignal)) {
-    failDesktopChatTurn(deps, request, "cancelled");
-    return requestCancelledResult();
-  }
+  const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
+  if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
     deps,
     prepared,
@@ -1784,6 +2209,7 @@ async function executeBufferedModelTurn(
       messageCount: messageCountBeforeTurn,
       startedAt,
       historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+      correlationId,
     },
   );
 }
@@ -1795,13 +2221,17 @@ interface BufferedCompactionContext {
   readonly messageCount: number;
   readonly startedAt: number;
   readonly historyPrefix: readonly ChatMessage[];
+  readonly correlationId: string | undefined;
 }
 
 async function finalizeAndRecordBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { userMessage: ChatMessage; response: NormalizedResponse },
+  result: {
+    userMessage: ChatMessage;
+    response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
+  },
   abortSignal: AbortSignal,
   compaction: BufferedCompactionContext,
 ): Promise<RouteResult> {
@@ -1814,6 +2244,7 @@ async function finalizeAndRecordBufferedTurn(
       messageCount: compaction.messageCount,
       startedAt: compaction.startedAt,
       historyPrefix: compaction.historyPrefix,
+      correlationId: compaction.correlationId,
     });
   }
   return finalized;
@@ -1823,7 +2254,12 @@ function commitBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { readonly userMessage: ChatMessage; readonly response: NormalizedResponse },
+  result: {
+    readonly userMessage: ChatMessage;
+    readonly response: Pick<NormalizedResponse, "content"> & {
+      readonly usage?: NormalizedResponse["usage"];
+    };
+  },
   redactedContent: string,
   memoryActions: readonly ConversationMemoryActionWire[],
 ): RouteResult {
@@ -1856,7 +2292,7 @@ function commitBufferedTurn(
     body: {
       chat: updatedChat,
       messages: [userMessage, assistantMessage],
-      usage: result.response.usage,
+      ...(result.response.usage === undefined ? {} : { usage: result.response.usage }),
       memory: { ...memory, actions: memoryActions },
       ...(conversationImageDeliveries(request).length === 0
         ? {}
@@ -1872,7 +2308,10 @@ async function finalizeBufferedTurn(
   deps: UiHandlerDeps,
   turn: BufferedTurnContext,
   memory: ConversationMemoryResultWire,
-  result: { userMessage: ChatMessage; response: NormalizedResponse },
+  result: {
+    userMessage: ChatMessage;
+    response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
+  },
   abortSignal: AbortSignal,
 ): Promise<RouteResult> {
   const { request, modelId, memoryContext } = turn;
@@ -1888,14 +2327,262 @@ async function finalizeBufferedTurn(
   return commitBufferedTurn(deps, turn, memory, result, redactedContent, memoryActions);
 }
 
+interface HeldChatDescription {
+  readonly proposalId?: string;
+  readonly status: ChatGitChangeScope["descriptionStatus"];
+  readonly service?: import("./gitDelivery/prDescriptionTypes.js").PrDescriptionApplicationService;
+}
+
+async function holdChatDescriptionProposal(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  chat: Chat,
+  scope: ChatGitChangeScope,
+  artifact: import("@oscharko-dev/keiko-contracts").PrDescriptionArtifact,
+  correlationId: string,
+): Promise<HeldChatDescription> {
+  if (scope.pullRequestNumber === undefined) {
+    return { status: artifact.outcome === "complete" ? "current" : artifact.outcome };
+  }
+  const repository = await resolveGitChangeApplyOwnerAndRepo(deps, chat, correlationId);
+  if (!repository.ok) {
+    gitChangeDescriptionTargetUnavailable(deps, correlationId, repository.reason);
+    return { status: "blocked" };
+  }
+  const resolution = resolvePrDescriptionApplicationServiceForRequest(
+    deps,
+    ctx,
+    {
+      projectId: chat.projectPath,
+      ownerAndRepo: repository.ownerAndRepo,
+      prNumber: scope.pullRequestNumber,
+      snapshotDigest: scope.snapshotDigest,
+    },
+    correlationId,
+    {},
+    gitChangeDescriptionAuthorityScopeFor(scope),
+  );
+  if (!resolution.ok) return { status: "blocked" };
+  const preview = await resolution.service.previewArtifact(artifact);
+  return preview.outcome === "preview"
+    ? {
+        proposalId: preview.preview.proposalId,
+        status: preview.preview.status.state,
+        service: resolution.service,
+      }
+    : {
+        status: preview.outcome === "observed" ? preview.status.state : "blocked",
+        service: resolution.service,
+      };
+}
+
+function updateChatDescriptionScope(
+  deps: UiHandlerDeps,
+  chatId: string,
+  expected: ChatGitChangeScope,
+  held: HeldChatDescription,
+): Chat | undefined {
+  const current = deps.store.findChatById(chatId);
+  const scopes = current?.gitChangeScopes;
+  if (current === undefined || scopes === undefined) return undefined;
+  const selected = scopes.find((scope) => scope.relationshipId === expected.relationshipId);
+  if (selected?.snapshotDigest !== expected.snapshotDigest) return undefined;
+  const next = scopes.map((scope): ChatGitChangeScope => {
+    if (scope.relationshipId !== expected.relationshipId) return scope;
+    const base = { ...scope };
+    delete base.descriptionProposalId;
+    return {
+      ...base,
+      descriptionStatus: held.status,
+      ...(held.proposalId === undefined ? {} : { descriptionProposalId: held.proposalId }),
+    };
+  });
+  return deps.store.updateChat(chatId, { gitChangeScopes: next });
+}
+
+async function generateAdmittedGitChangeTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  scope: ChatGitChangeScope,
+  admission: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId: string,
+): Promise<Awaited<ReturnType<typeof generateGitChangeChatDescription>>> {
+  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  return generateGitChangeChatDescription({
+    deps,
+    projectPath: prepared.chat.projectPath,
+    scope,
+    correlationId,
+    signal,
+    history: gatewayHistoryPrefix(gatewayTurn),
+    latestIntent: prepared.request.content,
+  });
+}
+
+function descriptionTurnResponse(
+  content: string,
+  usage:
+    | import("@oscharko-dev/keiko-model-gateway").PrDescription.PrDescriptionGenerationUsage
+    | undefined,
+): Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] } {
+  return {
+    content,
+    ...(usage === undefined
+      ? {}
+      : {
+          usage: {
+            requestId: usage.requestId,
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            latencyMs: usage.latencyMs,
+            costClass: usage.costClass,
+          },
+        }),
+  };
+}
+
+function gitChangeGenerationFailureStatus(reason: string): number {
+  if (reason === "authority-denied") return 403;
+  if (reason === "snapshot-unavailable" || reason === "invalid-snapshot") return 409;
+  return 503;
+}
+
+function gitChangeGenerationFailure(reason: string): RouteResult {
+  return reason === "cancelled"
+    ? requestCancelledResult()
+    : {
+        status: gitChangeGenerationFailureStatus(reason),
+        body: errorBody(
+          "GIT_CHANGE_DESCRIPTION_UNAVAILABLE",
+          "The connected Git change could not produce a current description.",
+        ),
+      };
+}
+
+function rejectUnavailableGitChangeGeneration(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admission: AdmittedTurnHandle,
+  reason: string,
+): RouteResult {
+  settleRejectedDesktopChatTurn(
+    deps,
+    prepared,
+    admission,
+    reason === "cancelled" ? "cancelled" : "failed",
+  );
+  return gitChangeGenerationFailure(reason);
+}
+
+export async function persistGitChangeDescriptionTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  abortSignal: AbortSignal,
+): Promise<RouteResult> {
+  const scope = activeGitChangeScope(prepared.chat);
+  if (scope === undefined)
+    return { status: 409, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
+  const admission = admitDesktopChatTurn(deps, prepared);
+  if (admission.kind === "replay") return { status: 200, body: admission.response };
+  if (admission.kind === "rejected") return admission.result;
+  const memory = await resolveBufferedMemory(
+    deps,
+    prepared,
+    admission,
+    abortSignal,
+    ctx.correlationId,
+  );
+  if (isRouteResult(memory)) return memory;
+  return completeGitChangeDescriptionTurn(
+    ctx,
+    deps,
+    prepared,
+    scope,
+    admission,
+    memory,
+    abortSignal,
+  );
+}
+
+async function completeGitChangeDescriptionTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  scope: ChatGitChangeScope,
+  admission: AdmittedTurnHandle,
+  memory: ConversationMemoryResultWire,
+  abortSignal: AbortSignal,
+): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const generated = await generateAdmittedGitChangeTurn(
+    deps,
+    prepared,
+    scope,
+    admission,
+    abortSignal,
+    correlationId,
+  );
+  if (generated.status === "unavailable") {
+    return rejectUnavailableGitChangeGeneration(deps, prepared, admission, generated.reason);
+  }
+  const held = await holdChatDescriptionProposal(
+    ctx,
+    deps,
+    prepared.chat,
+    scope,
+    generated.artifact,
+    correlationId,
+  );
+  if (updateChatDescriptionScope(deps, prepared.chat.id, scope, held) === undefined) {
+    held.service?.invalidate();
+    failDesktopChatTurn(deps, prepared.request);
+    return gitChangeGenerationFailure("snapshot-unavailable");
+  }
+  const result = await finalizeBufferedTurn(
+    deps,
+    prepared,
+    memory,
+    {
+      userMessage: admission.userMessage,
+      response: descriptionTurnResponse(generated.artifact.markdown, generated.usage),
+    },
+    abortSignal,
+  );
+  if (result.status !== 200) {
+    held.service?.invalidate();
+    updateChatDescriptionScope(deps, prepared.chat.id, scope, { status: "blocked" });
+  }
+  return result;
+}
+
 export async function handleCreateDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
+  // Fresh-install gap: verify a usable model on demand BEFORE the sync readiness guard —
+  // walking past an unsuitable default (e.g. an OCR model first in the list) so a
+  // configured-but-never-probed gateway does not reject the very first chat. The walk runs
+  // only for a DEFAULTED request: for an explicit modelId the admission validates that model
+  // alone, so probing its siblings could never change the outcome — it would only add their
+  // probe latency to an already-decided answer.
+  const explicitModelId = explicitChatModelId(body);
+  await (explicitModelId === undefined
+    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps), ctx.correlationId)
+    : ensureOnDemandConversationReadiness(deps, explicitModelId, ctx.correlationId));
   const modelId = modelFromBody(body, deps);
-  if (isRouteResult(modelId)) return modelId;
+  if (isRouteResult(modelId)) {
+    logChatCreationRejection(
+      ctx,
+      deps,
+      explicitModelId ?? defaultChatModelId(deps),
+      modelId.status,
+    );
+    return modelId;
+  }
   try {
     const projectPath = pickProjectPath(body, deps);
     const project = ensureProject(deps, projectPath);
@@ -1903,7 +2590,9 @@ export async function handleCreateDesktopChat(
       typeof body.title === "string" && body.title.trim().length > 0
         ? body.title.trim()
         : DEFAULT_CHAT_TITLE;
-    const chat = deps.store.createChat(project.path, title, modelId);
+    const chat = deps.store.createChat(project.path, title, modelId, {
+      correlationId: ctx.correlationId,
+    });
     return { status: 201, body: chatEnvelope(deps, project, chat) };
   } catch (error) {
     if (error instanceof UiStoreError) {
@@ -1926,9 +2615,9 @@ function normalizeDesktopProjectPath(
   deps: UiHandlerDeps,
 ): string | RouteResult {
   try {
-    return validateProjectPath(projectPath, { mustExist: false });
+    return asParsedOrRouteResult<string>(validateProjectPath(projectPath, { mustExist: false }));
   } catch (error) {
-    return desktopChatErrorResult(error, deps);
+    return asParsedOrRouteResult<string>(desktopChatErrorResult(error, deps));
   }
 }
 
@@ -1957,6 +2646,10 @@ export interface PreparedDesktopChatSend {
   readonly turnIdentityContent: string;
 }
 
+export interface DesktopChatExecutionAdmission {
+  readonly gatewayConfigGeneration: number | undefined;
+}
+
 export interface ParsedDesktopChatSend {
   readonly request: SendDesktopChatRequest;
   readonly chat: Chat;
@@ -1974,6 +2667,7 @@ interface PreparedDesktopChatRegenerate {
   };
   readonly memoryRequest: SendDesktopChatRequest;
   readonly memoryContext: ConversationMemoryRuntimeContext | undefined;
+  readonly executionAdmission: DesktopChatExecutionAdmission;
 }
 
 interface ParsedDesktopChatRegenerate {
@@ -2085,6 +2779,63 @@ export function validateDesktopChatExecution(
     : { status: 400, body: errorBody(validation.code, validation.message) };
 }
 
+export function captureDesktopChatExecutionAdmission(
+  request: SendDesktopChatRequest,
+  chat: Chat,
+  modelId: string,
+  deps: UiHandlerDeps,
+  rejectionContext?: ChatReadinessRejectionContext,
+): DesktopChatExecutionAdmission | RouteResult {
+  const invalidExecution = validateDesktopChatExecution(request, chat, modelId, deps);
+  const rejectionReason =
+    invalidExecution === undefined ? undefined : chatExecutionRejectionReason(invalidExecution);
+  if (
+    invalidExecution !== undefined &&
+    rejectionContext !== undefined &&
+    rejectionReason !== undefined
+  ) {
+    logChatRejection(
+      rejectionContext.operation,
+      rejectionContext.correlationId,
+      modelId,
+      deps,
+      invalidExecution.status,
+      rejectionReason,
+    );
+  }
+  return invalidExecution ?? { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
+}
+
+export function validateDesktopChatProviderBoundary(
+  modelId: string,
+  admission: DesktopChatExecutionAdmission,
+  deps: UiHandlerDeps,
+): RouteResult | undefined {
+  const reason = desktopChatProviderBoundaryRejectionReason(modelId, admission, deps);
+  if (reason === undefined) return undefined;
+  if (reason === "generation") {
+    return {
+      status: 409,
+      body: errorBody(
+        "GATEWAY_CONFIG_CHANGED",
+        "The model gateway configuration changed before the turn could run.",
+      ),
+    };
+  }
+  return unreadyChatModelResult();
+}
+
+export function desktopChatProviderBoundaryRejectionReason(
+  modelId: string,
+  admission: DesktopChatExecutionAdmission,
+  deps: UiHandlerDeps,
+): ChatRejectionReason | undefined {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return undefined;
+  if (holder.generation() !== admission.gatewayConfigGeneration) return "generation";
+  return currentConversationReady(deps, modelId) ? undefined : "readiness";
+}
+
 export function validateCurrentDesktopChatSend(
   prepared: Pick<ParsedDesktopChatSend, "request" | "chat">,
   deps: UiHandlerDeps,
@@ -2101,6 +2852,471 @@ export function validateCurrentDesktopChatSend(
   );
 }
 
+// ─── Issue #3400 (epic #3384) — git-change description-authority admission ─────────────────────
+//
+// A chat's connected git-change scope is not model-egress authority by itself (Architecture
+// Invariants: "Connecting context is not model-egress authority"). Every turn on a git-change-
+// scoped chat re-derives the server-minted description authority (#3399, contract correction 4)
+// before any snapshot content reaches the Model Gateway. `deps.gitChangeDescriptionAuthorityPort`
+// is a direct, official `UiHandlerDeps` field (description-composition-closeout): production
+// composition threads the SAME minted port onto it and onto `gitDeliveryDescriptionAuthority`
+// (deps.test.ts pins the two are `===`) — `undefined` (an unqualified runtime host, or a test
+// fixture that never wired one) fails admission CLOSED, never open: no port to consult is exactly
+// the same as no live authority record.
+
+// The scope always keys on the immutable base/head pair rather than a PR identity: `remoteDigest`
+// (correction 6) plus `baseRef`/`headRef` are present on every connected git-change scope whether
+// or not a pull request was resolved, while the PR-identity variant of
+// `GitDeliveryDescriptionAuthorityScope` needs an `ownerAndRepo` slug this wire shape deliberately
+// does not carry (correction 2 admits only safe, server-issued facts). The accepted buffered or
+// streamed turn mints this scope immediately before admission, using the accepted per-turn mode;
+// connect/refresh only persists context and never grants later model egress. The shared scope
+// producer keeps turn admission, artifact retention and governed apply on one exact identity.
+// #3400/#3401 final-audit F1: the closed reason a denied Chat admission carries — distinguishes a
+// description authority record that existed for the exact scope but has passed its `expiresAt`
+// from every other closed case (no port wired at all, or a scope that was never minted), reusing
+// `authorizeGitDeliveryModelEgress`'s own expired-vs-absent discriminant rather than a second one.
+export type { GitChangeDescriptionTurnDenial } from "./chat-activity.js";
+
+export type GitChangeDescriptionTurnAdmission =
+  | { readonly admitted: true }
+  | { readonly admitted: false; readonly reason: GitChangeDescriptionTurnDenial };
+
+/**
+ * Admits only when a live, unexpired description authority record exists for the EXACT scope
+ * (remoteDigest, base/head, snapshotDigest) the caller re-derived just now — never a cached or
+ * assumed admission. A denial carries the closed reason: `authority-expired` when the record was
+ * minted for this exact scope and has since expired, `model-egress-denied` for every other closed
+ * case (no port wired, or a scope that was never minted).
+ */
+export function admitGitChangeDescriptionTurn(
+  deps: UiHandlerDeps,
+  scope: ChatGitChangeScope,
+  nowIso: string,
+): GitChangeDescriptionTurnAdmission {
+  const port = deps.gitChangeDescriptionAuthorityPort;
+  if (port === undefined) return { admitted: false, reason: "model-egress-denied" };
+  const decision = authorizeGitDeliveryModelEgress(
+    port,
+    gitChangeDescriptionAuthorityScopeFor(scope),
+    nowIso,
+  );
+  if (decision.allowed) return { admitted: true };
+  return {
+    admitted: false,
+    reason: decision.reason === "authority-expired" ? "authority-expired" : "model-egress-denied",
+  };
+}
+
+function logGitChangeTurnAuthority(
+  correlationId: string | undefined,
+  admission: GitChangeDescriptionTurnAdmission,
+  relationshipId: string,
+): void {
+  logGitChangeTurnAuthorityEvent(correlationId, admission, relationshipId);
+}
+
+// V1 connects at most one git-change comparison per chat in practice; a chat that somehow carries
+// several treats the most-recently-connected one as the active turn scope.
+export function activeGitChangeScope(chat: Chat): ChatGitChangeScope | undefined {
+  const scopes = chat.gitChangeScopes;
+  return scopes?.at(-1);
+}
+
+/**
+ * Denies a normal Chat turn on a git-change-connected chat BEFORE the Model Gateway is reached
+ * when the description authority for its active scope is missing or expired. Returns `undefined`
+ * (proceed) for a chat with no connected git-change scope at all.
+ */
+// Exported so the streaming send path (chat-stream-handlers.ts) re-derives the SAME admission —
+// via the SAME formula, never a restated copy — rather than only the buffered /api/desktop/chat
+// path gating a git-change-connected chat. Both are real client transports for sending a turn.
+export function admitGitChangeScopedTurn(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  acceptedMode: CodingWorkbenchMode | undefined,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const scope = activeGitChangeScope(chat);
+  if (scope === undefined) return undefined;
+  const effectiveCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
+  if (acceptedMode === undefined || deps.mintDescriptionAuthority === undefined) {
+    const admission = { admitted: false, reason: "model-egress-denied" } as const;
+    logGitChangeTurnAuthority(effectiveCorrelationId, admission, scope.relationshipId);
+    return {
+      status: 409,
+      body: errorBody(
+        "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+        "The description authority for this connected Git change is missing or has expired.",
+      ),
+    };
+  }
+  const nowIso = new Date().toISOString();
+  deps.mintDescriptionAuthority({
+    scope: gitChangeDescriptionAuthorityScopeFor(scope),
+    requestedMode: acceptedMode,
+    nowIso,
+    correlationId: effectiveCorrelationId,
+  });
+  const admission = admitGitChangeDescriptionTurn(deps, scope, nowIso);
+  logGitChangeTurnAuthority(effectiveCorrelationId, admission, scope.relationshipId);
+  if (admission.admitted) return undefined;
+  return {
+    status: 409,
+    body: errorBody(
+      "GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED",
+      "The description authority for this connected Git change is missing or has expired.",
+    ),
+  };
+}
+
+export function acceptedGitChangeChatMode(
+  deps: UiHandlerDeps,
+  request: Pick<SendDesktopChatRequest, "memory">,
+): CodingWorkbenchMode | undefined {
+  const requestedMode = request.memory?.mode;
+  return requestedMode === undefined
+    ? undefined
+    : resolveMemoryCaptureAutonomyMode(deps, requestedMode);
+}
+
+// ─── Issue #3400 — apply routes only through the description application service (#3399) ────────
+//
+// Frozen Product Decision 6 / issue correction 1: the ONLY admitted write from a git-change-
+// connected Chat is a body-only description apply through the existing #3399 service. Final-audit
+// F7: production composition now reaches this handler with a real, composed
+// `PrDescriptionApplicationService` (`deps.prDescriptionApplicationService`, deps.ts's own
+// composition root) — a typed field, no optional-cast seam. Absent under the same closed
+// condition `deps.prDescriptionGeneration` is absent under (no configured model profile), apply is
+// unavailable — it NEVER falls back to `executeGovernedPullRequest` (prExecution.ts), which is the
+// only other PR-update path and is coupled title+body+base, not body-only.
+
+/**
+ * Applies an already-approved PR-description proposal through the existing body-only service.
+ * Returns `undefined` when the service is not yet composed (apply unavailable) rather than
+ * substituting any other write path.
+ */
+export function applyGitChangeDescription(
+  deps: UiHandlerDeps,
+  proposalId: string,
+  lease: object,
+): Promise<PrDescriptionApplicationResult> | undefined {
+  return deps.prDescriptionApplicationService?.executeApproved(proposalId, lease);
+}
+
+// ─── Issue #3400 — the real handler Chat reaches for the apply action (final-audit F5) ──────────
+//
+// Before this fix, `applyGitChangeDescription` above had zero production callers: nothing ever
+// invoked it from a route, so the apply effect was reachable only in tests. This handler is that
+// caller. A Chat-connected git-change scope only ever names a repository via `remoteDigest`
+// (contract correction 6) and only carries a `pullRequestNumber` once a PR was resolved at connect
+// time, so `ownerAndRepo` (the raw slug #3399's admission needs) is re-derived live from the SAME
+// trusted repository root the connect flow used, through the SAME git-membership check
+// (`resolveChatRepository`) and the SAME GitHub-reader authorization gate every other git-change
+// route reuses -- never a fresh, browser-authored identity.
+//
+// routes.ts registers the approve/review/apply handlers lazily to avoid the existing ESM cycle;
+// every request names only the server-held Chat scope and proposal.
+interface GitChangeApplyDescriptionRequest {
+  readonly chatId: string;
+  readonly relationshipId: string;
+  readonly proposalId: string;
+}
+
+const GIT_CHANGE_APPLY_DESCRIPTION_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "chatId",
+  "relationshipId",
+  "proposalId",
+]);
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+// Every field beyond this closed set is rejected before any lookup runs -- the same
+// "binding smuggling" guard prDescriptionRoutes.ts's own `baseFields` applies: a request that adds
+// `ownerAndRepo`, `prNumber`, or any other field this action never accepts is refused at
+// validation, never silently ignored.
+function parseGitChangeApplyDescriptionRequest(
+  value: unknown,
+): GitChangeApplyDescriptionRequest | undefined {
+  if (!isRecord(value) || !hasOnlyAllowedKeys(value, GIT_CHANGE_APPLY_DESCRIPTION_KEYS)) {
+    return undefined;
+  }
+  if (value.schemaVersion !== "1") return undefined;
+  const { chatId, relationshipId, proposalId } = value;
+  if (!nonEmptyString(chatId) || !nonEmptyString(relationshipId) || !nonEmptyString(proposalId)) {
+    return undefined;
+  }
+  return { chatId, relationshipId, proposalId };
+}
+
+interface FoundGitChangeApplyScope {
+  readonly chat: Chat;
+  readonly scope: ChatGitChangeScope;
+}
+
+function findConnectedGitChangeScope(
+  deps: UiHandlerDeps,
+  chatId: string,
+  relationshipId: string,
+): FoundGitChangeApplyScope | undefined {
+  const chat = deps.store.findChatById(chatId);
+  if (chat === undefined) return undefined;
+  const scope = (chat.gitChangeScopes ?? []).find(
+    (entry) => entry.relationshipId === relationshipId,
+  );
+  return scope === undefined ? undefined : { chat, scope };
+}
+
+// Re-derives `ownerAndRepo` live rather than reading it from the persisted scope (which never
+// stores it -- only its `remoteDigest`, contract correction 6): the SAME resolution the connect
+// flow performs for pull-request mode, so a live apply always checks the repository's CURRENT
+// GitHub-reader grant rather than trusting one observed at connect time.
+type GitChangeRepositoryResolution =
+  | { readonly ok: true; readonly ownerAndRepo: string }
+  | {
+      readonly ok: false;
+      readonly reason: GitChangeDescriptionTargetDenial;
+    };
+
+async function resolveGitChangeApplyOwnerAndRepo(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  correlationId: string,
+): Promise<GitChangeRepositoryResolution> {
+  const runner = observedGitRunner(
+    defaultGitProcessRunner,
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+  );
+  const repository = await resolveChatRepository(chat.projectPath, runner, 30_000);
+  if (repository === undefined) return { ok: false, reason: "repository-unavailable" };
+  if (!isGitHubIssueReaderAuthorized(deps, repository.repositoryRoot, { correlationId })) {
+    return { ok: false, reason: "reader-unauthorized" };
+  }
+  const ownerAndRepo = await githubRemoteOwnerAndRepoFor(
+    repository.repositoryRoot,
+    deps.env,
+    undefined,
+    { correlationId },
+  );
+  return ownerAndRepo === undefined
+    ? { ok: false, reason: "remote-unresolved" }
+    : { ok: true, ownerAndRepo };
+}
+
+function gitChangeApplyUnavailableResult(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "GIT_CHANGE_APPLY_UNAVAILABLE",
+      "This connected Git change has no pull request to apply a description to.",
+    ),
+  };
+}
+
+function gitChangeDescriptionTargetUnavailable(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  reason: Exclude<GitChangeRepositoryResolution, { readonly ok: true }>["reason"],
+): RouteResult {
+  logGitChangeDescriptionTargetDenied(
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+    reason,
+  );
+  const unauthorized = reason === "reader-unauthorized";
+  let errorCode = "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED";
+  if (unauthorized) {
+    errorCode = "GIT_CHANGE_APPLY_READER_UNAUTHORIZED";
+  } else if (reason === "repository-unavailable") {
+    errorCode = "GIT_CHANGE_APPLY_REPOSITORY_UNAVAILABLE";
+  }
+  return {
+    status: unauthorized ? 403 : 409,
+    body: errorBody(
+      errorCode,
+      unauthorized
+        ? "Repository-reader authority is required for this connected Git change."
+        : "The connected Git repository identity is unavailable.",
+    ),
+  };
+}
+
+interface GitChangeApplyDescriptionTarget {
+  readonly request: GitChangeApplyDescriptionRequest;
+  readonly baseFields: PrDescriptionBaseFields;
+  readonly scope: ChatGitChangeScope;
+}
+
+async function resolveGitChangeApplyTarget(
+  deps: UiHandlerDeps,
+  request: GitChangeApplyDescriptionRequest,
+  correlationId: string,
+): Promise<GitChangeApplyDescriptionTarget | RouteResult> {
+  const found = findConnectedGitChangeScope(deps, request.chatId, request.relationshipId);
+  if (found === undefined) {
+    return { status: 404, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
+  }
+  if (found.scope.pullRequestNumber === undefined) return gitChangeApplyUnavailableResult();
+  const repository = await resolveGitChangeApplyOwnerAndRepo(deps, found.chat, correlationId);
+  if (!repository.ok) {
+    return gitChangeDescriptionTargetUnavailable(deps, correlationId, repository.reason);
+  }
+  return {
+    request,
+    scope: found.scope,
+    baseFields: {
+      projectId: found.chat.projectPath,
+      ownerAndRepo: repository.ownerAndRepo,
+      prNumber: found.scope.pullRequestNumber,
+      snapshotDigest: found.scope.snapshotDigest,
+    },
+  };
+}
+
+function logGitChangeApplyOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  outcome: PrDescriptionApplicationResult["outcome"],
+): void {
+  logGitChangeApply(deps.activityLog ?? processServerLogSink(), correlationId, outcome);
+}
+
+/**
+ * Final-audit F5: the real handler Chat reaches for the apply action. Resolves the connected
+ * git-change scope, reuses #3399's own admitted service factory for the exact (project,
+ * repository, PR) the scope now names, consumes the one-use approval, and executes through
+ * `applyGitChangeDescription` above -- the SAME narrow gateway, never a second write path.
+ */
+export const createHandleGitChangeApplyDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const cancellation = createRequestCancellation(ctx, "git-change description apply cancelled");
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return { status: 400, body: errorBody("BAD_REQUEST", "Invalid apply-description request.") };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const lease = resolution.service.consumeApproval(request.proposalId);
+    if (lease === undefined) {
+      return {
+        status: 409,
+        body: errorBody("GIT_CHANGE_APPLY_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+      };
+    }
+    const applied = await applyGitChangeDescription(
+      { ...deps, prDescriptionApplicationService: resolution.service },
+      request.proposalId,
+      lease,
+    );
+    if (applied === undefined) return gitChangeApplyUnavailableResult();
+    updateChatDescriptionScope(deps, target.request.chatId, target.scope, {
+      status: applied.outcome === "observed" ? applied.status.state : "blocked",
+    });
+    logGitChangeApplyOutcome(deps, correlationId, applied.outcome);
+    return { status: 200, body: deps.redactor(applied) };
+  };
+};
+
+/** Issues the one-use approval for the exact Chat-held artifact and snapshot-bound service. */
+export const createHandleGitChangeApproveDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const cancellation = createRequestCancellation(
+      ctx,
+      "git-change description approval cancelled",
+    );
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "Invalid approve-description request."),
+      };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const issued = resolution.service.issueApproval(request.proposalId);
+    if (issued === undefined) {
+      return {
+        status: 409,
+        body: errorBody("GIT_CHANGE_APPROVE_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+      };
+    }
+    return {
+      status: 200,
+      body: deps.redactor({
+        schemaVersion: "1",
+        proposalId: request.proposalId,
+        expiresAt: new Date(issued.expiresAtMs).toISOString(),
+      }),
+    };
+  };
+};
+
+/** Returns the exact Chat-held proposal body without invoking description generation again. */
+export const createHandleGitChangeReviewDescription = (
+  options: PrDescriptionRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const cancellation = createRequestCancellation(ctx, "git-change description review cancelled");
+    const parsed = await readJsonObject(ctx.req, cancellation.signal).finally(cancellation.dispose);
+    if (isRouteResult(parsed)) return parsed;
+    const request = parseGitChangeApplyDescriptionRequest(parsed);
+    if (request === undefined) {
+      return { status: 400, body: errorBody("BAD_REQUEST", "Invalid review-description request.") };
+    }
+    const target = await resolveGitChangeApplyTarget(deps, request, correlationId);
+    if (!("baseFields" in target)) return target;
+    const resolution = resolvePrDescriptionApplicationServiceForRequest(
+      deps,
+      ctx,
+      target.baseFields,
+      correlationId,
+      options,
+      gitChangeDescriptionAuthorityScopeFor(target.scope),
+    );
+    if (!resolution.ok) return resolution.result;
+    const review = resolution.service.review(request.proposalId);
+    return review === undefined
+      ? {
+          status: 409,
+          body: errorBody("GIT_CHANGE_REVIEW_UNKNOWN_PROPOSAL", "Proposal is unknown or expired."),
+        }
+      : { status: 200, body: deps.redactor({ outcome: "preview", preview: review }) };
+  };
+};
+
 export async function handleSendDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2112,8 +3328,19 @@ export async function handleSendDesktopChat(
     if (isRouteResult(parsed)) return parsed;
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
+    if (activeGitChangeScope(prepared.chat) === undefined) {
+      await ensureOnDemandConversationReadiness(deps, prepared.modelId, ctx.correlationId);
+    }
+    const gitChangeDenial = admitGitChangeScopedTurn(
+      deps,
+      prepared.chat,
+      acceptedGitChangeChatMode(deps, prepared.request),
+      ctx.correlationId,
+    );
+    if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
-    if (inspection.kind === "replay") return { status: 200, body: inspection.response };
+    if (inspection.kind === "replay")
+      return logChatResponse({ status: 200, body: inspection.response }, ctx.correlationId);
     if (inspection.kind === "rejected") return inspection.result;
     const result = await runSerializedChatTurn(
       deps,
@@ -2122,10 +3349,22 @@ export async function handleSendDesktopChat(
       () => {
         const current = validateCurrentDesktopChatSend(parsed, deps);
         if (isRouteResult(current)) return current;
-        return persistModelChatTurn(deps, current, cancellation.signal);
+        // Re-derived immediately before dispatch (not only at the earlier fast-fail check above):
+        // a queued turn may wait long enough for the authority to expire in between.
+        const gitChangeDenial = admitGitChangeScopedTurn(
+          deps,
+          current.chat,
+          acceptedGitChangeChatMode(deps, current.request),
+          ctx.correlationId,
+        );
+        if (gitChangeDenial !== undefined) return gitChangeDenial;
+        return activeGitChangeScope(current.chat) === undefined
+          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId)
+          : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
       },
     );
-    return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    return logChatResponse(response, ctx.correlationId);
   } finally {
     cancellation.dispose();
   }
@@ -2425,6 +3664,7 @@ async function parseDesktopChatRegenerate(
 function prepareDesktopChatRegenerateRequest(
   request: RegenerateDesktopChatRequest,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): PreparedDesktopChatRegenerate | RouteResult {
   const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
   if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;
@@ -2434,8 +3674,9 @@ function prepareDesktopChatRegenerateRequest(
   if (closed !== undefined) return closed;
   if (hasGroundingScope(chat)) return groundedRegenerateResult();
   const modelId = request.modelId ?? chat.selectedModel;
-  const invalidModel = invalidChatModelResult(modelId, deps);
+  const invalidModel = invalidRegenerationModelResult(modelId, deps, correlationId);
   if (invalidModel !== undefined) return invalidModel;
+  const executionAdmission = captureGatewayGeneration(deps);
   const visibleTurn = latestRegenerableTurn(
     deps.store.listMessages(chat.id),
     request.assistantMessageId,
@@ -2449,7 +3690,30 @@ function prepareDesktopChatRegenerateRequest(
   const memoryRequest = regenerateMemoryRequest(request, turn);
   const memoryContext = resolveDesktopMemoryContext(deps, memoryRequest, normalizedProjectPath);
   if (isRouteResult(memoryContext)) return memoryContext;
-  return { request, chat, modelId, turn, memoryRequest, memoryContext };
+  return { request, chat, modelId, turn, memoryRequest, memoryContext, executionAdmission };
+}
+
+function invalidRegenerationModelResult(
+  modelId: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const invalidModel = invalidChatModelResult(modelId, deps);
+  if (invalidModel === undefined) return undefined;
+  if (chatExecutionRejectionReason(invalidModel) === "readiness") {
+    logChatRejection(
+      "chat.regeneration.rejected",
+      correlationId,
+      modelId,
+      deps,
+      invalidModel.status,
+    );
+  }
+  return invalidModel;
+}
+
+function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmission {
+  return { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
 }
 
 async function buildRegenerateMemoryAndMessages(
@@ -2502,16 +3766,24 @@ async function persistRegeneratedChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { chat, modelId, memoryRequest } = prepared;
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
-    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
-  }
+  const { chat, modelId, memoryRequest, executionAdmission } = prepared;
   try {
     const { memory, messages } = await buildRegenerateMemoryAndMessages(deps, prepared);
     if (requestSignalAborted(signal)) return requestCancelledResult();
-    const response = await model.call({ modelId, messages, stream: false }, signal);
+    const model = bufferedModelAtProviderBoundary(
+      deps,
+      modelId,
+      executionAdmission,
+      correlationId,
+      "chat.regeneration.rejected",
+    );
+    if (isRouteResult(model)) return model;
+    const response = await model.call(
+      { modelId, messages, stream: false, logContext: { correlationId } },
+      signal,
+    );
     if (requestSignalAborted(signal)) return requestCancelledResult();
     const redactedContent = deps.redactor(response.content) as string;
     assertUsableAssistantContent(redactedContent, modelId);
@@ -2533,7 +3805,9 @@ async function persistRegeneratedChatTurn(
       },
     };
   } catch (error) {
-    return signal.aborted ? requestCancelledResult() : desktopChatErrorResult(error, deps);
+    return signal.aborted
+      ? requestCancelledResult()
+      : desktopChatErrorResult(error, deps, correlationId);
   }
 }
 
@@ -2546,18 +3820,29 @@ export async function handleRegenerateDesktopChat(
     const prepared = await parseDesktopChatRegenerate(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(prepared)) return prepared;
+    await ensureOnDemandConversationReadiness(
+      deps,
+      prepared.request.modelId ?? prepared.chat.selectedModel,
+      ctx.correlationId,
+    );
+    if (requestSignalAborted(cancellation.signal)) return requestCancelledResult();
     const result = await runSerializedChatTurn(
       deps,
       prepared.request.chatId,
       cancellation.signal,
       () => {
-        const current = prepareDesktopChatRegenerateRequest(prepared.request, deps);
+        const current = prepareDesktopChatRegenerateRequest(
+          prepared.request,
+          deps,
+          ctx.correlationId,
+        );
         return isRouteResult(current)
           ? current
-          : persistRegeneratedChatTurn(deps, current, cancellation.signal);
+          : persistRegeneratedChatTurn(deps, current, cancellation.signal, ctx.correlationId);
       },
     );
-    return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    return logChatResponse(response, ctx.correlationId);
   } finally {
     cancellation.dispose();
   }

@@ -270,6 +270,58 @@ const NEGATIVE_FIXTURES: readonly VoiceAcousticFixture[] = [
       { kind: "grounding.tool.result", atMs: 2400 },
     ],
   },
+  // KEIKO-0171: three additional negatives so every VoiceAcousticScenario has adversarial coverage
+  // (previously laptop-echo, headset, and unfinished-utterance had no negative fixture at all, so a
+  // scorer regression that made those scenarios spuriously pass would ship green).
+  {
+    name: "negative-laptop-echo-transcription-drift",
+    scenario: "laptop-echo",
+    polarity: "negative",
+    acousticProfile: "laptop-echo",
+    referenceTranscript: "Mute the speakers before joining",
+    hypothesisTranscript: "Route the meeting through the console",
+    requiredTerms: [],
+    trace: [
+      { kind: "speech.start", atMs: 0 },
+      { kind: "transcript.partial", atMs: 1500 },
+      { kind: "speech.end", atMs: 1900 },
+      { kind: "transcript.final", atMs: 2800 },
+      { kind: "assistant.audio.start", atMs: 3700 },
+    ],
+  },
+  {
+    name: "negative-headset-transcription-drift",
+    scenario: "headset",
+    polarity: "negative",
+    acousticProfile: "headset",
+    referenceTranscript: "Headset audio is clear",
+    hypothesisTranscript: "Please repeat that request slowly",
+    requiredTerms: [],
+    trace: [
+      { kind: "speech.start", atMs: 0 },
+      { kind: "transcript.partial", atMs: 280 },
+      { kind: "speech.end", atMs: 1000 },
+      { kind: "transcript.final", atMs: 1350 },
+      { kind: "assistant.audio.start", atMs: 1900 },
+    ],
+  },
+  {
+    name: "negative-unfinished-premature-final",
+    scenario: "unfinished-utterance",
+    polarity: "negative",
+    acousticProfile: "endpointing",
+    referenceTranscript: "Open the draft and",
+    hypothesisTranscript: "Open the draft and",
+    requiredTerms: [],
+    trace: [
+      { kind: "speech.start", atMs: 0 },
+      { kind: "transcript.partial", atMs: 390 },
+      { kind: "endpoint.premature-final", atMs: 800 },
+      { kind: "transcript.final", atMs: 800 },
+      { kind: "speech.end", atMs: 950 },
+      { kind: "assistant.audio.start", atMs: 2100 },
+    ],
+  },
 ];
 
 export const ALL_VOICE_ACOUSTIC_FIXTURES: readonly VoiceAcousticFixture[] = [

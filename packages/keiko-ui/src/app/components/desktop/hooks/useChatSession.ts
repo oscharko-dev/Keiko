@@ -9,7 +9,10 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import {
+  classifyAttachmentMime,
+  MAX_ATTACHMENT_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { useTranslate } from "@/lib/i18n";
 import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
@@ -42,15 +45,23 @@ import {
   deleteConversationAttachment,
   updateChat,
 } from "@/lib/api";
-import type { SseDonePayload } from "@/lib/api";
+import type { SseDonePayload, SseErrorPayload } from "@/lib/api";
 import {
   acceptMemoryProposal,
   forgetMemory,
   loadMemoryAutonomyMode,
   rejectMemoryProposal,
-} from "@/lib/memory-api";
-import { GATEWAY_CONFIG_UPDATED_EVENT } from "../widgets/shared/gatewaySetupBus";
+} from "@/lib/memory-session-api";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+} from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { clientErrorSummary } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   classifyRunReport,
   formatRunSummaryFromManifest,
@@ -68,12 +79,13 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { isConversationEligibleModel } from "@/lib/types";
+import { electConversationDefault, isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
-import { extractDocumentContext, type PendingDocument } from "./documentContext";
+import type { PendingDocument } from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
+  removeConversationMemorySettings,
   useConversationMemorySettings,
 } from "./memorySettings";
 
@@ -292,10 +304,12 @@ async function deletePendingImage(attachment: PendingAttachment): Promise<void> 
 }
 
 const DEFAULT_CHAT_TITLE = "New chat";
+const NO_CONVERSATION_MODEL_MESSAGE =
+  "No conversation-eligible model is configured. Connect a gateway in Settings.";
 const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
-const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
+export const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
 const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 const RUN_SUMMARY_SYNC_MAX_INTERVAL_MS = 15_000;
 const CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS = 128;
@@ -318,6 +332,29 @@ const CANONICAL_VOICE_SCOPE_IDENTITY_ERROR =
   "The chat grounding scope could not be frozen for this spoken turn. Reload the chat and try again.";
 const CANONICAL_VOICE_HASHING_ERROR =
   "The spoken transcript could not be added to chat. Restart Voice and try again.";
+// KEIKO-0608: the typed-specific equivalent of CANONICAL_VOICE_INPUT_ERROR, used when
+// desktopChatInputSizeCheck rejects typed content in resolveSendMessageAdmission. Exported (like
+// GROUNDED_ATTACHMENT_NOTICE) so the test can pin the exact string without duplicating it.
+export const DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR =
+  "The message is outside the supported size limit. Shorten it and try again.";
+
+// KEIKO-0608: the one place both admission paths — resolveSendMessageAdmission (typed, and the
+// dequeue-time re-check for a queued spoken turn) and enqueueCanonicalVoiceTurn (voice, at
+// enqueue-time) — decide whether content fits MAX_DESKTOP_CHAT_INPUT_CHARS/BYTES. Before this,
+// only the voice path checked; a typed paste over the limit was accepted client-side and
+// discovered only after the server round trip rejected it and the draft had already been
+// cleared (the same "content silently lost from visible input" class the voice-only guard
+// exists to prevent). Returns the computed UTF-8 byte length so a caller that needs it again
+// (enqueueCanonicalVoiceTurn, for outbox-capacity accounting) does not encode the content twice.
+function desktopChatInputSizeCheck(content: string): {
+  readonly withinLimits: boolean;
+  readonly byteLength: number;
+} {
+  const byteLength = new TextEncoder().encode(content).byteLength;
+  const withinLimits =
+    content.length <= MAX_DESKTOP_CHAT_INPUT_CHARS && byteLength <= MAX_DESKTOP_CHAT_INPUT_BYTES;
+  return { withinLimits, byteLength };
+}
 
 function raceUiAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -380,6 +417,15 @@ export const CONTEXT_OVERSIZED_USER_MESSAGE =
   "The conversation context exceeded the model's window. Open a new chat or pick a larger-context model.";
 export const GROUNDED_ATTACHMENT_NOTICE =
   "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
+// KEIKO-0793: the voice "admit-and-drop" case (executeSendAttempt's grounded branch, when a
+// spoken turn arrives with staged attachments) is NOT a rejection — ADR-0154 D1 requires a
+// settled final transcript to always be sent, never discarded. It is a materially different
+// outcome from GROUNDED_ATTACHMENT_NOTICE's true pre-admission full-reject (typed path,
+// resolveSendMessageAdmission), which sends nothing at all. Reusing the same string for both
+// described two different outcomes identically, so this is a distinct notice for the
+// admit-and-drop case only.
+export const GROUNDED_ATTACHMENT_DROPPED_NOTICE =
+  "The turn was sent, but its attachments are not supported for grounded chats and were not included.";
 export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
   "The model request completed, but the provider did not return any answer text. Retry once; if it happens again, check the selected model deployment in Settings.";
 
@@ -643,31 +689,87 @@ export function notifyChatUpsert(chat: Chat): void {
 
 export function notifyChatDeleted(chatId: string): void {
   invalidateSharedBootstrap();
+  removeConversationMemorySettings(chatId);
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(CHAT_DELETE_EVENT, { detail: { chatId } }));
 }
 
-// Returns the id of the first eligible model, or undefined when no models are
+// Returns the id of the best usable model, or undefined when no models are
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
+// `conversationReady` is TRI-STATE on the wire: absent means "never probed in this server
+// process" (the store is volatile — after every restart everything is unknown), and the server
+// verifies unknown models on demand at create/send. Treating unknown as unusable dead-locked the
+// whole picker after each restart until a manual probe plus reload (customer field incident,
+// 0.3.11). Preference: verified models first, then unknown — both in the shared
+// conversationDefaultRank order, so a mode-less OCR model never outranks a declared chat model.
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
-  return models.find(isConversationEligibleModel)?.id;
+  return electConversationDefault(
+    models.filter(isUsableConversationModel),
+    (model) => model.conversationReady,
+  )?.id;
+}
+
+// Usable = conversation-eligible and not OBSERVED unready. Only an explicit false blocks; the
+// server's on-demand probe is the honest authority for unknown models.
+function isUsableConversationModel(model: ModelCapability): boolean {
+  return isConversationEligibleModel(model) && model.conversationReady !== false;
+}
+
+// Create-chat inputs preserve WHO chose the model (review finding on #3220): an AUTOMATIC
+// election (bootstrap default, fallback after a stale selection) is sent WITHOUT a modelId so
+// the server's bounded readiness walk can route around a failing preferred model, while a
+// user-selected or persisted model stays an explicit request the server validates as such.
+function createChatInput(
+  modelId: string,
+  automatic: boolean,
+  title: string,
+  projectPath?: string,
+): { modelId?: string; title: string; projectPath?: string } {
+  return {
+    ...(automatic ? {} : { modelId }),
+    title,
+    ...(projectPath !== undefined ? { projectPath } : {}),
+  };
+}
+
+// Whether the current selection names a live, usable model — a deliberate (user or persisted)
+// choice a create request must respect as an EXPLICIT model id.
+function isPreservedSelection(
+  selectedModel: string | undefined,
+  models: readonly ModelCapability[],
+): boolean {
+  return (
+    selectedModel !== undefined &&
+    models.some((model) => model.id === selectedModel && isUsableConversationModel(model))
+  );
+}
+
+// Resolution WITH provenance (review finding on #3221): the resolved id alone cannot say WHO
+// chose it. A fallback elected here must never later masquerade as a deliberate choice — the
+// session state stores `elected` alongside the id so a create request built from an elected
+// selection stays an AUTOMATIC one the server's bounded walk may route around.
+interface ResolvedSelection {
+  readonly id: string | undefined;
+  readonly elected: boolean;
+}
+
+function resolveSelection(
+  current: string | undefined,
+  models: readonly ModelCapability[],
+): ResolvedSelection {
+  if (isPreservedSelection(current, models)) return { id: current, elected: false };
+  return { id: pickChatModelId(models), elected: true };
 }
 
 // Reopened chats can persist a model id that is no longer present in the
-// current eligible model list. Fail closed to a live eligible model, or to
+// current eligible model list. Fail closed to a live usable model, or to
 // undefined so the UI blocks sends with the no-model alert.
 export function resolveSelectedModelId(
   current: string | undefined,
   models: readonly ModelCapability[],
 ): string | undefined {
-  if (
-    current !== undefined &&
-    models.some((model) => model.id === current && isConversationEligibleModel(model))
-  ) {
-    return current;
-  }
-  return pickChatModelId(models);
+  return resolveSelection(current, models).id;
 }
 
 function hasGroundingScope(chat: Chat): boolean {
@@ -675,8 +777,17 @@ function hasGroundingScope(chat: Chat): boolean {
     chat.connectedScope !== undefined ||
     (chat.connectedScopes !== undefined && chat.connectedScopes.length > 0) ||
     chat.localKnowledgeScope !== undefined ||
-    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0)
+    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0) ||
+    (chat.gitChangeScopes !== undefined && chat.gitChangeScopes.length > 0)
   );
+}
+
+function clearLatestChatContext(
+  setLatestGrounded: (value: undefined) => void,
+  setLatestMemory: (value: undefined) => void,
+): void {
+  setLatestGrounded(undefined);
+  setLatestMemory(undefined);
 }
 
 export type ChatSessionApi = UseChatSessionResult;
@@ -707,6 +818,9 @@ interface SendMessageOptions {
   // Stable opaque identity for safe retry of a Voice final. It is body-only and never used as a
   // header/log identifier; the BFF store scope-hashes it before persistence.
   readonly clientTurnId?: string;
+  // A batch dialogue's request-scoped Activity Log join key. The canonical queue retains it across
+  // retries; native Realtime and typed sends keep their existing request-generated identifiers.
+  readonly correlationId?: string;
   // Queue-owned target captured when Realtime hands off the final transcript. Keeping this target
   // outside React's active-chat state lets the FIFO survive chat and mode switches without scope drift.
   readonly canonicalVoiceTarget?: CanonicalVoiceSendTarget;
@@ -747,6 +861,7 @@ interface UngroundedSendRequest {
   readonly attachments: readonly ConversationAttachmentDescriptorWire[];
   readonly memory: ConversationMemoryRequestWire;
   readonly clientTurnId: string | undefined;
+  readonly correlationId?: string;
 }
 
 function desktopChatInputForUngrounded(
@@ -782,6 +897,15 @@ interface SendAttemptRequest {
   readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
   readonly forceBuffered: boolean;
   readonly clientTurnId: string | undefined;
+  readonly correlationId?: string;
+}
+
+interface GroundedSendRequest extends Pick<
+  SendAttemptRequest,
+  "chat" | "content" | "optimisticId" | "modelId" | "signal" | "clientTurnId"
+> {
+  readonly memory: ConversationMemoryRequestWire;
+  readonly correlationId: SendAttemptRequest["correlationId"];
 }
 
 interface SendAttemptExecution {
@@ -841,6 +965,7 @@ export type SendMessageOutcome =
 interface CanonicalVoiceTurnInput {
   readonly text: string;
   readonly clientTurnId: string;
+  readonly correlationId?: string;
   // The production Realtime handoff may consume the single bounded reserve slot. Once regular
   // capacity is reached, ChatWindow synchronously tells Realtime to stop capture, so no finalized
   // transcript remains component-local across a mode switch or unmount.
@@ -863,11 +988,15 @@ interface CanonicalVoiceQueueItem {
   readonly content: string;
   readonly contentDigest: string;
   readonly clientTurnId: string;
+  readonly correlationId: string | undefined;
   readonly target: CanonicalVoiceSendTarget;
   readonly optimistic: ChatMessage;
   readonly byteLength: number;
   readonly promise: Promise<SendMessageOutcome>;
   readonly resolve: (outcome: SendMessageOutcome) => void;
+  // The hook that accepted this turn owns its React-visible delivery. A different hook may hold the
+  // page FIFO drain lease, but it must dispatch through this runtime while the owner remains mounted.
+  readonly deliveryOwner: symbol;
 }
 
 interface CanonicalVoiceProjection {
@@ -905,7 +1034,9 @@ interface CanonicalVoicePageOutbox {
   };
   readonly settledRef: { current: Map<string, CanonicalVoiceSettledDelivery> };
   drainingOwner: symbol | undefined;
-  activeDelivery: { readonly key: string; readonly abort: () => void } | undefined;
+  activeDelivery:
+    { readonly key: string; readonly runtimeOwner: symbol; readonly abort: () => void } | undefined;
+  readonly runtimes: Map<symbol, CanonicalVoiceDeliveryRuntimeRegistration>;
   readonly wakes: Set<() => void>;
   readonly statusSubscribers: Set<(status: CanonicalVoiceOutboxStatus) => void>;
   status: CanonicalVoiceOutboxStatus;
@@ -924,6 +1055,7 @@ const canonicalVoicePageOutbox: CanonicalVoicePageOutbox = {
   settledRef: { current: new Map() },
   drainingOwner: undefined,
   activeDelivery: undefined,
+  runtimes: new Map(),
   wakes: new Set(),
   statusSubscribers: new Set(),
   status: { suspendedChatId: undefined, revision: 0 },
@@ -1086,6 +1218,7 @@ export function clearCanonicalVoicePageOutboxForTests(): void {
   canonicalVoicePageOutbox.drainingOwner = undefined;
   canonicalVoicePageOutbox.activeDelivery?.abort();
   canonicalVoicePageOutbox.activeDelivery = undefined;
+  canonicalVoicePageOutbox.runtimes.clear();
   canonicalVoicePageOutbox.wakes.clear();
   setCanonicalVoicePageOutboxSuspended(undefined);
   canonicalVoicePageOutbox.statusSubscribers.clear();
@@ -1142,6 +1275,35 @@ interface SendMessage {
   (options?: SendMessageOptions): Promise<void>;
 }
 
+interface CanonicalVoiceDeliveryRuntimeRegistration {
+  readonly sendRef: { current: SendMessage | null };
+  readonly waitForSendSlotRef: { current: (signal: AbortSignal) => Promise<void> };
+  readonly onDeliveryDelayed: () => void;
+  readonly activeChatIdRef: { current: string | undefined };
+  readonly reconcilePersistedTarget: (target: CanonicalVoiceSendTarget) => Promise<void>;
+}
+
+interface SelectedCanonicalVoiceDeliveryRuntime {
+  readonly owner: symbol;
+  readonly registration: CanonicalVoiceDeliveryRuntimeRegistration;
+}
+
+function selectCanonicalVoiceDeliveryRuntime(
+  item: CanonicalVoiceQueueItem,
+  fallbackOwner: symbol,
+): SelectedCanonicalVoiceDeliveryRuntime | undefined {
+  const targetChatId = item.target.chat.id;
+  const original = canonicalVoicePageOutbox.runtimes.get(item.deliveryOwner);
+  if (original?.activeChatIdRef.current === targetChatId) {
+    return { owner: item.deliveryOwner, registration: original };
+  }
+  for (const [owner, registration] of canonicalVoicePageOutbox.runtimes) {
+    if (registration.activeChatIdRef.current === targetChatId) return { owner, registration };
+  }
+  const fallback = canonicalVoicePageOutbox.runtimes.get(fallbackOwner);
+  return fallback === undefined ? undefined : { owner: fallbackOwner, registration: fallback };
+}
+
 interface CanonicalVoiceDeliveryRuntime {
   readonly signal: AbortSignal;
   readonly waitForSendSlot: () => Promise<void>;
@@ -1186,6 +1348,7 @@ async function requestCanonicalVoiceQueueOutcome(
       text: item.content,
       reportOutcome: true,
       clientTurnId: item.clientTurnId,
+      ...(item.correlationId === undefined ? {} : { correlationId: item.correlationId }),
       canonicalVoiceTarget: item.target,
       optimisticMessage: item.optimistic,
       forceBuffered: true,
@@ -1252,6 +1415,21 @@ async function deliverCanonicalVoiceQueueItem(
   return { kind: "aborted" };
 }
 
+async function reconcileCanonicalVoiceTargetRuntimes(
+  item: CanonicalVoiceQueueItem,
+  deliveryOwner: symbol,
+  delivery: CanonicalVoiceQueueDelivery,
+): Promise<void> {
+  if (delivery.kind !== "terminal" || !canonicalVoiceOutcomeIsPersisted(delivery.outcome)) return;
+  const reconciliations: Promise<void>[] = [];
+  for (const [owner, registration] of canonicalVoicePageOutbox.runtimes) {
+    if (owner !== deliveryOwner && registration.activeChatIdRef.current === item.target.chat.id) {
+      reconciliations.push(registration.reconcilePersistedTarget(item.target));
+    }
+  }
+  await Promise.all(reconciliations);
+}
+
 export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -1260,6 +1438,8 @@ export interface UseChatSessionResult {
   // so token deltas do not rewrite or scan the full conversation history.
   readonly streamingAssistantMessage?: ChatMessage | undefined;
   models: ModelCapability[];
+  /** True when the server catalog contains configured models, even if none is conversation-ready. */
+  readonly configuredModelsAvailable?: boolean | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   // undefined when no conversation-eligible model is configured (AC #1 / #4).
@@ -1355,9 +1535,78 @@ interface SessionState {
   chats: Chat[];
   messages: ChatMessage[];
   models: ModelCapability[];
+  configuredModelsAvailable: boolean;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
+  // True when selectedModel was ELECTED (bootstrap default or fallback after a stale
+  // selection) rather than chosen by the user or carried by the chat's persisted record.
+  // Creates built from an elected selection omit modelId (review finding on #3221).
+  selectedModelElected: boolean;
+  // Provenance of restorableModelId — carried through the pending-refresh cycle so a restored
+  // ELECTED selection does not come back laundered as deliberate (review finding on #3221).
+  restorableModelElected: boolean;
+  // The user's last deliberate model choice, remembered across a pending catalog refresh:
+  // the pending clear must invalidate selectedModel synchronously (no stale id is sendable
+  // mid-refresh), but the success path restores this id when the refreshed catalog still
+  // contains it — otherwise merely opening the picker reset a non-default selection.
+  restorableModelId: string | undefined;
+}
+
+function chatBelongsToSessionCatalog(previous: SessionState, chat: Chat): boolean {
+  return (
+    previous.activeProject?.path === chat.projectPath ||
+    previous.activeChat?.id === chat.id ||
+    previous.chats.some((candidate) => candidate.id === chat.id)
+  );
+}
+
+// The full session state a successful create rebases onto — module scope so openNewChat stays
+// a thin wire-up. `preservedSelection` carries provenance: an omitted modelId let the server
+// elect, so the created chat's model is an ELECTED selection, not a deliberate one.
+function sessionAfterChatCreate(
+  state: SessionState,
+  created: Awaited<ReturnType<typeof createDesktopChat>>,
+  preservedSelection: boolean,
+): SessionState {
+  return {
+    ...state,
+    projects: Array.from(created.projects),
+    chats: sortChats(created.chats),
+    messages: Array.from(created.messages),
+    activeProject: created.project,
+    activeChat: created.chat,
+    selectedModel: created.chat.selectedModel,
+    selectedModelElected: !preservedSelection,
+    // A freshly created chat starts a new selection scope: no pending-refresh memo.
+    restorableModelId: undefined,
+    restorableModelElected: false,
+  };
+}
+
+function applyChatUpsert(previous: SessionState, chat: Chat): SessionState {
+  if (!chatBelongsToSessionCatalog(previous, chat)) return previous;
+  const resolved = resolveSelection(chat.selectedModel, previous.models);
+  // An upsert that resolves to the id the session already shows carries no new provenance —
+  // keep ours. Without this, the server-persisted record of an AUTOMATIC creation laundered
+  // the elected default into a "deliberate" choice on the next upsert (review finding, #3221).
+  const selection =
+    previous.activeChat?.id === chat.id
+      ? {
+          id: resolved.id,
+          elected:
+            resolved.id === previous.selectedModel
+              ? previous.selectedModelElected
+              : resolved.elected,
+        }
+      : { id: previous.selectedModel, elected: previous.selectedModelElected };
+  return {
+    ...previous,
+    chats: upsertChatIntoList(previous.chats, chat),
+    activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
+    selectedModel: selection.id,
+    selectedModelElected: selection.elected,
+  };
 }
 
 function projectOptimisticMessage(
@@ -1379,9 +1628,13 @@ const INITIAL_STATE: SessionState = {
   chats: [],
   messages: [],
   models: [],
+  configuredModelsAvailable: false,
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
+  selectedModelElected: false,
+  restorableModelElected: false,
+  restorableModelId: undefined,
 };
 
 function canonicalProjectTarget(chat: Chat): CanonicalChatProjectTarget {
@@ -1398,11 +1651,80 @@ interface SharedBootstrapCacheEntry {
 let sharedBootstrapCache: SharedBootstrapCacheEntry | undefined;
 let sharedBootstrapInflight: Promise<Partial<SessionState>> | undefined;
 let sharedBootstrapVersion = 0;
-const sharedChatListInflight = new Map<string, Promise<{ readonly chats: readonly Chat[] }>>();
+
+/** A project's chat list and the correlation id of the load that answered it (#3557). */
+export interface ChatListLoad {
+  readonly chats: readonly Chat[];
+  readonly correlationId: string;
+}
+
+// A load in flight keeps the correlation id it was sent with, so a caller that joins it can still
+// name the load when it fails.
+interface InflightChatListLoad {
+  readonly promise: Promise<ChatListLoad>;
+  readonly correlationId: string;
+}
+
+const sharedChatListInflight = new Map<string, InflightChatListLoad>();
 const sharedChatMessagesInflight = new Map<
   string,
   Promise<{ readonly messages: readonly ChatMessage[] }>
 >();
+type GatewayModelRefreshResult =
+  | { readonly kind: "pending" }
+  | { readonly kind: "success"; readonly models: readonly ModelCapability[] }
+  | { readonly kind: "failure"; readonly message: string };
+const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
+let gatewayModelRefreshGeneration = 0;
+
+function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
+  for (const subscriber of gatewayModelRefreshSubscribers) subscriber(result);
+}
+
+function refreshGatewayModels(): void {
+  const generation = gatewayModelRefreshGeneration + 1;
+  gatewayModelRefreshGeneration = generation;
+  invalidateSharedBootstrap();
+  resetModelRequestCache();
+  // A gateway change makes the prior catalog untrustworthy immediately. Keep the picker empty
+  // until this exact refresh succeeds so a stale model can never be selected during a request or
+  // after its failure.
+  publishGatewayModelRefresh({ kind: "pending" });
+  void fetchModels().then(
+    ({ models }): void => {
+      if (generation === gatewayModelRefreshGeneration) {
+        publishGatewayModelRefresh({ kind: "success", models });
+      }
+    },
+    (error_: unknown): void => {
+      if (generation === gatewayModelRefreshGeneration) {
+        publishGatewayModelRefresh({ kind: "failure", message: errorMessage(error_) });
+      }
+    },
+  );
+}
+
+function subscribeGatewayModelRefresh(
+  subscriber: (result: GatewayModelRefreshResult) => void,
+): () => void {
+  if (gatewayModelRefreshSubscribers.size === 0) {
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, refreshGatewayModels);
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
+  }
+  gatewayModelRefreshSubscribers.add(subscriber);
+  return (): void => {
+    gatewayModelRefreshSubscribers.delete(subscriber);
+    if (gatewayModelRefreshSubscribers.size === 0) {
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+      window.removeEventListener(
+        GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+        refreshGatewayModels,
+      );
+      window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
+    }
+  };
+}
 
 function cloneSessionPatch(patch: Partial<SessionState>): Partial<SessionState> {
   const cloned: Partial<SessionState> = { ...patch };
@@ -1419,10 +1741,8 @@ function invalidateSharedBootstrap(): void {
   sharedBootstrapInflight = undefined;
 }
 
-function cloneChatListPayload(payload: { readonly chats: readonly Chat[] }): {
-  readonly chats: readonly Chat[];
-} {
-  return { chats: Array.from(payload.chats) };
+function cloneChatListPayload(payload: ChatListLoad): ChatListLoad {
+  return { chats: Array.from(payload.chats), correlationId: payload.correlationId };
 }
 
 function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMessage[] }): {
@@ -1431,18 +1751,80 @@ function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMes
   return { messages: Array.from(payload.messages) };
 }
 
-function sharedFetchChats(projectPath: string): Promise<{ readonly chats: readonly Chat[] }> {
+// The correlation id of each project's last successful chat list load (#3557). A restored chat
+// window decides from that list whether its conversation still exists, and its binding evidence
+// names this id, so the load and the outcome read as one timeline in the Activity Log.
+const CHAT_LIST_CORRELATION_LIMIT = 32;
+const chatListCorrelationIds = new Map<string, string>();
+
+function rememberChatListCorrelation(projectPath: string, correlationId: string): void {
+  chatListCorrelationIds.delete(projectPath);
+  chatListCorrelationIds.set(projectPath, correlationId);
+  const oldest = chatListCorrelationIds.keys().next().value;
+  if (chatListCorrelationIds.size > CHAT_LIST_CORRELATION_LIMIT && oldest !== undefined) {
+    chatListCorrelationIds.delete(oldest);
+  }
+}
+
+/** The correlation id of the last successful chat list load for `projectPath`, if any. */
+export function chatListCorrelationId(projectPath: string): string | undefined {
+  return chatListCorrelationIds.get(projectPath);
+}
+
+function startSharedChatListLoad(projectPath: string): InflightChatListLoad {
   const existing = sharedChatListInflight.get(projectPath);
-  if (existing !== undefined) return existing.then(cloneChatListPayload);
-  const pending = fetchChats(projectPath)
-    .then(cloneChatListPayload)
+  if (existing !== undefined) return existing;
+  const correlationId = newClientCorrelationId();
+  const promise = fetchChats(projectPath, correlationId)
+    .then((payload): ChatListLoad => {
+      rememberChatListCorrelation(projectPath, correlationId);
+      return { chats: Array.from(payload.chats), correlationId };
+    })
     .finally(() => {
-      if (sharedChatListInflight.get(projectPath) === pending) {
+      if (sharedChatListInflight.get(projectPath)?.promise === promise) {
         sharedChatListInflight.delete(projectPath);
       }
     });
-  sharedChatListInflight.set(projectPath, pending);
-  return pending.then(cloneChatListPayload);
+  const load = { promise, correlationId };
+  sharedChatListInflight.set(projectPath, load);
+  return load;
+}
+
+function sharedFetchChats(projectPath: string): Promise<ChatListLoad> {
+  return startSharedChatListLoad(projectPath).promise.then(cloneChatListPayload);
+}
+
+/**
+ * A chat list load that failed (#3557 review). A transport failure rejects before any response
+ * could carry an id, so the error keeps the id the load was sent with, and the closed class of its
+ * cause; never the cause's message.
+ */
+export class ChatListLoadError extends Error {
+  public readonly correlationId: string;
+  public readonly errorKind: ActivityLogErrorKind;
+  // The cause's class from the closed vocabulary.
+  public readonly errorClass: string;
+
+  public constructor(cause: unknown, correlationId: string) {
+    super("Chat list load failed", { cause });
+    this.name = "ChatListLoadError";
+    this.correlationId = correlationId;
+    this.errorKind = bffRequestErrorKind(cause);
+    this.errorClass = clientErrorSummary(cause);
+  }
+}
+
+/**
+ * The same shared load as `sharedFetchChats`, for a caller that records its failure: it rejects with
+ * a `ChatListLoadError` that names the load.
+ */
+export async function sharedFetchChatsWithEvidence(projectPath: string): Promise<ChatListLoad> {
+  const { promise, correlationId } = startSharedChatListLoad(projectPath);
+  try {
+    return cloneChatListPayload(await promise);
+  } catch (error) {
+    throw new ChatListLoadError(error, correlationId);
+  }
 }
 
 function sharedFetchChatMessages(
@@ -1465,8 +1847,12 @@ function sharedFetchChatMessages(
 
 export function clearChatSessionBootstrapCacheForTests(): void {
   invalidateSharedBootstrap();
+  gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
+  chatListCorrelationIds.clear();
+  for (const entry of sharedRunSummarySyncs.values()) entry.controller.abort();
+  sharedRunSummarySyncs.clear();
 }
 
 function isPendingRunSummaryMessage(message: ChatMessage): boolean {
@@ -1533,7 +1919,14 @@ interface RunSummarySyncResult {
   readonly message: ChatMessage;
 }
 
-const sharedRunSummarySyncs = new Map<string, Promise<RunSummarySyncResult | undefined>>();
+interface SharedRunSummarySync {
+  readonly controller: AbortController;
+  promise: Promise<RunSummarySyncResult | undefined>;
+  readonly subscribers: Map<AbortSignal, () => void>;
+  persistentSubscriber: boolean;
+}
+
+const sharedRunSummarySyncs = new Map<string, SharedRunSummarySync>();
 
 function runSummarySharedSyncKey(chat: Chat, projectPath: string, message: ChatMessage): string {
   return `${chat.id}:${projectPath}:${message.id}:${message.runId ?? ""}`;
@@ -1626,50 +2019,91 @@ async function pollRunSummaryPatch(
   return undefined;
 }
 
+function releaseRunSummarySubscriber(entry: SharedRunSummarySync, signal: AbortSignal): void {
+  const listener = entry.subscribers.get(signal);
+  if (listener === undefined) return;
+  signal.removeEventListener("abort", listener);
+  entry.subscribers.delete(signal);
+  if (entry.subscribers.size === 0 && !entry.persistentSubscriber) entry.controller.abort();
+}
+
+function subscribeRunSummary(entry: SharedRunSummarySync, signal?: AbortSignal): void {
+  if (signal === undefined) {
+    entry.persistentSubscriber = true;
+    return;
+  }
+  if (signal.aborted || entry.subscribers.has(signal)) return;
+  const release = (): void => releaseRunSummarySubscriber(entry, signal);
+  entry.subscribers.set(signal, release);
+  signal.addEventListener("abort", release, { once: true });
+}
+
+function clearRunSummarySubscribers(entry: SharedRunSummarySync): void {
+  for (const [signal, listener] of entry.subscribers) {
+    signal.removeEventListener("abort", listener);
+  }
+  entry.subscribers.clear();
+}
+
 function sharedRunSummaryPatch(
   chat: Chat,
   projectPath: string,
   message: ChatMessage,
   signal?: AbortSignal,
 ): Promise<RunSummarySyncResult | undefined> {
+  if (signal?.aborted === true) return Promise.resolve(undefined);
   const key = runSummarySharedSyncKey(chat, projectPath, message);
   const existing = sharedRunSummarySyncs.get(key);
-  if (existing !== undefined) return existing;
-  // GEN-PERF-CHAT-011 — the poll is aborted when the owning hook unmounts (signal from the hook's
-  // AbortController). The shared cache is keyed per (chat, project, message, runId); chat is a
-  // singleton window (Step 03) so a single hook owns the poll for a given run.
-  const pending = pollRunSummaryPatch(chat, projectPath, message, signal).finally(() => {
-    if (sharedRunSummarySyncs.get(key) === pending) {
+  if (existing !== undefined && !existing.controller.signal.aborted) {
+    subscribeRunSummary(existing, signal);
+    return existing.promise;
+  }
+  if (existing !== undefined) sharedRunSummarySyncs.delete(key);
+  const controller = new AbortController();
+  const entry: SharedRunSummarySync = {
+    controller,
+    promise: Promise.resolve(undefined),
+    subscribers: new Map(),
+    persistentSubscriber: false,
+  };
+  subscribeRunSummary(entry, signal);
+  const pending = pollRunSummaryPatch(chat, projectPath, message, controller.signal).finally(() => {
+    clearRunSummarySubscribers(entry);
+    if (sharedRunSummarySyncs.get(key) === entry) {
       sharedRunSummarySyncs.delete(key);
     }
   });
-  sharedRunSummarySyncs.set(key, pending);
+  entry.promise = pending;
+  sharedRunSummarySyncs.set(key, entry);
   return pending;
 }
 
 async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
-  // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
-  const chatModels = modelPayload.models.filter(isConversationEligibleModel);
+  // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server
+  // never probed (tri-state: conversationReady ABSENT) stay usable — the on-demand probe at
+  // create/send decides honestly; only an observed `false` filters out.
+  const chatModels = modelPayload.models.filter(isUsableConversationModel);
+  const configuredModelsAvailable = modelPayload.models.length > 0;
   const defaultModel = pickChatModelId(chatModels);
 
-  const projectPayload = await fetchProjects().catch(() => ({ projects: [] }));
+  const projectPayload = await fetchProjects();
   const projects = sortProjects(projectPayload.projects);
   const project = projects.find((item) => item.available) ?? projects[0];
 
   const chatPayload =
-    project === undefined
-      ? { chats: [] as readonly Chat[] }
-      : await sharedFetchChats(project.path).catch(() => ({ chats: [] as readonly Chat[] }));
+    project === undefined ? { chats: [] as readonly Chat[] } : await sharedFetchChats(project.path);
   const sortedChats = sortChats(chatPayload.chats);
   const latestChat = pickResumableChat(sortedChats);
   if (project !== undefined && latestChat !== undefined) {
     const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
-    const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
+    const selection = resolveSelection(latestChat.selectedModel, chatModels);
     return {
       models: chatModels,
-      selectedModel,
+      configuredModelsAvailable,
+      selectedModel: selection.id,
+      selectedModelElected: selection.elected,
       projects: Array.from(projects),
       activeProject: project,
       chats: sortedChats,
@@ -1686,7 +2120,9 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   if (defaultModel === undefined || !autoCreate) {
     return {
       models: chatModels,
+      configuredModelsAvailable,
       selectedModel: defaultModel,
+      selectedModelElected: true,
       projects: Array.from(projects),
       activeProject: project,
       chats: sortedChats,
@@ -1694,16 +2130,21 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
       messages: [],
     };
   }
-  const input: { modelId: string; title: string; projectPath?: string } = {
-    modelId: defaultModel,
-    title: DEFAULT_CHAT_TITLE,
-  };
-  if (project?.available === true) input.projectPath = project.path;
-  const created = await createDesktopChat(input);
+  const created = await createDesktopChat(
+    createChatInput(
+      defaultModel,
+      true,
+      DEFAULT_CHAT_TITLE,
+      project?.available === true ? project.path : undefined,
+    ),
+  );
   notifyChatUpsert(created.chat);
   return {
     models: chatModels,
+    configuredModelsAvailable,
     selectedModel: created.chat.selectedModel,
+    // The server's walk elected this model for the auto-created chat; no user chose it.
+    selectedModelElected: true,
     projects: Array.from(created.projects),
     activeProject: created.project,
     chats: sortChats(created.chats),
@@ -1744,29 +2185,67 @@ function refreshSessionModels(
   previous: SessionState,
   capabilities: readonly ModelCapability[],
 ): SessionState {
-  const models = capabilities.filter(isConversationEligibleModel);
+  const models = capabilities.filter(isUsableConversationModel);
+  const remembered = previous.selectedModel ?? previous.restorableModelId;
+  const selection = resolveSelection(remembered, models);
+  // Provenance survives a refresh that keeps the id: a live selection keeps its own flag, a
+  // restored pending memo carries the flag it was remembered with, and a freshly elected
+  // fallback is elected regardless.
+  const keptProvenance =
+    previous.selectedModel !== undefined
+      ? previous.selectedModelElected
+      : previous.restorableModelElected;
+  const selectedModelElected = selection.elected || keptProvenance;
   return {
     ...previous,
     models,
-    selectedModel: resolveSelectedModelId(previous.selectedModel, models),
+    configuredModelsAvailable: capabilities.length > 0,
+    selectedModel: selection.id,
+    selectedModelElected,
+    restorableModelId: undefined,
   };
 }
 
-interface SessionModelRefreshContext {
-  readonly isCancelled: () => boolean;
-  readonly setError: Dispatch<SetStateAction<string | undefined>>;
-  readonly setState: Dispatch<SetStateAction<SessionState>>;
+// A chat switch rebinds both the live selection and the pending-refresh memo to the newly
+// opened chat's persisted model, so a refresh that lands after a mid-pending switch cannot
+// restore the previous chat's choice.
+function selectionForChatSwitch(
+  persistedModelId: string | undefined,
+  models: readonly ModelCapability[],
+): Pick<
+  SessionState,
+  "selectedModel" | "selectedModelElected" | "restorableModelId" | "restorableModelElected"
+> {
+  const selection = resolveSelection(persistedModelId, models);
+  return {
+    selectedModel: selection.id,
+    selectedModelElected: selection.elected,
+    restorableModelId: persistedModelId,
+    restorableModelElected: false,
+  };
 }
 
-async function loadRefreshedSessionModels(context: SessionModelRefreshContext): Promise<void> {
-  try {
-    const { models } = await fetchModels();
-    if (!context.isCancelled()) {
-      context.setState((previous) => refreshSessionModels(previous, models));
-    }
-  } catch (error_) {
-    if (!context.isCancelled()) context.setError(errorMessage(error_));
-  }
+// Pending-refresh variant: empties the picker so a stale model cannot be selected mid-refresh,
+// but PRESERVES configuredModelsAvailable — AppShell reads (loading=false, error=undefined,
+// configuredModelsAvailable=false) as "gateway missing" and would mount the modal setup dialog
+// over a fully configured workspace for the duration of every catalog read.
+function clearSessionModelsForPendingRefresh(previous: SessionState): SessionState {
+  return {
+    ...previous,
+    models: [],
+    // Pinned choreography: the selection is invalidated synchronously so no send can target
+    // a model that may no longer exist — but the id is remembered so the success path can
+    // restore it against the refreshed catalog instead of falling back to the first ready
+    // model every time the picker is merely opened. A failed refresh leaves selectedModel
+    // undefined, so chained retries must keep the earliest memo.
+    selectedModel: undefined,
+    selectedModelElected: false,
+    restorableModelId: previous.selectedModel ?? previous.restorableModelId,
+    restorableModelElected:
+      previous.selectedModel !== undefined
+        ? previous.selectedModelElected
+        : previous.restorableModelElected,
+  };
 }
 
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
@@ -1851,6 +2330,14 @@ function resolveSendMessageAdmission(input: {
     modelId === undefined
   ) {
     return { kind: "rejected" };
+  }
+  // KEIKO-0608: applies to both the typed path and the dequeue-time re-check of an already-queued
+  // spoken turn (canonicalTarget defined) — the latter was already validated once by
+  // enqueueCanonicalVoiceTurn at enqueue-time, so this is a harmless redundant check there and
+  // the FIRST client-side check at all for a typed paste, which previously reached the server
+  // before being rejected.
+  if (!desktopChatInputSizeCheck(content).withinLimits) {
+    return { kind: "rejected", error: DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR };
   }
   if (canonicalTarget === undefined && hasGroundingScope(chat) && pendingAttachmentCount > 0) {
     return { kind: "rejected", error: GROUNDED_ATTACHMENT_NOTICE };
@@ -1977,6 +2464,47 @@ export interface UseChatSessionOptions {
   readonly loadMemoryAutonomyModeImpl?: typeof loadMemoryAutonomyMode;
 }
 
+type MemoryAutonomyModeLoader = typeof loadMemoryAutonomyMode;
+const memoryAutonomyModeHydrations = new WeakMap<
+  MemoryAutonomyModeLoader,
+  ReturnType<MemoryAutonomyModeLoader>
+>();
+
+function sharedLoadMemoryAutonomyMode(
+  loader: MemoryAutonomyModeLoader,
+): ReturnType<MemoryAutonomyModeLoader> {
+  const active = memoryAutonomyModeHydrations.get(loader);
+  if (active !== undefined) return active;
+  const started = loader();
+  memoryAutonomyModeHydrations.set(loader, started);
+  const clear = (): void => {
+    if (memoryAutonomyModeHydrations.get(loader) === started) {
+      memoryAutonomyModeHydrations.delete(loader);
+    }
+  };
+  void started.then(clear, clear);
+  return started;
+}
+
+function activeConversationMemoryScope(state: SessionState): string | undefined {
+  return state.activeChat?.id;
+}
+
+function activeProjectIdentity(state: SessionState): string | undefined {
+  return state.activeProject?.path;
+}
+
+function synchronizeRenderedIdentity(
+  activeRef: { current: string | undefined },
+  renderedRef: { current: string | undefined },
+  next: string | undefined,
+): void {
+  const previous = renderedRef.current;
+  if (previous === next) return;
+  if (activeRef.current === previous || activeRef.current === next) activeRef.current = next;
+  renderedRef.current = next;
+}
+
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
   // English. `documentContext` is not a component and cannot call a hook, so the session hook
@@ -2037,6 +2565,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
+  const renderedChatIdentity = activeConversationMemoryScope(state);
+  const renderedProjectIdentity = activeProjectIdentity(state);
   const {
     memoryEnabled,
     setMemoryEnabled,
@@ -2044,16 +2574,15 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setMemoryBudgetTokens,
     memoryMode,
     setMemoryMode,
-  } = useConversationMemorySettings();
-  // Hydrate the server-persisted autonomy mode once per session mount so chat/voice requests use
-  // the user's actual selection even if no autonomy-settings surface is opened. The settings
-  // store is a module-level singleton, so redundant hydration across multiple mounted sessions is
-  // a harmless no-op (publish() skips an identical value); a failure leaves the safe
-  // "governed-assist" default untouched.
+  } = useConversationMemorySettings(renderedChatIdentity);
+  // Hydrate the server-persisted autonomy mode so chat/voice requests use the user's actual
+  // selection even if no autonomy-settings surface is opened. The settings authority mode is
+  // process-wide, so simultaneously mounting many windows shares the same in-flight request; a
+  // failure leaves the safe "governed-assist" default untouched.
   useEffect(() => {
     let active = true;
     const revisionAtHydrationStart = currentConversationMemoryModeRevision();
-    void loadMemoryAutonomyModeImpl()
+    void sharedLoadMemoryAutonomyMode(loadMemoryAutonomyModeImpl)
       .then((policy) => {
         // A newer selection (this hydration in another mounted session, or a change made through
         // MemoriaVivaWindow) already landed while this request was in flight — applying the stale
@@ -2069,19 +2598,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         // chat failure, and keiko-ui has no client-side diagnostic sink to route through instead
         // of console.*, which product code must not call directly).
       });
-    return () => {
+    return (): void => {
       active = false;
     };
   }, [loadMemoryAutonomyModeImpl, setMemoryMode]);
   const mountedRef = useRef(true);
-  const activeChatIdRef = useRef<string | undefined>(undefined);
+  const activeChatIdRef = useRef<string | undefined>(renderedChatIdentity);
+  const renderedActiveChatIdRef = useRef(renderedChatIdentity);
+  synchronizeRenderedIdentity(activeChatIdRef, renderedActiveChatIdRef, renderedChatIdentity);
   // GEN-DUP-SEMANTIC-016 — two named predicates for the two repeated stale-landing guards so the
   // intent reads at the call site. `activeChatIdRef.current` is read at CALL time (not captured),
   // preserving the existing ref-based guard behaviour exactly.
   const isStillActiveChat = (id: string): boolean => activeChatIdRef.current === id;
   const isSupersededOrAborted = (id: string, signal: AbortSignal): boolean =>
     signal.aborted || activeChatIdRef.current !== id;
-  const activeProjectPathRef = useRef<string | undefined>(undefined);
+  const activeProjectPathRef = useRef<string | undefined>(renderedProjectIdentity);
+  const renderedProjectPathRef = useRef(renderedProjectIdentity);
+  synchronizeRenderedIdentity(
+    activeProjectPathRef,
+    renderedProjectPathRef,
+    renderedProjectIdentity,
+  );
   const runSummarySyncingRef = useRef<Set<string>>(new Set());
   // GEN-PERF-CHAT-011 — a per-hook AbortController for the run-summary pollers, aborted on unmount
   // so the poll loop stops at its fetch/sleep edges instead of running out its remaining attempts.
@@ -2095,7 +2632,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const selectedModelPersistRef = useRef(0);
   // COMP-5 — synchronous read of the current model list inside setSelectedModel
   // (which is intentionally `useCallback(..., [])`) without recreating the callback.
-  const modelsRef = useRef<readonly ModelCapability[]>([]);
+  const modelsRef = useRef<readonly ModelCapability[]>(state.models);
+  modelsRef.current = state.models;
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
   // GEN-PERF-MEMORY-001 — live mirror of pendingAttachments so the unmount cleanup can revoke any
@@ -2185,14 +2723,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // 0.3.0 release audit — the composer (draft text + staged attachment queue) is ONE app-wide
-  // slot because the chat window is a singleton (ADR-0114). Switching the active conversation
-  // reset the stream bubble, the grounded answer, the latest memory and the document note, but
-  // never the composer — so a document staged in chat A was extracted and sent into chat B, under
-  // whatever model and provider chat B had selected. Content a user staged for one conversation
-  // must never ride along into another: every path that changes the active conversation clears it
-  // fail-closed. Placed here, on the state that owns the composer, so a new switch path cannot
-  // forget to call it.
+  // 0.3.0 release audit — each mounted session owns one composer (draft text + staged attachment
+  // queue). Switching that session to another conversation must clear the composer fail-closed so
+  // content staged for chat A cannot ride into chat B. ADR-0114 now mounts one session per chat
+  // window, so this reset is local to that window and never touches a sibling composer.
   const resetComposerForConversationSwitch = useCallback((): void => {
     setDraft("");
     clearPendingAttachments();
@@ -2229,7 +2763,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const extracted =
         documents.length === 0
           ? { entries: [] as readonly ConversationDocumentContextWire[], failures: [] }
-          : await extractDocumentContext(documents, t);
+          : await import("./documentContext").then(({ extractDocumentContext }) =>
+              extractDocumentContext(documents, t),
+            );
       const notices = extracted.failures;
       if (notices.length > 0) setError(notices.join(" "));
       const disclosures = extracted.entries.map((e) => ({
@@ -2362,6 +2898,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (!isInFlight(sendStatusRef.current)) release();
     });
   }, []);
+  const waitForCanonicalVoiceSendSlotRef = useRef(waitForCanonicalVoiceSendSlot);
+  waitForCanonicalVoiceSendSlotRef.current = waitForCanonicalVoiceSendSlot;
 
   const updateOwnedSendStatus = useCallback(
     (signal: AbortSignal, next: SendStatus): void => {
@@ -2483,18 +3021,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   );
 
   useEffect(() => {
-    activeChatIdRef.current = state.activeChat?.id;
-  }, [state.activeChat?.id]);
-
-  useEffect(() => {
-    activeProjectPathRef.current = state.activeProject?.path;
-  }, [state.activeProject?.path]);
-
-  useEffect(() => {
-    modelsRef.current = state.models;
-  }, [state.models]);
-
-  useEffect(() => {
     let cancelled = false;
     async function run(): Promise<void> {
       setLoading(true);
@@ -2523,45 +3049,30 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
     }
     void run();
-    return () => {
+    return (): void => {
       cancelled = true;
     };
   }, [autoCreate, canonicalVoiceProjectionRef]);
 
   useEffect(() => {
-    let cancelled = false;
-    let refreshGeneration = 0;
-    const refreshModels = (): void => {
-      refreshGeneration += 1;
-      const generation = refreshGeneration;
-      invalidateSharedBootstrap();
-      resetModelRequestCache();
-      void loadRefreshedSessionModels({
-        isCancelled: () => cancelled || generation !== refreshGeneration,
-        setError,
-        setState,
-      });
-    };
-    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
-    };
+    return subscribeGatewayModelRefresh((result): void => {
+      if (result.kind === "pending") {
+        setError(undefined);
+        setState((previous) => clearSessionModelsForPendingRefresh(previous));
+        return;
+      }
+      if (result.kind === "failure") {
+        setError(result.message);
+        return;
+      }
+      setState((previous) => refreshSessionModels(previous, result.models));
+    });
   }, []);
 
   useEffect(() => {
     return subscribeChatMutations((mutation) => {
       if (mutation.type === "upsert") {
-        const { chat } = mutation;
-        setState((previous) => ({
-          ...previous,
-          chats: upsertChatIntoList(previous.chats, chat),
-          activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
-          selectedModel:
-            previous.activeChat?.id === chat.id
-              ? resolveSelectedModelId(chat.selectedModel, previous.models)
-              : previous.selectedModel,
-        }));
+        setState((previous) => applyChatUpsert(previous, mutation.chat));
         return;
       }
       setState((previous) => ({
@@ -2584,7 +3095,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (canonicalVoiceQueueControllerRef.current.signal.aborted) {
       canonicalVoiceQueueControllerRef.current = new AbortController();
     }
-    return () => {
+    return (): void => {
       mountedRef.current = false;
       sendStatusRef.current = "cancelled";
       sendControllerRef.current?.abort();
@@ -2632,17 +3143,24 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     // Capture pre-update snapshot so the optimistic write can be rolled back if
     // the PATCH fails — without this the server and UI diverge permanently.
     let snapshot:
-      | { selectedModel: string | undefined; activeChat: Chat | undefined; chats: Chat[] }
+      | {
+          selectedModel: string | undefined;
+          selectedModelElected: boolean;
+          activeChat: Chat | undefined;
+          chats: Chat[];
+        }
       | undefined;
     setState((previous) => {
       snapshot = {
         selectedModel: previous.selectedModel,
+        selectedModelElected: previous.selectedModelElected,
         activeChat: previous.activeChat,
         chats: previous.chats,
       };
       return {
         ...previous,
         selectedModel: id,
+        selectedModelElected: false,
         activeChat:
           previous.activeChat === undefined
             ? previous.activeChat
@@ -2680,6 +3198,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setState((previous) => ({
           ...previous,
           selectedModel: result.chat.selectedModel,
+          selectedModelElected: false,
           activeChat:
             previous.activeChat?.id === result.chat.id ? result.chat : previous.activeChat,
           chats: replaceChatInList(previous.chats, result.chat),
@@ -2705,6 +3224,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               previous.activeChat?.id === activeChatId
                 ? rollback.selectedModel
                 : previous.selectedModel,
+            selectedModelElected:
+              previous.activeChat?.id === activeChatId
+                ? rollback.selectedModelElected
+                : previous.selectedModelElected,
             activeChat:
               previous.activeChat?.id === activeChatId ? rollback.activeChat : previous.activeChat,
             chats: restoreChatSelectedModel(previous.chats, activeChatId, rollback.chats),
@@ -2718,9 +3241,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       projectOverride?: ProjectWithAvailability,
       title?: string,
     ): Promise<Chat | undefined> => {
+      const preservedSelection =
+        !state.selectedModelElected && isPreservedSelection(state.selectedModel, state.models);
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       if (modelId === undefined) {
-        setError("No conversation-eligible model is configured. Connect a gateway in Settings.");
+        setError(NO_CONVERSATION_MODEL_MESSAGE);
         return undefined;
       }
       setError(undefined);
@@ -2731,38 +3256,37 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch();
       try {
         const trimmedTitle = title?.trim();
-        const input: { modelId: string; title: string; projectPath?: string } = {
-          modelId,
-          title:
+        const targetPath = projectOverride?.path ?? state.activeProject?.path;
+        const created = await createDesktopChat(
+          createChatInput(
+            modelId,
+            !preservedSelection,
             trimmedTitle !== undefined && trimmedTitle.length > 0
               ? trimmedTitle
               : DEFAULT_CHAT_TITLE,
-        };
-        const targetPath = projectOverride?.path ?? state.activeProject?.path;
-        if (targetPath !== undefined) input.projectPath = targetPath;
-        const created = await createDesktopChat(input);
+            targetPath,
+          ),
+        );
+        notifyChatUpsert(created.chat);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
           return created.chat;
         }
         activeChatIdRef.current = created.chat.id;
         activeProjectPathRef.current = created.project.path;
-        notifyChatUpsert(created.chat);
-        setState({
-          projects: Array.from(created.projects),
-          chats: sortChats(created.chats),
-          messages: Array.from(created.messages),
-          models: state.models,
-          activeProject: created.project,
-          activeChat: created.chat,
-          selectedModel: created.chat.selectedModel,
-        });
+        setState((previous) => sessionAfterChatCreate(previous, created, preservedSelection));
         return created.chat;
       } catch (error_) {
         setError(errorMessage(error_));
         return undefined;
       }
     },
-    [resetComposerForConversationSwitch, state.selectedModel, state.activeProject, state.models],
+    [
+      resetComposerForConversationSwitch,
+      state.selectedModel,
+      state.selectedModelElected,
+      state.activeProject,
+      state.models,
+    ],
   );
 
   const openProject = useCallback(
@@ -2782,18 +3306,29 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const latest = pickResumableChat(sorted);
         if (latest === undefined) {
           if (activeProjectPathRef.current !== project.path) return;
-          await openNewChat(project);
+          if (autoCreate) {
+            await openNewChat(project);
+          } else {
+            activeChatIdRef.current = undefined;
+            setState((previous) => ({
+              ...previous,
+              chats: sorted,
+              messages: [],
+              activeProject: project,
+              activeChat: undefined,
+            }));
+            clearLatestChatContext(setLatestGrounded, setLatestMemory);
+          }
           return;
         }
         const messagePayload = await sharedFetchChatMessages(latest.id, project.path);
         if (activeProjectPathRef.current !== project.path) return;
         activeChatIdRef.current = latest.id;
-        const selectedModel = resolveSelectedModelId(latest.selectedModel, state.models);
         setState((previous) => ({
           ...previous,
           chats: sorted,
           activeChat: latest,
-          selectedModel,
+          ...selectionForChatSwitch(latest.selectedModel, state.models),
           messages: mergeCanonicalVoiceProjections(
             messagePayload.messages,
             latest.id,
@@ -2806,7 +3341,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [canonicalVoiceProjectionRef, openNewChat, resetComposerForConversationSwitch, state.models],
+    [
+      autoCreate,
+      canonicalVoiceProjectionRef,
+      openNewChat,
+      resetComposerForConversationSwitch,
+      state.models,
+    ],
   );
 
   const openChat = useCallback(
@@ -2835,14 +3376,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
         if (!isStillActiveChat(chat.id)) return;
-        const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
         setState((previous) => {
           const project = previous.projects.find((item) => item.path === chat.projectPath);
           return {
             ...previous,
             activeProject: project,
             activeChat: chat,
-            selectedModel,
+            ...selectionForChatSwitch(chat.selectedModel, state.models),
             messages: mergeCanonicalVoiceProjections(
               messagePayload.messages,
               chat.id,
@@ -2874,6 +3414,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openProject(created.project);
+        if (pickChatModelId(state.models) === undefined) setError(NO_CONVERSATION_MODEL_MESSAGE);
         setNotice(projectResponseWarningMessage(created));
         return created.project;
       } catch (error_) {
@@ -2881,7 +3422,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [openProject],
+    [openProject, state.models],
   );
 
   // Removes a temp optimistic message from state by id (AC#3 — no partial kept).
@@ -2973,7 +3514,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           if (outcome.status === "failed") setError(EMPTY_MODEL_RESPONSE_USER_MESSAGE);
           resolve(outcome);
         },
-        onError: ({ code, message }: { code: string; message: string }): void => {
+        onError: ({ code, message, correlationId }: SseErrorPayload): void => {
           // GEN-PERF-CHAT-007 — cancel any pending frame; onError/onCancelled remove the temp
           // bubble entirely (AC#3, no partial kept), so the buffered text must NOT be flushed.
           cancelFlush();
@@ -2988,7 +3529,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             resolve({ status: "failed", canonicalTurnInProgress: true });
             return;
           }
-          setError(errorMessage(new ApiError(code, message, 0)));
+          // RB-6 / ADR-0173 D5 — the stream error event carries the same correlation id as every
+          // other diagnostic for this request; keep it on the ApiError instead of dropping it, so
+          // formatUserError can surface it as a copyable support id.
+          const apiError = new ApiError(code, message, 0);
+          if (correlationId !== undefined) apiError.correlationId = correlationId;
+          setError(errorMessage(apiError));
           removeTempMessage(tempAssistantId);
           resolve({ status: "failed" });
         },
@@ -3088,7 +3634,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         updateOwnedSendStatus(signal, "contacting");
         // Issue #148 — byte-bounded document context on the request body.
-        const result = await sendDesktopChat(desktopChatInputForUngrounded(request), signal);
+        const result = await sendDesktopChat(
+          desktopChatInputForUngrounded(request),
+          signal,
+          request.correlationId,
+        );
         if (signal.aborted) return { status: "cancelled" };
         const outcome = completedSendOutcome(result.messages, result.attachmentDeliveries);
         if (!isStillActiveChat(chat.id)) return outcome;
@@ -3147,15 +3697,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // The route persists both messages and returns the redacted citation projection; the hook
   // refetches the message log on success so the bubbles reflect the canonical store state.
   const sendGrounded = useCallback(
-    async (
-      chat: Chat,
-      content: string,
-      optimisticId: string,
-      modelId: string,
-      signal: AbortSignal,
-      memory: ConversationMemoryRequestWire,
-      clientTurnId: string | undefined,
-    ): Promise<SendAttemptOutcome> => {
+    async ({
+      chat,
+      content,
+      optimisticId,
+      modelId,
+      signal,
+      memory,
+      clientTurnId,
+      correlationId,
+    }: GroundedSendRequest): Promise<SendAttemptOutcome> => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
@@ -3173,6 +3724,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
           },
           signal,
+          correlationId,
         );
         if (!isStillActiveChat(chat.id)) {
           return { status: "completed", assistantMessageId: result.assistantMessageId };
@@ -3244,19 +3796,22 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (grounded) {
         // A typed send in this state is rejected before admission (resolveSendMessageAdmission), so
         // only a spoken turn can reach here with files staged. A settled final transcript must never
-        // be discarded (ADR-0154 D1), so the turn proceeds on the grounded route and the SAME notice
-        // states that the staged attachments were not part of it. Unconditional on purpose: whichever
-        // caller arrives here with staged files, the user is told rather than silently ignored.
-        if (staged.length > 0) setError(GROUNDED_ATTACHMENT_NOTICE);
-        const terminal = await sendGrounded(
+        // be discarded (ADR-0154 D1), so the turn proceeds on the grounded route and a DISTINCT
+        // notice (GROUNDED_ATTACHMENT_DROPPED_NOTICE, not the typed path's full-reject
+        // GROUNDED_ATTACHMENT_NOTICE — see KEIKO-0793) states that the staged attachments were not
+        // part of it. Unconditional on purpose: whichever caller arrives here with staged files,
+        // the user is told rather than silently ignored.
+        if (staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
+        const terminal = await sendGrounded({
           chat,
-          request.content,
-          request.optimisticId,
-          request.modelId,
+          content: request.content,
+          optimisticId: request.optimisticId,
+          modelId: request.modelId,
           signal,
           memory,
-          request.clientTurnId,
-        );
+          clientTurnId: request.clientTurnId,
+          correlationId: request.correlationId,
+        });
         return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
       }
       const ungroundedRequest: UngroundedSendRequest = {
@@ -3270,6 +3825,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         attachments,
         memory,
         clientTurnId: request.clientTurnId,
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       };
       const terminal =
         request.forceBuffered || staged.some((attachment) => attachment.kind === "image")
@@ -3459,6 +4015,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           canonicalTarget,
           forceBuffered: options?.forceBuffered === true,
           clientTurnId,
+          ...(options?.correlationId === undefined ? {} : { correlationId: options.correlationId }),
         });
         const { settled, persistence } = await settleSendAttempt({
           terminal,
@@ -3516,6 +4073,59 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   sendMessageRef.current = sendMessage;
 
+  const reconcilePersistedCanonicalVoiceTarget = useCallback(
+    async (target: CanonicalVoiceSendTarget): Promise<void> => {
+      const chatId = target.chat.id;
+      try {
+        const [messagePayload, chatsPayload] = await Promise.all([
+          sharedFetchChatMessages(chatId, target.project.path),
+          sharedFetchChats(target.project.path),
+        ]);
+        if (!mountedRef.current || activeChatIdRef.current !== chatId) return;
+        const refreshedActive = chatsPayload.chats.find((chat) => chat.id === chatId);
+        setState((previous) =>
+          previous.activeChat?.id !== chatId
+            ? previous
+            : {
+                ...previous,
+                messages: mergeCanonicalVoiceProjections(
+                  messagePayload.messages,
+                  chatId,
+                  canonicalVoiceProjectionRef.current,
+                ),
+                chats: sortChats(chatsPayload.chats),
+                activeChat: refreshedActive ?? previous.activeChat,
+              },
+        );
+      } catch (error_) {
+        if (mountedRef.current && activeChatIdRef.current === chatId)
+          setError(errorMessage(error_));
+      }
+    },
+    [canonicalVoiceProjectionRef],
+  );
+
+  useEffect(() => {
+    const owner = canonicalVoiceQueueOwnerRef.current;
+    const registration: CanonicalVoiceDeliveryRuntimeRegistration = {
+      sendRef: sendMessageRef,
+      waitForSendSlotRef: waitForCanonicalVoiceSendSlotRef,
+      onDeliveryDelayed: () => setError(CANONICAL_VOICE_PENDING_ERROR),
+      activeChatIdRef,
+      reconcilePersistedTarget: reconcilePersistedCanonicalVoiceTarget,
+    };
+    canonicalVoicePageOutbox.runtimes.set(owner, registration);
+    wakeCanonicalVoicePageOutbox();
+    return (): void => {
+      if (canonicalVoicePageOutbox.runtimes.get(owner) === registration) {
+        canonicalVoicePageOutbox.runtimes.delete(owner);
+      }
+      const activeDelivery = canonicalVoicePageOutbox.activeDelivery;
+      if (activeDelivery?.runtimeOwner === owner) activeDelivery.abort();
+      wakeCanonicalVoicePageOutbox();
+    };
+  }, [reconcilePersistedCanonicalVoiceTarget]);
+
   const releaseCanonicalVoiceProjection = useCallback(
     (item: CanonicalVoiceQueueItem): void => {
       const projection = canonicalVoiceProjectionRef.current.get(item.key);
@@ -3538,24 +4148,34 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       item: CanonicalVoiceQueueItem,
       signal: AbortSignal,
     ): Promise<CanonicalVoiceQueueDelivery | undefined> => {
-      const sender = sendMessageRef.current;
+      const selectedRuntime = selectCanonicalVoiceDeliveryRuntime(
+        item,
+        canonicalVoiceQueueOwnerRef.current,
+      );
+      if (selectedRuntime === undefined) return undefined;
+      const sender = selectedRuntime.registration.sendRef.current;
       if (sender === null) return undefined;
       const itemController = new AbortController();
       const abortItem = (): void => itemController.abort();
       signal.addEventListener("abort", abortItem, { once: true });
-      canonicalVoicePageOutbox.activeDelivery = { key: item.key, abort: abortItem };
+      canonicalVoicePageOutbox.activeDelivery = {
+        key: item.key,
+        runtimeOwner: selectedRuntime.owner,
+        abort: abortItem,
+      };
       try {
-        return await deliverCanonicalVoiceQueueItem(item, {
+        const delivery = await deliverCanonicalVoiceQueueItem(item, {
           signal: itemController.signal,
           send: sender,
-          waitForSendSlot: () => waitForCanonicalVoiceSendSlot(itemController.signal),
-          onDeliveryDelayed: () => {
-            setError(CANONICAL_VOICE_PENDING_ERROR);
-          },
+          waitForSendSlot: () =>
+            selectedRuntime.registration.waitForSendSlotRef.current(itemController.signal),
+          onDeliveryDelayed: selectedRuntime.registration.onDeliveryDelayed,
           onUserPersisted: () => {
             releaseCanonicalVoiceProjection(item);
           },
         });
+        await reconcileCanonicalVoiceTargetRuntimes(item, selectedRuntime.owner, delivery);
+        return delivery;
       } finally {
         signal.removeEventListener("abort", abortItem);
         if (canonicalVoicePageOutbox.activeDelivery?.key === item.key) {
@@ -3563,7 +4183,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
       }
     },
-    [releaseCanonicalVoiceProjection, waitForCanonicalVoiceSendSlot],
+    [releaseCanonicalVoiceProjection],
   );
 
   const settleQueuedCanonicalVoiceDelivery = useCallback(
@@ -3641,7 +4261,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     settleQueuedCanonicalVoiceDelivery,
   ]);
 
-  drainCanonicalVoiceQueueRef.current = () => {
+  drainCanonicalVoiceQueueRef.current = (): void => {
     void drainCanonicalVoiceQueue();
   };
 
@@ -3651,7 +4271,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     };
     canonicalVoicePageOutbox.statusSubscribers.add(observeStatus);
     observeStatus(canonicalVoicePageOutbox.status);
-    return () => {
+    return (): void => {
       canonicalVoicePageOutbox.statusSubscribers.delete(observeStatus);
     };
   }, []);
@@ -3668,7 +4288,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     };
     canonicalVoicePageOutbox.wakes.add(wake);
     wake();
-    return () => {
+    return (): void => {
       canonicalVoicePageOutbox.wakes.delete(wake);
     };
   }, [loading]);
@@ -3688,17 +4308,32 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // server still validates compatibility and fails closed, while the optimistic user row stays
       // visible instead of being silently discarded by a client-only no-model guard.
       const modelId = input.target.modelId;
-      const byteLength = new TextEncoder().encode(content).byteLength;
+      // KEIKO-0608: shared with resolveSendMessageAdmission's typed-path check.
+      const { withinLimits, byteLength } = desktopChatInputSizeCheck(content);
       if (
         content.length === 0 ||
-        content.length > MAX_DESKTOP_CHAT_INPUT_CHARS ||
-        byteLength > MAX_DESKTOP_CHAT_INPUT_BYTES ||
+        !withinLimits ||
         clientTurnId.length === 0 ||
         clientTurnId.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS
       ) {
         setError(CANONICAL_VOICE_INPUT_ERROR);
         return undefined;
       }
+      // KEIKO-0692: voice-only precondition, with no equivalent in resolveSendMessageAdmission
+      // (the typed path). `chat` here is the frozen snapshot captured at enqueue time and reused
+      // verbatim when the FIFO queue eventually drains this item — its groundingScopeIdentity is
+      // what sendGrounded/sendUngrounded later forward as expectedGroundingScopeIdentity (see the
+      // `chat.groundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity: ... }`
+      // shape near askGrounded's call site), the optimistic-concurrency proof the server's
+      // serializer lane checks against the chat's CURRENT identity at actual send time. If that
+      // value were undefined or malformed, the request-builder's ternary would just omit the
+      // field — no error, no rejection — silently sending the delayed turn with no race proof at
+      // all. A typed send has no such gap to bridge: admission and the request it produces happen
+      // synchronously in the same call, using a freshly-read `chat`, so there is no delay window
+      // in which the scope could change out from under it and nothing to omit-and-silently-lose.
+      // A queued spoken turn can sit for an arbitrary time before the outbox drains it, during
+      // which another client could change the chat's grounding scope, so voice must fail closed
+      // here, at enqueue time, on a value the typed path never needs to pre-validate.
       if (!isGroundingScopeIdentity(chat.groundingScopeIdentity)) {
         setError(CANONICAL_VOICE_SCOPE_IDENTITY_ERROR);
         return undefined;
@@ -3746,6 +4381,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         content,
         contentDigest,
         clientTurnId,
+        correlationId: input.correlationId,
         target: {
           chat,
           project,
@@ -3760,6 +4396,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         byteLength,
         promise,
         resolve: resolveOutcome,
+        deliveryOwner: canonicalVoiceQueueOwnerRef.current,
       };
       canonicalVoiceDeliveriesRef.current.set(key, { contentDigest, promise });
       canonicalVoiceQueueRef.current.push(item);
@@ -3938,6 +4575,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       messages: state.messages,
       streamingAssistantMessage,
       models: state.models,
+      configuredModelsAvailable: state.configuredModelsAvailable,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -3991,6 +4629,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.messages,
       streamingAssistantMessage,
       state.models,
+      state.configuredModelsAvailable,
       state.activeProject,
       state.activeChat,
       state.selectedModel,

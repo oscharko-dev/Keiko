@@ -1,18 +1,18 @@
 "use client";
 
-import {
-  DEFAULT_DEBUG_PAYLOAD_LIMITS,
-  type BoundedDebugText,
-  type DebugEvent,
-  type DebugSession,
-  type DebugVariableNode,
-  type ExceptionBreakpointFilter,
-  type InstrumentationSnapshot,
-  type Scope,
-  type StackFrame,
-  type WatchEvaluationResult,
-  type WatchExpression,
+import type {
+  BoundedDebugText,
+  DebugEvent,
+  DebugSession,
+  DebugVariableNode,
+  ExceptionBreakpointFilter,
+  InstrumentationSnapshot,
+  Scope,
+  StackFrame,
+  WatchEvaluationResult,
+  WatchExpression,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DEBUG_PAYLOAD_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 
 export interface DebugStackSnapshot {
   readonly frames: readonly StackFrame[];

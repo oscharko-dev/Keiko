@@ -18,8 +18,20 @@
 // require a schema change every time a payload kind landed (#205 ships only two kinds today).
 
 import type { DatabaseSync } from "node:sqlite";
+
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
 import type { MemoryContentCipher } from "./cipher.js";
-import { encryptExistingContent } from "./migrate-encrypt.js";
+import { emitEncryptionMigrated, sweepExistingContent } from "./migrate-encrypt.js";
+import {
+  emitMemoryVaultLogEvent,
+  memoryVaultErrorKind,
+  startMemoryVaultLogTimer,
+  type MemoryVaultLogSink,
+} from "./vault-log.js";
 
 // v2 = encryption-at-rest (ADR-0035). v1 stored content columns in plaintext; v2 seals them via an
 // eager code sweep (no column changes). The bump is one-way: a v2 DB is unreadable by v1 code.
@@ -53,6 +65,26 @@ import { encryptExistingContent } from "./migrate-encrypt.js";
 export const MEMORY_VAULT_SCHEMA_VERSION = 11;
 
 const ENCRYPTION_VERSION = 2;
+
+const STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.store.encryption-checkpoint-degraded",
+  category: "diagnostic",
+  owner: "keiko-memory-vault",
+  emitter: "schema.emitCheckpointDegraded",
+  fields: {
+    attempts: { type: "integer", dataClass: "count", required: true },
+    busy: { type: "boolean", dataClass: "closed-enum", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["memory-vault-encryption-checkpoint"],
+  proofIds: ["memory-vault.store.encryption-checkpoint-degraded.state"],
+  releaseImpact: "patch",
+});
 
 interface Migration {
   readonly version: number;
@@ -209,7 +241,9 @@ CREATE INDEX IF NOT EXISTS idx_tombstones_scope_forgotten
   ON memory_tombstones(scope_kind, scope_coordinate, forgotten_at DESC, id ASC);
 `;
 
-const MIGRATIONS: readonly Migration[] = [
+// KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
+// array. Not re-exported through the package's public entry point, so no packaged surface change.
+export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 3, sql: V3_SQL },
   { version: 4, sql: V4_SQL },
@@ -233,7 +267,11 @@ function setUserVersion(db: DatabaseSync, v: number): void {
   db.exec(`PRAGMA user_version = ${String(v)}`);
 }
 
-export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): void {
+export function runMigrations(
+  db: DatabaseSync,
+  cipher: MemoryContentCipher,
+  sink?: MemoryVaultLogSink,
+): void {
   const start = currentUserVersion(db);
   if (start > MEMORY_VAULT_SCHEMA_VERSION) {
     throw new Error(
@@ -248,6 +286,8 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
   // An EXISTING (already-created) DB crossing into the encryption version had plaintext on disk;
   // its superseded pages must be purged from the WAL so the plaintext does not linger after upgrade.
   const upgradedExistingDb = start > 0 && needsEncryption;
+  const elapsedMs = startMemoryVaultLogTimer();
+  let rowsMigrated = 0;
   db.exec("BEGIN");
   try {
     for (const m of pendingDdl) {
@@ -258,8 +298,11 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
       // Idempotent: skips values already sealed, so a fresh DB (no rows) and a re-run are no-ops.
       // The encryption sweep is keyed to ENCRYPTION_VERSION (2) but is NOT a user_version write:
       // post-v2 migrations (v3+) own the version. Setting the version is deferred to the line below
-      // so encryption never regresses a DB that already applied a later DDL migration.
-      encryptExistingContent(db, cipher);
+      // so encryption never regresses a DB that already applied a later DDL migration. The sweep
+      // itself never emits (see migrate-encrypt.ts's `sweepExistingContent`): a log line for a
+      // migration that then rolls back would be a false report, so the emission below waits for
+      // this transaction's own COMMIT to actually succeed.
+      rowsMigrated = sweepExistingContent(db, cipher);
     }
     // Pin the final version to the current schema head once every pending DDL and the encryption
     // sweep have run. A fresh DB applies v1 + later DDL and the encryption sweep, then lands on
@@ -270,9 +313,118 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
     db.exec("ROLLBACK");
     throw error;
   }
+  // Outside the transaction, same reasoning as the WAL checkpoint below: a real transition is
+  // reported only once the migration has actually committed, never for a sweep that then rolled
+  // back. `emitEncryptionMigrated` itself is a no-op when `rowsMigrated` is 0 (fresh DB, or a
+  // re-run over already-sealed content).
+  emitEncryptionMigrated(sink, rowsMigrated, elapsedMs());
   if (upgradedExistingDb) {
-    // Outside the transaction (checkpoint cannot run inside one): truncate the WAL so pages that
-    // held the now-re-encrypted plaintext are reclaimed immediately, not at the next close.
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    flushPlaintextResidueWithRetry(db, sink);
   }
+}
+
+// The number of times the post-migration WAL TRUNCATE checkpoint is retried when SQLite
+// reports `busy=1` (another connection holds an open read/write). Bounded on purpose so a
+// sustained reader cannot hang vault open indefinitely; three attempts covers a transient
+// contending reader without turning the migration open into a spin loop (#2906 KEIKO-0877).
+const WAL_CHECKPOINT_MAX_ATTEMPTS = 3;
+
+interface WalCheckpointResult {
+  readonly busy: number;
+  readonly log: number;
+  readonly checkpointed: number;
+}
+
+// Post-migration WAL flush: truncates the WAL so pages that held the now-re-encrypted
+// plaintext are reclaimed immediately instead of at the next natural close. The migration
+// transaction has already committed, so any failure here — a busy contending reader, an
+// exception thrown by the checkpoint statement itself — must NOT propagate out of
+// runMigrations()/openMemoryDatabase() (#2906 KEIKO-0713): a transient hiccup would
+// otherwise turn a successful encryption upgrade into a spurious vault-open failure, and a
+// process restart would repair itself since the migration is idempotent. But per AGENTS.md
+// §7 a silent swallow is forbidden — a persistently busy or throwing checkpoint is emitted
+// as a body-free diagnostic through the log sink so an operator can see plaintext pages
+// were not immediately reclaimed (#2906 KEIKO-0877).
+//
+// Exported so schema.test.ts can exercise the retry/report path directly without having
+// to reconstruct a real v1→v-current migration timeline. Not part of the public package
+// surface — consumed only by runMigrations above and by co-located tests.
+export function flushPlaintextResidueWithRetry(
+  db: DatabaseSync,
+  sink: MemoryVaultLogSink | undefined,
+): void {
+  for (let attempt = 1; attempt <= WAL_CHECKPOINT_MAX_ATTEMPTS; attempt += 1) {
+    const outcome = attemptWalCheckpointTruncate(db);
+    if (isCheckpointComplete(outcome)) return;
+    if (attempt === WAL_CHECKPOINT_MAX_ATTEMPTS) {
+      emitCheckpointDegraded(sink, attempt, outcome);
+      return;
+    }
+  }
+}
+
+type WalCheckpointAttempt =
+  | { readonly kind: "ok"; readonly result: WalCheckpointResult }
+  | { readonly kind: "threw"; readonly errorKind: string }
+  // #2906: SQLite can return busy=0 with checkpointed < log (a PARTIAL checkpoint that still
+  // reports success on the busy flag alone) or, in principle, a malformed/short row (missing or
+  // non-integer columns). Both must fail closed into the retry/report path rather than being
+  // parsed as a trivially-satisfied 0/0/0 result, so a bogus row can never be mistaken for a
+  // completed checkpoint.
+  | { readonly kind: "malformed" };
+
+function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
+  try {
+    const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      Partial<WalCheckpointResult> | undefined;
+    if (!isWellFormedCheckpointRow(row)) return { kind: "malformed" };
+    return { kind: "ok", result: row };
+  } catch (error) {
+    return { kind: "threw", errorKind: memoryVaultErrorKind(error) };
+  }
+}
+
+function isWellFormedCheckpointRow(
+  row: Partial<WalCheckpointResult> | undefined,
+): row is WalCheckpointResult {
+  return (
+    Number.isInteger(row?.busy) && Number.isInteger(row?.log) && Number.isInteger(row?.checkpointed)
+  );
+}
+
+// Mirrors keiko-local-knowledge/store-content-encryption.ts's isCheckpointComplete: busy=0 alone
+// is not sufficient, since SQLite can report a PARTIAL checkpoint (fewer frames checkpointed than
+// the WAL currently holds) while still clearing the busy flag.
+function isCheckpointComplete(outcome: WalCheckpointAttempt): boolean {
+  return (
+    outcome.kind === "ok" &&
+    outcome.result.busy === 0 &&
+    outcome.result.checkpointed >= outcome.result.log
+  );
+}
+
+function emitCheckpointDegraded(
+  sink: MemoryVaultLogSink | undefined,
+  attempts: number,
+  outcome: WalCheckpointAttempt,
+): void {
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEvent(
+      STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION,
+      { level: "warn", errorKind: "durability-failed" },
+      {
+        attempts,
+        busy: outcome.kind === "ok" && outcome.result.busy === 1,
+        failureKind: checkpointFailureKind(outcome),
+      },
+    ),
+  );
+}
+
+function checkpointFailureKind(outcome: WalCheckpointAttempt): string {
+  if (outcome.kind === "threw") return outcome.errorKind;
+  if (outcome.kind === "malformed") return "checkpoint-result-malformed";
+  if (outcome.result.busy === 1) return "checkpoint-busy-retries-exhausted";
+  return "checkpoint-incomplete-retries-exhausted";
 }

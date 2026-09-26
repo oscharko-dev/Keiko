@@ -186,7 +186,7 @@
 
 .lazyWidgetScope :global(.pdfv-context-summary:focus-visible) {
   outline: var(--focus-ring);
-  outline-offset: var(--focus-ring-offset);
+  outline-offset: 2px;
 }
 
 .lazyWidgetScope :global(.pdfv-context-summary::-webkit-details-marker) {
@@ -408,7 +408,7 @@
 .lazyWidgetScope :global(.pdfv-page-skeleton) {
   display: block;
   max-width: 100%;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-surface);
   background: var(--surface-primary);
 }
 
@@ -429,7 +429,7 @@
   margin: 0;
   padding: 20px;
   border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-surface);
   background: var(--surface-primary);
 }
 

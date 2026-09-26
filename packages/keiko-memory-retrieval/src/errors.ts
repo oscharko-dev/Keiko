@@ -13,7 +13,12 @@
 import { RedactingError } from "@oscharko-dev/keiko-security/errors/base";
 
 export type RetrievalErrorCode =
-  "empty-scopes" | "invalid-budget" | "invalid-threshold" | "invalid-weight" | "port-failure";
+  | "empty-scopes"
+  | "invalid-budget"
+  | "invalid-clock"
+  | "invalid-threshold"
+  | "invalid-weight"
+  | "port-failure";
 
 export class RetrievalError extends RedactingError {
   public readonly code: RetrievalErrorCode;

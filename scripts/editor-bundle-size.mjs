@@ -52,6 +52,20 @@ export function evaluateOwnCodeBudget({ files, ceilingBytes }) {
   };
 }
 
+// Fail closed on the budget file itself (review finding on #3220): a missing or malformed
+// ceiling used to SKIP the first-load check silently, so a typo in the budget key could
+// disable a required gate with a green run. The ceiling must be a positive safe integer.
+export function requireInitialPageCeiling(budget, fail) {
+  const ceiling = budget.initialPageChunkGzipBytesCeiling;
+  if (!Number.isSafeInteger(ceiling) || ceiling <= 0) {
+    fail(
+      "scripts/editor-bundle-size.budget.json is missing a valid initialPageChunkGzipBytesCeiling " +
+        "(positive integer required) — refusing to run the first-load gate fail-open.",
+    );
+  }
+  return ceiling;
+}
+
 export function evaluateInitialPageChunkBudget({ files, ceilingBytes }) {
   const totalGzipBytes = files.reduce((sum, file) => sum + gzipSizeBytes(file.content), 0);
   return {
@@ -272,7 +286,7 @@ function staticExportScriptPath(outDir, src) {
   return join(outDir, withoutLeadingSlash);
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity
+// eslint-disable-next-line max-lines-per-function
 function checkStaticExportFirstLoad(repoRoot, budget, fail) {
   const outDir = join(repoRoot, "packages", "keiko-ui", "out");
   const indexHtml = join(outDir, "index.html");
@@ -316,14 +330,11 @@ function checkStaticExportFirstLoad(repoRoot, budget, fail) {
     );
   }
 
-  const initialPageBudget =
-    budget.initialPageChunkGzipBytesCeiling === undefined
-      ? undefined
-      : evaluateInitialPageChunkBudget({
-          files,
-          ceilingBytes: budget.initialPageChunkGzipBytesCeiling,
-        });
-  if (initialPageBudget !== undefined && !initialPageBudget.ok) {
+  const initialPageBudget = evaluateInitialPageChunkBudget({
+    files,
+    ceilingBytes: requireInitialPageCeiling(budget, fail),
+  });
+  if (!initialPageBudget.ok) {
     fail(
       `Static-export first-load JavaScript gzip footprint ${String(
         initialPageBudget.totalGzipBytes,

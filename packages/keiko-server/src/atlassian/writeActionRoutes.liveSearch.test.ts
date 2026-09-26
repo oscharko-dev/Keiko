@@ -12,18 +12,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  AtlassianConnectorPendingApproval,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+  JiraLiveSearchResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   validateAtlassianConnectorActivityRecord,
   validateAtlassianConnectorPendingApproval,
   validateJiraLiveSearchResult,
-  type AtlassianConnectorPendingApproval,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-  type JiraLiveSearchResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import {
   createInMemoryJiraFixture,
   JIRA_LIVE_SEARCH_TEMPLATE_JQL,

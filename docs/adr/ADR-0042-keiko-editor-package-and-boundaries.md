@@ -29,10 +29,15 @@ its companion blueprint. ADR-0045 performs the dependency review and records the
 out-of-process LSP decision, the staged rollout order, and the per-language security model; it relaxes
 nothing in this ADR.
 
-Amended 2026-07-22 during the independent PR #2665 audit: D3.7 now records the current root
-DOMPurify override at `3.4.12` and the governed assistance surfaces added since the original
-closed-sink review. This is a patched-version and assurance maintenance update; the Monaco pin,
-browser-tier boundary, plain-text/inert projections, and durable-upgrade requirement are unchanged.
+Amended 2026-07-22 during the independent PR #2665 audit: D3.7 records the root DOMPurify override
+at `3.4.12` and the governed assistance surfaces added since the original closed-sink review. This is
+a patched-version and assurance maintenance update; the Monaco pin, browser-tier boundary,
+plain-text/inert projections, and durable-upgrade requirement are unchanged.
+
+Amended 2026-08-16 for the 0.3.8 release: the reviewed Monaco runtime pin moves to `0.56.0`, the
+root DOMPurify override moves to `3.4.13`, and D3.7 records Monaco 0.56.0's `dompurify@3.4.8`
+declared and vendored dependency. No browser-tier boundary, CSP, no-CDN requirement, governed-provider
+bridge, or plain-text/inert Markdown projection is relaxed.
 
 > **Authority semantics superseded in part by
 > [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).** The original blanket
@@ -64,9 +69,9 @@ default, evidence is redacted before persistence, and Keiko is explicitly **not*
 agentic coding loop must preserve all of these invariants.
 
 The host stack is fixed and non-trivial for editor runtime loading: `@oscharko-dev/keiko-ui` runs
-**Next.js 16.2.9 (App Router), Turbopack, and `output: "export"` static export**
-(`packages/keiko-ui/next.config.mjs`). `monaco-editor` and `@monaco-editor/react` are not yet
-dependencies. The Model Gateway's `ModelCapability` contract
+**Next.js 16.2.12 (App Router), Turbopack, and `output: "export"` static export**
+(`packages/keiko-ui/next.config.mjs`). `monaco-editor@0.56.0` and `@monaco-editor/react@4.7.0` are
+local, no-CDN editor runtime dependencies. The Model Gateway's `ModelCapability` contract
 (`packages/keiko-contracts/src/gateway.ts`) has no fill-in-the-middle (FIM) capability today.
 
 This ADR governs the architecture decisions that the downstream editor children (#1191–#1213) must
@@ -140,18 +145,18 @@ base branch):
    enter read-only/degraded mode, and files > 1,000,000 bytes use the existing too-large path without
    instantiating Monaco. #1207 measures and enforces these budgets; #1209 records release evidence.
 7. **Monaco DOMPurify supply-chain control (#1196 host mount).** Mounting Monaco in `keiko-ui` brings
-   `monaco-editor`'s declared `dompurify@3.2.7` dependency into keiko-ui's audit closure, tripping the
-   `ui` job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui`. The control is a
-   root `overrides: { dompurify: "3.4.12" }` pinning the patched DOMPurify line (the advisories affect
-   `<= 3.4.10`); `monaco-editor` stays at the `0.55.1` pin and the `npm audit fix` downgrade to `0.53.0`
-   is not taken. The override does not replace Monaco's vendored DOMPurify copy. Governed providers
+   `monaco-editor`'s declared `dompurify@3.4.8` dependency into keiko-ui's audit closure. The control
+   is a root `overrides: { dompurify: "3.4.13" }` pinning the patched DOMPurify line (the advisories
+   affect `<= 3.4.10`); `monaco-editor` stays at the reviewed `0.56.0` pin and the old
+   `npm audit fix` downgrade path is not taken. The override does not replace Monaco's vendored
+   DOMPurify copy, which is also `3.4.8` in `monaco-editor@0.56.0`. Governed providers
    may explicitly enable hover, completion, parameter hints, code-action lightbulbs, and inlay hints;
    their bridges enumerate plain-string fields and never forward `IMarkdownString` or trusted-Markdown
    objects. Hover is the sole Markdown renderer and wraps server text in an inert code fence longer
    than every content backtick run. Suggest documentation, links, code lens, the inline-suggest
    toolbar, and syntax-highlighted ghost text remain disabled. Runtime guards discard non-string
    completion/signature metadata even if an untyped host violates the TypeScript contract. The
-   durable fix remains upgrading Monaco to a release vendoring DOMPurify `>= 3.3.2` once one exists.
+   durable fix remains upgrading Monaco to a release vendoring DOMPurify `> 3.4.10` once one exists.
    Detailed in the `@oscharko-dev/keiko-editor` README supply-chain note.
 
 ### D4 — Server-side deterministic language service is the single source of truth
@@ -282,7 +287,7 @@ patches without explicit local action.
 - [ADR-0045](ADR-0045-staged-multi-language-lsp-expansion.md) and [docs/planning/keiko-editor-multi-language-expansion.md](../planning/keiko-editor-multi-language-expansion.md) (staged multi-language expansion; realises the #1213 deferral)
 - `docs/planning/keiko-editor-architecture-blueprint.md`
 - `docs/security-and-audit-boundaries.md`
-- Monaco Editor 0.55.1 (MIT); `@monaco-editor/react` 4.7.0 (MIT); Monaco ESM worker integration; LSP
+- Monaco Editor 0.56.0 (MIT); `@monaco-editor/react` 4.7.0 (MIT); Monaco ESM worker integration; LSP
   3.17; `monaco-languageclient`
 - OWASP Top 10 for LLM Applications (2025): LLM01, LLM05, LLM08
 - EU AI Act Reg. (EU) 2024/1689 Art. 12 & 14; DORA Reg. (EU) 2022/2554; BaFin BDAI principles (2021)

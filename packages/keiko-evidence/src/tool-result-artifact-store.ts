@@ -7,9 +7,14 @@ import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { replaceViaDurableTempFile } from "./durable-write.js";
+import { PostRenameFsyncError, replaceViaDurableTempFile } from "./durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "./errors.js";
-import { existingOwnedDirectory, ownedChildPath, prepareOwnedDirectory } from "./fs-safety.js";
+import {
+  existingOwnedDirectory,
+  isSingleLinkRegularFile,
+  ownedChildPath,
+  prepareOwnedDirectory,
+} from "./fs-safety.js";
 
 export const TOOL_RESULT_ARTIFACT_SUBDIR = "tool-results";
 export const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt";
@@ -64,15 +69,12 @@ function artifactPath(realDir: string, artifactId: string): string {
   return ownedChildPath(realDir, artifactName(artifactId));
 }
 
-function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
-  try {
-    const stat = fs.stat(path);
-    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot inspect tool-result artifact: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+function toToolResultInspectionError(message: string): Error {
+  return new EvidenceReadError(`cannot inspect tool-result artifact: ${message}`);
+}
+
+function isSingleLinkToolResult(path: string, fs: WorkspaceFs): boolean {
+  return isSingleLinkRegularFile(path, fs, toToolResultInspectionError);
 }
 
 function assertWritableArtifact(target: string, fs: WorkspaceFs): void {
@@ -80,7 +82,7 @@ function assertWritableArtifact(target: string, fs: WorkspaceFs): void {
   if (entry === undefined) {
     return;
   }
-  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || !isSingleLinkToolResult(target, fs)) {
     throw new EvidenceWriteError("cannot overwrite a non-ledger tool-result artifact");
   }
 }
@@ -90,6 +92,14 @@ function atomicWriteText(target: string, content: string, randomSuffix: () => st
   try {
     replaceViaDurableTempFile(target, temp, content);
   } catch (error) {
+    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
+    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
+    // See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `tool-result artifact parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `tool-result artifact write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -102,7 +112,7 @@ function readArtifact(target: string, fs: WorkspaceFs): string | undefined {
   if (entry === undefined) {
     return undefined;
   }
-  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || !isSingleLinkToolResult(target, fs)) {
     throw new EvidenceReadError("cannot read a non-ledger tool-result artifact");
   }
   return readFileSync(target, "utf8");

@@ -156,11 +156,15 @@ function buildCitationRequirement(
   return { discipline: "best-effort", granularity: "per-section" };
 }
 
-function buildRecency(
-  analysis: PromptTaskAnalysis,
+// Exported and narrowed to `{ volatile }` so the VALIDATOR can call the producer instead of keeping
+// its own copy of the formula. A copy cannot detect the case it exists to catch: if the producer's
+// rule moves and the copy does not, both sides change together and the suite stays green over a
+// plan the validator now silently mis-approves (AGENTS.md §7).
+export function buildRecency(
+  groundingNeed: { readonly volatile: boolean },
   strategy: GroundingStrategy,
 ): RecencyExpectation {
-  const volatile = analysis.groundingNeed.volatile;
+  const volatile = groundingNeed.volatile;
   return {
     volatile,
     requireAsOfDate: volatile,
@@ -199,9 +203,12 @@ export const SCOPED_EVIDENCE_STRATEGIES: ReadonlySet<GroundingStrategy> = new Se
   "repository-context",
 ]);
 
+// Second parameter narrowed to `{ volatile }` for the same reason as buildRecency: the validator
+// held a byte-for-byte re-implementation of this function that differed only in taking `recency`
+// instead of `analysis`.
 export function buildNoAnswerConditions(
   strategy: GroundingStrategy,
-  analysis: PromptTaskAnalysis,
+  groundingNeed: { readonly volatile: boolean },
 ): readonly NoAnswerCondition[] {
   if (strategy === "no-grounding") {
     return [];
@@ -213,7 +220,7 @@ export function buildNoAnswerConditions(
   if (SCOPED_EVIDENCE_STRATEGIES.has(strategy)) {
     conditions.push("outside-evidence-scope");
   }
-  if (analysis.groundingNeed.volatile || strategy === "external-research-required") {
+  if (groundingNeed.volatile || strategy === "external-research-required") {
     conditions.push("stale-or-unavailable-current-data");
   }
   return conditions;
@@ -312,9 +319,9 @@ export function planGrounding(
     allowedRetrievalModes: [...RETRIEVAL_MODES_BY_STRATEGY[strategy]],
     sourcePriority: buildSourcePriority(strategy, required),
     citation: buildCitationRequirement(strategy, analysis, required),
-    recency: buildRecency(analysis, strategy),
+    recency: buildRecency(analysis.groundingNeed, strategy),
     contradictionPolicy: selectContradictionPolicy(strategy, analysis),
-    noAnswerConditions: buildNoAnswerConditions(strategy, analysis),
+    noAnswerConditions: buildNoAnswerConditions(strategy, analysis.groundingNeed),
     directives: buildDirectives(strategy, required),
     ragEvaluation: buildRagEvaluation(analysis, strategy),
     untrustedContent: true,

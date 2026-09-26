@@ -1,0 +1,68 @@
+.cmp-journey-state {
+  display: block;
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.cmp-journey-state[data-state="completed"] {
+  color: var(--feedback-success);
+}
+.cmp-journey-state[data-state="blocked"],
+.cmp-journey-state[data-state="recovery-required"] {
+  color: var(--feedback-danger);
+}
+.cmp-journey-state[data-state="stale"] {
+  color: var(--feedback-warning);
+}
+.cmp-journey-links,
+.cmp-journey-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-block: var(--space-3);
+}
+.cmp-journey-links a {
+  color: var(--text-accent);
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.cmp-journey-links a:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+.cmp-journey-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: var(--space-3);
+  margin-block: var(--space-3);
+}
+.cmp-journey-group {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset);
+}
+.cmp-journey-group h4,
+.cmp-journey-group p {
+  margin: 0 0 var(--space-2);
+}
+.cmp-journey-value {
+  overflow-wrap: anywhere;
+}
+@media (forced-colors: active) {
+  .cmp-journey-state {
+    color: CanvasText;
+  }
+  .cmp-journey-group {
+    border-color: CanvasText;
+  }
+  .cmp-journey-links a {
+    color: LinkText;
+  }
+}
+
+.cmp-journey-error {
+  color: var(--feedback-danger);
+  overflow-wrap: anywhere;
+}

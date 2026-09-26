@@ -24,9 +24,13 @@ export interface LiveRuntimeFixtureOptions {
 
 export interface LiveRuntimeFixture {
   readonly open: () => Promise<void>;
+  readonly openInformation: () => Promise<void>;
+  readonly closeInformation: () => Promise<void>;
   readonly requestMode: (label: RegExp) => Promise<void>;
   readonly workbench: ReturnType<Page["locator"]>;
   readonly autonomySettings: ReturnType<Page["locator"]>;
+  readonly approvalDecisionCount: () => number;
+  readonly editorSnapshotRegistrationCount: () => number;
   readonly streamConnectionCount: () => number;
   readonly assertValidRequests: () => void;
 }
@@ -40,8 +44,35 @@ export async function installLiveCodingWorkbenchRuntime(
   return {
     open: async (): Promise<void> => {
       await page.goto("/");
-      await page.getByRole("button", { name: "Coding Workbench" }).click();
-      await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
+      const launcher = page.getByRole("button", { name: "Coding Workbench", exact: true });
+      const heading = page.getByRole("heading", { name: "Coding Workbench", exact: true });
+      // Exact names avoid the window controls; retry only while a pre-hydration click is ignored.
+      await expect(launcher).toBeVisible();
+      await expect(async () => {
+        if ((await launcher.getAttribute("aria-pressed")) !== "true") await launcher.click();
+        await expect(launcher).toHaveAttribute("aria-pressed", "true", { timeout: 2_000 });
+      }).toPass({ timeout: 15_000 });
+      await expect(heading).toBeVisible({ timeout: 15_000 });
+    },
+    // The session context (task id · branch · health) and the server-confirmed effective mode
+    // moved into an information popover in #3494. Callers that need to assert either fact must
+    // reveal them first — this opens the popover and waits until the dialog is present.
+    openInformation: async (): Promise<void> => {
+      const trigger = page.getByRole("button", { name: "Open Coding Workbench information" });
+      await expect(trigger).toBeVisible();
+      if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+      await expect(
+        page.getByRole("dialog", { name: "Coding Workbench information" }),
+      ).toBeVisible();
+    },
+    // Callers that opened the popover to read a fact must close it before driving the composer —
+    // at narrow viewports the popover overlaps the composer and intercepts pointer events, so a
+    // subsequent `Start coding run` click times out. Toggle via the trigger; the popover matches
+    // the button's `aria-expanded` state.
+    closeInformation: async (): Promise<void> => {
+      const trigger = page.getByRole("button", { name: "Open Coding Workbench information" });
+      if ((await trigger.getAttribute("aria-expanded")) === "true") await trigger.click();
+      await expect(page.getByRole("dialog", { name: "Coding Workbench information" })).toBeHidden();
     },
     // #2644 moved the product-wide autonomy modes out of the Workbench into Settings → Security.
     // A request made here must still be answered by the server's clamp, never by the surface that
@@ -58,6 +89,8 @@ export async function installLiveCodingWorkbenchRuntime(
     },
     autonomySettings: page.locator('section[aria-labelledby="settings-autonomy-title"]'),
     workbench: page.locator('section[aria-label="Coding Workbench"][data-state]'),
+    approvalDecisionCount: () => fixture.approvalDecisions,
+    editorSnapshotRegistrationCount: () => fixture.editorSnapshotRegistrations,
     streamConnectionCount: () => fixture.streamConnections,
     assertValidRequests: (): void => {
       expect(fixture.validationErrors).toEqual([]);

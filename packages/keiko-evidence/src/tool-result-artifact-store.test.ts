@@ -1,4 +1,5 @@
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -82,6 +83,47 @@ describe("createNodeToolResultArtifactStore", () => {
       expect(() =>
         readFileSync(join(outside, `${ARTIFACT_ID}${TOOL_RESULT_ARTIFACT_SUFFIX}`)),
       ).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // KEIKO-0272: the single-hard-link guard (isSingleLinkRegularFile via fs-safety) is present in
+  // production. The sibling side-file store has a hardlink test; this one did not. If a future
+  // refactor drops the guard here — or the shared helper's hard-link check ever regresses — a
+  // hardlinked outside file would be silently clobbered by a write, and the read path would happily
+  // return its contents. Both paths must fail closed.
+  it("refuses to write or read through a hardlink at the artifact target (KEIKO-0272)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = tempRoot();
+    const baseDir = join(root, ".keiko", "evidence");
+    const outside = join(root, "outside");
+    mkdirSync(baseDir, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const victimPath = join(outside, "victim");
+    const victimContent = "victim-original-content";
+    writeFileSync(victimPath, victimContent, "utf8");
+    try {
+      const store = createNodeToolResultArtifactStore(baseDir, {
+        randomSuffix: (): string => "fixed-token",
+      });
+      // Force the artifact directory to exist so we can plant a hardlink inside it.
+      store.write(ARTIFACT_ID, "seed-content");
+      // Overwrite the freshly-written artifact with a hardlink to the victim file. Now the target
+      // path has nlink === 2 and points at content the ledger did NOT write.
+      const artifactPath = store.location(ARTIFACT_ID);
+      rmSync(artifactPath, { force: true });
+      linkSync(victimPath, artifactPath);
+      expect(statSync(artifactPath).nlink).toBeGreaterThan(1);
+
+      expect(() => {
+        store.write(ARTIFACT_ID, "attempted-overwrite");
+      }).toThrow(/non-ledger tool-result artifact/);
+      expect(() => {
+        store.read(ARTIFACT_ID);
+      }).toThrow(/non-ledger tool-result artifact/);
+      // Victim content stayed untouched.
+      expect(readFileSync(victimPath, "utf8")).toBe(victimContent);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

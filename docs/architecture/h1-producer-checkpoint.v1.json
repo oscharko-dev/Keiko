@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "integrationPr": 3394,
+  "sourceHead": "41aeca96072d30de30d6bf84e1102c1efece65b3",
+  "treeDigest": "4a13a6f50e50acc58fa13262e8689032d1acd83deaf862577e3e88173f55d519",
+  "verificationRef": "docs/qa/evidence/h1-verification.v1.json#sha256=27c8bab60e54cf913e7cfaa0b34952d87890e7311a43280c338cf0ff8ae15396",
+  "reviewRef": "docs/qa/evidence/h1-review.v1.json#sha256=8063bbb852bf5d8cd4b10579a3c62aabc74ea75d0595f92d8185f342979c0aa4",
+  "catalogRevision": "713b56bb6f032cb64aae480fe7de9b07aece4b05a1e4cd645e620aae27721f4b",
+  "profile": {
+    "id": "opencode",
+    "version": 1
+  },
+  "projectionDigest": "201df77730101f5fc1c1d16fe297314d25193f8c5463dc329e6bd5c4b0eaa8ae",
+  "handlerSetDigest": "21192a69a4c7ea069fd1b86618ddce6304ca4d2d93a5ef1f5c60efd096702d91",
+  "currentHead": "41aeca96072d30de30d6bf84e1102c1efece65b3"
+}

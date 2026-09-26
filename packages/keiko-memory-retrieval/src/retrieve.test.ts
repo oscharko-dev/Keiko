@@ -136,6 +136,69 @@ describe("retrieveMemoryContext — input validation", () => {
     }
   });
 
+  // #2906 KEIKO-0574 — nowMs is required, but exponentialDecay's ageMs<=0 guard is false for
+  // NaN so an invalid clock silently produces a NaN decay score. Validate at the boundary.
+  it("throws RetrievalError('invalid-clock') when nowMs is NaN", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext({ scopes: [userScope()], nowMs: Number.NaN }, port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-clock");
+    }
+  });
+
+  it("throws RetrievalError('invalid-clock') when nowMs is +Infinity", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext({ scopes: [userScope()], nowMs: Number.POSITIVE_INFINITY }, port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-clock");
+    }
+  });
+
+  // #2906 round-3 review — finiteness alone still accepted a negative epoch. With nowMs = -1,
+  // every normal positive validUntil reads as "in the future" (re-admitting an already-expired
+  // memory) and recency treats every record as future/fresh, instead of failing closed at the
+  // same boundary the NaN/+Infinity cases above already guard.
+  it("throws RetrievalError('invalid-clock') when nowMs is negative", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext({ scopes: [userScope()], nowMs: -1 }, port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-clock");
+    }
+  });
+
+  // #2906 KEIKO-0696 — mmrLambda was the only numeric tuning field without validation; NaN
+  // silently degraded reorderByMmr to always-pick-first-remaining instead of failing closed.
+  it("throws RetrievalError('invalid-threshold') when mmrLambda is NaN", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ mmrLambda: Number.NaN, embeddingById: new Map() }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
+  });
+
+  it("throws RetrievalError('invalid-threshold') when mmrLambda is out of [0, 1]", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ mmrLambda: 1.5 }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
+  });
+
   it("wraps port failures as RetrievalError('port-failure') with cause preserved", () => {
     const root = new Error("port boom");
     const port: MemoryQueryPort = {
@@ -494,6 +557,49 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
       memoryId: memoryId("schedule"),
       reason: "below-threshold",
     });
+  });
+
+  // The relevance floor enumerates the three QUERY-DERIVED subscores (relevance/semantic/graph) to
+  // decide an entry is untouched by this turn. The ranker computes `pinned` and `correction`
+  // independently of query overlap — that is their entire purpose — so a floor that ignores them
+  // drops the two highest-authority signals on any turn whose wording happens not to overlap them,
+  // and chat-handlers.ts sets queryText to the raw user message on EVERY turn.
+  it("keeps pinned and correction memories under the relevance floor while still omitting ordinary ones", () => {
+    const pinned = buildRecord({
+      id: "pinned",
+      body: "deploys happen on Tuesdays",
+      type: "episodic",
+      pinned: true,
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const correction = buildRecord({
+      id: "correction",
+      body: "invoices live in the legacy archive",
+      sourceKind: "accepted-correction",
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const ordinary = buildRecord({
+      id: "ordinary",
+      body: "the office plants are watered weekly",
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const { port } = portReturning({ "user:u1": [pinned, correction, ordinary] });
+    const result = retrieveMemoryContext(
+      baseRequest({ queryText: "Which formatter should I use?", budgetTokens: 500 }),
+      port,
+    );
+    expect(result.included.map((i) => i.memoryId)).toEqual(
+      expect.arrayContaining([memoryId("pinned"), memoryId("correction")]),
+    );
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("ordinary"),
+      reason: "below-threshold",
+    });
+    expect(result.omitted.map((o) => o.memoryId)).not.toContain(memoryId("pinned"));
+    expect(result.omitted.map((o) => o.memoryId)).not.toContain(memoryId("correction"));
   });
 
   it("treats semantic scores below the configured floor as absent", () => {

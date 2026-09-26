@@ -1,13 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #1575 (Epic #1571) — browser evidence that the Git "Changes" view renders all six file
 // states (modified, added, deleted, renamed, untracked, conflicted), exposes the correct staging
 // controls and header counters, opens a diff with scope controls, and surfaces the commit composer.
 // Mirrors playwright.issue-475-git-delivery.config.ts: build the packaged CLI, boot the real UI
 // server, run a single deterministic chromium worker. The webServer env flag
-// KEIKO_GIT_DELIVERY_ENABLED=true makes the governed /api/git-delivery/staging/* routes live so the
+// The governed /api/git-delivery/staging/* routes are live so the
 // spec can also verify staging-mutation intercept for determinism on the mutation assertions.
 // The read surface (/api/git/status + /api/git/diff) is intercepted with a deterministic fixture
 // carrying all six change states, so the assertion is stable across environments and CI machines
@@ -16,7 +16,7 @@ import { join } from "node:path";
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32200");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-1575-git-changes-${String(process.pid)}`;
-const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [
@@ -65,7 +65,6 @@ export default defineConfig({
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,
-      KEIKO_GIT_DELIVERY_ENABLED: "true",
     },
   },
 });

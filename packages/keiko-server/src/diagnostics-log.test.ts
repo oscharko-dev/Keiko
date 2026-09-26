@@ -1,8 +1,10 @@
 // Unit tests for the RB-6 operator diagnostics sink and correlation-id resolver.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import {
   contentFreeErrorClass,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  defaultServerDiagnosticSink,
   describeError,
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -14,6 +16,9 @@ import {
   newCorrelationId,
   resolveCorrelationId,
 } from "./correlation.js";
+import { ProviderError, RateLimitError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { resetServerLogFailureNotices } from "./observability/server-log.js";
 
 const identity = (message: string): string => message;
 
@@ -38,6 +43,32 @@ describe("describeError (RB-6)", () => {
     const described = describeError("just a string");
     expect(described.errorClass).toBe("string");
     expect(described.code).toBeUndefined();
+  });
+
+  // ADR-0173 D5 g26: httpStatus/retryAfterMs are derived through the SAME instanceof-based
+  // `providerErrorDetail()` (keiko-model-gateway/resilience.ts) `gateway.retry.*` lines already
+  // use — reused, not re-implemented, so a diagnostic record and its sibling retry line never
+  // disagree about what a `ProviderError`/`RateLimitError` carried.
+  it("carries httpStatus from a ProviderError but not retryAfterMs", () => {
+    const described = describeError(new ProviderError("upstream overloaded", 503));
+    expect(described.httpStatus).toBe(503);
+    expect(described.retryAfterMs).toBeUndefined();
+  });
+
+  // httpStatus is read off a RateLimitError too, deliberately: a rate limit is always HTTP 429 by
+  // definition, so a consumer building a replay/reproduction artifact from these lines (e.g.
+  // `GatewayReplayAttempt.httpStatus`) never has to infer the status from
+  // errorClass === "RateLimitError" when the error itself already carries it.
+  it("carries both retryAfterMs and httpStatus=429 from a RateLimitError", () => {
+    const described = describeError(new RateLimitError("slow down", 4_000));
+    expect(described.retryAfterMs).toBe(4_000);
+    expect(described.httpStatus).toBe(429);
+  });
+
+  it("contributes neither field for an error that is neither a ProviderError nor a RateLimitError", () => {
+    const described = describeError(new TypeError("unrelated"));
+    expect(described.httpStatus).toBeUndefined();
+    expect(described.retryAfterMs).toBeUndefined();
   });
 });
 
@@ -272,10 +303,71 @@ describe("emitServerDiagnostic (RB-6)", () => {
     expect(JSON.stringify(record)).not.toContain(labelMarker);
   });
 
+  // ADR-0173 D3-adjacent follow-up (#3235 review, Wave 5): an `operation` label built from a live
+  // request path (`GET ${ctx.url.pathname}`-shaped) could carry a customer-chosen route segment
+  // verbatim onto the record. `diagnosticLabel` now reduces the path portion of an operation label
+  // through the SAME `redactRoutePath` reducer the HTTP request line uses, rather than accepting
+  // any string that merely matches the shape regex.
+  describe("operation labels never carry a raw request path (review follow-up, #3235)", () => {
+    it("reduces a path with a customer-named segment to its route template", () => {
+      const customerMarker = "fixture-customer-named-repository";
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-path-template",
+        operation: `GET /api/git/repositories/${customerMarker}/status`,
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("GET /api/git/repositories/{id}/status");
+      expect(JSON.stringify(record)).not.toContain(customerMarker);
+    });
+
+    it("leaves an operation label with no path component unchanged", () => {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-no-path",
+        operation: "chat.stream",
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("chat.stream");
+    });
+
+    it("falls back to server.operation for a traversal-shaped path", () => {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-traversal",
+        operation: "GET /api/git/../../etc/passwd",
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("server.operation");
+    });
+
+    it("keeps a fully-literal route path unchanged (every segment is a declared route word)", () => {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-literal-path",
+        operation: "POST /api/desktop/chat/stream",
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("POST /api/desktop/chat/stream");
+    });
+  });
+
   it("routes the record to the provided sink", () => {
     const records: ServerDiagnosticRecord[] = [];
     const record = serverDiagnosticFromError({
-      correlationId: "cid-1",
+      correlationId: "cid-routes-1",
       operation: "GET /api/x",
       source: "unit",
       error: new Error("nope"),
@@ -292,11 +384,11 @@ describe("emitServerDiagnostic (RB-6)", () => {
     );
     expect(records).toHaveLength(1);
     const [captured] = records;
-    expect(captured?.correlationId).toBe("cid-1");
+    expect(captured?.correlationId).toBe("cid-routes-1");
     expect(captured?.timestamp).toBe("1970-01-01T00:00:00.000Z");
   });
 
-  it("never throws when the sink itself throws", () => {
+  it("never throws when the sink itself throws, and counts and reports the dropped record", () => {
     const record = serverDiagnosticFromError({
       correlationId: "cid-2",
       operation: "op",
@@ -309,9 +401,224 @@ describe("emitServerDiagnostic (RB-6)", () => {
         throw new Error("sink is broken");
       },
     };
-    expect(() => {
-      emitServerDiagnostic(brokenSink, record);
-    }).not.toThrow();
+    const droppedBefore = activityLogLossCounters()["diagnostic-sink-failed"];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let notices: string[];
+    try {
+      // The notice throttle is process-wide: start from a clean slate, and drop the reset's own
+      // flush of anything an earlier test suppressed, so only this record's notice is inspected.
+      resetServerLogFailureNotices();
+      stderrWrite.mockClear();
+      expect(() => {
+        emitServerDiagnostic(brokenSink, record);
+      }).not.toThrow();
+      notices = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
+    } finally {
+      stderrWrite.mockRestore();
+    }
+    // #3532: the drop is no longer silent. It is counted in the loss ledger and announced on the
+    // independent stderr channel, body-free.
+    expect(activityLogLossCounters()["diagnostic-sink-failed"]).toBe(droppedBefore + 1);
+    expect(notices).toHaveLength(1);
+    expect(JSON.parse(notices[0] ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "server.diagnostic.failure",
+      loss: "event-dropped",
+    });
+    expect(notices[0]).not.toContain("sink is broken");
+  });
+
+  it("sanitizes an out-of-shape parentCorrelationId before ANY sink sees it, so a CRLF-bearing value never reaches the stderr line", () => {
+    // Regression: `diagnosticActivityLogFields` already dropped an invalid `parentCorrelationId`
+    // from the activity-log projection, but `defaultServerDiagnosticSink` serialized the ORIGINAL
+    // record straight to stderr via JSON.stringify — a producer bug or hostile input could still
+    // smuggle a CRLF (log-line injection) onto the operator's terminal even though the file-backed
+    // activity log stayed clean. `emitServerDiagnostic` must sanitize the record once, before it
+    // reaches any sink, so both tracks are protected.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-crlf-guard",
+        operation: "unit.crlf-guard",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+      const hostileParentCorrelationId = "job-1\r\ninjected-fake-log-line-marker";
+
+      emitServerDiagnostic(undefined, {
+        ...record,
+        parentCorrelationId: hostileParentCorrelationId,
+      });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain(hostileParentCorrelationId);
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      expect(line).not.toContain("\r\n");
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("substitutes a fixed marker for an out-of-shape correlationId, for symmetry with parentCorrelationId", () => {
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-symmetry-guard",
+        operation: "unit.symmetry-guard",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+      const hostileCorrelationId = "req-1\r\ninjected-fake-log-line-marker";
+
+      emitServerDiagnostic(undefined, { ...record, correlationId: hostileCorrelationId });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain(hostileCorrelationId);
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      // correlationId is required by the type, so an invalid value is replaced rather than
+      // omitted — the sanitized record still carries a (content-free) correlationId.
+      const parsed = JSON.parse(
+        line.replace("[keiko-server:diagnostic] ", ""),
+      ) as ServerDiagnosticRecord;
+      expect(parsed.correlationId).toBe("invalid-correlation-id");
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("sanitizes a CRLF-bearing correlationId/parentCorrelationId handed straight to defaultServerDiagnosticSink.record(), bypassing emitServerDiagnostic", () => {
+    // Regression: `emitServerDiagnostic` sanitized the record, but three production call sites
+    // (grounded-entailment-stage, codingRuntimeEventHub, sessionChannel) hand their record to
+    // `ServerDiagnosticSink.record()` directly. The sanitization therefore has to live in the
+    // default sink — the only sink that writes to stderr and the activity log — so that the
+    // choke point is the writer itself, not one particular caller of it.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-direct-sink-guard",
+        operation: "unit.direct-sink-guard",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      defaultServerDiagnosticSink.record({
+        ...record,
+        correlationId: "req-1\r\ninjected-fake-log-line-marker",
+        parentCorrelationId: "job-1\r\ninjected-parent-marker",
+      });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      expect(line).not.toContain("injected-parent-marker");
+      expect(line).not.toContain("\r\n");
+      const parsed = JSON.parse(
+        line.replace("[keiko-server:diagnostic] ", ""),
+      ) as ServerDiagnosticRecord;
+      expect(parsed.correlationId).toBe("invalid-correlation-id");
+      expect(parsed.parentCorrelationId).toBeUndefined();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("leaves a well-formed parentCorrelationId untouched on the sanitized record", () => {
+    const captured: ServerDiagnosticRecord[] = [];
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-valid-parent",
+      operation: "unit.valid-parent",
+      source: "unit",
+      error: new Error("x"),
+      redact: identity,
+      now: () => 0,
+    });
+
+    emitServerDiagnostic(
+      { record: (r) => void captured.push(r) },
+      { ...record, parentCorrelationId: "job-parent-abc123" },
+    );
+
+    expect(captured[0]?.parentCorrelationId).toBe("job-parent-abc123");
+  });
+
+  // PR #3602 review: registering a diagnostic field is not emitting it — the projection copies
+  // allowlisted names explicitly, so the chat smoke round's skipped count and deadline must be on
+  // the persisted line, or a skipped candidate reads like one that was probed and timed out.
+  it("projects the chat smoke round's skipped count and deadline onto the diagnostic line", () => {
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-smoke-round-evidence",
+        operation: "unit.smoke-round-evidence",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      emitServerDiagnostic(undefined, {
+        ...record,
+        skippedChatModelCount: 3,
+        chatSmokeRoundDeadlineMs: 600_000,
+      });
+
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      const parsed = JSON.parse(line.replace("[keiko-server:diagnostic] ", "")) as Record<
+        string,
+        unknown
+      >;
+      expect(parsed.skippedChatModelCount).toBe(3);
+      expect(parsed.chatSmokeRoundDeadlineMs).toBe(600_000);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("drops a content-shaped `code` at the writer, so neither the stderr line nor the file projection carries it (parity)", () => {
+    // Regression: the stderr branch built its line straight from
+    // `diagnosticActivityLogFields(sanitized)`, which projects onto allowlisted FIELD NAMES only
+    // — `addBoundedField` writes whatever value it is given, with no shape check. The actual
+    // content redaction (`redactLogFields`) ran only on the file-sink path, inside
+    // `formatServerLogLine`. A prose-shaped `code` (more than the space budget `hasProseShape`
+    // allows) therefore reached stderr in full while the file line would have replaced it — the
+    // opposite of the "SAME redaction guarantee" the module's own comment claims. Fails before the
+    // fix (stderr line still contains the raw prose); passes after (both lines carry the same
+    // writer-side drop).
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-stderr-redaction-parity",
+        operation: "unit.stderr-redaction-parity",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+      const proseCode = "user said the sky is very blue today";
+
+      emitServerDiagnostic(undefined, { ...record, code: proseCode });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain(proseCode);
+      const parsed = JSON.parse(
+        line.replace("[keiko-server:diagnostic] ", ""),
+      ) as ServerDiagnosticRecord;
+      // The writer bounds `code` to DIAGNOSTIC_CODE_SHAPE (no whitespace, fixed alphabet, ≤ 256):
+      // an out-of-shape value is dropped outright — on stderr AND in the file projection — rather
+      // than written under a marker, the same rule `parentCorrelationId` already follows.
+      expect(parsed.code).toBeUndefined();
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 });
 
@@ -369,5 +676,128 @@ describe("describeError partial-usage passthrough", () => {
     });
     expect(describeError(nan).partialUsage).toBeUndefined();
     expect(describeError(new Error("x")).partialUsage).toBeUndefined();
+  });
+});
+
+// ADR-0173 D3: `describeError` wires `keikoStackFrames`/`causeChain` onto its result rather than
+// re-deriving stack/cause reduction itself — `stack-frames.test.ts` owns the reducers' own
+// contract (dist-anchoring, bounds, hostile-input handling); this suite only proves the wiring.
+describe("describeError frames and causeChain (ADR-0173 D3)", () => {
+  function withStack(error: Error, stack: string): Error {
+    error.stack = stack;
+    return error;
+  }
+
+  it("includes keikoStackFrames' reduction under frames", () => {
+    const error = withStack(
+      new Error("boom"),
+      [
+        "Error: boom",
+        "    at Object.handler (file:///Users/someone/app/packages/keiko-server/dist/observability/server-log.js:128:18)",
+        "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+      ].join("\n"),
+    );
+    expect(describeError(error).frames).toEqual([
+      "packages/keiko-server/dist/observability/server-log.js:128:18",
+    ]);
+  });
+
+  it("omits frames entirely rather than an empty array when nothing anchors", () => {
+    const error = withStack(
+      new Error("boom"),
+      ["Error: boom", "    at node_modules/some-lib/index.js:1:1"].join("\n"),
+    );
+    expect(describeError(error).frames).toBeUndefined();
+    expect(describeError("not an error").frames).toBeUndefined();
+  });
+
+  it("includes causeChain's content-free class reduction of the error's cause chain", () => {
+    const inner = new TypeError("inner");
+    const outer = new Error("outer", { cause: inner });
+    expect(describeError(outer).causeChain).toEqual(["TypeError"]);
+  });
+
+  it("omits causeChain rather than an empty array when the error carries no cause", () => {
+    expect(describeError(new Error("no cause")).causeChain).toBeUndefined();
+  });
+});
+
+describe("serverDiagnosticFromError forwards frames and causeChain (ADR-0173 D3)", () => {
+  it("carries both onto the produced record when the error carries both", () => {
+    const inner = new TypeError("inner");
+    const error = new Error("outer", { cause: inner });
+    error.stack = [
+      "Error: outer",
+      "    at file:///Users/someone/app/packages/keiko-server/dist/foo.js:1:1",
+    ].join("\n");
+
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-frames-chain",
+      operation: "op",
+      source: "unit",
+      error,
+      redact: identity,
+      now: () => 0,
+    });
+
+    expect(record.frames).toEqual(["packages/keiko-server/dist/foo.js:1:1"]);
+    expect(record.causeChain).toEqual(["TypeError"]);
+  });
+
+  it("omits both when the error carries neither a recognisable stack nor a cause", () => {
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-no-evidence",
+      operation: "op",
+      source: "unit",
+      error: "plain string throw",
+      redact: identity,
+      now: () => 0,
+    });
+    expect(record.frames).toBeUndefined();
+    expect(record.causeChain).toBeUndefined();
+  });
+});
+
+// Issue #3245: `ServerDiagnosticRecord.message` was `string`, so a producer could compile with
+// free/foreign text — the closed-vocabulary contract in the field's own doc comment ("A
+// code-declared, allowlisted summary. Foreign error/provider/customer text is never read.") was
+// enforced only by `allowlistedSummary`'s RUNTIME check, never by the type checker. Narrowing
+// `message` to the closed `ServerDiagnosticSummary` union makes a non-member string a compile
+// error, so a producer can no longer even build with it. This suite is the type-level proof: a
+// vitest `it` never executes the `@ts-expect-error` line (vitest transpiles, it never
+// type-checks — the repo's own documented tsc/vitest gap), so this is deliberately also asserted
+// by `npx tsc --noEmit -p packages/keiko-server/tsconfig.json`, the actual gate this narrowing
+// exists to turn red for a violating producer.
+describe("ServerDiagnosticRecord.message is the closed ServerDiagnosticSummary union (Issue #3245)", () => {
+  it("accepts a real vocabulary member without a cast", () => {
+    const record: ServerDiagnosticRecord = {
+      correlationId: "req-vocab-member",
+      timestamp: "2026-08-22T00:00:00.000Z",
+      operation: "unit.test",
+      source: "diagnostics-log.test",
+      errorClass: "Error",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    };
+    expect(record.message).toBe(DEFAULT_SERVER_DIAGNOSTIC_SUMMARY);
+  });
+
+  it("rejects a non-member string at compile time — a free-text message can no longer build", () => {
+    // Issue #3245: "definitely-not-a-real-summary" is not a member of SERVER_DIAGNOSTIC_SUMMARIES,
+    // so this literal must fail `npx tsc --noEmit` against `ServerDiagnosticSummary`. Before the
+    // fix (`message: string`) this whole object literal compiled cleanly — see the fails-before
+    // snapshot proof in the item's verification report. If the `@ts-expect-error` below ever goes
+    // unused, the closed vocabulary has silently widened back to `string`.
+    const record: ServerDiagnosticRecord = {
+      correlationId: "req-foreign-literal",
+      timestamp: "2026-08-22T00:00:00.000Z",
+      operation: "unit.test",
+      source: "diagnostics-log.test",
+      errorClass: "Error",
+      // @ts-expect-error — not a member of the closed ServerDiagnosticSummary union (Issue #3245).
+      message: "definitely-not-a-real-summary",
+    };
+    // The record still constructs at runtime (vitest doesn't type-check); the assertion below is
+    // incidental — the compile error above is the actual test.
+    expect(record.message).toBe("definitely-not-a-real-summary");
   });
 });

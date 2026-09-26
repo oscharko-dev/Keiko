@@ -8,20 +8,22 @@
 // these helpers touch `document`/`DragEvent`. EditorWidget imports the whole cluster back.
 
 import type { DragEvent } from "react";
+import type {
+  EditorLayoutNode,
+  EditorLayoutPaneNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+} from "@oscharko-dev/keiko-contracts";
 import {
   activeEditorPane,
   createEditorLayoutStateV2,
   editorLayoutOpenFiles,
   editorLayoutPaneIds,
   editorLayoutPanes,
-  resolveWorkspaceFileIdentifier,
-  type EditorLayoutNode,
-  type EditorLayoutPaneNode,
-  type EditorLayoutSplitNode,
-  type EditorLayoutStateV2,
-  type EditorPaneStateV2,
-  type EditorSplitDirection,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,

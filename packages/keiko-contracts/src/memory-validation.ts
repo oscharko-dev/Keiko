@@ -19,7 +19,7 @@ import type {
   MemoryStructuredPayload,
   MemoryValidityInterval,
 } from "./memory-records.js";
-import type { MemoryScope, MemoryStatus } from "./memory.js";
+import type { MemoryScope, MemoryStatus } from "./memory-contracts.js";
 import {
   MEMORY_EDGE_KINDS,
   MEMORY_SCOPE_KINDS,
@@ -27,7 +27,7 @@ import {
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
-} from "./memory.js";
+} from "./memory-contracts.js";
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
 import {
   FORBIDDEN_CONTROL_RE,
@@ -103,7 +103,11 @@ function passesLuhn(value: string): boolean {
   return sum % 10 === 0;
 }
 
-function hasPaymentCardPanShape(value: string): boolean {
+// Exported so the capture layer's write-time scanner composes THIS detector instead of carrying a
+// second, naive digit-run regex: two independent "parity" implementations drifted apart once
+// already (GEN-DUP-DUPLICATION-004), and the primary boundary ended up weaker than the audit-time
+// check it claimed to match.
+export function hasPaymentCardPanShape(value: string): boolean {
   for (const match of value.matchAll(PAN_SHAPE_RE)) {
     const candidate = match[0].replaceAll(/[ -]/g, "");
     if (candidate.length >= 13 && candidate.length <= 19 && passesLuhn(candidate)) {

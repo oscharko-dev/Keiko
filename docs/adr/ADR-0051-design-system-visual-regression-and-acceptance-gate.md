@@ -63,7 +63,11 @@ evidence, and CI gates established by ADR-0049, ADR-0050, and the upstream archi
 
 4. **Accessibility is proven across every mode.** An axe-core run (`evidence/1300/a11y/axe-proof.mjs`) over the
    component union asserts **zero serious or critical WCAG 2.1 A/AA violations** in each of the seven
-   theme/contrast/motion modes, covering contrast, name/role/value, keyboard semantics, reduced-motion, and
+   theme/contrast/motion modes (see [docs/design-system/state-matrix.md](../design-system/state-matrix.md) for
+   the full seven-item list: `01-dark`, `02-light`, `03-dark-hc`, `04-light-hc`, `05-prefers-contrast`,
+   `06-forced-colors`, `07-reduced-motion` — gate 2 above names five of the seven, with `03-dark-hc` /
+   `04-light-hc` implied by the High Contrast × Dark/Light combinations), covering contrast, name/role/value,
+   keyboard semantics, reduced-motion, and
    forced-colors. Any serious/critical violation fails the run; any incomplete axe result also fails unless it
    has a checked-in owner/disposition.
 
@@ -86,10 +90,11 @@ evidence, and CI gates established by ADR-0049, ADR-0050, and the upstream archi
    epics #1373/#1390) may exist between product and reference. A genuine new drift is a regression and fails
    the gate; it must not be reclassified to pass.
 
-8. **Evidence is in-repo, re-runnable, and CI-pinned.** All artifacts (PNG + JSON) are retained under
+8. **Evidence is in-repo and historically re-runnable.** All artifacts (PNG + JSON) are retained under
    `docs/design-system/evidence/1300/` so the baseline travels with the source it proves. The `Issue #1300`
-   block in `packages/keiko-ui/src/app/globals.css.test.ts` pins the consolidated proofs and the variance
-   register against the product CSS so drift fails the required `ci`/`ui` checks without needing a browser.
+   block in `packages/keiko-ui/src/app/globals.css.test.ts` validates the committed proof metadata and variance
+   register shape. It does not execute the historical browser harnesses or claim standing visual-regression
+   protection; current release protection remains with the applicable UI and Playwright gates.
 
 ## Consequences
 

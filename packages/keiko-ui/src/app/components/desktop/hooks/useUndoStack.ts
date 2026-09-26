@@ -12,12 +12,11 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import {
-  type WorkspaceUiAction,
-  type WorkspaceUndoStackApi,
   workspaceActionLabel,
   workspaceInverseAction,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-ui";
 
 interface UndoStackInternalState {
   readonly undoStack: ReadonlyArray<WorkspaceUiAction>;

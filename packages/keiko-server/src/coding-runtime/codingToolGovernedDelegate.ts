@@ -1,11 +1,31 @@
-import type { AuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
+import type { CodingRepositoryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
+import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  VerifiedCommitResult,
+  CodingRuntimeGitResult,
+  SkillDiscoveryResultV1,
+} from "@oscharko-dev/keiko-contracts";
 
 import type { CodingToolDelegatePort, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type {
+  CiRepairExecutionBudget,
+  CiRepairExecutionLease,
+} from "./codingRuntimeCiRepairController.js";
 import type {
   CodingToolActionRequest,
   CodingToolEgressReadResult,
   CodingToolReadResult,
+  CodingToolVerificationFailure,
+  CodingToolVerificationResult,
+  VerificationNotRunStep,
 } from "./codingToolIpc.js";
+import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 export type CodingToolActionOf<Kind extends CodingToolActionRequest["action"]> = Extract<
   CodingToolActionRequest,
@@ -21,19 +41,38 @@ export interface GovernedCodingToolPort<Kind extends CodingToolActionRequest["ac
 }
 
 type GovernedCodingToolRead = CodingToolReadResult | CodingToolEgressReadResult;
-type GovernedCodingToolResult =
+export type GovernedCodingToolResult =
   | {
       readonly status: "completed";
       readonly read?: GovernedCodingToolRead | undefined;
       readonly auxiliary?: AuxiliaryCapabilityOutcomeV1 | undefined;
+      readonly draftDelivery?: CodingRuntimeDeliveryResult;
+      readonly verifiedCommit?: VerifiedCommitResult;
+      readonly git?: CodingRuntimeGitResult;
+      readonly ci?: CodingRuntimeCiResult;
+      readonly search?: CodingRepositoryResult;
+      readonly verification?: CodingToolVerificationResult;
+      readonly skills?: SkillDiscoveryResultV1 | undefined;
+      /** Fresh server-only approval-store observation; the immutable domain receipt is unchanged. */
+      readonly approvalDisposition?: "ready" | undefined;
     }
-  // `reasonCode` is a closed-vocabulary marker (see codingToolReadEditPorts.ts's `EditOutcome`),
-  // populated only by the editor-changeset port; every other port's failure carries none.
-  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+  // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
+  // body-free codes and collapses every unrecognized value to a bare failed outcome. `message` is
+  // the editor route's own sentence for a refused edit; only an edit carries it, and the facade
+  // decides whether the model sees it.
+  | {
+      readonly status: "failed";
+      readonly reasonCode?: string | undefined;
+      readonly message?: string | undefined;
+      readonly verificationFailure?: CodingToolVerificationFailure | undefined;
+      /** The steps of a verification that never executed, each with its closed reason (F74). */
+      readonly notRun?: readonly VerificationNotRunStep[] | undefined;
+    };
 
 export interface CodingToolGovernedPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
   readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
+  readonly repositorySearch: GovernedCodingToolPort<"search">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
   readonly commandRunner: GovernedCodingToolPort<"command">;
   readonly verificationRunner: GovernedCodingToolPort<"verification">;
@@ -42,20 +81,88 @@ export interface CodingToolGovernedPorts {
   readonly connectorAuthority: GovernedCodingToolPort<"connector">;
   readonly egressAuthority: GovernedCodingToolPort<"egress">;
   readonly skillAuthority?: GovernedCodingToolPort<"skill"> | undefined;
+  readonly skillDiscovery?: GovernedCodingToolPort<"skill-discover"> | undefined;
   readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
+}
+
+function repairBudgetRefusalReason(budget: CiRepairExecutionBudget): string {
+  return budget.ciObservationRequired?.() === true
+    ? "ci-observation-required"
+    : "ci-repair-budget-blocked";
 }
 
 export function createCodingToolGovernedDelegate(
   ports: CodingToolGovernedPorts,
+  budget?: CiRepairExecutionBudget,
+  activityLog: ServerLogSink = processServerLogSink(),
 ): CodingToolDelegatePort {
   return {
     execute: async (request, signal, mutationGuard): Promise<unknown> => {
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
-      const result = await dispatch(ports, request, signal, mutationGuard);
-      return governedOutcome(request.action, result);
+      const lease = budget?.admitTool(request);
+      if (budget !== undefined && lease === undefined)
+        return {
+          outcome: "failed",
+          reasonCode: repairBudgetRefusalReason(budget),
+        };
+      const guard = withRepairLease(mutationGuard, lease, budget);
+      let result: GovernedCodingToolResult | undefined;
+      try {
+        result = await dispatch(ports, request, signal, guard);
+        if (!completionLive(result, guard, signal)) {
+          return discardedResult(activityLog, request, guard);
+        }
+        return governedOutcome(request.action, result);
+      } finally {
+        lease?.settle(result);
+      }
     },
   };
+}
+
+function discardedResult(
+  activityLog: ServerLogSink,
+  request: CodingToolActionRequest,
+  guard: CodingToolMutationGuard,
+): { readonly outcome: "failed" } {
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      {
+        level: "warn",
+        correlationId: guard.binding?.runId ?? UNKNOWN_CORRELATION_ID,
+        errorKind: "authority-denied",
+      },
+      { actionKind: request.action, state: "discarded", reason: "authority-denied" },
+    ),
+  );
+  return { outcome: "failed" };
+}
+
+function withRepairLease(
+  guard: CodingToolMutationGuard,
+  lease: CiRepairExecutionLease | undefined,
+  budget: CiRepairExecutionBudget | undefined,
+): CodingToolMutationGuard {
+  return lease === undefined
+    ? guard
+    : {
+        ...guard,
+        check: (): boolean => guard.check() && lease.check(),
+        chargeDelegatedRead: (delegationId, idempotencyKey): boolean =>
+          guard.chargeDelegatedRead?.(delegationId, idempotencyKey) === true &&
+          budget?.chargeDelegatedRead?.(delegationId, idempotencyKey) === true,
+        canChargeDelegatedRead: (): boolean =>
+          guard.canChargeDelegatedRead?.() === true && budget?.canChargeDelegatedRead?.() === true,
+      };
+}
+function completionLive(
+  result: GovernedCodingToolResult,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): boolean {
+  return result.status !== "completed" || (signal?.aborted !== true && guard.check());
 }
 
 // Repository reads AND research fetches (#2387) carry their governed payload back; skills and
@@ -76,17 +183,102 @@ function governedOutcome(
   action: CodingToolActionRequest["action"],
   result: GovernedCodingToolResult,
 ): unknown {
-  if (result.status === "failed" && result.reasonCode !== undefined) {
-    return { outcome: "failed", reasonCode: result.reasonCode };
-  }
-  if (result.status !== "completed") return { outcome: result.status };
+  if (result.status === "failed") return governedFailureOutcome(action, result);
+  const domain = gitOutcome(action, result);
+  if (domain !== undefined) return domain;
   if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
     return { outcome: "completed", read: result.read };
   }
   if (AUXILIARY_BEARING_ACTIONS.has(action) && result.auxiliary !== undefined) {
     return { outcome: "completed", auxiliary: result.auxiliary };
   }
-  return { outcome: result.status };
+  return { outcome: "completed" };
+}
+
+function governedFailureOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
+): unknown {
+  if (result.reasonCode === undefined) return { outcome: "failed" };
+  if (action === "verification" && result.verificationFailure !== undefined) {
+    return {
+      outcome: "failed",
+      reasonCode: result.reasonCode,
+      verificationFailure: result.verificationFailure,
+    };
+  }
+  if (action === "verification" && result.notRun !== undefined) {
+    return { outcome: "failed", reasonCode: result.reasonCode, notRun: result.notRun };
+  }
+  return action === "edit" && result.message !== undefined
+    ? { outcome: "failed", reasonCode: result.reasonCode, message: result.message }
+    : { outcome: "failed", reasonCode: result.reasonCode };
+}
+
+function gitOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return (
+    deliveryOutcome(action, result) ??
+    searchOutcome(action, result) ??
+    verificationOutcome(action, result) ??
+    skillsOutcome(action, result)
+  );
+}
+
+function verificationOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return action === "verification" && result.verification !== undefined
+    ? { outcome: "completed", verification: result.verification }
+    : undefined;
+}
+
+function deliveryOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  if (action === "git" && result.ci !== undefined) return { outcome: "completed", ci: result.ci };
+  if (action === "git" && result.git !== undefined)
+    return { outcome: "completed", git: result.git };
+  if (action === "delivery" && result.draftDelivery !== undefined)
+    return withApprovalDisposition({ draftDelivery: result.draftDelivery }, result);
+  if (action === "delivery" && result.verifiedCommit !== undefined)
+    return withApprovalDisposition({ verifiedCommit: result.verifiedCommit }, result);
+  return undefined;
+}
+
+function withApprovalDisposition(
+  domain: Readonly<Record<string, unknown>>,
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): Readonly<Record<string, unknown>> {
+  return {
+    outcome: "completed",
+    ...domain,
+    ...(result.approvalDisposition === undefined
+      ? {}
+      : { approvalDisposition: result.approvalDisposition }),
+  };
+}
+
+function searchOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return action === "search" && result.search !== undefined
+    ? { outcome: "completed", search: result.search }
+    : undefined;
+}
+
+function skillsOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return action === "skill-discover" && result.skills !== undefined
+    ? { outcome: "completed", skills: result.skills }
+    : undefined;
 }
 
 // One exhaustive line per governed action class: the switch IS the routing table and the compiler
@@ -104,6 +296,8 @@ function dispatch(
       return ports.repositoryRead.execute(request, signal, mutationGuard);
     case "discover":
       return ports.repositoryDiscover.execute(request, signal, mutationGuard);
+    case "search":
+      return ports.repositorySearch.execute(request, signal, mutationGuard);
     case "edit":
       return ports.editorChangeset.execute(request, signal, mutationGuard);
     case "command":
@@ -120,6 +314,8 @@ function dispatch(
       return ports.egressAuthority.execute(request, signal, mutationGuard);
     case "skill":
       return ports.skillAuthority?.execute(request, signal, mutationGuard) ?? failed();
+    case "skill-discover":
+      return ports.skillDiscovery?.execute(request, signal, mutationGuard) ?? failed();
     case "child-agent":
       return ports.childAgentAuthority?.execute(request, signal, mutationGuard) ?? failed();
   }

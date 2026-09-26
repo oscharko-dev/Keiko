@@ -14,14 +14,15 @@ const DIGEST = createHash("sha256").update(BYTES).digest("hex");
 const TREE_DIGEST = "b".repeat(64);
 const COMMIT = "c".repeat(40);
 
-function helper(target = "macos-arm64") {
+function helper(target = "macos-arm64", evaluation = false) {
   const mac = target.startsWith("macos-");
+  const linux = target === "linux-x64";
   return {
     name: "keiko-secure-workspace-read",
     kind: "secure-workspace-text-read",
     platformTarget: target,
     architecture: target.endsWith("arm64") ? "arm64" : "x64",
-    executablePath: `runtime/native/keiko-secure-workspace-read${mac ? "" : ".exe"}`,
+    executablePath: `runtime/native/keiko-secure-workspace-read${mac || linux ? "" : ".exe"}`,
     protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
     source: {
       commitSha: COMMIT,
@@ -33,34 +34,53 @@ function helper(target = "macos-arm64") {
     sizeBytes: BYTES.byteLength,
     sbomBomRef: `pkg:generic/keiko-secure-workspace-read@0.2.15?platform=${target}`,
     signing: {
-      signatureKind: mac ? "developer-id-notarized" : "authenticode",
-      verificationStatus: "verified-production",
-      signatureVerified: true,
+      signatureKind: mac
+        ? "developer-id-notarized"
+        : linux
+          ? "github-oidc-attested"
+          : "authenticode",
+      verificationStatus: evaluation ? "evaluation-unqualified" : "verified-production",
+      signatureVerified: !evaluation,
       notarizationRequired: mac,
-      notarizationVerified: mac,
+      notarizationVerified: mac && !evaluation,
     },
   };
 }
 
-function manifest(target = "macos-arm64") {
-  const nativeHelper = helper(target);
+function verificationChecks(target: string, verified: boolean): Record<string, boolean> {
+  if (target.startsWith("macos-")) {
+    return {
+      developerIdVerified: verified,
+      notarizationVerified: verified,
+      stapleVerified: verified,
+      assessmentVerified: verified,
+    };
+  }
+  return target === "linux-x64"
+    ? { provenanceVerified: verified }
+    : { publisherChainVerified: verified, timestampVerified: verified };
+}
+
+function nodePlatform(target: string): string {
+  if (target.startsWith("macos-")) return "darwin";
+  return target === "linux-x64" ? "linux" : "win32";
+}
+
+function manifest(target = "macos-arm64", evaluation = false) {
+  const nativeHelper = helper(target, evaluation);
   const mac = target.startsWith("macos-");
-  const checks = mac
-    ? {
-        developerIdVerified: true,
-        notarizationVerified: true,
-        stapleVerified: true,
-        assessmentVerified: true,
-      }
-    : { publisherChainVerified: true, timestampVerified: true };
+  const verified = !evaluation;
+  const checks = verificationChecks(target, verified);
   const security = {
-    verificationPolicy: "production",
-    verificationStatus: "verified-production",
-    verificationReasonCodes: [],
+    verificationPolicy: evaluation ? "evaluation" : "production",
+    verificationStatus: evaluation ? "evaluation-unqualified" : "verified-production",
+    verificationReasonCodes: evaluation
+      ? ["evaluation-artifact", "evaluation-unsigned-allowed"]
+      : [],
     signatureKind: nativeHelper.signing.signatureKind,
-    signatureVerified: true,
+    signatureVerified: verified,
     notarizationRequired: mac,
-    notarizationVerified: mac,
+    notarizationVerified: mac && verified,
     verificationChecks: checks,
     verificationSummaryPath: "evidence/signing-verification.json",
   };
@@ -68,7 +88,7 @@ function manifest(target = "macos-arm64") {
     product: { packageVersion: "0.2.15" },
     artifact: { platformTarget: target },
     runtime: {
-      nodePlatform: mac ? "darwin" : "win32",
+      nodePlatform: nodePlatform(target),
       nodeArchitecture: nativeHelper.architecture,
     },
     nativeHelpers: [nativeHelper],
@@ -78,7 +98,7 @@ function manifest(target = "macos-arm64") {
         verificationPolicy: security.verificationPolicy,
         verificationStatus: security.verificationStatus,
         verificationReasonCodes: security.verificationReasonCodes,
-        platformSignatureLocallyVerified: true,
+        platformSignatureLocallyVerified: verified,
         signatureKind: security.signatureKind,
         signatureVerified: security.signatureVerified,
         notarizationRequired: security.notarizationRequired,
@@ -90,9 +110,193 @@ function manifest(target = "macos-arm64") {
   };
 }
 
+function linuxManifestWithSupervisor() {
+  const value = manifest("linux-x64");
+  const supervisor = {
+    ...structuredClone(value.nativeHelpers[0]!),
+    name: "keiko-runtime-supervisor",
+    kind: "runtime-process-supervisor",
+    executablePath: "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js",
+    protocol: { schemaVersion: 1, requestMagic: "none", responseMagic: "none" },
+    source: {
+      commitSha: COMMIT,
+      path: "packages/keiko-sandbox/src",
+      treeSha256: "e".repeat(64),
+    },
+    sbomBomRef: "pkg:generic/keiko-runtime-supervisor@0.2.15?platform=linux-x64",
+  };
+  value.nativeHelpers.push(supervisor);
+  value.releaseImpact.reviewedBinding.nativeHelpers.push(structuredClone(supervisor));
+  return value;
+}
+
+/**
+ * The evaluation mirror of `manifest()` — the SAME builder, only the declared lane differs. Every
+ * structural fact (the closed 12-key helper shape, the KSR1/KSS1 protocol pin, the source
+ * commit/path/tree pin, both digests, the size ceiling, the SBOM bom-ref binding, the exact
+ * `verificationChecks` KEY set and the reviewed-binding deep equality) is unchanged, and every
+ * platform boolean flips to a declared FALSE rather than disappearing.
+ */
+function evaluationManifest(target = "macos-arm64") {
+  return manifest(target, true);
+}
+
+type FixtureRecord = Record<string, unknown>;
+
+interface FixtureHelperShape extends FixtureRecord {
+  signing: FixtureRecord;
+  protocol: FixtureRecord;
+  shippedSha256: string;
+  sizeBytes: number;
+  sbomBomRef: string;
+}
+
+interface FixtureManifest extends FixtureRecord {
+  security: FixtureRecord & {
+    verificationChecks: FixtureRecord;
+    verificationReasonCodes: readonly string[];
+  };
+  nativeHelpers: [FixtureHelperShape, ...FixtureHelperShape[]];
+  releaseImpact: {
+    reviewedBinding: FixtureRecord & {
+      nativeHelpers: [FixtureHelperShape, ...FixtureHelperShape[]];
+    };
+  };
+}
+
+/** A deep, structurally typed copy so each adversarial case mutates exactly one fact. */
+function mutableEvaluationManifest(): FixtureManifest {
+  return JSON.parse(JSON.stringify(evaluationManifest())) as FixtureManifest;
+}
+
+function evaluationBinding(manifestValue: unknown = evaluationManifest()) {
+  return resolvePortableSecureWorkspaceReadBinding({
+    manifest: manifestValue,
+    lane: "evaluation-unqualified",
+    platform: { os: "darwin", arch: "arm64" },
+    resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+  });
+}
+
+describe("portable secure workspace-read binding on the evaluation lane", () => {
+  it("resolves a binding for a declared evaluation artifact", () => {
+    const resolved = evaluationBinding();
+    expect(resolved).toBeDefined();
+    // `signed` is a structural artifact-shape literal, not a platform-signature claim: the
+    // point-of-use verifier and the node process both require it truthy before any read runs.
+    expect(resolved?.artifact.signed).toBe(true);
+    expect(resolved?.artifact.sha256).toBe(DIGEST);
+  });
+
+  it("refuses an evaluation artifact when the release-qualified lane is requested", () => {
+    expect(
+      resolvePortableSecureWorkspaceReadBinding({
+        manifest: evaluationManifest(),
+        lane: "release-qualified",
+        platform: { os: "darwin", arch: "arm64" },
+        resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("refuses a production artifact when the evaluation lane is requested", () => {
+    expect(
+      resolvePortableSecureWorkspaceReadBinding({
+        manifest: manifest(),
+        lane: "evaluation-unqualified",
+        platform: { os: "darwin", arch: "arm64" },
+        resourceRoot: "/Applications/Keiko.app/Contents/Resources",
+      }),
+    ).toBeUndefined();
+  });
+
+  // The lane ASSERTS the platform proof is present and false, in BOTH the security block and the
+  // reviewed copy, and every non-signature predicate stays exactly as strict.
+  it.each([
+    [
+      "the helper signing block claims a verified signature",
+      (value: FixtureManifest): void => {
+        value.nativeHelpers[0].signing.signatureVerified = true;
+        value.releaseImpact.reviewedBinding.nativeHelpers[0].signing.signatureVerified = true;
+      },
+    ],
+    [
+      "the helper signing block keeps the production status",
+      (value: FixtureManifest): void => {
+        value.nativeHelpers[0].signing.verificationStatus = "verified-production";
+        value.releaseImpact.reviewedBinding.nativeHelpers[0].signing.verificationStatus =
+          "verified-production";
+      },
+    ],
+    [
+      "security asserts one platform check",
+      (value: FixtureManifest): void => {
+        value.security.verificationChecks.developerIdVerified = true;
+      },
+    ],
+    [
+      "security omits a platform check instead of declaring it false",
+      (value: FixtureManifest): void => {
+        delete value.security.verificationChecks.stapleVerified;
+      },
+    ],
+    [
+      "security omits an evaluation reason code",
+      (value: FixtureManifest): void => {
+        value.security.verificationReasonCodes = ["evaluation-artifact"];
+      },
+    ],
+    [
+      "the reviewed binding claims a locally verified platform signature",
+      (value: FixtureManifest): void => {
+        value.releaseImpact.reviewedBinding.platformSignatureLocallyVerified = true;
+      },
+    ],
+    [
+      "the reviewed binding declares the other lane",
+      (value: FixtureManifest): void => {
+        value.releaseImpact.reviewedBinding.verificationPolicy = "staging";
+      },
+    ],
+    [
+      "the helper digest is not a digest",
+      (value: FixtureManifest): void => {
+        value.nativeHelpers[0].shippedSha256 = "not-a-digest";
+        value.releaseImpact.reviewedBinding.nativeHelpers[0].shippedSha256 = "not-a-digest";
+      },
+    ],
+    [
+      "the helper protocol pin drifts",
+      (value: FixtureManifest): void => {
+        value.nativeHelpers[0].protocol.requestMagic = "KSR2";
+        value.releaseImpact.reviewedBinding.nativeHelpers[0].protocol.requestMagic = "KSR2";
+      },
+    ],
+    [
+      "the reviewed helpers stop matching the manifest helpers",
+      (value: FixtureManifest): void => {
+        value.releaseImpact.reviewedBinding.nativeHelpers[0].sizeBytes += 1;
+      },
+    ],
+    [
+      "the sbom bom-ref version binding drifts",
+      (value: FixtureManifest): void => {
+        value.nativeHelpers[0].sbomBomRef = "pkg:generic/keiko-secure-workspace-read@9.9.9";
+        value.releaseImpact.reviewedBinding.nativeHelpers[0].sbomBomRef =
+          "pkg:generic/keiko-secure-workspace-read@9.9.9";
+      },
+    ],
+  ])("refuses an evaluation artifact where %s", (_name, mutate) => {
+    const value = mutableEvaluationManifest();
+    mutate(value);
+    expect(evaluationBinding(value)).toBeUndefined();
+  });
+});
+
 function binding() {
   return resolvePortableSecureWorkspaceReadBinding({
     manifest: manifest(),
+    lane: "release-qualified",
     platform: { os: "darwin", arch: "arm64" },
     resourceRoot: "/Applications/Keiko.app/Contents/Resources",
   })!;
@@ -137,6 +341,7 @@ describe("portable secure workspace-read binding", () => {
     expect(
       resolvePortableSecureWorkspaceReadBinding({
         manifest: manifest(),
+        lane: "release-qualified",
         platform: { os: "darwin", arch: "arm64" },
         resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       }),
@@ -158,6 +363,7 @@ describe("portable secure workspace-read binding", () => {
   });
 
   it.each([
+    [{ os: "linux", arch: "x64" }, "linux-x64", "/opt/Keiko"],
     [{ os: "win32", arch: "x64" }, "windows-x64", String.raw`C:\Keiko\Resources`],
     [{ os: "darwin", arch: "arm64" }, "macos-arm64", "/Keiko/Resources"],
     [{ os: "darwin", arch: "x64" }, "macos-x64", "/Keiko/Resources"],
@@ -165,10 +371,11 @@ describe("portable secure workspace-read binding", () => {
     expect(
       resolvePortableSecureWorkspaceReadBinding({
         manifest: manifest(target),
+        lane: "release-qualified",
         platform,
         resourceRoot,
       })?.artifact.target,
-    ).toBe(platform.os === "win32" ? "win32-x64" : `darwin-${platform.arch}`);
+    ).toBe(platform.os === "darwin" ? `darwin-${platform.arch}` : `${platform.os}-x64`);
   });
 
   it("selects the secure-read helper from the exact release helper set", () => {
@@ -192,28 +399,11 @@ describe("portable secure workspace-read binding", () => {
     expect(
       resolvePortableSecureWorkspaceReadBinding({
         manifest: value,
+        lane: "release-qualified",
         platform: { os: "darwin", arch: "arm64" },
         resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       }),
     ).toBeDefined();
-  });
-
-  it("rejects Linux before parsing or touching point-of-use dependencies", async () => {
-    const malformed = new Proxy(
-      {},
-      {
-        get: () => {
-          throw new Error("manifest touched");
-        },
-      },
-    );
-    expect(
-      resolvePortableSecureWorkspaceReadBinding({
-        manifest: malformed,
-        platform: { os: "linux", arch: "x64" },
-        resourceRoot: "/Keiko/Resources",
-      }),
-    ).toBeUndefined();
   });
 
   it("fails closed when an unknown supported-target manifest is ambiguous", () => {
@@ -228,6 +418,7 @@ describe("portable secure workspace-read binding", () => {
     expect(
       resolvePortableSecureWorkspaceReadBinding({
         manifest: ambiguous,
+        lane: "release-qualified",
         platform: { os: "darwin", arch: "arm64" },
         resourceRoot: "/Keiko/Resources",
       }),
@@ -262,11 +453,56 @@ describe("portable secure workspace-read binding", () => {
       expect(
         resolvePortableSecureWorkspaceReadBinding({
           manifest: value,
+          lane: "release-qualified",
           platform: { os: "darwin", arch: "arm64" },
           resourceRoot: "/Keiko/Resources",
         }),
       ).toBeUndefined();
     }
+  });
+
+  it.each([
+    [
+      "supervisor protocol",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.nativeHelpers[1]!.protocol.requestMagic = "KRP1";
+        value.releaseImpact.reviewedBinding.nativeHelpers[1]!.protocol.requestMagic = "KRP1";
+      },
+    ],
+    [
+      "supervisor source",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.nativeHelpers[1]!.source.path = "native/runtime-supervisor/macos";
+        value.releaseImpact.reviewedBinding.nativeHelpers[1]!.source.path =
+          "native/runtime-supervisor/macos";
+      },
+    ],
+    [
+      "Sigstore signature kind",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.security.signatureKind = "authenticode";
+        value.releaseImpact.reviewedBinding.signatureKind = "authenticode";
+      },
+    ],
+    [
+      "provenance result",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.security.verificationChecks.provenanceVerified = false;
+        value.releaseImpact.reviewedBinding.verificationChecks.provenanceVerified = false;
+      },
+    ],
+  ])("rejects Linux %s drift", (_label, mutate) => {
+    const value = linuxManifestWithSupervisor();
+    mutate(value);
+
+    expect(
+      resolvePortableSecureWorkspaceReadBinding({
+        manifest: value,
+        lane: "release-qualified",
+        platform: { os: "linux", arch: "x64" },
+        resourceRoot: "/opt/Keiko",
+      }),
+    ).toBeUndefined();
   });
 });
 

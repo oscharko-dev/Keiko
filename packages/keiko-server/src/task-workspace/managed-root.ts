@@ -7,18 +7,28 @@
 // by a realpath check that walks the existing parent chain, so a symlinked ancestor that escapes the
 // root is rejected even though the leaf worktree directory does not yet exist.
 
-import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import {
-  assertContainedRealPath,
-  PathEscapeError,
-  resolveWithinWorkspace,
-} from "@oscharko-dev/keiko-workspace";
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  writeFileSync,
+  type Dirent,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { PathEscapeError, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { assertContainedRealPathWithinOwnedRoot } from "@oscharko-dev/keiko-workspace/internal/owned-root";
 import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
 import { TaskWorkspaceError } from "./errors.js";
 
 const MARKER_CONTENT = JSON.stringify({ keikoManagedRoot: true, schemaVersion: "1" });
+const MAX_MARKER_BYTES = 256;
 
 function chmodBestEffort(target: string, mode: number): void {
   if (process.platform === "win32") return;
@@ -29,20 +39,83 @@ function chmodBestEffort(target: string, mode: number): void {
   }
 }
 
+function hardenMarkerPermissionsBestEffort(target: string): void {
+  if (process.platform === "win32") return;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const before = fstatSync(descriptor, { bigint: true });
+    if (!before.isFile() || before.nlink !== 1n) return;
+    fchmodSync(descriptor, 0o600);
+    const after = fstatSync(descriptor, { bigint: true });
+    if (!after.isFile() || (after.mode & 0o777n) !== 0o600n) {
+      throw new Error("managed-root marker permissions were not hardened");
+    }
+  } catch {
+    // Preserve the existing best-effort permission contract without following a replaced symlink.
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function realPathOrUndefined(target: string): string | undefined {
+  try {
+    return nodeWorkspaceFs.realPath(target);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The CANONICAL spelling of the managed-worktree root: the realpath of its longest EXISTING
+ * ancestor, with the segments that do not exist yet re-appended.
+ *
+ * The root is composed lexically from the UI database's directory (`<uiDbDir>/task-workspaces`), and
+ * every managed worktree path is derived from it and PERSISTED. On a symlinked or case-folded state
+ * directory — `/var` → `/private/var` on macOS is the everyday example — that lexical spelling is not
+ * the canonical one, so every persisted `managedWorktreePath` was non-canonical too, and
+ * `productionRuntimeWorkspaceAuthority.qualifiedWorkspaceRoot` refuses any root whose
+ * `realpathSync(root) !== root`: the workspace could be provisioned and then never run (#3382).
+ *
+ * The longest-existing-ancestor walk is the same shape `assertContainedRealPathWithinOwnedRoot` uses
+ * to verify a path whose leaf does not exist yet, so the answer is stable whether this is called
+ * before or after the root is materialized. A root with no resolvable ancestor at all (an
+ * unreadable chain) falls back to the absolute lexical spelling — this function canonicalises, it
+ * never decides authority; ownership and containment are still proven by the guards above.
+ */
+export function canonicalManagedRootPath(managedRoot: string): string {
+  const absolute = resolve(managedRoot);
+  const pending: string[] = [];
+  let current = absolute;
+  let parent = dirname(current);
+  while (current !== parent) {
+    const canonical = realPathOrUndefined(current);
+    if (canonical !== undefined) return join(canonical, ...pending);
+    pending.unshift(basename(current));
+    current = parent;
+    parent = dirname(current);
+  }
+  return absolute;
+}
+
 // Creates (if absent) and proves ownership of the managed-worktree root. The marker file is the
 // ownership proof: provisioning refuses to write under a root Keiko cannot establish and mark as its
 // own (SC2). Throws a content-free UNSAFE_PATH error when ownership cannot be proven.
 export function assertManagedRootOwned(managedRoot: string): void {
   try {
     mkdirSync(managedRoot, { recursive: true, mode: 0o700 });
+    const rootStat = nodeWorkspaceFs.stat(managedRoot);
+    if (!rootStat.isDirectory || rootStat.isSymbolicLink) {
+      throw new Error("managed root is not a regular directory");
+    }
     chmodBestEffort(managedRoot, 0o700);
     const markerPath = join(managedRoot, MANAGED_ROOT_MARKER_FILENAME);
     if (!existsSync(markerPath)) {
-      writeFileSync(markerPath, MARKER_CONTENT, { mode: 0o600 });
+      writeFileSync(markerPath, MARKER_CONTENT, { mode: 0o600, flag: "wx" });
     }
-    chmodBestEffort(markerPath, 0o600);
-    if (!statSync(managedRoot).isDirectory() || !existsSync(markerPath)) {
-      throw new Error("marker absent after creation");
+    hardenMarkerPermissionsBestEffort(markerPath);
+    if (!isManagedRootOwned(managedRoot)) {
+      throw new Error("managed-root marker is invalid");
     }
   } catch (error) {
     if (error instanceof TaskWorkspaceError) throw error;
@@ -59,7 +132,12 @@ export function assertManagedRootOwned(managedRoot: string): void {
 export function assertManagedTargetContained(managedRoot: string, worktreePath: string): void {
   try {
     resolveWithinWorkspace(managedRoot, worktreePath);
-    assertContainedRealPath(nodeWorkspaceFs, managedRoot, worktreePath, "managed worktree path");
+    assertContainedRealPathWithinOwnedRoot(
+      nodeWorkspaceFs,
+      managedRoot,
+      worktreePath,
+      "managed worktree path",
+    );
   } catch (error) {
     if (error instanceof PathEscapeError) {
       throw new TaskWorkspaceError("UNSAFE_PATH", "worktree path escapes the managed root");
@@ -80,14 +158,25 @@ export function managedTargetExists(worktreePath: string): boolean {
   return existsSync(worktreePath);
 }
 
-// Non-throwing, read-only ownership check (#448): the managed root is a directory AND Keiko's marker
-// file is present. Unlike assertManagedRootOwned it never creates the root or the marker, so it is the
-// correct gate for read-only health evaluation and for cleanup (which must REFUSE when ownership cannot
-// be proven rather than establish it). Any IO error fails closed (not owned).
+// Non-throwing, read-only ownership check (#448): the managed root is a no-follow directory AND its
+// bounded, descriptor-safe marker is a regular file with the exact Keiko schema. Unlike
+// assertManagedRootOwned it never creates the root or marker, so it is the correct gate for read-only
+// health evaluation and cleanup. Any IO or identity error fails closed (not owned).
 export function isManagedRootOwned(managedRoot: string): boolean {
   try {
-    const markerPath = join(managedRoot, MANAGED_ROOT_MARKER_FILENAME);
-    return statSync(managedRoot).isDirectory() && existsSync(markerPath);
+    const rootStat = nodeWorkspaceFs.stat(managedRoot);
+    if (!rootStat.isDirectory || rootStat.isSymbolicLink) return false;
+    const canonicalRoot = nodeWorkspaceFs.realPath(managedRoot);
+    const read = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
+    if (read === undefined) return false;
+    const marker = read(
+      canonicalRoot,
+      join(canonicalRoot, MANAGED_ROOT_MARKER_FILENAME),
+      MAX_MARKER_BYTES,
+      "reject",
+      "complete",
+    );
+    return marker.stat.isFile && !marker.stat.isSymbolicLink && marker.rawText === MARKER_CONTENT;
   } catch {
     return false;
   }
@@ -104,4 +193,34 @@ export function isManagedTargetContained(managedRoot: string, target: string): b
   } catch {
     return false;
   }
+}
+
+// The repository-id directories currently under the managed root — the on-disk half of the managed
+// inventory, which the persisted rows alone cannot enumerate once every row of a repository is gone.
+// ONE listing shared by the health report and the orphan sweep, so the two global scans cannot
+// disagree about which repositories exist on disk (audit finding, 2026-09-03: the report only knew
+// repositories with a persisted row and never surfaced a leftover directory without one). A missing
+// root lists nothing; a root that exists but cannot be read throws, because neither caller may
+// claim a complete inventory it could not take.
+//
+// The absence is decided by `readdirSync` itself, never by a preceding `existsSync`. That precheck
+// answers `false` for a root whose PARENT denies traversal — `existsSync` swallows the `EACCES` its
+// `stat` raised — so an unreadable root produced an empty listing that both callers then read as a
+// complete "no repositories exist" inventory (PR #3381 review). `ENOENT`, the one code that means
+// "there is no such directory", lists nothing; every other errno propagates, `ENOTDIR` included —
+// a managed root that is a FILE exists and cannot be read, which is the case the pin above covers.
+export function listManagedRepositoryIds(managedRoot: string): readonly string[] {
+  let entries: readonly Dirent[];
+  try {
+    entries = readdirSync(managedRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingDirectory(error)) return [];
+    throw error;
+  }
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+function isMissingDirectory(error: unknown): boolean {
+  if (error === null || typeof error !== "object" || !("code" in error)) return false;
+  return (error as { readonly code?: unknown }).code === "ENOENT";
 }

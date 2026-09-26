@@ -1,10 +1,14 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +16,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveHostExecutable,
+  runtimeTrustRoots,
   shellCommandForTrustedExecutable,
 } from "../lib/host-executable.mjs";
 
@@ -140,6 +145,97 @@ describe("resolveHostExecutable", () => {
           workspaceRoot: workspace,
         }),
       ).toBe(realpathSync(join(npmBin, "npm-cli.js")));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "accepts formula-specific Homebrew links without trusting the writable prefix",
+    () => {
+      const workspace = temporary("keiko-host-executable-workspace-");
+      const homebrew = temporary("keiko-host-executable-homebrew-");
+      const bin = join(homebrew, "bin");
+      const nodeBin = join(homebrew, "Cellar", "node", "26.8.1", "bin");
+      const ghBin = join(homebrew, "Cellar", "gh", "2.100.0", "bin");
+      const npmBin = join(homebrew, "lib", "node_modules", "npm", "bin");
+      const nodeExecutable = join(nodeBin, "node");
+      mkdirSync(bin);
+      mkdirSync(nodeBin, { recursive: true });
+      mkdirSync(ghBin, { recursive: true });
+      mkdirSync(npmBin, { recursive: true });
+      writeFileSync(nodeExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const ghExecutable = join(ghBin, "gh");
+      writeFileSync(ghExecutable, "#!/bin/sh\nprintf 'trusted-gh\\n'\n", { mode: 0o755 });
+      writeFileSync(join(npmBin, "npm-cli.js"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync(join(npmBin, "npm-cli.js"), join(nodeBin, "npm"));
+      symlinkSync("../Cellar/node/26.8.1/bin/npm", join(bin, "npm"));
+      symlinkSync("../Cellar/gh/2.100.0/bin/gh", join(bin, "gh"));
+      chmodSync(bin, 0o775);
+      chmodSync(join(homebrew, "Cellar"), 0o775);
+
+      expect(runtimeTrustRoots(nodeExecutable)).toEqual([
+        realpathSync(join(homebrew, "Cellar", "node", "26.8.1")),
+      ]);
+      const resolvedGh = resolveHostExecutable("gh", {
+        env: { PATH: bin },
+        runtimeExecutable: nodeExecutable,
+        workspaceRoot: workspace,
+      });
+      expect(resolvedGh).not.toBe(realpathSync(ghExecutable));
+      expect(readFileSync(resolvedGh)).toEqual(readFileSync(ghExecutable));
+      expect(
+        resolveHostExecutable("npm", {
+          env: { PATH: bin },
+          runtimeExecutable: nodeExecutable,
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(join(npmBin, "npm-cli.js")));
+
+      const ghFormula = join(homebrew, "Cellar", "gh");
+      const displacedFormula = join(homebrew, "Cellar", "gh-displaced");
+      renameSync(ghFormula, displacedFormula);
+      mkdirSync(ghBin, { recursive: true });
+      writeFileSync(ghExecutable, "#!/bin/sh\nprintf 'attacker-gh\\n'\n", { mode: 0o755 });
+      expect(execFileSync(resolvedGh, { encoding: "utf8" })).toBe("trusted-gh\n");
+      rmSync(ghFormula, { recursive: true });
+      renameSync(displacedFormula, ghFormula);
+
+      renameSync(ghFormula, displacedFormula);
+      symlinkSync(displacedFormula, ghFormula, "dir");
+      expect(() =>
+        resolveHostExecutable("gh", {
+          env: { PATH: bin },
+          runtimeExecutable: nodeExecutable,
+          workspaceRoot: workspace,
+        }),
+      ).toThrow("trusted host executable is unavailable");
+      unlinkSync(ghFormula);
+      renameSync(displacedFormula, ghFormula);
+
+      const outside = temporary("keiko-host-executable-homebrew-outside-");
+      writeFileSync(join(outside, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      unlinkSync(join(bin, "gh"));
+      symlinkSync(join(outside, "gh"), join(bin, "gh"));
+      expect(() =>
+        resolveHostExecutable("gh", {
+          env: { PATH: bin },
+          runtimeExecutable: nodeExecutable,
+          workspaceRoot: workspace,
+        }),
+      ).toThrow("trusted host executable is unavailable");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps non-Homebrew runtimes scoped to their package root and rejects missing runtimes",
+    () => {
+      const runtime = temporary("keiko-host-executable-runtime-");
+      const nodeBin = join(runtime, "bin");
+      const nodeExecutable = join(nodeBin, "node");
+      mkdirSync(nodeBin);
+      writeFileSync(nodeExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      expect(runtimeTrustRoots(nodeExecutable)).toEqual([realpathSync(runtime)]);
+      expect(runtimeTrustRoots(join(runtime, "missing-node"))).toEqual([]);
     },
   );
 

@@ -8,23 +8,42 @@ import {
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { CircuitBreaker, executeWithRetry } from "./resilience.js";
+import {
+  CircuitBreaker,
+  executeWithRetry,
+  GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+  providerRequestBudgetMs,
+  providerRetryConfig,
+} from "./resilience.js";
+import { MAX_TIMER_DELAY_MS } from "./config.js";
+import { createScriptedGatewayClock } from "./replay.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
 import type { Clock } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
+// Wraps the shared createScriptedGatewayClock (replay.ts) with the extra instrumentation these
+// tests need: a `sleeps` log of every ms actually slept, and an `advance` escape hatch for the
+// CircuitBreaker tests below, which never call clock.sleep() themselves (the breaker only ever
+// reads clock.now()) and so need a way to move the simulated clock forward from outside. Both
+// wrappers delegate their actual clock arithmetic to the shared implementation rather than
+// restating it, so this file no longer carries its own, independently-driftable copy.
 function stubClock(): { clock: Clock; sleeps: number[]; advance: (ms: number) => void } {
-  let current = 0;
+  const scripted = createScriptedGatewayClock();
   const sleeps: number[] = [];
   return {
     sleeps,
-    advance: (ms: number): void => {
-      current += ms;
-    },
+    // Fire-and-forget: createScriptedGatewayClock's sleep() advances its internal clock
+    // synchronously before returning its (already-resolved) promise, so the mutation this line
+    // needs has already happened by the time the call returns.
+    advance: (ms: number): void => void scripted.sleep(ms),
     clock: {
-      now: (): number => current,
-      sleep: (ms: number): Promise<void> => {
+      now: scripted.now,
+      sleep: (ms: number, signal?: AbortSignal): Promise<void> => {
         sleeps.push(ms);
-        current += ms;
-        return Promise.resolve();
+        return scripted.sleep(ms, signal);
       },
     },
   };
@@ -87,6 +106,50 @@ describe("executeWithRetry", () => {
     ).rejects.toBeInstanceOf(TransportError);
     expect(calls).toBe(4);
   });
+
+  // Each of the three stop reasons names itself on the exhausted line; a reordered decision or a
+  // collapsed mapping would otherwise pass every behavioural test (PR #3452 review).
+  it.each([
+    { reason: "terminal", error: (): Error => new AuthenticationError("nope"), calls: 1 },
+    { reason: "max-retries", error: (): Error => new TransportError("down"), calls: 4 },
+  ])(
+    "names a $reason stop on the exhausted line",
+    async ({ reason, error, calls: expectedCalls }) => {
+      const { clock } = stubClock();
+      const events: ModelGatewayLogEvent[] = [];
+      let calls = 0;
+      await expect(
+        executeWithRetry(
+          () => {
+            calls += 1;
+            return Promise.reject(error());
+          },
+          RETRY_CONFIG,
+          clock,
+          undefined,
+          () => 1,
+          {
+            sink: {
+              write: (event): void => {
+                events.push(event);
+              },
+            },
+          },
+        ),
+      ).rejects.toBeInstanceOf(Error);
+      expect(calls).toBe(expectedCalls);
+      const exhausted = events.filter((event) => event.op === "gateway.retry.exhausted");
+      expect(exhausted).toHaveLength(1);
+      expect(exhausted[0]?.extra).toMatchObject({ reason, attempt: expectedCalls });
+      expect(exhausted[0]?.extra).not.toHaveProperty("delayMs");
+      const persisted = expectActivityLogProof(
+        "gateway.retry.exhausted.emitted-line",
+        formatActivityLogProofLine(exhausted[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({ reason, attempt: expectedCalls });
+      expect(persisted).not.toHaveProperty("delayMs");
+    },
+  );
 
   it("does not retry a non-retryable error", async () => {
     const { clock, sleeps } = stubClock();
@@ -170,6 +233,189 @@ describe("executeWithRetry", () => {
     expect(sleeps).toEqual([]);
   });
 
+  // Run 23 (2026-09-11): a provider's `timeoutMs` was the budget of the WHOLE call, so an attempt
+  // that hung to its timeout spent it and the retry the loop exists for could never start. Each
+  // attempt now runs under its own `attemptTimeoutMs` (ADR-0003), inside the end-to-end budget.
+  it("retries an attempt that hung to its own timeout with a fresh attempt timeout", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const seen: (number | undefined)[] = [];
+    const result = await executeWithRetry(
+      (attemptTimeoutMs) => {
+        seen.push(attemptTimeoutMs);
+        if (seen.length === 1) {
+          advance(attemptTimeoutMs ?? 0);
+          return Promise.reject(new TimeoutError("timed out"));
+        }
+        return Promise.resolve("answered");
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500, attemptTimeoutMs: 1_000, timeoutMs: 5_000 },
+      clock,
+      undefined,
+      () => 1,
+    );
+    expect(result).toBe("answered");
+    expect(seen).toEqual([1_000, 1_000]);
+    expect(sleeps).toEqual([500]);
+  });
+
+  it("clips an attempt to what is left of the end-to-end budget", async () => {
+    const { clock, advance } = stubClock();
+    const seen: (number | undefined)[] = [];
+    await executeWithRetry(
+      (attemptTimeoutMs) => {
+        seen.push(attemptTimeoutMs);
+        if (seen.length === 1) {
+          advance(1_000);
+          return Promise.reject(new TransportError("reset"));
+        }
+        return Promise.resolve("answered");
+      },
+      { maxRetries: 1, retryBaseDelayMs: 500, attemptTimeoutMs: 1_000, timeoutMs: 1_800 },
+      clock,
+      undefined,
+      () => 1,
+    );
+    // 1 000 ms in the first attempt and 500 ms asleep leave 300 ms of the 1 800 ms budget.
+    expect(seen).toEqual([1_000, 300]);
+  });
+
+  // A provider's Retry-After is honoured, capped at 30 s, and the budget reserves exactly that much
+  // before every retry, so a rate-limited provider keeps all its configured attempts and the
+  // cool-down it asked for. The budget used to reserve only the backoff step: a 30 s Retry-After
+  // spent the rest of it on one clipped sleep and no retry ever ran (PR #3452 review).
+  it("keeps every configured attempt of a provider that asks for the longest cool-down", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const provider = { timeoutMs: 2_000, maxRetries: 2, retryBaseDelayMs: 200 };
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(100);
+          return Promise.reject(new RateLimitError("slow down", 30_000));
+        },
+        providerRetryConfig(provider),
+        clock,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(3);
+    expect(sleeps).toEqual([30_000, 30_000]);
+  });
+
+  // A retry whose delay does not fit what is left of the budget can never run: the call ends at
+  // once with the last error, named for the budget, instead of sleeping the rest of it away first.
+  it("ends the call at once when the next delay does not fit the remaining budget", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(999);
+          return Promise.reject(new RateLimitError("slow down", 5_000));
+        },
+        { maxRetries: 1, retryBaseDelayMs: 100, attemptTimeoutMs: 1_000, timeoutMs: 1_500 },
+        clock,
+        undefined,
+        Math.random,
+        {
+          sink: {
+            write: (event): void => {
+              events.push(event);
+            },
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 1,
+      reason: "budget",
+      delayMs: 5_000,
+      remainingMs: 501,
+    });
+  });
+
+  // CodeRabbit review, PR #3452: the retry inputs the tests above leave out. A rate limit without
+  // Retry-After takes the jittered backoff step; a rejection that is not an Error is wrapped and
+  // terminal; a delay exactly as long as what is left of the budget cannot run either.
+  it("takes the jittered backoff step for a rate limit without Retry-After", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new RateLimitError("slow down"))
+            : Promise.resolve("answer");
+        },
+        { maxRetries: 1, retryBaseDelayMs: 100 },
+        clock,
+        undefined,
+        () => 1,
+      ),
+    ).resolves.toBe("answer");
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([100]);
+  });
+
+  it("ends a call whose rejection is not an Error at once, as terminal", async () => {
+    const { clock, sleeps } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the case under test
+          return Promise.reject("socket hang up");
+        },
+        RETRY_CONFIG,
+        clock,
+        undefined,
+        () => 1,
+        { sink: { write: (event): void => void events.push(event) } },
+      ),
+    ).rejects.toThrow("socket hang up");
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 1,
+      reason: "terminal",
+    });
+  });
+
+  it("ends the call at once when the next delay exactly equals the remaining budget", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(1_000);
+          return Promise.reject(new RateLimitError("slow down", 500));
+        },
+        { maxRetries: 1, retryBaseDelayMs: 100, attemptTimeoutMs: 1_000, timeoutMs: 1_500 },
+        clock,
+        undefined,
+        () => 1,
+        { sink: { write: (event): void => void events.push(event) } },
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 1,
+      reason: "budget",
+      delayMs: 500,
+      remainingMs: 500,
+    });
+  });
+
   it("propagates cancellation while sleeping between retries", async () => {
     const controller = new AbortController();
     const clock: Clock = {
@@ -189,6 +435,76 @@ describe("executeWithRetry", () => {
         controller.signal,
       ),
     ).rejects.toBeInstanceOf(CancelledError);
+  });
+});
+
+describe("providerRequestBudgetMs", () => {
+  // The budget has to hold the worst case the loop can take: every attempt hanging to its timeout
+  // and every backoff at the top of its jitter band. Proven by running that case through the loop
+  // itself, so the derivation cannot drift from the loop it bounds.
+  it("covers every attempt hanging to its timeout and every retry waiting the longest it may", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    // #3591: the configured 1000ms is well below the silence floor, so every attempt actually
+    // runs under the FLOORED timeout — the loop's own arithmetic, not a restated literal.
+    const provider = { timeoutMs: 1_000, maxRetries: 4, retryBaseDelayMs: 10_000 };
+    const effectiveAttemptTimeoutMs = providerRetryConfig(provider).attemptTimeoutMs;
+    const start = clock.now();
+    const seen: (number | undefined)[] = [];
+    await expect(
+      executeWithRetry(
+        (attemptTimeoutMs) => {
+          seen.push(attemptTimeoutMs);
+          advance(attemptTimeoutMs ?? 0);
+          // A provider that answers only at the deadline, and then asks for the longest cool-down.
+          return Promise.reject(new RateLimitError("slow down", 30_000));
+        },
+        providerRetryConfig(provider),
+        clock,
+        undefined,
+        () => 1,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(seen).toEqual(Array<number | undefined>(5).fill(effectiveAttemptTimeoutMs));
+    expect(sleeps).toEqual([30_000, 30_000, 30_000, 30_000]);
+    expect(clock.now() - start).toBe(providerRequestBudgetMs(provider));
+  });
+
+  it("is a single attempt for a provider that never retries, floored to the buffered-answer budget", () => {
+    // #3591: 120_000ms is below GATEWAY_BUFFERED_BUDGET_FLOOR_MS, so the single-attempt budget is
+    // raised to the floor rather than passed through — a buffered Gateway.chat() call never gets
+    // less than this much patience end to end, even at maxRetries: 0.
+    expect(
+      providerRequestBudgetMs({ timeoutMs: 120_000, maxRetries: 0, retryBaseDelayMs: 500 }),
+    ).toBe(GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
+  });
+
+  it("passes an already-generous configured budget through unmodified", () => {
+    const aboveFloor = GATEWAY_BUFFERED_BUDGET_FLOOR_MS + 100_000;
+    expect(
+      providerRequestBudgetMs({ timeoutMs: aboveFloor, maxRetries: 0, retryBaseDelayMs: 500 }),
+    ).toBe(aboveFloor);
+  });
+
+  // Flipped by PR #3602 review: a buffered (whole-body) attempt cannot observe progress, so its
+  // per-attempt bound floors to the LARGER buffered-answer floor, not the silence floor — see the
+  // buffered-vs-stream rule documented above `GATEWAY_SILENCE_FLOOR_MS`.
+  it("floors the per-attempt timeout to the buffered-answer floor before deriving the budget", () => {
+    expect(
+      providerRetryConfig({ timeoutMs: 1_000, maxRetries: 0, retryBaseDelayMs: 500 })
+        .attemptTimeoutMs,
+    ).toBe(GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
+  });
+
+  // Config validation holds each term to the timer ceiling, never their sum: past it, every
+  // deadline armed from the budget would fire the moment it is set (PR #3452 review).
+  it("stays inside what a timer can hold when the attempts together would pass it", () => {
+    expect(
+      providerRequestBudgetMs({
+        timeoutMs: MAX_TIMER_DELAY_MS,
+        maxRetries: 1,
+        retryBaseDelayMs: 500,
+      }),
+    ).toBe(MAX_TIMER_DELAY_MS);
   });
 });
 
@@ -350,6 +666,67 @@ describe("CircuitBreaker", () => {
       cb.assertAllowed();
     }).toThrow(CircuitOpenError);
   });
+
+  // RED reasoning (review finding on PR #3602): before the fix, a non-provider fault during a
+  // half-open probe hit neither `recordSuccess` nor `recordFailure`, so the slot
+  // `admitProbeOrReject` claimed was never released. Once every half-open probe slot was stuck this
+  // way, the breaker stayed half-open and rejected every later call with CircuitOpenError forever —
+  // even though the provider itself was never actually tested and may be perfectly healthy.
+  it("releases the half-open probe slot on a non-provider fault, without counting it as success or failure", () => {
+    const { clock, advance } = stubClock();
+    const cb = new CircuitBreaker(
+      "m",
+      { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      clock,
+    );
+    for (let i = 0; i < 5; i += 1) {
+      cb.recordFailure();
+    }
+    advance(30_000);
+    cb.assertAllowed(); // claims the single probe slot
+    cb.recordNonProviderFault(); // e.g. a client cancel or config error — never tested the provider
+    // Neither opened (still half-open, not re-opened) nor closed (still needs a real success).
+    expect(cb.status("m").state).toBe("half-open");
+    expect(cb.status("m").consecutiveFailures).toBe(5);
+    // The slot is free again: the next call is admitted rather than rejected.
+    expect(() => {
+      cb.assertAllowed();
+    }).not.toThrow();
+  });
+
+  // The same fault kind, twice, must never lock the breaker out of ever closing again: every probe
+  // slot cycling through a non-provider fault stays admissible, not exhausted.
+  it("keeps admitting probes across repeated non-provider faults until a real probe succeeds", () => {
+    const { clock, advance } = stubClock();
+    const cb = new CircuitBreaker(
+      "m",
+      { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      clock,
+    );
+    for (let i = 0; i < 5; i += 1) {
+      cb.recordFailure();
+    }
+    advance(30_000);
+    for (let i = 0; i < 3; i += 1) {
+      cb.assertAllowed();
+      cb.recordNonProviderFault();
+    }
+    expect(cb.status("m").state).toBe("half-open");
+    cb.assertAllowed();
+    cb.recordSuccess();
+    expect(cb.status("m").state).toBe("closed");
+  });
+
+  // A non-provider fault while CLOSED (no half-open probe in flight) is a no-op: there is no probe
+  // slot to free, and it must not perturb the ordinary failure count either.
+  it("is a no-op for a non-provider fault while closed", () => {
+    const { clock } = stubClock();
+    const cb = new CircuitBreaker("m", cbConfig, clock);
+    cb.recordFailure();
+    cb.recordNonProviderFault();
+    expect(cb.status("m").consecutiveFailures).toBe(1);
+    expect(cb.status("m").state).toBe("closed");
+  });
 });
 
 describe("executeWithRetry — backoff jitter (thundering-herd)", () => {
@@ -367,6 +744,25 @@ describe("executeWithRetry — backoff jitter (thundering-herd)", () => {
       () => 0, // bottom of the band: exactly half of each unjittered delay
     );
     expect(sleeps).toEqual([250, 500]);
+  });
+
+  // Run 29's log showed `delayMs` with thirteen decimals: the jittered step reached the timer and
+  // the retry line as a fraction. Every step is a whole number of milliseconds.
+  it("sleeps a whole number of milliseconds for any randomness", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls < 3 ? Promise.reject(new TransportError("boom")) : Promise.resolve("ok");
+      },
+      { maxRetries: 3, retryBaseDelayMs: 1_000 },
+      clock,
+      undefined,
+      () => 0.123_456_789,
+    );
+    expect(sleeps).toEqual([562, 1_123]);
+    expect(sleeps.every((delay) => Number.isInteger(delay))).toBe(true);
   });
 
   it("spreads concurrent retries: different randomness yields different delays", async () => {
@@ -447,5 +843,30 @@ describe("executeWithRetry — provider 5xx classification (buffered path)", () 
     ).rejects.toBeInstanceOf(ProviderError);
     expect(calls).toBe(1);
     expect(sleeps).toEqual([]);
+  });
+});
+
+// A streamed read may spend what is left of the call's budget while the provider keeps producing
+// (ADR-0003), so every attempt is handed that remainder alongside its own bound.
+describe("executeWithRetry remaining budget", () => {
+  it("hands each attempt what is left of the call's budget", async () => {
+    const { clock } = stubClock();
+    const remaining: (number | undefined)[] = [];
+    let attempts = 0;
+    const result = await executeWithRetry(
+      (_attemptTimeoutMs, remainingBudgetMs) => {
+        remaining.push(remainingBudgetMs);
+        attempts += 1;
+        return attempts === 1 ? Promise.reject(new TransportError("down")) : Promise.resolve("ok");
+      },
+      { ...RETRY_CONFIG, timeoutMs: 10_000, attemptTimeoutMs: 1_000 },
+      clock,
+      undefined,
+      () => 1,
+    );
+    expect(result).toBe("ok");
+    expect(remaining[0]).toBe(10_000);
+    expect(remaining[1]).toBeLessThan(10_000);
+    expect(remaining[1]).toBeGreaterThan(0);
   });
 });

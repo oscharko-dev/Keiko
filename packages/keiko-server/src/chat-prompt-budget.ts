@@ -1,10 +1,10 @@
-import {
-  countContextTokensForSegments,
-  type ContextAssemblyDiagnostics,
-  type ContextProfile,
-  type ConversationDocumentContextWire,
-  type DiscussionMode,
+import type {
+  ContextAssemblyDiagnostics,
+  ContextProfile,
+  ConversationDocumentContextWire,
+  DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
+import { countContextTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,

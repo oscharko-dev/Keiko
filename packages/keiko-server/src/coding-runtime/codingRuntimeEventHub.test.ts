@@ -42,6 +42,95 @@ const recovery = (runId: string, revision: number): CodingRuntimeEventHubInput =
 });
 
 describe("CodingRuntimeEventHub", () => {
+  it("retains every redacted gateway failure when separate turns share a task revision", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 3 });
+    expect(hub.publishTurnFailure("run-a", "running", 1, "provider-failed")).toMatchObject({
+      ok: true,
+    });
+    expect(hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toMatchObject({
+      ok: true,
+    });
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events).toMatchObject([
+      {
+        kind: "runtime-event",
+        eventKind: "failure-redacted",
+        failureCode: "provider-failed",
+      },
+      {
+        kind: "runtime-event",
+        eventKind: "failure-redacted",
+        failureCode: "stream-incomplete",
+      },
+    ]);
+  });
+
+  it("distinguishes terminal and capacity rejection of a turn failure", () => {
+    const capacity = new CodingRuntimeEventHub({ maxEvents: 1 });
+    expect(capacity.publishTurnFailure("run-a", "running", 1, "provider-failed")).toEqual({
+      ok: false,
+      reason: "capacity-pressure",
+    });
+    const terminalHub = new CodingRuntimeEventHub();
+    terminalHub.publish(terminal("run-a", 1));
+    expect(terminalHub.publishTurnFailure("run-a", "running", 2, "provider-failed")).toEqual({
+      ok: false,
+      reason: "terminal-run",
+    });
+  });
+
+  it("retains a later approval after a burst of turn failures", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 4 });
+    const received: CodingRuntimeEventHubInput[] = [];
+    const subscribed = hub.subscribe("run-a", undefined, {
+      write: (event): boolean => {
+        received.push(event);
+        return true;
+      },
+      close: (): void => undefined,
+    });
+    expect(subscribed.ok).toBe(true);
+    for (let index = 0; index < 10; index += 1) {
+      expect(hub.publishTurnFailure("run-a", "running", 1, "provider-failed").ok).toBe(true);
+    }
+    expect(hub.publish(approval("run-a", 2)).ok).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(
+      replay.events.some(
+        (event) => event.kind === "runtime-event" && event.eventKind === "permission-requested",
+      ),
+    ).toBe(true);
+    expect(
+      received.some(
+        (event) => event.kind === "runtime-event" && event.eventKind === "permission-requested",
+      ),
+    ).toBe(true);
+  });
+
+  // #3593: an approval published while no browser is connected is not lost. The hub retains it, and
+  // the first subscriber that connects afterwards receives it once, ahead of the live events.
+  it("delivers an approval published with no subscriber to the next one that connects", () => {
+    const hub = new CodingRuntimeEventHub();
+    expect(hub.publish(approval("run-a", 1)).ok).toBe(true);
+    const received: CodingRuntimeEventHubInput[] = [];
+    const subscribed = hub.subscribe("run-a", undefined, {
+      write: (event): boolean => {
+        received.push(event);
+        return true;
+      },
+      close: (): void => undefined,
+    });
+    expect(subscribed.ok).toBe(true);
+    expect(hub.publish(status("run-a", 2)).ok).toBe(true);
+    expect(
+      received.map((event) => (event.kind === "runtime-event" ? event.eventKind : event.state)),
+    ).toEqual(["permission-requested", "running"]);
+  });
+
   it("replays approval and terminal facts exactly once across three forced reconnects", () => {
     const hub = new CodingRuntimeEventHub();
     const first = hub.publish(approval("run-a", 1));
@@ -59,27 +148,6 @@ describe("CodingRuntimeEventHub", () => {
       cursor = replay.events.at(-1)?.cursor ?? cursor;
     }
     expect(received).toEqual([first.event.cursor, end.event.cursor]);
-  });
-
-  it("does not replay a stale permission-requested fact after restart", () => {
-    const hub = new CodingRuntimeEventHub();
-    const requested = hub.publish(approval("run-a", 1));
-    const awaiting = hub.publish({
-      schemaVersion: "1",
-      kind: "status",
-      runId: "run-a",
-      state: "awaiting-approval",
-      revision: 2,
-    });
-    expect(requested.ok && awaiting.ok).toBe(true);
-    if (!awaiting.ok) return;
-
-    hub.restart("run-a");
-
-    const replay = hub.replay("run-a");
-    expect(replay.ok).toBe(true);
-    if (!replay.ok) return;
-    expect(replay.events).toEqual([awaiting.event]);
   });
 
   it("admits the content-free auxiliary facts produced by research, skill, and child events", () => {
@@ -222,6 +290,46 @@ describe("CodingRuntimeEventHub", () => {
     ).toBe(true);
   });
 
+  // KEIKO-0796: makeCapacity()'s reservation heuristic (`sum(existing critical bytes) +
+  // incoming.bytes * 2 > maxBytes`) is exact only when critical events are comparably sized. This
+  // pins the boundary the heuristic is exact for: two same-sized critical (non-containment) events
+  // that saturate the reservation exactly, followed by a same-class containment fact (the terminal
+  // event serializes a few bytes smaller than the approval events here, not byte-identical) that
+  // must still be admitted because containment events bypass the ×2 reservation check entirely.
+  it("admits a same-class containment fact even though critical events have saturated the byte reservation", () => {
+    const now = (): Date => new Date("2024-01-01T00:00:00.000Z");
+
+    // Derive the reservation boundary from the hub's own accounting instead of restating its byte
+    // formula: measure one critical event's serialized size the same way makeCapacity() does.
+    const probe = new CodingRuntimeEventHub({ now });
+    expect(probe.publish(approval("run-a", 1)).ok).toBe(true);
+    const probeInternals = probe as unknown as {
+      runs: Map<string, { events: readonly { bytes: number }[] }>;
+    };
+    const criticalEventBytes = probeInternals.runs.get("run-a")?.events[0]?.bytes;
+    if (criticalEventBytes === undefined)
+      throw new Error("test setup failed to measure event size");
+
+    // Two same-sized critical (non-containment) events exactly saturate the reservation
+    // (sum(existing) + incoming.bytes * 2 === maxBytes); a third of the same size is rejected.
+    const maxBytes = criticalEventBytes * 3;
+    const hub = new CodingRuntimeEventHub({ maxEvents: 10, maxBytes, now });
+    expect(hub.publish(approval("run-a", 1)).ok).toBe(true);
+    expect(hub.publish(approval("run-a", 2)).ok).toBe(true);
+    expect(hub.publish(approval("run-a", 3))).toMatchObject({
+      ok: false,
+      reason: "capacity-pressure",
+    });
+
+    // The terminal containment fact must still be admitted at the exact same saturation point: it
+    // is never subject to the ×2 reservation heuristic that guards non-containment critical events.
+    expect(hub.publish(terminal("run-a", 4)).ok).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events.some((event) => event.state === "succeeded")).toBe(true);
+  });
+
   it("fails closed before sequence overflow and isolates cursors by run", () => {
     const hub = new CodingRuntimeEventHub();
     const event = hub.publish(status("run-a", 1));
@@ -256,5 +364,52 @@ describe("CodingRuntimeEventHub", () => {
 
     expect(closed).toBe(true);
     expect(hub.replay("run-a")).toEqual({ ok: true, events: [] });
+  });
+
+  // Regression: KEIKO-0225. Previously the bare `catch { close(subscriber); return false; }`
+  // in write() swallowed both a throwing subscriber and a `false`-returning subscriber (SSE
+  // backpressure) with zero diagnostic — the operator saw a dropped stream with nothing to
+  // trace. With `diagnostics` wired, both paths emit one redacted, correlationId-bearing record.
+  it("records a redacted diagnostic when a subscriber's write throws", () => {
+    const records: unknown[] = [];
+    const hub = new CodingRuntimeEventHub({
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+    hub.subscribe("run-diag", undefined, {
+      write: (): boolean => {
+        throw new Error("STREAM_SECRET_UPSTREAM_FAILURE");
+      },
+      close: (): void => undefined,
+    });
+    hub.publish(status("run-diag", 1));
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "run-diag",
+        operation: "coding-runtime.sse-fanout",
+        source: "coding-runtime-event-hub.write",
+        errorClass: "Error",
+        message: "sse-subscriber-write-failed",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("STREAM_SECRET");
+  });
+
+  it("records a redacted diagnostic when a subscriber returns false for backpressure", () => {
+    const records: unknown[] = [];
+    const hub = new CodingRuntimeEventHub({
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+    hub.subscribe("run-back", undefined, {
+      write: (): boolean => false,
+      close: (): void => undefined,
+    });
+    hub.publish(status("run-back", 1));
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "run-back",
+        source: "coding-runtime-event-hub.write",
+        message: "sse-backpressure",
+      }),
+    ]);
   });
 });

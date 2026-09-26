@@ -9,26 +9,28 @@
 //     CASCADE clause from any dependent table will either throw an FK violation (when
 //     foreign_keys=ON catches a leftover) or leave orphan rows the cascade test catches.
 
+import type {
+  CapsuleAnswerGroundingPolicy,
+  CapsuleContextualRetrievalSettings,
+  CapsuleLifecycleState,
+  CapsuleOutputMode,
+  CapsuleRetrievalEffort,
+  CapsuleSetId,
+  EmbeddingModelIdentity,
+  EmbeddingVectorMetric,
+  EmbeddingVectorNormalization,
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
+import { DELETE_CAPSULE_SQL } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema";
 import {
-  DELETE_CAPSULE_SQL,
-  type CapsuleAnswerGroundingPolicy,
-  type CapsuleContextualRetrievalSettings,
   CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
   CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
-  type CapsuleLifecycleState,
-  type CapsuleOutputMode,
-  type CapsuleRetrievalEffort,
-  type CapsuleSetId,
-  type EmbeddingModelIdentity,
-  type EmbeddingVectorMetric,
-  type EmbeddingVectorNormalization,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-  type KnowledgeSourceId,
-  isSafeStorageReference,
-  validateKnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
+import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
+import { validateKnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";

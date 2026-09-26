@@ -24,19 +24,21 @@ import {
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type {
+  ContainerCapabilityResponse,
+  ContainerExecutionPolicy,
+  ContainerFailureReason,
+  ContainerResourceLimits,
+  ContainerRunResult,
+  ContainerRunnerEvent,
+  ContainerRunnerEventKind,
+  ContainerTask,
+  ContainerTaskCatalog,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTAINER_RUNTIME_SCHEMA_VERSION,
   CONTAINER_TASK_RULES,
-  type ContainerCapabilityResponse,
-  type ContainerExecutionPolicy,
-  type ContainerFailureReason,
-  type ContainerResourceLimits,
-  type ContainerRunResult,
-  type ContainerRunnerEvent,
-  type ContainerRunnerEventKind,
-  type ContainerTask,
-  type ContainerTaskCatalog,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import {
@@ -45,15 +47,21 @@ import {
 } from "./containerRunner-evidence.js";
 import { detectContainerEngines, type ContainerProbeDeps } from "./containerEngineDetector.js";
 import type { Project, UiStore } from "../store/index.js";
-import {
-  evidenceRetentionDiagnosticObserver,
-  type ServerDiagnosticSink,
-} from "../diagnostics-log.js";
+import { type ServerDiagnosticSink } from "../diagnostics-log.js";
+import { evidenceRetentionObserver } from "../evidence-retention-log.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 // Tight cap — a container run is a high-trust surface, so a small number of concurrent runs.
 const MAX_CONCURRENT_CONTAINER_RUNS = 2;
 const MIN_TIMEOUT_MS = 1_000;
 const CAPABILITY_CACHE_TTL_MS = 30_000;
+// KEIKO-0765: single-key cache. detectContainerEngines probes host-level docker/podman daemon
+// state, which is identical for every project on the same host -- keying the cache by projectId
+// wastefully re-probed on the first request from each new project. resolveCapability still takes
+// projectId (the public execute/capability/listCatalog signatures require it and tryWorkspace
+// uses it for the probe's cwd containment plumbing), only the cache key is a fixed host constant.
+const HOST_CAPABILITY_CACHE_KEY = "__host__";
 
 // ─── Defaults (conservative; justified inline) ─────────────────────────────────────
 
@@ -164,6 +172,11 @@ export interface ContainerRunnerManagerOptions {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
+  // Defaults to processServerLogSink() — the same process-wide sink every other server
+  // composition site uses — so production logging works with no wiring required; tests inject a
+  // buffered sink to assert on the emitted line.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined; // injectable spawn seam
   // Injectable detector outcome (tests pass a fake; production uses detectContainerEngines).
   readonly detect?: ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
@@ -260,7 +273,8 @@ function outcomeFromError(
     return { ...base, timedOut: false, failureReason: "cancelled", eventKind: "run-cancelled" };
   }
   if (error instanceof CommandTimeoutError) {
-    return { ...base, timedOut: true, failureReason: "timed-out", eventKind: "run-failed" };
+    // ADR-0018 D7 — a timeout is a "completed with timedOut=true" outcome, not an infra failure.
+    return { ...base, timedOut: true, failureReason: "timed-out", eventKind: "run-completed" };
   }
   return {
     ...base,
@@ -304,6 +318,7 @@ function projectRootOrThrow(project: Project): string {
 function buildWorkspaceInfo(projectRoot: string): WorkspaceInfo {
   return {
     root: projectRoot,
+    selectedRoot: projectRoot,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -335,6 +350,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly detect:
     ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
@@ -352,6 +368,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? ((input: string): string => input);
     this.diagnostics = opts.diagnostics;
+    this.activityLog = opts.activityLog ?? processServerLogSink();
     this.runDeps = opts.runDeps ?? {};
     this.detect = opts.detect;
     this.now = opts.now ?? Date.now;
@@ -415,17 +432,23 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   };
 
   private resolveCapability(projectId: string): Promise<ContainerCapabilityResponse> {
+    // KEIKO-0765: cache under HOST_CAPABILITY_CACHE_KEY so a probe result is shared across every
+    // project on the same host. The projectId is still threaded to the probe (tryWorkspace + the
+    // injected detect seam), so per-project cwd containment is unchanged.
     const now = this.now();
-    const cached = this.capabilityCache.get(projectId);
+    const cached = this.capabilityCache.get(HOST_CAPABILITY_CACHE_KEY);
     if (cached !== undefined && cached.expiresAt > now) {
       return cached.promise;
     }
     if (this.detect !== undefined) {
       const promise = this.detect(projectId);
-      this.capabilityCache.set(projectId, { expiresAt: now + CAPABILITY_CACHE_TTL_MS, promise });
+      this.capabilityCache.set(HOST_CAPABILITY_CACHE_KEY, {
+        expiresAt: now + CAPABILITY_CACHE_TTL_MS,
+        promise,
+      });
       promise.catch(() => {
-        if (this.capabilityCache.get(projectId)?.promise === promise) {
-          this.capabilityCache.delete(projectId);
+        if (this.capabilityCache.get(HOST_CAPABILITY_CACHE_KEY)?.promise === promise) {
+          this.capabilityCache.delete(HOST_CAPABILITY_CACHE_KEY);
         }
       });
       return promise;
@@ -436,12 +459,19 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
       policy: this.policy,
       processEnv: this.processEnv,
       now: this.now,
+      // Forwarded, not defaulted: without it a probe that times out writes its termination evidence
+      // to the process-wide sink instead of the sink this runner was configured with, so a caller
+      // that injected its own log port would silently lose those lines.
+      activityLog: this.activityLog,
     };
     const promise = detectContainerEngines(probeDeps);
-    this.capabilityCache.set(projectId, { expiresAt: now + CAPABILITY_CACHE_TTL_MS, promise });
+    this.capabilityCache.set(HOST_CAPABILITY_CACHE_KEY, {
+      expiresAt: now + CAPABILITY_CACHE_TTL_MS,
+      promise,
+    });
     promise.catch(() => {
-      if (this.capabilityCache.get(projectId)?.promise === promise) {
-        this.capabilityCache.delete(projectId);
+      if (this.capabilityCache.get(HOST_CAPABILITY_CACHE_KEY)?.promise === promise) {
+        this.capabilityCache.delete(HOST_CAPABILITY_CACHE_KEY);
       }
     });
     return promise;
@@ -534,6 +564,9 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
           cwd: undefined,
           timeoutMs,
           signal: entry.controller.signal,
+          onTerminated: (evidence): void => {
+            logCommandTermination(this.activityLog, runId, evidence);
+          },
         },
         deps,
       );
@@ -618,7 +651,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
         evidence,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "container-runner"),
+        evidenceRetentionObserver("container-runner"),
       );
     } catch {
       throw new ContainerRunnerError(

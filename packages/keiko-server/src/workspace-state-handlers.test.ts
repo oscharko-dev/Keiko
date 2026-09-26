@@ -36,6 +36,7 @@ function context(
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
   Object.assign(req, { method, headers });
   return {
+    correlationId: undefined,
     req,
     res: {} as ServerResponse,
     params: {},

@@ -1,21 +1,23 @@
 // Shared test helpers for the Prompt Enhancer module tests. Excluded from coverage by the vitest
 // config (`**/_support.ts`); not a test file.
 
+import type {
+  ClarificationOrAssumption,
+  EnhancedPromptId,
+  GroundingNeed,
+  OutputSchemaDescriptor,
+  PromptCriticality,
+  PromptDomain,
+  PromptEnhancementProfileId,
+  PromptRiskClass,
+  PromptTaskAnalysis,
+  PromptTaskClass,
+} from "@oscharko-dev/keiko-contracts";
 import {
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-  type ClarificationOrAssumption,
-  type EnhancedPromptId,
-  type GroundingNeed,
-  type OutputSchemaDescriptor,
-  type PromptCriticality,
-  type PromptDomain,
-  type PromptEnhancementProfileId,
-  type PromptRiskClass,
-  type PromptTaskAnalysis,
-  type PromptTaskClass,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 
 export interface AnalysisOverrides {
   readonly taskClass?: PromptTaskClass;

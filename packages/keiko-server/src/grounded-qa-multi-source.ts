@@ -16,11 +16,8 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
-import {
-  CONTEXT_LANE_IDS,
-  type ContextBudgetPressure,
-  type ContextLaneId,
-} from "@oscharko-dev/keiko-contracts";
+import type { ContextBudgetPressure, ContextLaneId } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_LANE_IDS } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import {
   CANDIDATE_OMISSION_REASONS,
@@ -55,8 +52,9 @@ import {
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
+import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
-import { evidenceRetentionDiagnosticObserver } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
@@ -89,6 +87,7 @@ import {
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
   groundedEvidenceRunId,
+  groundedScopeWorkspaceFs,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -523,7 +522,11 @@ export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalO
 
 // Production retriever: retrieval-only orchestrator pass with a per-scope micro-index cache. No
 // modelId is needed — retrieval performs no model call.
-export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): GroundedRetriever {
+export function defaultRetriever(
+  signal: AbortSignal,
+  deps?: UiHandlerDeps,
+  correlationId?: string,
+): GroundedRetriever {
   return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
     const semanticLease =
@@ -535,6 +538,10 @@ export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): Gro
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
+      // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
+      // single-folder one, so without the id every git-history read failure on the plural-source
+      // routes lands under UNKNOWN_CORRELATION_ID and cannot be joined to the ask that degraded.
+      correlationId,
       ...(deps?.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndexForRoot: deps.workspaceIndexForRoot }),
@@ -559,6 +566,7 @@ export function createMultiSourceAnswerer(
   modelId: string,
   redactor: Redactor,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): MultiSourceAnswerer {
   return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
@@ -567,6 +575,7 @@ export function createMultiSourceAnswerer(
         modelId,
         messages: buildMultiSourceGatewayMessages(question, labeledPacks, redactor),
         stream: false,
+        logContext: { correlationId },
       },
       signal,
     );
@@ -623,6 +632,8 @@ export interface MultiSourceAskInput {
   // Upfront-skipped sources (inaccessible/denied at canonicalization time). Merged into the
   // `source-skipped` uncertainty entries so the caller sees which folders were omitted.
   readonly preSkipped?: readonly { readonly label: string; readonly message: string }[];
+  /** Test seam (KEIKO-0237): supply the entailment stage instead of building it from `deps`. */
+  readonly entailmentStageFactory?: EntailmentStageFactory;
 }
 
 // GRD-006: classify a thrown per-source retrieve error. A recoverable workspace error becomes a
@@ -634,11 +645,13 @@ function classifyPerSourceRetrieveError(
 ): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
   const mapped = mappedWorkspaceError(error);
   if (mapped === undefined) return undefined;
+  const body = mapped.body as { readonly error?: { readonly message?: unknown } };
+  const safeMessage =
+    typeof body.error?.message === "string"
+      ? body.error.message
+      : "Connected source is not readable.";
   return {
-    skipped: {
-      label,
-      message: error instanceof Error ? error.message : "Connected source is not readable.",
-    },
+    skipped: { label, message: safeMessage },
     mapped,
   };
 }
@@ -668,11 +681,13 @@ async function retrieveOneSource(
   const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
   let out: Awaited<ReturnType<GroundedRetriever>>;
   try {
+    const workspaceFs = groundedScopeWorkspaceFs(cs);
     out = await ctx.retriever({
       scope,
       query,
       workspaceRoot: scope.workspaceRoot,
       budget,
+      ...(workspaceFs === undefined ? {} : { workspaceFs }),
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {
@@ -843,10 +858,7 @@ function persistPerSourceEvidence(
         env: ctx.deps.env,
         additionalSecrets: currentRedactionSecrets(ctx.deps),
         costClassResolver: resolveCostClass,
-        onRetentionDeleted: evidenceRetentionDiagnosticObserver(
-          ctx.deps.diagnostics,
-          "grounded-qa-multi-source",
-        ),
+        onRetentionDeleted: evidenceRetentionObserver("grounded-qa-multi-source"),
       },
     );
     firstRunId ??= runId;
@@ -959,13 +971,16 @@ async function applyMultiSourceEntailment(
   if (!modelInvoked) {
     return assembled;
   }
-  const stage = createEntailmentStage(
-    ctx.deps,
-    [],
-    ctx.modelId,
-    { diagnostics: ctx.deps.diagnostics },
-    ctx.signal,
-  );
+  const stage =
+    ctx.entailmentStageFactory !== undefined
+      ? ctx.entailmentStageFactory({ capsules: [], modelId: ctx.modelId, signal: ctx.signal })
+      : createEntailmentStage(
+          ctx.deps,
+          [],
+          ctx.modelId,
+          { diagnostics: ctx.deps.diagnostics },
+          ctx.signal,
+        );
   if (stage === undefined) {
     return assembled;
   }

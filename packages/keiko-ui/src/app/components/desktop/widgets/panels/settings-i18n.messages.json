@@ -48,20 +48,20 @@
     "de": "Gateway-Prüfung fehlgeschlagen"
   },
   "settings.models.detailNotVerified": {
-    "en": "Configured, not verified: no readiness check has confirmed that this gateway answers. Run a readiness check below.",
-    "de": "Konfiguriert, nicht verifiziert: Keine Bereitschaftsprüfung hat bestätigt, dass dieses Gateway antwortet. Führe unten eine Bereitschaftsprüfung aus."
+    "en": "Models are configured. Keiko verifies the capabilities required by the Coding Workbench automatically when they are first needed; the checks below remain available for diagnostics.",
+    "de": "Modelle sind konfiguriert. Keiko verifiziert die von der Coding Workbench benötigten Fähigkeiten beim ersten Bedarf automatisch; die Prüfungen unten bleiben für Diagnosen verfügbar."
   },
   "settings.models.detailProbeFailed": {
     "en": "The last readiness check could not confirm this gateway. Model and agent features that need it stay unavailable until a check succeeds.",
     "de": "Die letzte Bereitschaftsprüfung konnte dieses Gateway nicht bestätigen. Modell- und Agent-Funktionen, die es benötigen, bleiben bis zu einer erfolgreichen Prüfung nicht verfügbar."
   },
   "settings.models.modelCount": {
-    "en": "{count} models",
-    "de": "{count} Modelle"
+    "en": "{count} configured models",
+    "de": "{count} konfigurierte Modelle"
   },
   "settings.models.chatCount": {
-    "en": "{count} chat",
-    "de": "{count} Chat"
+    "en": "{count} chat models",
+    "de": "{count} Chat-Modelle"
   },
   "settings.models.statusConfigured": {
     "en": "gateway configured",
@@ -72,8 +72,8 @@
     "de": "Einrichtung erforderlich"
   },
   "settings.models.statusNotVerified": {
-    "en": "configured, not verified",
-    "de": "konfiguriert, nicht verifiziert"
+    "en": "gateway configured; automatic verification pending",
+    "de": "Gateway konfiguriert; automatische Verifizierung ausstehend"
   },
   "settings.models.statusProbeFailed": {
     "en": "gateway check failed",
@@ -115,9 +115,13 @@
     "en": "Conversation-eligible",
     "de": "Konversationsfähig"
   },
-  "settings.models.eligibilityOkAria": {
-    "en": "Model eligibility: eligible for conversation",
-    "de": "Modelleignung: für Konversationen geeignet"
+  "settings.models.modelNotVerified": {
+    "en": "Chat model — not verified",
+    "de": "Chat-Modell — nicht verifiziert"
+  },
+  "settings.models.modelProbeFailed": {
+    "en": "Chat unavailable — check failed",
+    "de": "Chat nicht verfügbar — Prüfung fehlgeschlagen"
   },
   "settings.models.eligibilityPrefix": {
     "en": "Model eligibility: {label}",
@@ -162,6 +166,18 @@
   "settings.models.voiceProviderBadge": {
     "en": "Voice provider - {label}",
     "de": "Sprachanbieter - {label}"
+  },
+  "settings.models.voiceNeedsOutputVoice": {
+    "en": "Choose a supported output voice in Audio settings",
+    "de": "Unterstützte Ausgabestimme in den Audio-Einstellungen wählen"
+  },
+  "settings.models.voiceNeedsRealtimeTranscription": {
+    "en": "Native Realtime needs a live transcription deployment; Digital Twin can use speech-to-text instead",
+    "de": "Natives Realtime braucht ein Live-Transkriptions-Deployment; Digital Twin kann stattdessen Speech-to-Text nutzen"
+  },
+  "settings.models.configureAudio": {
+    "en": "Set up audio",
+    "de": "Audio einrichten"
   },
   "settings.models.voiceCapabilitySpeechToText": {
     "en": "speech-to-text",
@@ -370,6 +386,22 @@
   "settings.profiles.name": {
     "en": "Profile name",
     "de": "Profilname"
+  },
+  "settings.profiles.name.reserved": {
+    "en": "\"Default\" is reserved. Choose a different name.",
+    "de": "„Default“ ist reserviert. Wähle einen anderen Namen."
+  },
+  "settings.profiles.name.invalid": {
+    "en": "This name isn't allowed. Remove leading or trailing spaces, or use different characters.",
+    "de": "Dieser Name ist nicht zulässig. Entferne führende oder nachgestellte Leerzeichen oder verwende andere Zeichen."
+  },
+  "settings.profiles.name.tooLong": {
+    "en": "The name is too long (max {max} characters).",
+    "de": "Der Name ist zu lang (max. {max} Zeichen)."
+  },
+  "settings.profiles.defaultName": {
+    "en": "Default",
+    "de": "Standard"
   },
   "settings.profiles.create": {
     "en": "Create",
@@ -751,6 +783,10 @@
     "en": "modified",
     "de": "geändert"
   },
+  "settings.keyboard.unbound": {
+    "en": "Unbound",
+    "de": "Nicht zugewiesen"
+  },
   "settings.keyboard.scopeGlobal": {
     "en": "global",
     "de": "global"
@@ -762,14 +798,6 @@
   "settings.keyboard.scopeSettings": {
     "en": "settings",
     "de": "Einstellungen"
-  },
-  "settings.keyboard.scopeExplorer": {
-    "en": "explorer",
-    "de": "Explorer"
-  },
-  "settings.keyboard.scopeGit": {
-    "en": "git",
-    "de": "Git"
   },
   "settings.keyboard.conflict": {
     "en": "Conflicts with: {commands}",
@@ -1010,6 +1038,14 @@
   "settings.snippets.preview": {
     "en": "Preview",
     "de": "Vorschau"
+  },
+  "settings.snippets.previewUnsafe": {
+    "en": "This snippet body was rejected as unsafe or too large. Remove script-like markers or active HTML, or shorten it, then try again.",
+    "de": "Dieser Snippet-Body wurde als unsicher oder zu groß abgelehnt. Entferne skriptartige Marker oder aktives HTML, oder kürze ihn, und versuche es erneut."
+  },
+  "settings.snippets.previewFailed": {
+    "en": "The snippet preview failed. Adjust the body and try again.",
+    "de": "Die Snippet-Vorschau ist fehlgeschlagen. Passe den Body an und versuche es erneut."
   },
   "settings.snippets.save": {
     "en": "Save snippet",

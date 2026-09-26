@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   recordQualityIntelligenceCandidates,
   recordQualityIntelligenceRun,
@@ -98,6 +98,7 @@ function makeRawReq(raw: string): IncomingMessage {
 
 function ctx(runId: string, req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -107,6 +108,7 @@ function ctx(runId: string, req: IncomingMessage): RouteContext {
 
 function ctxNoId(req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: {},
@@ -305,6 +307,7 @@ describe("handleQiReview — missing id param", () => {
   it("returns 400 when id param is an empty string", async () => {
     const req = makeReq({ action: "approve" });
     const c: RouteContext = {
+      correlationId: undefined,
       req,
       res: {} as RouteContext["res"],
       params: { id: "" },
@@ -321,6 +324,7 @@ describe("handleQiReview — missing id param", () => {
   it("returns 400 when id param is only whitespace", async () => {
     const req = makeReq({ action: "approve" });
     const c: RouteContext = {
+      correlationId: undefined,
       req,
       res: {} as RouteContext["res"],
       params: { id: "   " },
@@ -588,9 +592,6 @@ describe("handleQiReview — candidate-scope approve", () => {
       entryHashSha256Hex: _entryHash,
       ...unchainedSecond
     } = second;
-    void _sequence;
-    void _priorHash;
-    void _entryHash;
 
     expect(
       verifyQiReviewAuditIntegrity({
@@ -651,7 +652,6 @@ describe("handleQiReview — candidate-scope approve", () => {
       throw new Error("expected two audit entries");
     }
     const { entryHashSha256Hex: _firstEntryHash, ...firstWithoutEntryHash } = first;
-    void _firstEntryHash;
     const secondWithFallbackPrior = {
       ...second,
       priorHashSha256Hex: hashQiReviewAuditEntry(firstWithoutEntryHash),

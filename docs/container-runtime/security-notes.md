@@ -142,6 +142,44 @@ Running the engine itself in rootless mode (Docker/Podman rootless) is the recom
 the controls above are independent of, and additive to, a rootless daemon. Podman's default rootless
 operation is one reason both engines are first-class in `ContainerEngineId`.
 
+## Pilot-image pinning (tag today; digest migration path)
+
+The pilot image referenced by `containerRunner.ts`'s code comment is intentionally pinned by TAG
+(`docker.io/library/alpine:3.20`), not by digest, because no Keiko-vetted digest has been
+published yet (KEIKO-0964). **This tag pin is a residual local-image trust boundary, not a
+safe-by-construction guarantee:**
+
+- `--pull never` blocks a network _fetch_ when the image is missing locally, so a tag re-mapping
+  published upstream cannot silently replace the local image at request time. It does **not**
+  verify the identity of whatever image currently owns the `docker.io/library/alpine:3.20` tag in
+  the local image store — a locally retagged or substituted image under that same tag name is
+  pulled and run without detection.
+- The `imageAllowlist` is a closed literal set of one entry, so an image _name_ outside it is
+  rejected with `IMAGE_NOT_ALLOWED`. The allowlist validates the requested name string, not image
+  content or provenance, so it cannot distinguish the vetted Alpine 3.20 build from a locally
+  substituted image carrying the same tag.
+
+Until a Keiko-vetted digest lands (below), this surface's image integrity depends on the
+trustworthiness of whatever local Docker/Podman image store the host operator maintains. That is an
+explicit, accepted limitation of tag pinning — not a closed gap — and callers of this document must
+not describe the current state as pinned or safe against local image substitution.
+
+A **Keiko-vetted digest** is one that has been:
+
+1. Pulled from a Keiko-controlled or Keiko-mirrored registry.
+2. Recorded in a Keiko-signed provenance manifest (SBOM + scanner report attached).
+3. Reviewed against this document's security controls (rootless, `--cap-drop ALL`, `--read-only`,
+   `--network none`, resource limits).
+
+Once such a digest exists, the switch is a one-line change in `containerRunner.ts`: change the
+`PILOT_IMAGE` constant from `docker.io/library/alpine:3.20` to a digest reference of the form
+`docker.io/library/alpine@sha256:<64-hex>`. `--pull never` and the closed `imageAllowlist`
+remain unchanged; no runtime behaviour changes beyond the stricter image-identity check the
+digest gives.
+
+**Do not** paste an unvetted digest here or into the code as a placeholder -- the value is
+load-bearing operator evidence.
+
 ## Out of scope
 
 The following are explicitly **not** provided by this surface and are deferred behind their own issues

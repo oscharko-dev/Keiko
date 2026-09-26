@@ -18,13 +18,14 @@
 
 import { randomUUID } from "node:crypto";
 import { runConsolidation, type ReviewItem } from "@oscharko-dev/keiko-memory-consolidation";
+import { consolidationLogSinkFor } from "./process-log-sink.js";
 import {
   planMemoryMaintenance,
   type MemoryAccessStatLike,
   type MemoryMaintenancePlan,
   type MemoryMaintenancePolicy,
 } from "@oscharko-dev/keiko-memory-governance";
-import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   CodingWorkbenchMode,
   MemoryAuditEvent,
@@ -180,11 +181,18 @@ function runConsolidationPass(
   nowMs: number,
   records: readonly MemoryRecord[],
   counts: MaintenanceAccumulator,
+  correlationId: string,
 ): void {
   const result = runConsolidation(records, {
     nowMs,
     newEdgeId: (): MemoryEdgeId => randomUUID() as unknown as MemoryEdgeId,
     newReviewItemId: (): string => randomUUID(),
+    // Wires the same process-wide activity log the route/CLI consolidation-job path uses, stamped
+    // with this pass's own correlation id, so a `consolidation.summary.fallback` line produced by
+    // the maintenance sweep is durable rather than silently unreachable (#2902 w6). This pass has
+    // no per-run job id of its own (unlike the scheduled consolidation-job registry), so the
+    // caller's request/background-pass correlationId is reused instead of a second identifier.
+    logSink: consolidationLogSinkFor(correlationId),
   });
   counts.edgesCreated += applyEdges(vault, result.edgesProposed);
   counts.clustersInspected += result.clustersInspected;
@@ -369,6 +377,11 @@ export interface RunMaintenanceOptions {
   // Explicit operator policy. Absent means no absolute-age/count retention phase; the existing
   // strength-based maintenance remains unchanged. Server callers resolve this from env.
   readonly retentionPolicy?: MemoryRetentionPolicy;
+  // Correlation id for this pass's own activity-log lines (currently: the consolidation phase's
+  // `consolidation.summary.fallback`, see `runConsolidationPass`). Absent mints a fresh one, same
+  // fail-open default `resolveMaintenanceAutonomyMode`/`reportRetentionPolicyFailure` already use,
+  // so an existing caller that supplies no id keeps compiling and logging unchanged.
+  readonly correlationId?: string;
 }
 
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -437,6 +450,13 @@ function runPromotionPhase(
   applyPromotions(vault, auditSink, nowMs, promotePlan.promote, recordsById(beforePromote), counts);
 }
 
+// Split out of `runMemoryMaintenance` solely to keep that function's cyclomatic complexity at the
+// AGENTS.md ceiling: the `??` fallback here is one branch this pass's own control flow does not
+// need to carry.
+function resolveRunCorrelationId(options: RunMaintenanceOptions | undefined): string {
+  return options?.correlationId ?? randomUUID();
+}
+
 export function runMemoryMaintenance(
   vault: MemoryVaultStore,
   auditSink?: MemoryAuditSink,
@@ -446,6 +466,7 @@ export function runMemoryMaintenance(
   // same nowMs, so selection is consistent within a run and fully replay-stable when nowMs is
   // injected (the deterministic-verification invariant the rest of the stack honours).
   const nowMs = options?.nowMs ?? Date.now();
+  const correlationId = resolveRunCorrelationId(options);
   const planPolicy =
     options?.decayHalfLifeMultiplierByType !== undefined
       ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
@@ -471,7 +492,7 @@ export function runMemoryMaintenance(
         record.status === "proposed" ||
         record.status === "conflicted",
     );
-  runConsolidationPass(vault, nowMs, reviewable, counts);
+  runConsolidationPass(vault, nowMs, reviewable, counts, correlationId);
   // Phase 3 — archive / forget on the post-consolidation snapshot. The access stats feed the
   // strength model; confidence itself is never mutated (O-V2).
   const all = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
@@ -532,6 +553,10 @@ export interface MaybeRunAutoMaintenanceOptions {
   readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
   readonly retentionPolicy?: MemoryRetentionPolicy;
   readonly onFailure?: ((error: unknown) => void) | undefined;
+  // Forwarded verbatim to the pass as its activity-log correlationId (see `RunMaintenanceOptions`).
+  // Absent mints a fresh one inside `runMemoryMaintenance`, so an existing caller keeps compiling
+  // unchanged; the chat auto-maintenance caller threads the ONE id it already mints for this pass.
+  readonly correlationId?: string;
 }
 
 function notifyAutoMaintenanceFailure(
@@ -561,6 +586,7 @@ export function maybeRunAutoMaintenance(
   try {
     return runMemoryMaintenance(vault, auditSink, {
       nowMs: options.nowMs,
+      ...(options.correlationId !== undefined ? { correlationId: options.correlationId } : {}),
       ...(options.autonomyMode !== undefined ? { autonomyMode: options.autonomyMode } : {}),
       ...(options.decayHalfLifeMultiplierByType !== undefined
         ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
@@ -593,14 +619,22 @@ export function memoryMaintenanceAuditSink(deps: UiHandlerDeps): MemoryAuditSink
 // never widen authority and must never break the caller (the chat path runs this pass), so an
 // unreadable policy row degrades to the most restrictive posture — no unattended acceptance — and
 // is reported as a content-free operator diagnostic rather than swallowed.
-export function resolveMaintenanceAutonomyMode(deps: UiHandlerDeps): CodingWorkbenchMode {
+//
+// `correlationId` defaults to a fresh mint ONLY so a caller with no id in scope keeps compiling
+// unchanged (ADR-0173 D5 / g12). The route caller (`handleRunMaintenance`) threads its own
+// request id; the chat auto-maintenance caller mints ONE id for its whole pass and threads that,
+// so a route request or a background pass never fragments across disconnected mints.
+export function resolveMaintenanceAutonomyMode(
+  deps: UiHandlerDeps,
+  correlationId: string = randomUUID(),
+): CodingWorkbenchMode {
   try {
     return resolveMemoryMaintenanceAutonomyMode(deps);
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: randomUUID(),
+        correlationId,
         operation: "memory.maintenance.autonomy-mode",
         source: "memory-maintenance-handlers.resolveMaintenanceAutonomyMode",
         error,
@@ -611,8 +645,11 @@ export function resolveMaintenanceAutonomyMode(deps: UiHandlerDeps): CodingWorkb
   }
 }
 
-function reportRetentionPolicyFailure(deps: UiHandlerDeps, error: unknown): string {
-  const correlationId = randomUUID();
+function reportRetentionPolicyFailure(
+  deps: UiHandlerDeps,
+  error: unknown,
+  correlationId: string = randomUUID(),
+): string {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -630,22 +667,26 @@ export type MemoryRetentionPolicyResolution =
   | { readonly ok: true; readonly policy: MemoryRetentionPolicy | undefined }
   | { readonly ok: false };
 
-export function resolveMemoryRetentionPolicy(deps: UiHandlerDeps): MemoryRetentionPolicyResolution {
+export function resolveMemoryRetentionPolicy(
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): MemoryRetentionPolicyResolution {
   try {
     return { ok: true, policy: memoryRetentionPolicy(deps.env) };
   } catch (error) {
-    reportRetentionPolicyFailure(deps, error);
+    reportRetentionPolicyFailure(deps, error, correlationId);
     return { ok: false };
   }
 }
 
 function manualRetentionPolicy(
   deps: UiHandlerDeps,
+  correlationId: string,
 ): MemoryRetentionPolicy | undefined | RouteResult {
   try {
     return memoryRetentionPolicy(deps.env);
   } catch (error) {
-    const correlationId = reportRetentionPolicyFailure(deps, error);
+    reportRetentionPolicyFailure(deps, error, correlationId);
     return {
       status: 500,
       body: errorBody(
@@ -657,15 +698,20 @@ function manualRetentionPolicy(
   }
 }
 
-export function handleRunMaintenance(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
+  // Minted once so a caller who supplied no id (RouteContext.correlationId is optional for test
+  // literals) still shares ONE id across every diagnostic this single route invocation reports,
+  // rather than each helper minting its own (ADR-0173 D5 / g12).
+  const correlationId = ctx.correlationId ?? randomUUID();
   try {
     const multipliers = memorySemanticizationMultipliers(deps.env);
-    const retentionPolicy = manualRetentionPolicy(deps);
+    const retentionPolicy = manualRetentionPolicy(deps, correlationId);
     if (isRouteResult(retentionPolicy)) return retentionPolicy;
     const counts = runMemoryMaintenance(vault, memoryMaintenanceAuditSink(deps), {
-      autonomyMode: resolveMaintenanceAutonomyMode(deps),
+      correlationId,
+      autonomyMode: resolveMaintenanceAutonomyMode(deps, correlationId),
       ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
       ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
     });

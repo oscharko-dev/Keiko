@@ -21,34 +21,40 @@
 // pacing is bounded server-side by a per-root rate limiter (cooldown + window cap) plus the per-call
 // cost ceiling and an as-you-type latency budget; output is bounded by a hard character cap.
 
+import type {
+  CodingContextPack,
+  CodingContextRequest,
+  CompletionDegradeReason,
+  CompletionInteractionMode,
+  CompletionModelSelection,
+  CostClass,
+  EditorCompletionSource,
+  EditorInlineCompletionWireItem,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionWireResponse,
+  UsageMetadata,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_BUDGETS,
   CODING_CONTEXT_SCHEMA_VERSION,
+  toCodingContextWirePack,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import {
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
-  isValidScopePath,
   parseEditorInlineCompletionRequest,
   parseEditorInlineCompletionTelemetry,
-  stripUnsafeFormatChars,
-  toCodingContextWirePack,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type CompletionDegradeReason,
-  type CompletionInteractionMode,
-  type CompletionModelSelection,
-  type CostClass,
-  type EditorCompletionSource,
-  type EditorInlineCompletionWireItem,
-  type EditorInlineCompletionWireRequest,
-  type EditorInlineCompletionWireResponse,
-  type UsageMetadata,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-inline-completion";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { newCorrelationId } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import { MODEL_AS_YOU_TYPE_TIMEOUT_MS } from "./asYouTypeTimeout.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
@@ -82,8 +88,8 @@ const INLINE_COMPLETION_GATEWAY_POLICY_VERSION = "editor-inline-completion/1";
 const MAX_INLINE_INSERT_TEXT_CHARS = 2_000;
 const APPROX_CHARS_PER_TOKEN = 4;
 const MAX_CONTEXT_CHANGED_FILES = 64;
-// p95 latency budget for as-you-type ghost text (ADR-0042 D5): a fast FIM call self-cancels past it.
-const MODEL_AS_YOU_TYPE_TIMEOUT_MS = 750;
+// KEIKO-0667: MODEL_AS_YOU_TYPE_TIMEOUT_MS is imported from ./asYouTypeTimeout.js, shared with
+// completionRoutes.ts, so a change to the number cannot silently split the two routes.
 // Policy/configuration gate (Acceptance Criterion 7). The feature is ENABLED by default; a deployment
 // disables it by setting this env var to a falsy token.
 const INLINE_COMPLETION_POLICY_ENV = "KEIKO_EDITOR_INLINE_COMPLETION";
@@ -111,7 +117,10 @@ export interface EditorInlineCompletionRouteOptions {
 const sharedRateLimiter: InlineCompletionRateLimiter = createInlineCompletionRateLimiter();
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactoryFor(deps: UiHandlerDeps): InlineCompletionChatFactory {
+function defaultChatFactoryFor(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): InlineCompletionChatFactory {
   return (_config, modelId): ModelChatFn => {
     const gateway = currentGateway(deps);
     if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
@@ -123,6 +132,7 @@ function defaultChatFactoryFor(deps: UiHandlerDeps): InlineCompletionChatFactory
           { role: "user", content: chatRequest.user },
         ],
         cancellationSignal: chatSignal,
+        logContext: { correlationId },
       });
       return { content: response.content, usage: response.usage };
     };
@@ -195,6 +205,7 @@ interface InlineModelOutcome {
 interface ElectedInlineModelContext {
   readonly request: EditorInlineCompletionWireRequest;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly deps: UiHandlerDeps;
   readonly selection: CompletionModelSelection;
@@ -203,6 +214,7 @@ interface ElectedInlineModelContext {
   readonly config: GatewayConfig;
   readonly nowMs: number;
   readonly tokenBudget: EditorModelTokenBudget;
+  readonly correlationId: string | undefined;
 }
 
 function noItemOutcome(
@@ -366,9 +378,13 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     signal: ctx.signal,
     nowMs: ctx.nowMs,
     budgetBytes: effectiveContextBudgetBytes(ctx.request),
+    // The git context calls the git routes in-process; without the id their failure lines are
+    // orphaned under UNKNOWN_CORRELATION_ID (AGENTS.md §8 Rule 1). #3357.
+    correlationId: ctx.correlationId,
   });
   recordCodingContextEvidence(
     ctx.deps.evidenceStore,
@@ -472,6 +488,7 @@ function reportInlineModelFailure(
 async function runInlineModelTier(
   request: EditorInlineCompletionWireRequest,
   realRoot: string,
+  fs: WorkspaceFs,
   signal: AbortSignal,
   deps: UiHandlerDeps,
   options: EditorInlineCompletionRouteOptions,
@@ -496,6 +513,7 @@ async function runInlineModelTier(
     const outcome = await runElectedInlineModel({
       request,
       realRoot,
+      fs,
       signal: modelSignal(
         selection,
         signal,
@@ -504,10 +522,11 @@ async function runInlineModelTier(
       deps,
       selection,
       modelId,
-      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps),
+      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps, correlationId),
       config,
       nowMs: now(),
       tokenBudget,
+      correlationId,
     });
     return outcome;
   } catch (error) {
@@ -529,6 +548,7 @@ function invalidChangedFiles(message: string): RouteResult {
 
 function sanitizeChangedFiles(
   realRoot: string,
+  fs: WorkspaceFs,
   changedFiles: readonly string[] | undefined,
 ): readonly string[] | RouteResult | undefined {
   if (changedFiles === undefined) {
@@ -546,7 +566,7 @@ function sanitizeChangedFiles(
         `context.changedFiles contains an invalid workspace-relative path: ${changed}`,
       );
     }
-    resolveOverlayPath(realRoot, changed);
+    resolveOverlayPath(realRoot, changed, fs);
   }
   return deduped.length > 0 ? deduped : undefined;
 }
@@ -554,8 +574,9 @@ function sanitizeChangedFiles(
 function sanitizeRequestContext(
   request: EditorInlineCompletionWireRequest,
   realRoot: string,
+  fs: WorkspaceFs,
 ): EditorInlineCompletionWireRequest | RouteResult {
-  const changedFiles = sanitizeChangedFiles(realRoot, request.context?.changedFiles);
+  const changedFiles = sanitizeChangedFiles(realRoot, fs, request.context?.changedFiles);
   if (isRouteResult(changedFiles)) {
     return changedFiles;
   }
@@ -643,25 +664,27 @@ export async function handleEditorInlineCompletion(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
+    const { canonicalRoot, fs } = root.access;
     // Containment check for the overlay document path (throws on escape → handled by runFilesHandler).
-    resolveOverlayPath(root.realRoot, request.document.path);
-    if (!(await activationStillActive(deps, root.realRoot))) {
+    resolveOverlayPath(canonicalRoot, request.document.path, fs);
+    if (!(await activationStillActive(deps, canonicalRoot))) {
       return noItemsRouteResult(deps);
     }
-    const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
+    const sanitizedRequest = sanitizeRequestContext(request, canonicalRoot, fs);
     if (isRouteResult(sanitizedRequest)) {
       return sanitizedRequest;
     }
     const signal = clientAbortSignal(ctx);
     const outcome = await runInlineModelTier(
       sanitizedRequest,
-      root.realRoot,
+      canonicalRoot,
+      fs,
       signal,
       deps,
       options,
       ctx.correlationId,
     );
-    if (!(await activationStillActive(deps, root.realRoot))) {
+    if (!(await activationStillActive(deps, canonicalRoot))) {
       return noItemsRouteResult(deps);
     }
     return { status: 200, body: deps.redactor(buildWireResponse(outcome)) };
@@ -687,7 +710,7 @@ export async function handleEditorInlineCompletionTelemetry(
     recordInlineCompletionTelemetryEvidence(
       deps.evidenceStore,
       deps.redactor,
-      { ...parsed.value, root: root.realRoot },
+      { ...parsed.value, root: root.access.canonicalRoot },
       now(),
     );
     return { status: 200, body: deps.redactor({ ok: true }) };

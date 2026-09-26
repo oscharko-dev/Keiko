@@ -4,7 +4,7 @@
 // so the workflow validates+applies the patch and verification reports passed — exercising the
 // test-pass-rate and verification-completeness dimensions for the bug workflow (C5).
 
-import { FIXTURE_PACKAGE_JSON, scriptedResponse } from "../support.js";
+import { FIXTURE_PACKAGE_JSON, fencedDiff, scriptedResponse } from "../support.js";
 import type { EvaluationFixture } from "../../types.js";
 
 const BUGGY_SOURCE =
@@ -29,9 +29,7 @@ const FIX_DIFF = [
 ].join("\n");
 
 const MODEL_CONTENT = [
-  "```diff",
-  FIX_DIFF,
-  "```",
+  fencedDiff(FIX_DIFF),
   "## Root cause",
   "The divisor was 3 instead of 2, so half returned a third of the input.",
   "## Regression test",
@@ -69,7 +67,7 @@ export const bugHappyPath: EvaluationFixture = {
     expectedStatuses: ["fix-applied"],
     expectPatch: true,
     expectVerificationSkip: false,
-    maxExpectedChangedFiles: 2,
+    maxExpectedChangedFiles: 1,
     maxExpectedPatchBytes: 4_096,
   },
 };

@@ -134,26 +134,21 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     for (const type of NON_MUTATING) expect(isMutatingEditorAgentAction(type)).toBe(false);
   });
 
-  it("gates server-resolved repository reads through workspace-read authority", () => {
-    for (const type of ["navigateSymbol", "searchWorkspace"] as const) {
+  it("allows repository reads in every mode while retaining authority and hard denials", () => {
+    for (const type of ["navigateSymbol", "searchWorkspace", "queryGit"] as const) {
       const baseline = classifyEditorAgentAction(type, ctx());
       expect(baseline.disposition).toBe("allowed");
-      // ADR-0138's monotonic matrix gates workspace-contained actions behind approval under
-      // governed-assist; the supervised middle mode admits the repository-backed read directly.
-      expect(
-        composeEditorAgentActionPolicyDecision(
-          baseline,
-          authority("governed-assist", { actionClasses: ["workspace-read"] }),
-          EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
-        ),
-      ).toMatchObject({ disposition: "review-required", effectClass: "workspace-read" });
-      expect(
-        composeEditorAgentActionPolicyDecision(
-          baseline,
-          authority("supervised-coding", { actionClasses: ["workspace-read"] }),
-          EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
-        ),
-      ).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+      // ADR-0138 D4: reads keep their Authority Envelope action-class, trust, containment, and
+      // budget gates, but never enter the effectful workspace approval matrix.
+      for (const mode of CODING_WORKBENCH_MODES) {
+        expect(
+          composeEditorAgentActionPolicyDecision(
+            baseline,
+            authority(mode, { actionClasses: ["workspace-read"] }),
+            EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
+          ),
+        ).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+      }
       expect(
         composeEditorAgentActionPolicyDecision(
           baseline,
@@ -166,6 +161,13 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
         denyReason: "mode-policy-denied",
       });
     }
+    expect(
+      composeEditorAgentActionPolicyDecision(
+        classifyEditorAgentAction("requestVerification", ctx()),
+        authority("governed-assist", { actionClasses: ["verification"] }),
+        EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification,
+      ),
+    ).toMatchObject({ disposition: "review-required", effectClass: "execution" });
   });
 });
 
@@ -511,6 +513,63 @@ function auditInput(over: Partial<EditorAgentActionAuditInput> = {}): EditorAgen
     ...over,
   };
 }
+
+// KEIKO-0494: the record declares typed vocabularies for outcome, denyReason, reviewReason,
+// conflictCode and failureCode, and documents that a denyReason belongs only to a denied
+// disposition — none of which the structural guard enforced. `outcome` took any non-empty string.
+// An audit record is what a reviewer reads to reconstruct what the agent was allowed to do.
+describe("audit record structural guard enforces its declared vocabularies", () => {
+  function record(over: Record<string, unknown> = {}): unknown {
+    return { ...buildEditorAgentActionAuditRecord(auditInput()), ...over };
+  }
+
+  it.each(["approved", "", "SUCCEEDED", "done"])("rejects an outcome of %s", (outcome) => {
+    expect(isEditorAgentActionAuditRecord(record({ outcome }))).toBe(false);
+  });
+
+  it("accepts every member of the declared outcome union", () => {
+    for (const outcome of ["queued", "succeeded", "failed", "conflict"]) {
+      expect(isEditorAgentActionAuditRecord(record({ outcome }))).toBe(true);
+    }
+  });
+
+  it.each([
+    ["denyReason", "not-a-real-deny-reason"],
+    ["reviewReason", "not-a-real-review-reason"],
+    ["conflictCode", "not-a-real-conflict"],
+    ["failureCode", "not-a-real-failure"],
+  ])("rejects an unrecognised %s", (field, badValue) => {
+    expect(isEditorAgentActionAuditRecord(record({ [field]: badValue }))).toBe(false);
+  });
+
+  it("rejects a denyReason on a non-denied disposition and a reviewReason on a non-review one", () => {
+    expect(
+      isEditorAgentActionAuditRecord(
+        record({ disposition: "allowed", denyReason: "workspace-escape" }),
+      ),
+    ).toBe(false);
+    expect(
+      isEditorAgentActionAuditRecord(
+        record({ disposition: "allowed", reviewReason: "risk-threshold" }),
+      ),
+    ).toBe(false);
+  });
+
+  // hasValidDispositionReasonPairing only checked the wrong-reason-on-the-wrong-disposition
+  // direction. It never required the REQUIRED reason to be present: a record could claim
+  // disposition: "denied" with no denyReason at all — a reviewer reading the audit trail would see
+  // WHY was never recorded for a denial that, per this module's own documented pairing rule, must
+  // always carry one.
+  it("rejects a denied disposition with no denyReason, and a review-required one with no reviewReason", () => {
+    const denied = record({ disposition: "denied", denyReason: undefined });
+    expect((denied as Record<string, unknown>).denyReason).toBeUndefined();
+    expect(isEditorAgentActionAuditRecord(denied)).toBe(false);
+
+    const reviewRequired = record({ disposition: "review-required", reviewReason: undefined });
+    expect((reviewRequired as Record<string, unknown>).reviewReason).toBeUndefined();
+    expect(isEditorAgentActionAuditRecord(reviewRequired)).toBe(false);
+  });
+});
 
 describe("audit record builder (Issue #1395 AC1, AC3)", () => {
   it("builds a content-free record for a mutating action", () => {

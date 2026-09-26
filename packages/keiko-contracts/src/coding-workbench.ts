@@ -1,4 +1,6 @@
+import { deepFreeze } from "./deep-freeze.js";
 import type { GatewayVerificationState } from "./gateway-verification.js";
+import type { ModelReasoningEffort } from "./gateway.js";
 
 export const CODING_WORKBENCH_SCHEMA_VERSION = "1" as const;
 
@@ -143,7 +145,10 @@ export const CODING_WORKBENCH_PERMISSION_REQUEST_KINDS: readonly CodingWorkbench
 
 export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
+  | "git-stage"
   | "verification-command"
+  | "ci-observe"
+  | "connector-read"
   | "research"
   | "commit"
   | "push"
@@ -156,7 +161,10 @@ export type CodingWorkbenchSupervisedActionKind =
 export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchSupervisedActionKind[] =
   Object.freeze([
     "file-edit",
+    "git-stage",
     "verification-command",
+    "ci-observe",
+    "connector-read",
     "research",
     "commit",
     "push",
@@ -239,6 +247,7 @@ export type CodingWorkbenchRuntimeEventKind =
   | "skill-invoked"
   | "child-run-started"
   | "child-run-completed"
+  | "operator-decision"
   | "failure-redacted";
 
 export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRuntimeEventKind[] =
@@ -256,6 +265,7 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "skill-invoked",
     "child-run-started",
     "child-run-completed",
+    "operator-decision",
     "failure-redacted",
   ] as const satisfies readonly CodingWorkbenchRuntimeEventKind[]);
 
@@ -274,6 +284,22 @@ export const CODING_WORKBENCH_AUXILIARY_STATUSES: readonly CodingWorkbenchAuxili
     "stopped",
   ] as const satisfies readonly CodingWorkbenchAuxiliaryStatus[]);
 
+// A decision only a local human can make, which is NOT an Authority Envelope approval. A governed
+// tool that meets one of these stops in place and the run reports itself `paused` naming this
+// value, so the operator sees a run waiting on them rather than a run that quietly gave up.
+//
+// `workspace-script-trust` is the ADR-0147 package-script grant. It is deliberately outside the
+// approval plane: trust is a hard, mode-independent boundary (an untrusted script may not run in
+// `autonomous-delivery` either), and a trust grant is a durable workspace record, not a one-use
+// action authority. Modelling it as a `command-execution` permission would both mint the wrong
+// artifact and collapse `governed-assist`'s separate per-command approval into it.
+export type CodingWorkbenchOperatorDecision = "workspace-script-trust";
+
+export const CODING_WORKBENCH_OPERATOR_DECISIONS: readonly CodingWorkbenchOperatorDecision[] =
+  Object.freeze([
+    "workspace-script-trust",
+  ] as const satisfies readonly CodingWorkbenchOperatorDecision[]);
+
 // #2637: the trust classification of tool-result content handed to a Code task's model. Web page
 // text fetched by governed research egress is `untrusted` — third-party data that carries no
 // authority. The union is deliberately single-valued: there is no "trusted" web page, so there is
@@ -287,9 +313,11 @@ export interface CodingWorkbenchModePolicy {
   // Capability admission is not pre-approval. Resource scope, risk, authority, and hard-deny gates
   // still determine the tri-state effect for each concrete action.
   readonly allowedActionClasses: readonly CodingWorkbenchActionClass[];
-  readonly allowsWorkspaceWrites: boolean;
-  readonly allowsCommandExecution: boolean;
-  readonly allowsDeliverySubstrate: boolean;
+  // KEIKO-0831: the previous boolean triple (allowsWorkspaceWrites / allowsCommandExecution /
+  // allowsDeliverySubstrate) was dead policy — every consumer already routes through the
+  // `effects` tri-state matrix below, which carries the same information at a finer grain.
+  // Removed from the interface and from every entry so drift between the coarse booleans and the
+  // matrix cannot arise.
   readonly display: CodingWorkbenchModeDisplay;
   readonly effects: CodingWorkbenchModeEffectMatrix;
 }
@@ -323,14 +351,16 @@ export type CodingWorkbenchActionPolicyDecision =
       readonly reasonCode: CodingWorkbenchPolicyDenialReason;
     };
 
+// Every mode deliberately carries the complete action-class set: mode chooses approval posture,
+// while the validated Authority Envelope and deployment ceiling narrow actual admission.
+// deepFreeze, not Object.freeze: this is the authority matrix every tri-state effect in the product
+// is read from, and a shallow freeze left each per-mode policy and its nested `effects` matrix
+// writable at runtime.
 export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   Record<CodingWorkbenchMode, CodingWorkbenchModePolicy>
-> = Object.freeze({
+> = deepFreeze({
   "governed-assist": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
-    allowsWorkspaceWrites: true,
-    allowsCommandExecution: true,
-    allowsDeliverySubstrate: true,
     display: {
       label: "Ask for approval",
       description:
@@ -365,9 +395,6 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   },
   "supervised-coding": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
-    allowsWorkspaceWrites: true,
-    allowsCommandExecution: true,
-    allowsDeliverySubstrate: true,
     display: {
       label: "Supervised workspace",
       description:
@@ -402,13 +429,10 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   },
   "autonomous-delivery": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
-    allowsWorkspaceWrites: true,
-    allowsCommandExecution: true,
-    allowsDeliverySubstrate: true,
     display: {
       label: "Full access",
       description:
-        "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+        "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
     },
     effects: {
       "workspace-contained": {
@@ -484,6 +508,7 @@ export interface CodingWorkbenchModelProfile {
   readonly source: CodingWorkbenchModelSource;
   readonly supportsStreaming: boolean;
   readonly supportsToolCalling: boolean;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
 }
 
 export type CodingWorkbenchSidecarGatewayStatus = "available" | "unavailable";
@@ -497,7 +522,29 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   | "non-workflow-eligible"
   | "non-coding-capable"
   | "deployment-policy-disabled"
-  | "subscription-source";
+  | "subscription-source"
+  // Appended (epic #3384, #3390 closeout): the profile is otherwise configured and probed, but
+  // `runMetadata.maxPromptTokens` sits below `CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS`
+  // — a run minted against it would fail its very first gateway call.
+  | "model-context-window-insufficient"
+  // Appended (PR #3452, F73): the coding model qualifies in every other respect, but its forced
+  // tool-call proof is missing or older than 24 h. The remedy is a new probe, not another model.
+  | "tool-calling-unverified"
+  // Appended (#3591, 1.1.7): the automatic verification of this model (context window or tool
+  // calling) is still running against a slow gateway. Transient: the Workbench re-reads its profile
+  // until the probe settles, and no operator action is required.
+  | "model-verification-pending";
+
+/**
+ * The floor `runMetadata.maxPromptTokens` must clear before a coding run is allowed to look
+ * "ready": the fixed OpenCode system prompt plus all 18 governed tool schemas the sidecar gateway
+ * advertises (~8 KB of JSON, roughly 2,000 tokens) plus a usable slice of actual issue/task
+ * context and conversation. A capability configured under this — the #3390 incident shipped a
+ * setup placeholder of `contextWindow: 4096, maxOutputTokens: 0` — reports itself "available" and
+ * then dies on the first real request with "estimated prompt tokens exceed profile
+ * maxPromptTokens". Demoting readiness here catches that before a run ever starts.
+ */
+export const CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS = 32_000;
 
 export interface CodingWorkbenchSidecarGatewayRunMetadata {
   readonly maxPromptTokens: number;
@@ -613,6 +660,9 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly passedCount?: number | undefined;
   readonly failedCount?: number | undefined;
   readonly skippedCount?: number | undefined;
+  readonly failureLocationCount?: number | undefined;
+  readonly failureLocationsTruncated?: boolean | undefined;
+  readonly verificationTargetDigest?: string | undefined;
   readonly artifactKind?: string | undefined;
   readonly artifactLabel?: string | undefined;
   readonly artifactDigest?: string | undefined;
@@ -630,6 +680,10 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly skillInvocation?: "explicit" | "implicit" | undefined;
   readonly childRunId?: string | undefined;
   readonly childResultCount?: number | undefined;
+  // `operator-decision` events only. Absent `auxiliaryOutcome` means the decision is OPEN and the
+  // tool is waiting in place; a present one means it settled (`accepted` = the human decided in
+  // favour, and the waiting tool proceeds).
+  readonly operatorDecision?: CodingWorkbenchOperatorDecision | undefined;
   readonly failureCode?: string | undefined;
   readonly failureSummary?: string | undefined;
   readonly retryable?: boolean | undefined;
@@ -705,6 +759,29 @@ export function codingWorkbenchPolicyEffectFor(
   return CODING_WORKBENCH_MODE_POLICIES[mode].effects[resourceScope][risk];
 }
 
+export type CodingWorkbenchCodeTaskDeliveryAction = "commit" | "push" | "pull-request" | "merge";
+
+/**
+ * Scoped policy for an accepted Code task's proposal-bound delivery execute. The general
+ * `delivery` matrix remains approval-required because it also covers merge and repository facades
+ * that do not carry the Code task's live mutation guard.
+ */
+export function codingWorkbenchCodeTaskDeliveryEffectFor(
+  mode: CodingWorkbenchMode,
+  action: CodingWorkbenchCodeTaskDeliveryAction,
+): CodingWorkbenchPolicyEffect {
+  const general = codingWorkbenchPolicyEffectFor(mode, "delivery", "high");
+  const scoped = codeTaskDeliveryActionIsScoped(action);
+  if (!scoped && action !== "merge") return "denied";
+  return mode === "autonomous-delivery" && scoped && general === "approval-required"
+    ? "allowed"
+    : general;
+}
+
+function codeTaskDeliveryActionIsScoped(action: string): boolean {
+  return action === "commit" || action === "push" || action === "pull-request";
+}
+
 export function strictestCodingWorkbenchPolicyEffect(
   first: CodingWorkbenchPolicyEffect,
   ...rest: readonly CodingWorkbenchPolicyEffect[]
@@ -742,8 +819,21 @@ export function isCodingWorkbenchActionAllowedForMode(
 export function permissionKindForSupervisedCodingAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): CodingWorkbenchPermissionRequestKind {
-  if (actionKind === "file-edit") return "workspace-write";
-  if (actionKind === "verification-command") return "command-execution";
+  if (actionKind === "file-edit" || actionKind === "git-stage") return "workspace-write";
+  // ci-observe and connector-read carry the same bounded, non-mutating, single-command risk as
+  // verification-command (3941816393) -- unlike research they must NOT map to "network-egress":
+  // that kind couples the Workbench prompt to the research destination review channel
+  // (CodingWorkbenchWindow's ResearchDestination/evidenceBound gate), which has no reader for
+  // these two actions and would leave Approve permanently unbound. They also must never map to
+  // "connector-access": that permission kind is hard-denied at every mode by
+  // unavailableRuntimeActionEvent (codingRuntimeManager.ts), which would make them unreachable.
+  if (
+    actionKind === "verification-command" ||
+    actionKind === "ci-observe" ||
+    actionKind === "connector-read"
+  ) {
+    return "command-execution";
+  }
   if (actionKind === "research") return "network-egress";
   if (actionKind === "connector-write" || actionKind === "external-write") {
     return "connector-access";
@@ -754,7 +844,11 @@ export function permissionKindForSupervisedCodingAction(
 export function supervisedCodingActionRequiresApproval(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): boolean {
-  return actionKind !== "file-edit" && actionKind !== "verification-command";
+  return (
+    actionKind !== "file-edit" &&
+    actionKind !== "git-stage" &&
+    actionKind !== "verification-command"
+  );
 }
 
 function denyCodingWorkbenchAction(

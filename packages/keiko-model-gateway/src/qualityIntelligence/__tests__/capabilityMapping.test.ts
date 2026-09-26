@@ -4,9 +4,19 @@
 // and the profile router (selectModelForProfile). Each branch is exercised with the OTHER capability
 // fields inverted, so a mutant that returns the wrong ModelCapability field for any capability is caught.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "../../config.js";
 import { modelSupportsCapability } from "../capabilityMapping.js";
+
+function verifiedToolCallingProof(): NonNullable<ModelCapability["toolCallingVerification"]> {
+  return {
+    status: "verified",
+    checkedAt: new Date().toISOString(),
+    probe: "gateway-tool-calling-v1",
+    configurationFingerprint: "test-fingerprint",
+  };
+}
 
 function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
   return {
@@ -15,6 +25,7 @@ function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
     contextWindow: 32_000,
     maxOutputTokens: 4_096,
     toolCalling: true,
+    toolCallingVerification: verifiedToolCallingProof(),
     structuredOutput: true,
     streaming: true,
     supportsImageInput: false,
@@ -28,6 +39,10 @@ function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
     ...overrides,
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("modelSupportsCapability", () => {
   it("text → satisfied only by a chat-kind model", () => {
@@ -51,6 +66,8 @@ describe("modelSupportsCapability", () => {
   });
 
   it("function-calling → keyed to toolCalling, not another flag", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T12:00:00.000Z"));
     expect(
       modelSupportsCapability(
         "function-calling",
@@ -63,6 +80,72 @@ describe("modelSupportsCapability", () => {
         cap({ toolCalling: false, supportsImageInput: true, structuredOutput: true }),
       ),
     ).toBe(false);
+  });
+
+  it("function-calling rejects missing, invalid, unverified, future, and expired proofs", () => {
+    vi.useFakeTimers();
+    const now = Date.parse("2026-08-28T12:00:00.000Z");
+    vi.setSystemTime(new Date(now));
+    const { toolCallingVerification: removedProof, ...withoutProof } = cap();
+    expect(removedProof).toBeDefined();
+
+    expect(modelSupportsCapability("function-calling", withoutProof)).toBe(false);
+    expect(
+      modelSupportsCapability(
+        "function-calling",
+        cap({
+          toolCallingVerification: { ...verifiedToolCallingProof(), status: "unverified" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      modelSupportsCapability(
+        "function-calling",
+        cap({
+          toolCallingVerification: { ...verifiedToolCallingProof(), checkedAt: "invalid" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      modelSupportsCapability(
+        "function-calling",
+        cap({
+          toolCallingVerification: {
+            ...verifiedToolCallingProof(),
+            checkedAt: new Date(now + 1).toISOString(),
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      modelSupportsCapability(
+        "function-calling",
+        cap({
+          toolCallingVerification: {
+            ...verifiedToolCallingProof(),
+            checkedAt: new Date(now - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 1).toISOString(),
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("function-calling accepts a proof exactly at the freshness boundary", () => {
+    vi.useFakeTimers();
+    const now = Date.parse("2026-08-28T12:00:00.000Z");
+    vi.setSystemTime(new Date(now));
+
+    expect(
+      modelSupportsCapability(
+        "function-calling",
+        cap({
+          toolCallingVerification: {
+            ...verifiedToolCallingProof(),
+            checkedAt: new Date(now - TOOL_CALLING_VERIFICATION_MAX_AGE_MS).toISOString(),
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("vision → keyed to supportsImageInput, not another flag", () => {

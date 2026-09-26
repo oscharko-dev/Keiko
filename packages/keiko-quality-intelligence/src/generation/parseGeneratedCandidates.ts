@@ -6,7 +6,7 @@
 // model call, NO randomness — IDs are content-hash derived so the same model output yields the
 // same candidate IDs (round-trip stable, mutation-detectable).
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { normaliseCandidateText } from "../domain/assertions.js";

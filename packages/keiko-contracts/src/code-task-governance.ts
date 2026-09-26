@@ -9,7 +9,12 @@
 // `CodeTaskExecutionV1` (the named projection consumed from #2385). `RunControlSnapshotV1` and
 // `RuntimeGovernancePortV1` live in `./code-task-run-control.ts` and reuse the branded ids here.
 import type { CodeTaskFact } from "./code-task-acceptance.js";
-import { isCodeTaskIsoInstant, isCodeTaskSha256Digest } from "./code-task-acceptance.js";
+import {
+  hasInheritedEnumerableProperty,
+  isCodeTaskIsoInstant,
+  isCodeTaskSha256Digest,
+  ownField,
+} from "./code-task-acceptance.js";
 import type { CodingWorkbenchMode, CodingWorkbenchValidationResult } from "./coding-workbench.js";
 import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 import type { CodingWorkbenchRuntimeStateName } from "./coding-workbench-runtime.js";
@@ -58,8 +63,21 @@ export function isCodeTaskPolicyVersion(value: unknown): value is CodeTaskPolicy
   return typeof value === "string" && POLICY_VERSION_PATTERN.test(value);
 }
 
+// KfQ Critical on code-task-acceptance.ts's identical unknownKeys (this file mirrors it): a value
+// shaped via Object.create(secretHolder) can carry every required field as an OWN property (so it
+// looks complete) plus one extra field reachable ONLY through the prototype -- verified empirically
+// that such a value's own-property count and names match an honest input exactly, so no
+// own-property-only scan (Object.keys, Object.getOwnPropertyNames, or an exact-own-count check)
+// ever sees the extra field, while ordinary property access on it still resolves through the
+// prototype chain. Rejecting any non-default prototype closes this at the single choke point every
+// validator in this file already passes through.
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -70,21 +88,33 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
+// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching
+// debug/debug-lifecycle.ts's idiom: Object.keys alone misses a non-enumerable own property. Every
+// caller here already passes through the hardened isRecord above, which is what actually closes
+// the prototype case (see its own comment).
 function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
 ): string[] {
-  return Object.keys(value)
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push(`${path} must not carry symbol-keyed properties`);
+  }
+  return errors;
 }
 
 // A content-free failure reason: a bounded lower-kebab reason code that cannot smuggle secrets or
 // free text across the acceptance boundary (mirrors the code-task-acceptance content-free rule).
 const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
-function isContentFreeReasonCode(value: unknown): value is string {
+// Exported: this is the ONE definition of the content-free reason-code rule. It was previously
+// re-declared verbatim in code-task-auxiliary.ts and enforced as a length-only check in
+// code-task-run-control.ts, so the "cannot smuggle secrets or free text" guarantee held in one of
+// the three places that claimed it — "Denied: /Users/alice/secret" is 64 characters or fewer.
+export function isContentFreeReasonCode(value: unknown): value is string {
   return typeof value === "string" && REASON_CODE_PATTERN.test(value);
 }
 
@@ -178,6 +208,16 @@ export interface GovernedActionEnvelope {
   readonly actionKind: GovernedActionActionKind;
 }
 
+// KEIKO-0755: `grantRefFactErrors` and `questionRefFactErrors` reject every outcome except
+// "known" and "absent" — but the field types below declared the full four-outcome CodeTaskFact
+// union, so at compile time a producer could construct a `{ outcome: "unknown" }` grant/question
+// that would still typecheck cleanly before being rejected at runtime. Narrow the type so an
+// unsupported outcome is a compile error at the producer.
+export type CodeTaskKnownOrAbsentFact<Value> = Extract<
+  CodeTaskFact<Value>,
+  { readonly outcome: "known" } | { readonly outcome: "absent" }
+>;
+
 /**
  * Discriminated on `decision`. Only "allowed" may carry a task grant; only "approval-required" may
  * carry a pending question; every other decision explicitly carries no reference on both axes.
@@ -185,13 +225,13 @@ export interface GovernedActionEnvelope {
 export type GovernedActionV1 =
   | (GovernedActionEnvelope & {
       readonly decision: "allowed";
-      readonly grant: CodeTaskFact<GovernedActionGrantRef>;
+      readonly grant: CodeTaskKnownOrAbsentFact<GovernedActionGrantRef>;
       readonly question: GovernedActionAbsent;
     })
   | (GovernedActionEnvelope & {
       readonly decision: "approval-required";
       readonly grant: GovernedActionAbsent;
-      readonly question: CodeTaskFact<GovernedActionQuestionRef>;
+      readonly question: CodeTaskKnownOrAbsentFact<GovernedActionQuestionRef>;
     })
   | (GovernedActionEnvelope & {
       readonly decision: Exclude<GovernedActionDecision, "allowed" | "approval-required">;
@@ -201,49 +241,117 @@ export type GovernedActionV1 =
 
 function envelopeErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (value.kind !== GOVERNED_ACTION_KIND) errors.push(`kind must be ${GOVERNED_ACTION_KIND}`);
-  if (value.schemaVersion !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
+  if (ownField(value, "kind") !== GOVERNED_ACTION_KIND) {
+    errors.push(`kind must be ${GOVERNED_ACTION_KIND}`);
+  }
+  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isCodeTaskTaskId(value.taskId)) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(value.runId)) errors.push("runId is invalid");
-  if (!isCodeTaskWorkspaceId(value.workspaceId)) errors.push("workspaceId is invalid");
-  if (!isNonNegativeInteger(value.stateRevision)) {
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId"))) errors.push("workspaceId is invalid");
+  if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
     errors.push("stateRevision must be a non-negative integer");
   }
-  if (!isOneOf(value.actionKind, GOVERNED_ACTION_ACTION_KINDS))
+  if (!isOneOf(ownField(value, "actionKind"), GOVERNED_ACTION_ACTION_KINDS)) {
     errors.push("actionKind is invalid");
+  }
   return errors;
 }
 
+// KEIKO-0302 follow-on: this only excluded a literal "value" key, so { outcome: "absent",
+// promptText: "leak me" } passed as absent on the denied/non-carrying decision path (and on the
+// "allowed" question / "approval-required" grant paths, both of which route through
+// absentErrors). GovernedActionAbsent's only field is "outcome" (see its definition above), so
+// requiring exactly one key rejects every extra key, not just "value".
+// Round 3 (#2899), proactive (not named by Codex/KfQ, but the same class of gap they found
+// elsewhere in this file): the own-property-COUNT check alone does not verify WHICH key is
+// present. Object.prototype polluted with outcome: "absent" lets `{ foo: "bar" }` -- one own key,
+// but not "outcome" -- pass every condition here: isRecord (default prototype, untouched by this
+// polluted-in-place mutation), value.outcome === "absent" (resolved via inheritance), and an own
+// count of exactly 1 (satisfied by the unrelated "foo").
+// Codex P1 3789773829: hasInheritedEnumerableProperty alone is not enough either -- it only sees
+// an ENUMERABLE inherited property, and Object.defineProperty(Object.prototype, "outcome", {
+// value: "absent", enumerable: false }) is invisible to it while value.outcome still resolves to
+// "absent". Reading through ownField (imported from code-task-acceptance.ts) instead of plain
+// property access is what actually closes this: ownField answers ownership, never resolution, so
+// no property-descriptor shape (enumerable, non-enumerable, or whatever comes next) matters here.
+// hasInheritedEnumerableProperty is kept as an extra, cheaper rejection for the common case, not as
+// the check this predicate depends on for correctness.
 function isAbsent(value: unknown): value is GovernedActionAbsent {
-  return isRecord(value) && value.outcome === "absent" && !("value" in value);
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  return (
+    isRecord(value) &&
+    !hasInheritedEnumerableProperty(value) &&
+    ownField(value, "outcome") === "absent" &&
+    Object.getOwnPropertyNames(value).length === 1 &&
+    Object.getOwnPropertySymbols(value).length === 0
+  );
 }
 
+// KEIKO-0302 follow-on: this checked the INNER grant.value object's own keys but never the outer
+// fact wrapper's, so a well-formed known fact padded with an extra field (e.g. free text riding
+// alongside a valid grant) validated and was returned verbatim. The "grant must not carry a
+// value" message for the absent+value case is preserved exactly (pinned test); any OTHER extra
+// key on either branch is now also rejected via the shared unknownKeys helper.
+// Round 3 (#2899): the absent branch's "value" in value check and the known branch's
+// wrapperExtraKeys check were both early-returns -- an object with two independent problems (an
+// inherited/extra field AND an invalid inner grant, or a wrapper extra key AND an invalid inner
+// grant) only ever reported one. Replaced the absent branch's field-specific check with the shared
+// hasInheritedEnumerableProperty guard (imported from code-task-acceptance.ts: see its definition
+// there for why this is a strict superset of "value" in value, and why reuse over a fourth copy),
+// called upfront so it also covers the known branch's wrapper. Both branches now collect.
 function grantRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["grant must be a tagged fact object"];
-  if (value.outcome === "absent") return "value" in value ? ["grant must not carry a value"] : [];
-  if (value.outcome !== "known") return ["grant.outcome must be known or absent"];
-  const grant = value.value;
-  if (!isRecord(grant)) return ["grant.value must be an object"];
-  const errors = unknownKeys(grant, ["grantId", "grantScope"], "grant.value");
-  if (!isCodeTaskGrantId(grant.grantId)) errors.push("grant.value.grantId is invalid");
-  if (!isCodeTaskGrantScope(grant.grantScope)) errors.push("grant.value.grantScope is invalid");
+  if (hasInheritedEnumerableProperty(value)) {
+    return ["grant must not resolve any field through its prototype chain"];
+  }
+  const outcome = ownField(value, "outcome");
+  if (outcome === "absent") {
+    const errors = unknownKeys(value, ["outcome"], "grant");
+    if (Object.hasOwn(value, "value")) errors.push("grant must not carry a value");
+    return errors;
+  }
+  if (outcome !== "known") return ["grant.outcome must be known or absent"];
+  const errors = unknownKeys(value, ["outcome", "value"], "grant");
+  const grant = ownField(value, "value");
+  if (!isRecord(grant)) {
+    errors.push("grant.value must be an object");
+    return errors;
+  }
+  errors.push(...unknownKeys(grant, ["grantId", "grantScope"], "grant.value"));
+  if (!isCodeTaskGrantId(ownField(grant, "grantId"))) errors.push("grant.value.grantId is invalid");
+  if (!isCodeTaskGrantScope(ownField(grant, "grantScope"))) {
+    errors.push("grant.value.grantScope is invalid");
+  }
   return errors;
 }
 
+// Same fix as grantRefFactErrors above, for the question fact.
 function questionRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["question must be a tagged fact object"];
-  if (value.outcome === "absent") {
-    return "value" in value ? ["question must not carry a value"] : [];
+  if (hasInheritedEnumerableProperty(value)) {
+    return ["question must not resolve any field through its prototype chain"];
   }
-  if (value.outcome !== "known") return ["question.outcome must be known or absent"];
-  const question = value.value;
-  if (!isRecord(question)) return ["question.value must be an object"];
-  const errors = unknownKeys(question, ["questionId", "expectedRevision"], "question.value");
-  if (!isCodeTaskQuestionId(question.questionId))
+  const outcome = ownField(value, "outcome");
+  if (outcome === "absent") {
+    const errors = unknownKeys(value, ["outcome"], "question");
+    if (Object.hasOwn(value, "value")) errors.push("question must not carry a value");
+    return errors;
+  }
+  if (outcome !== "known") return ["question.outcome must be known or absent"];
+  const errors = unknownKeys(value, ["outcome", "value"], "question");
+  const question = ownField(value, "value");
+  if (!isRecord(question)) {
+    errors.push("question.value must be an object");
+    return errors;
+  }
+  errors.push(...unknownKeys(question, ["questionId", "expectedRevision"], "question.value"));
+  if (!isCodeTaskQuestionId(ownField(question, "questionId"))) {
     errors.push("question.value.questionId is invalid");
-  if (!isNonNegativeInteger(question.expectedRevision)) {
+  }
+  if (!isNonNegativeInteger(ownField(question, "expectedRevision"))) {
     errors.push("question.value.expectedRevision must be a non-negative integer");
   }
   return errors;
@@ -252,30 +360,52 @@ function questionRefFactErrors(value: unknown): string[] {
 // A "known" grant on an ungrantable action kind (delivery, authority-widening, dependency-operation,
 // external-file-apply-back) is rejected: those actions can never be covered by a stored grant and
 // require separate explicit approval every time (the structural exclusion invariant).
+// KfQ 3789983129: ownField(grant, "outcome") !== "known" used to be the WHOLE test for "nothing to
+// exclude-check here, skip" -- but that is exactly the mirror risk of ownField itself: undefined
+// (grant.outcome unreadable because it is only inherited) satisfies `!== "known"` identically to a
+// genuinely non-known grant, so this function silently returned [] for BOTH. ownField is correct
+// for a REJECTING read (undefined never equals a required literal, so it falls through to an
+// error); it is wrong for a PRESENCE-gated read whose false branch is "skip, nothing to check" --
+// there, invisible must not collapse onto "legitimately not applicable". Verified by construction
+// before this fix: grantRefFactErrors (run separately on the same grant) already rejects this exact
+// shape via its own "grant.outcome must be known or absent" message, so validateGovernedActionV1's
+// overall ok:false was never actually wrong -- but this function's OWN return value was, and a
+// future caller of this exclusion rule in isolation (or a change to grantRefFactErrors) must not be
+// able to inherit that latent gap. Object.hasOwn(grant, "outcome") makes "outcome is not this
+// grant's own property" its own explicit, rejecting branch instead of folding it into "not known".
 function allowedGrantExclusionErrors(value: Record<string, unknown>): string[] {
-  const grant = value.grant;
-  if (!isRecord(grant) || grant.outcome !== "known") return [];
-  if (
-    isOneOf(value.actionKind, GOVERNED_ACTION_ACTION_KINDS) &&
-    isGovernedActionGrantable(value.actionKind)
-  ) {
+  const grant = ownField(value, "grant");
+  if (!isRecord(grant)) return [];
+  if (!Object.hasOwn(grant, "outcome")) {
+    return ["grant.outcome must be its own property to evaluate the exclusion rule"];
+  }
+  if (ownField(grant, "outcome") !== "known") return [];
+  const actionKind = ownField(value, "actionKind");
+  if (isOneOf(actionKind, GOVERNED_ACTION_ACTION_KINDS) && isGovernedActionGrantable(actionKind)) {
     return [];
   }
   return ["grant is not permitted on a structurally ungrantable action kind"];
 }
 
 function governedActionRefErrors(value: Record<string, unknown>): string[] {
-  if (value.decision === "allowed") {
+  const decision = ownField(value, "decision");
+  if (decision === "allowed") {
     return [
-      ...grantRefFactErrors(value.grant),
+      ...grantRefFactErrors(ownField(value, "grant")),
       ...allowedGrantExclusionErrors(value),
-      ...absentErrors(value.question, "question"),
+      ...absentErrors(ownField(value, "question"), "question"),
     ];
   }
-  if (value.decision === "approval-required") {
-    return [...absentErrors(value.grant, "grant"), ...questionRefFactErrors(value.question)];
+  if (decision === "approval-required") {
+    return [
+      ...absentErrors(ownField(value, "grant"), "grant"),
+      ...questionRefFactErrors(ownField(value, "question")),
+    ];
   }
-  return [...absentErrors(value.grant, "grant"), ...absentErrors(value.question, "question")];
+  return [
+    ...absentErrors(ownField(value, "grant"), "grant"),
+    ...absentErrors(ownField(value, "question"), "question"),
+  ];
 }
 
 function absentErrors(value: unknown, path: string): string[] {
@@ -299,12 +429,20 @@ export function validateGovernedActionV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<GovernedActionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["governed action must be an object"] };
-  const errors = Object.keys(value)
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !GOVERNED_ACTION_KEYS.has(key))
     .map((key) => `governedAction.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push("governedAction must not carry symbol-keyed properties");
+  }
   errors.push(...envelopeErrors(value));
-  if (!isOneOf(value.decision, GOVERNED_ACTION_DECISIONS)) errors.push("decision is invalid");
-  else errors.push(...governedActionRefErrors(value));
+  if (!isOneOf(ownField(value, "decision"), GOVERNED_ACTION_DECISIONS)) {
+    errors.push("decision is invalid");
+  } else {
+    errors.push(...governedActionRefErrors(value));
+  }
   return errors.length === 0
     ? { ok: true, value: value as unknown as GovernedActionV1 }
     : { ok: false, errors };
@@ -354,53 +492,103 @@ const CODE_TASK_EXECUTION_KEYS = new Set([
 
 function executionHeaderErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (value.kind !== CODE_TASK_EXECUTION_KIND)
+  if (ownField(value, "kind") !== CODE_TASK_EXECUTION_KIND) {
     errors.push(`kind must be ${CODE_TASK_EXECUTION_KIND}`);
-  if (value.schemaVersion !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
+  }
+  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isCodeTaskTaskId(value.taskId)) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(value.runId)) errors.push("runId is invalid");
-  if (!isCodeTaskWorkspaceId(value.workspaceId)) errors.push("workspaceId is invalid");
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId"))) errors.push("workspaceId is invalid");
   return errors;
 }
 
 function executionModeErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
   for (const key of ["requestedMode", "effectiveMode", "deploymentCeiling"] as const) {
-    if (!isOneOf(value[key], CODING_WORKBENCH_MODES)) errors.push(`${key} is invalid`);
+    if (!isOneOf(ownField(value, key), CODING_WORKBENCH_MODES)) errors.push(`${key} is invalid`);
   }
-  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
+  if (!isOneOf(ownField(value, "state"), CODING_WORKBENCH_RUNTIME_STATE_NAMES)) {
+    errors.push("state is invalid");
+  }
   return errors;
 }
 
 function executionFactErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
   for (const key of ["stateRevision", "runEpoch"] as const) {
-    if (!isNonNegativeInteger(value[key])) errors.push(`${key} must be a non-negative integer`);
+    if (!isNonNegativeInteger(ownField(value, key))) {
+      errors.push(`${key} must be a non-negative integer`);
+    }
   }
   for (const key of ["objectiveDigest", "authorityEnvelopeDigest"] as const) {
-    if (!isCodeTaskSha256Digest(value[key])) errors.push(`${key} must be a sha256 digest`);
+    if (!isCodeTaskSha256Digest(ownField(value, key)))
+      errors.push(`${key} must be a sha256 digest`);
   }
-  if (!isCodeTaskIsoInstant(value.updatedAt))
+  if (!isCodeTaskIsoInstant(ownField(value, "updatedAt"))) {
     errors.push("updatedAt must be an ISO-8601 UTC instant");
-  errors.push(...executionFailureFactErrors(value.failure));
+  }
+  // KEIKO-0626: pass the execution state into the failure-fact validator so the invariant is
+  // enforced at parse time — `failed` and `recovery-required` states MUST carry a known failure
+  // fact, and every other state MUST carry an absent/unknown/unavailable failure fact.
+  errors.push(...executionFailureFactErrors(ownField(value, "failure"), ownField(value, "state")));
   return errors;
 }
 
-function executionFailureFactErrors(value: unknown): string[] {
-  if (!isRecord(value)) return ["failure must be a tagged fact object"];
-  if (value.outcome === "known") {
-    return isContentFreeReasonCode(value.value)
-      ? []
-      : ["failure.value must be a bounded content-free reason code"];
+// KEIKO-0302 follow-on: same gap as grantRefFactErrors/questionRefFactErrors above — the "known"
+// branch validated value.value but never rejected an extra key riding alongside it, and the other
+// three outcomes only checked for a stray "value" key, not any other extra key. The
+// `failure must not carry a value for outcome ${outcome}` message is preserved exactly for that
+// one pinned case; every other extra key is now also rejected via unknownKeys.
+// Round 3 (#2899): same early-return-vs-collect and per-key-vs-general-guard gaps as
+// grantRefFactErrors/questionRefFactErrors above, fixed the same way.
+// KEIKO-0626: the failure fact's outcome must correlate with the runtime state — a "failed" or
+// "recovery-required" state MUST carry a `known` failure, and every other state MUST carry a
+// non-known outcome. Previously the shapes were checked independently, so `state: "running"` with
+// `failure: { outcome: "known", value: "..." }` (or the reverse — `state: "failed"` with an
+// `absent` failure) validated cleanly.
+const FAILURE_STATES: ReadonlySet<string> = new Set(["failed", "recovery-required"]);
+
+function knownFailureFactErrors(value: Record<string, unknown>, state: unknown): string[] {
+  const errors = unknownKeys(value, ["outcome", "value"], "failure");
+  if (!isContentFreeReasonCode(ownField(value, "value"))) {
+    errors.push("failure.value must be a bounded content-free reason code");
   }
-  if (
-    value.outcome === "absent" ||
-    value.outcome === "unavailable" ||
-    value.outcome === "unknown"
-  ) {
-    return "value" in value ? [`failure must not carry a value for outcome ${value.outcome}`] : [];
+  if (typeof state === "string" && !FAILURE_STATES.has(state)) {
+    errors.push(
+      `failure.outcome=known is only valid when state is failed or recovery-required, got ${state}`,
+    );
+  }
+  return errors;
+}
+
+function nonKnownFailureFactErrors(
+  value: Record<string, unknown>,
+  outcome: "absent" | "unavailable" | "unknown",
+  state: unknown,
+): string[] {
+  const errors = unknownKeys(value, ["outcome"], "failure");
+  if (Object.hasOwn(value, "value")) {
+    errors.push(`failure must not carry a value for outcome ${outcome}`);
+  }
+  if (typeof state === "string" && FAILURE_STATES.has(state)) {
+    errors.push(
+      `failure.outcome=${outcome} is invalid when state is ${state}; expected outcome=known`,
+    );
+  }
+  return errors;
+}
+
+function executionFailureFactErrors(value: unknown, state: unknown): string[] {
+  if (!isRecord(value)) return ["failure must be a tagged fact object"];
+  if (hasInheritedEnumerableProperty(value)) {
+    return ["failure must not resolve any field through its prototype chain"];
+  }
+  const outcome = ownField(value, "outcome");
+  if (outcome === "known") return knownFailureFactErrors(value, state);
+  if (outcome === "absent" || outcome === "unavailable" || outcome === "unknown") {
+    return nonKnownFailureFactErrors(value, outcome, state);
   }
   return ["failure.outcome must be known, absent, unavailable, or unknown"];
 }
@@ -409,9 +597,14 @@ export function validateCodeTaskExecutionV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodeTaskExecutionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["code-task execution must be an object"] };
-  const errors = Object.keys(value)
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !CODE_TASK_EXECUTION_KEYS.has(key))
     .map((key) => `codeTaskExecution.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push("codeTaskExecution must not carry symbol-keyed properties");
+  }
   errors.push(
     ...executionHeaderErrors(value),
     ...executionModeErrors(value),

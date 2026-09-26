@@ -11,7 +11,7 @@
 // each other.
 
 import type { MemoryEdge, MemoryRecord } from "./memory-records.js";
-import { MEMORY_SCHEMA_VERSION, MEMORY_STATUSES, MEMORY_TYPES } from "./memory.js";
+import { MEMORY_SCHEMA_VERSION, MEMORY_STATUSES, MEMORY_TYPES } from "./memory-contracts.js";
 import {
   validateMemoryEdge,
   validateMemoryProvenance,
@@ -140,4 +140,4 @@ export type {
   MemoryStructuredPayload,
   MemoryValidityInterval,
 } from "./memory-records.js";
-export type { MemoryScope, MemoryType } from "./memory.js";
+export type { MemoryScope, MemoryType } from "./memory-contracts.js";

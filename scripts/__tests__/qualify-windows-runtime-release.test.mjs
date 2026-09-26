@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +8,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   qualificationReceiptFor,
   qualifyWindowsRuntimeRelease,
+  writeQualificationEvidenceReceipt,
 } from "../qualify-windows-runtime-release.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "../runtime-activation-manifest.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
-import { inventoryWindowsPortablePeFiles } from "../windows-portable-signing.mjs";
+import {
+  inventoryWindowsPortableCorePeFiles,
+  inventoryWindowsPortablePeFiles,
+  closeWindowsGenerationDirectory,
+} from "../windows-portable-signing.mjs";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const roots = [];
@@ -37,7 +42,8 @@ function portableExecutable(marker = 0) {
 
 function fixture() {
   const stageRoot = root();
-  const resourceRoot = join(stageRoot, "payload", "Keiko");
+  const payloadRoot = join(stageRoot, "payload", "Keiko");
+  const resourceRoot = payloadRoot;
   const supervisor = portableExecutable(6);
   const secureRead = portableExecutable(7);
   const helpers = [
@@ -64,7 +70,7 @@ function fixture() {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, bytes);
   }
-  writeFileSync(join(resourceRoot, "Keiko.exe"), portableExecutable(1));
+  writeFileSync(join(payloadRoot, "Keiko.exe"), portableExecutable(1));
   const nodePath = join(resourceRoot, "runtime", "node", "node.exe");
   mkdirSync(dirname(nodePath), { recursive: true });
   writeFileSync(nodePath, portableExecutable(2));
@@ -82,6 +88,8 @@ function fixture() {
     artifact: { platformTarget: "windows-x64" },
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
     security: { verificationStatus: "verified-production" },
+    // runtimeActivationManifest emits nativeAddons unconditionally (#3455).
+    nativeAddons: [],
     nativeHelpers: helpers,
     sidecarRuntimes: [
       {
@@ -101,6 +109,10 @@ function fixture() {
     expectedInventoryPath,
     JSON.stringify(inventoryWindowsPortablePeFiles(resourceRoot)),
   );
+  const manifest = { schemaVersion: 1 };
+  const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
   const verificationInputPath = join(stageRoot, "verification.json");
   writeFileSync(
     verificationInputPath,
@@ -128,6 +140,44 @@ function fixture() {
   };
 }
 
+async function closedGenerationFixture() {
+  const value = fixture();
+  const payloadRoot = value.resourceRoot;
+  const temporaryInner = join(value.stageRoot, "inner-generation");
+  mkdirSync(join(temporaryInner, ".portable"), { recursive: true });
+  renameSync(join(payloadRoot, "runtime"), join(temporaryInner, "runtime"));
+  renameSync(value.activationPath, join(temporaryInner, ".portable", "runtime-activation.json"));
+  rmSync(join(payloadRoot, ".portable"), { recursive: true });
+  mkdirSync(join(payloadRoot, ".portable"), { recursive: true });
+  renameSync(temporaryInner, join(payloadRoot, ".portable", "generation-staging"));
+  const generationId = await closeWindowsGenerationDirectory(value.stageRoot);
+  value.resourceRoot = join(payloadRoot, ".portable", "generations", generationId);
+  value.activationPath = join(value.resourceRoot, ".portable", "runtime-activation.json");
+  writeFileSync(
+    value.expectedInventoryPath,
+    JSON.stringify(inventoryWindowsPortableCorePeFiles(value.resourceRoot)),
+  );
+  const verification = JSON.parse(readFileSync(value.verificationInputPath, "utf8"));
+  verification.peInventorySha256 = sha256(readFileSync(value.expectedInventoryPath));
+  writeFileSync(value.verificationInputPath, JSON.stringify(verification));
+  const manifest = {
+    schemaVersion: 2,
+    windowsGeneration: {
+      schemaVersion: 1,
+      resourceRoot: `.portable/generations/${generationId}`,
+      treeHashSchema: "KHT1",
+      treeSha256: generationId,
+      launcherPath: "Keiko.exe",
+      launcherSha256: sha256(readFileSync(join(payloadRoot, "Keiko.exe"))),
+    },
+  };
+  writeFileSync(
+    join(value.stageRoot, "manifest", "portable-manifest.json"),
+    `${JSON.stringify(manifest)}\n`,
+  );
+  return value;
+}
+
 function receiptInput(value) {
   return {
     activationPath: value.activationPath,
@@ -143,6 +193,25 @@ afterEach(() => {
 });
 
 describe("Windows runtime qualification", () => {
+  it.each([
+    ["null", null],
+    ["an object", { usearch: {} }],
+    ["a string", "usearch"],
+    ["absent", undefined],
+  ])("refuses an activation manifest whose nativeAddons is %s", (_label, addons) => {
+    // exactKeys only proves the key exists, so a malformed nativeAddons would otherwise receive a
+    // successful qualification receipt. The gate fails closed on every shape that is not an array.
+    const value = fixture();
+    const activation = { ...value.activation };
+    if (addons === undefined) delete activation.nativeAddons;
+    else activation.nativeAddons = addons;
+    writeFileSync(value.activationPath, `${JSON.stringify(activation)}\n`);
+
+    expect(() => qualificationReceiptFor(receiptInput(value))).toThrow(
+      "activation manifest is invalid",
+    );
+  });
+
   it("binds the exact activation, helper bytes, OpenCode payload, and backend", () => {
     const value = fixture();
     expect(qualificationReceiptFor(receiptInput(value))).toMatchObject({
@@ -190,6 +259,93 @@ describe("Windows runtime qualification", () => {
       backend: "windows-job-object",
       result: "passed",
     });
+  });
+
+  it("requalifies a fresh schema 2 artifact from its bound closed generation", async () => {
+    const value = await closedGenerationFixture();
+    const output = join(value.stageRoot, "qualification.json");
+    const spawnSyncImpl = vi.fn(() => ({ status: 0 }));
+
+    qualifyWindowsRuntimeRelease(
+      {
+        "stage-root": value.stageRoot,
+        "expected-inventory": value.expectedInventoryPath,
+        "source-commit-sha": COMMIT,
+        "verification-input": value.verificationInputPath,
+        output,
+      },
+      { platform: "win32", spawnSyncImpl },
+    );
+
+    expect(spawnSyncImpl.mock.calls[0][1]).toContain(
+      join(value.resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    );
+    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ result: "passed" });
+  });
+
+  it("writes a receipt.json + artifact pair the #3390 checker reads (audit F8)", () => {
+    const receiptsDir = root();
+    writeQualificationEvidenceReceipt({
+      receiptsDir,
+      scenarioId: "packaged-windows-x64",
+      receipt: { sourceCommitSha: COMMIT, platformTarget: "windows-x64", result: "passed" },
+      recordedAt: "2026-09-04T12:00:00Z",
+    });
+    expect(
+      JSON.parse(readFileSync(join(receiptsDir, "packaged-windows-x64.receipt.json"), "utf8")),
+    ).toEqual({
+      scenarioId: "packaged-windows-x64",
+      commitSha: COMMIT,
+      platform: "windows-x64",
+      testStatus: "passed",
+      recordedAt: "2026-09-04T12:00:00Z",
+      provenance: "real-model",
+    });
+  });
+
+  it("bridges a real qualification receipt into #3390 evidence when --qualification-receipts is set (audit F8)", () => {
+    const value = fixture();
+    const receiptsDir = root();
+    const output = join(value.stageRoot, "evidence", "qualification.json");
+    mkdirSync(dirname(output), { recursive: true });
+    qualifyWindowsRuntimeRelease(
+      {
+        "stage-root": value.stageRoot,
+        "expected-inventory": value.expectedInventoryPath,
+        "qualification-receipts": receiptsDir,
+        "scenario-id": "packaged-windows-x64",
+        "source-commit-sha": COMMIT,
+        "verification-input": value.verificationInputPath,
+        output,
+      },
+      { platform: "win32", spawnSyncImpl: vi.fn(() => ({ status: 0 })) },
+    );
+    expect(
+      JSON.parse(readFileSync(join(receiptsDir, "packaged-windows-x64.receipt.json"), "utf8")),
+    ).toMatchObject({
+      scenarioId: "packaged-windows-x64",
+      commitSha: COMMIT,
+      testStatus: "passed",
+    });
+  });
+
+  it("requires --scenario-id when writing qualification evidence", () => {
+    const value = fixture();
+    const output = join(value.stageRoot, "evidence", "qualification.json");
+    mkdirSync(dirname(output), { recursive: true });
+    expect(() =>
+      qualifyWindowsRuntimeRelease(
+        {
+          "stage-root": value.stageRoot,
+          "expected-inventory": value.expectedInventoryPath,
+          "qualification-receipts": root(),
+          "source-commit-sha": COMMIT,
+          "verification-input": value.verificationInputPath,
+          output,
+        },
+        { platform: "win32", spawnSyncImpl: vi.fn(() => ({ status: 0 })) },
+      ),
+    ).toThrow("--scenario-id is required");
   });
 
   it("rejects wrong platforms, invalid options, failed protocols, and tampered helper bytes", () => {

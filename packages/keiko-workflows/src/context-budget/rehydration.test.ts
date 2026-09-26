@@ -5,12 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextProvenanceRef,
-  type ContextRehydrationHandle,
-  type ContextToolRehydrationHandle,
+import type {
+  ContextProvenanceRef,
+  ContextRehydrationHandle,
+  ContextToolRehydrationHandle,
 } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   hashExcerptContent,
   type SearchScope,
@@ -29,6 +29,7 @@ const ROOT = "/ws";
 function scopeOver(relativePaths: readonly string[]): SearchScope {
   const workspace: WorkspaceInfo = {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",

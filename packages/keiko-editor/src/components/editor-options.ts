@@ -142,7 +142,7 @@ function buildAssistanceOptions(
   return {
     // Force below-line placement so top-of-editor diagnostics do not render under Keiko window chrome.
     // The bridge renders quick info as inert Markdown, so hover remains the only enabled Markdown sink.
-    hover: { enabled: hoverEnabled, above: false },
+    hover: { enabled: hoverEnabled ? "on" : "off", above: false },
     quickSuggestions: false,
     quickSuggestionsDelay: 0,
     suggestOnTriggerCharacters: true,

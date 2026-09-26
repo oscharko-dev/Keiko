@@ -3,17 +3,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
+  DEFAULT_COOLDOWN_MS,
+  DEFAULT_FAILURE_THRESHOLD,
+  DEFAULT_HALF_OPEN_PROBES,
+  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
+  hasConfiguredEnvModelProvider,
   loadConfigFromFile,
   loadEgressConfigFromFile,
+  migrateLegacyChatContextWindows,
   parseCapabilityList,
   parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
   parseModelCapability,
   resolveOutboundHttpEgressConfig,
+  resolvePrDescriptionBrandingFromConfig,
+  toolCallingConfigurationFingerprint,
   toSafeObject,
   type ParseGatewayConfigOptions,
 } from "./config.js";
+import { resolveCodingSafeSidecarGatewayProfile } from "./model-selection.js";
 
 interface RawProvider {
   modelId: string;
@@ -22,6 +33,19 @@ interface RawProvider {
   timeoutMs: number;
   maxRetries: number;
   retryBaseDelayMs: number;
+}
+
+interface ToolCallingProofProvider extends RawProvider {
+  readonly capability: Record<string, unknown>;
+}
+
+interface ToolCallingProofRaw {
+  readonly providers: readonly [ToolCallingProofProvider];
+  readonly circuitBreaker: {
+    readonly failureThreshold: number;
+    readonly cooldownMs: number;
+    readonly halfOpenProbes: number;
+  };
 }
 
 function validProvider(): RawProvider {
@@ -50,9 +74,32 @@ function rawWithProvider(mutate: (provider: RawProvider) => Record<string, unkno
   };
 }
 
+function rawToolCallingProof(): ToolCallingProofRaw {
+  return rawWithProvider((provider) => ({
+    ...provider,
+    capability: {
+      kind: "chat",
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      toolCalling: true,
+      structuredOutput: false,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    },
+  })) as ToolCallingProofRaw;
+}
+
 describe("parseGatewayConfig", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("parses a structurally valid config", () => {
@@ -102,6 +149,28 @@ describe("parseGatewayConfig", () => {
     expect(() =>
       parseGatewayConfig(rawWithProvider((p) => ({ ...p, realtimeAuthMode: "magic-token" }))),
     ).toThrow(/realtimeAuthMode must be one of/u);
+  });
+
+  // #2906 KEIKO-0567 — Gateway's constructor keys providers by modelId in a Map; a duplicate
+  // silently lets the later entry win. Reject it at the config-parse boundary so a
+  // chat/embedding modelId that collides with a later voice-role deployment name never
+  // silently redirects chat traffic to the voice provider.
+  it("rejects a config with two provider entries sharing the same modelId", () => {
+    const raw = {
+      providers: [
+        { ...validProvider(), modelId: "shared-model" },
+        { ...validProvider(), modelId: "shared-model" },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    };
+    let caught: unknown = undefined;
+    try {
+      parseGatewayConfig(raw);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ConfigInvalidError);
+    expect((caught as Error).message).toContain("shared-model");
   });
 
   it("parses and validates the provider output-token parameter", () => {
@@ -178,6 +247,34 @@ describe("parseGatewayConfig", () => {
       expect((error as Error).message).toContain("figma.accessToken");
       expect((error as Error).message).not.toContain("figd_bad-token");
     }
+  });
+
+  it("parses an optional server-owned PR-description branding logo URL (#3398)", () => {
+    const immutable = `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`;
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      branding: { logoUrl: `  ${immutable}  ` },
+    });
+
+    expect(config.branding?.logoUrl).toBe(immutable);
+  });
+
+  it("accepts a branding block with no logoUrl, present but empty", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      branding: {},
+    });
+
+    expect(config.branding).toEqual({});
+  });
+
+  it("rejects a non-object branding block", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        branding: "https://cdn.example.org/logo.svg",
+      }),
+    ).toThrow(/branding must be an object/);
   });
 
   it("parses an optional self-hosted LiteLLM reranker block", () => {
@@ -373,6 +470,50 @@ describe("parseGatewayConfig", () => {
     expect(config.providers[0]?.egress).toEqual(config.egress);
   });
 
+  it("parses proxied-hostname policy acknowledgement from config only", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        egress: {
+          httpProxy: "http://proxy.config.local:8080",
+          acknowledgeProxiedHostnamePolicy: true,
+        },
+      },
+      { KEIKO_ACKNOWLEDGE_PROXIED_HOSTNAME_POLICY: "false" },
+    );
+
+    expect(config.egress).toMatchObject({ acknowledgeProxiedHostnamePolicy: true });
+  });
+
+  it("does not accept an environment-only proxied-hostname policy acknowledgement", () => {
+    const config = parseGatewayConfig(validRaw(), {
+      KEIKO_ACKNOWLEDGE_PROXIED_HOSTNAME_POLICY: "true",
+    });
+
+    expect(config.egress?.acknowledgeProxiedHostnamePolicy).not.toBe(true);
+  });
+
+  it("preserves an explicit false proxied-hostname policy acknowledgement", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        egress: { acknowledgeProxiedHostnamePolicy: false },
+      },
+      { KEIKO_ACKNOWLEDGE_PROXIED_HOSTNAME_POLICY: "true" },
+    );
+
+    expect(config.egress?.acknowledgeProxiedHostnamePolicy).toBe(false);
+  });
+
+  it("rejects malformed proxied-hostname policy acknowledgement", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        egress: { acknowledgeProxiedHostnamePolicy: "not-a-boolean" },
+      }),
+    ).toThrow(/egress\.acknowledgeProxiedHostnamePolicy/u);
+  });
+
   it("lets env vars override explicit enterprise egress settings per field", () => {
     const raw = {
       ...(validRaw() as Record<string, unknown>),
@@ -476,6 +617,41 @@ describe("parseGatewayConfig", () => {
     expect(() => parseGatewayConfig(raw)).toThrow(/timeoutMs/);
   });
 
+  // A timer armed with more than 2^31 - 1 ms fires at once, so a larger timeoutMs would abort every
+  // call the moment it starts (PR #3452 review).
+  it("rejects a timeoutMs beyond what a timer can hold, and accepts the largest one", () => {
+    const tooLong = rawWithProvider((p) => ({ ...p, timeoutMs: 2 ** 31 }));
+    expect(() => parseGatewayConfig(tooLong)).toThrow(/timeoutMs/);
+    const longest = rawWithProvider((p) => ({ ...p, timeoutMs: 2 ** 31 - 1 }));
+    expect(parseGatewayConfig(longest).providers[0]?.timeoutMs).toBe(2 ** 31 - 1);
+  });
+
+  // The reranker's environment override arms the same timer: a KEIKO_RERANKER_TIMEOUT_MS past
+  // 2^31 - 1 ms would abort every rerank call the moment it starts (PR #3452 review, F77).
+  it("rejects a KEIKO_RERANKER_TIMEOUT_MS beyond what a timer can hold, and accepts the largest one", () => {
+    const withRerankerTimeout = (timeoutMs: string): ReturnType<typeof parseGatewayConfig> =>
+      parseGatewayConfig(
+        {
+          ...(validRaw() as Record<string, unknown>),
+          reranker: {
+            modelId: "config-reranker",
+            baseUrl: "https://config-reranker.local/v1",
+            apiKey: "config-secret",
+          },
+        },
+        { KEIKO_RERANKER_TIMEOUT_MS: timeoutMs },
+      );
+    expect(() => withRerankerTimeout(String(2 ** 31))).toThrow(/KEIKO_RERANKER_TIMEOUT_MS/);
+    expect(withRerankerTimeout(String(2 ** 31 - 1)).reranker?.timeoutMs).toBe(2 ** 31 - 1);
+  });
+
+  // An integer past 2^53 is not one JavaScript can count with; the retry loop and the budget derived
+  // from maxRetries must never be handed one (PR #3452 review).
+  it("rejects a maxRetries that is not a safe integer", () => {
+    const raw = rawWithProvider((p) => ({ ...p, maxRetries: 2 ** 53 }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/maxRetries/);
+  });
+
   it("accepts a provider modelId that is not in the capability registry", () => {
     const raw = rawWithProvider((p) => ({ ...p, modelId: "not-in-registry" }));
     const config = parseGatewayConfig(raw);
@@ -505,9 +681,104 @@ describe("parseGatewayConfig", () => {
     expect(config.capabilities?.[0]).toMatchObject({
       id: "example-private-chat",
       kind: "chat",
-      toolCalling: true,
+      toolCalling: false,
       structuredOutput: true,
     });
+  });
+
+  it("admits tool calling only with a current configuration-bound live proof", () => {
+    const raw = rawToolCallingProof();
+    const first = parseGatewayConfig(raw);
+    const provider = first.providers[0];
+    if (provider === undefined) throw new Error("expected provider");
+    const rawProvider = raw.providers[0];
+    const provenProvider = {
+      ...rawProvider,
+      capability: {
+        ...rawProvider.capability,
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date().toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+      },
+    };
+    const provenRaw = {
+      ...raw,
+      providers: [provenProvider],
+    };
+    expect(parseGatewayConfig(provenRaw).capabilities?.[0]?.toolCalling).toBe(true);
+    const movedRaw = {
+      ...provenRaw,
+      providers: [{ ...provenProvider, baseUrl: "https://moved.example/v1" }],
+    };
+    expect(parseGatewayConfig(movedRaw).capabilities?.[0]?.toolCalling).toBe(false);
+    const staleRaw = {
+      ...provenRaw,
+      providers: [
+        {
+          ...provenProvider,
+          capability: {
+            ...provenProvider.capability,
+            toolCallingVerification: {
+              status: "verified",
+              checkedAt: new Date(
+                Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 1,
+              ).toISOString(),
+              probe: "gateway-tool-calling-v1",
+              configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+            },
+          },
+        },
+      ],
+    };
+    expect(parseGatewayConfig(staleRaw).capabilities?.[0]?.toolCalling).toBe(false);
+  });
+
+  // 1.1.8 lab: a restart the day after setup loads the proof above as stale. The Coding Workbench
+  // must read the demoted model as a proof to renew, never as a model without tool calling, or its
+  // profile read never probes and the Workbench stays blocked until a manual check.
+  it("leaves a lapsed or moved proof renewable by the Coding Workbench", () => {
+    // One instant for the proof, the loader and the resolver, so the 1 ms boundary holds exactly.
+    vi.useFakeTimers({ now: Date.parse("2026-09-26T08:00:00.000Z") });
+    const raw = rawToolCallingProof();
+    const provider = parseGatewayConfig(raw).providers[0];
+    if (provider === undefined) throw new Error("expected provider");
+    const rawProvider = raw.providers[0];
+    const provenAt = (checkedAtMs: number, baseUrl = rawProvider.baseUrl): unknown => ({
+      ...raw,
+      providers: [
+        {
+          ...rawProvider,
+          baseUrl,
+          capability: {
+            ...rawProvider.capability,
+            toolCallingVerification: {
+              status: "verified",
+              checkedAt: new Date(checkedAtMs).toISOString(),
+              probe: "gateway-tool-calling-v1",
+              configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+            },
+          },
+        },
+      ],
+    });
+    const lapsed = [
+      provenAt(Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 1),
+      provenAt(Date.now(), "https://moved.example/v1"),
+    ];
+
+    for (const config of lapsed.map((value) => parseGatewayConfig(value))) {
+      expect(config.capabilities?.[0]?.toolCalling).toBe(false);
+      expect(resolveCodingSafeSidecarGatewayProfile(config)).toEqual({
+        status: "unavailable",
+        reason: "tool-calling-unverified",
+      });
+    }
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(parseGatewayConfig(provenAt(Date.now()))),
+    ).toMatchObject({ status: "available", modelAlias: provider.modelId });
   });
 
   it("round-trips calibrated token accounting through the inline provider capability path", () => {
@@ -740,6 +1011,68 @@ describe("parseGatewayConfig", () => {
     expect(cap?.supportsResponseFormat).toBe(true);
   });
 
+  // 0.3.12 conversation-default rank: the discovery-declared chat mode persists on the stored
+  // capability (setup writes it after /model/info), so the parser must round-trip it through
+  // BOTH capability paths — a dropped flag silently demotes every declared chat model to the
+  // same tier as a mode-less OCR entry and the default-model preference stops working after
+  // the next config reload.
+  it("round-trips chatModeDeclared through the strict top-level capabilities array", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "declared-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "declared-chat",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          chatModeDeclared: true,
+          workflowEligible: false,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "declared endpoint",
+          preferredUseCases: ["Conversation"],
+          knownLimitations: [],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "declared-chat");
+    expect(cap?.chatModeDeclared).toBe(true);
+  });
+
+  it("round-trips chatModeDeclared through the inline provider capability path and preserves absence", () => {
+    const declared = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        modelId: "declared-chat",
+        capability: { kind: "chat", contextWindow: 8_192, chatModeDeclared: true },
+      })),
+    );
+    expect(declared.capabilities?.find((c) => c.id === "declared-chat")?.chatModeDeclared).toBe(
+      true,
+    );
+    const silent = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        modelId: "modeless-chat",
+        capability: { kind: "chat", contextWindow: 8_192 },
+      })),
+    );
+    // Absence is NO signal and must stay absent — a coerced false would be indistinguishable
+    // from an affirmative "declared non-chat" record. Pin the capability first: with a bare
+    // `?? {}` fallback a parser regression that drops the inline capability entirely would
+    // still satisfy the absence check.
+    const modeless = silent.capabilities?.find((c) => c.id === "modeless-chat");
+    expect(modeless).toBeDefined();
+    expect(modeless !== undefined && "chatModeDeclared" in modeless).toBe(false);
+  });
+
   // Mutation guard: the strict top-level path preserves absence (optionalDeterminismFlags only
   // materialises a flag when declared), so an omitted determinism flag must read back as undefined,
   // not a coerced false — the gate treats both as "not seed-capable" but the wire shape must not drift.
@@ -909,6 +1242,69 @@ describe("parseGatewayConfig", () => {
     }
   });
 
+  // Regression pin (audit KEIKO-0520): the inline provider capability path used to default a
+  // missing contextWindow to 0 silently (optionalNonNegativeInt). A chat capability without a
+  // real contextWindow is a degraded sentinel. PR-review follow-up (Codex thread 3770357725):
+  // the strict parser now REJECTS these misconfigurations so a fresh setup save (which should
+  // never emit 0) cannot silently produce a chat capability with invented 4096. Legacy
+  // migration for pre-KEIKO-0520 files runs separately in loadConfigFromFile via
+  // migrateLegacyChatContextWindows — the migration+parse pin below confirms that path.
+  it("rejects an inline provider capability with kind: 'chat' and missing contextWindow", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-missing-context-chat",
+      capability: {
+        kind: "chat",
+      },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/contextWindow/);
+  });
+
+  it("rejects an inline provider capability with kind: 'chat' and contextWindow: 0", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-zero-context-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 0,
+      },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/contextWindow/);
+  });
+
+  it("migrates a legacy persisted inline chat contextWindow:0 when routed through the file-load walker", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-legacy-file-load-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 0,
+      },
+    }));
+    const config = parseGatewayConfig(migrateLegacyChatContextWindows(raw));
+    const cap = config.capabilities?.find((c) => c.id === "example-legacy-file-load-chat");
+    expect(cap?.kind).toBe("chat");
+    expect(cap?.contextWindow).toBe(4096);
+  });
+
+  it("accepts an inline provider capability with kind: 'voice' and contextWindow: 0", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-voice-model",
+      capability: {
+        kind: "voice",
+        contextWindow: 0,
+        supportsSpeechInput: true,
+        supportsSpeechOutput: true,
+        voiceProviderLocality: "azure-foundry",
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "example-voice-model");
+    expect(cap?.kind).toBe("voice");
+    expect(cap?.contextWindow).toBe(0);
+  });
+
   it("rejects an empty providers array", () => {
     expect(() => parseGatewayConfig({ providers: [], circuitBreaker: {} })).toThrow(
       ConfigInvalidError,
@@ -1062,6 +1458,89 @@ describe("parseGatewayConfig", () => {
       expect(parseGatewayConfig(raw).providers[0]?.baseUrl).toBe("https://10.0.0.5/v1");
     });
   });
+
+  // Regression pin (audit KEIKO-0167): a provider may declare its own circuitBreaker override so
+  // a mixed deployment (LiteLLM proxy + direct Azure) can give the flakier provider a more
+  // forgiving threshold/cooldown while the stricter provider keeps the shared top-level default.
+  // Parsed present-only: an override on providers[0] leaves providers[1].circuitBreaker undefined,
+  // and the top-level GatewayConfig.circuitBreaker continues to apply to every provider without
+  // one. The parser reuses parseCircuitBreaker so per-provider validation stays consistent with
+  // the top-level surface.
+  describe("per-provider circuitBreaker override (KEIKO-0167)", () => {
+    it("round-trips a provider-level override alongside a sibling that omits it", () => {
+      const raw = {
+        providers: [
+          {
+            ...validProvider(),
+            modelId: "flaky-provider",
+            circuitBreaker: { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 },
+          },
+          {
+            ...validProvider(),
+            modelId: "strict-provider",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      };
+      const config = parseGatewayConfig(raw);
+      const overridden = config.providers.find((p) => p.modelId === "flaky-provider");
+      const sibling = config.providers.find((p) => p.modelId === "strict-provider");
+      expect(overridden?.circuitBreaker).toEqual({
+        failureThreshold: 1,
+        cooldownMs: 1_000,
+        halfOpenProbes: 1,
+      });
+      expect(sibling?.circuitBreaker).toBeUndefined();
+      expect(config.circuitBreaker).toEqual({
+        failureThreshold: 5,
+        cooldownMs: 30_000,
+        halfOpenProbes: 2,
+      });
+    });
+
+    it("rejects a non-positive per-provider cooldownMs using the shared validator", () => {
+      const raw = rawWithProvider((p) => ({
+        ...p,
+        circuitBreaker: { failureThreshold: 2, cooldownMs: 0, halfOpenProbes: 1 },
+      }));
+      expect(() => parseGatewayConfig(raw)).toThrow(/providers\[0\]\.circuitBreaker\.cooldownMs/u);
+    });
+  });
+});
+
+// Issue #3398 (child correction 8): the config-level key never fails config load — only
+// `resolvePrDescriptionBrandingFromConfig`'s reuse of `validatedPrDescriptionLogoUrl` decides
+// whether the operator's declared logo actually renders. Every branch here proves the trusted
+// text-only attribution fallback is real, not merely the absence of a throw.
+describe("resolvePrDescriptionBrandingFromConfig (#3398)", () => {
+  const immutable = `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`;
+
+  function configWithBranding(logoUrl: string | undefined): ReturnType<typeof parseGatewayConfig> {
+    return parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      ...(logoUrl === undefined ? {} : { branding: { logoUrl } }),
+    });
+  }
+
+  it("resolves an immutable public HTTPS SVG logo URL to a renderable branding fact", () => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(immutable))).toEqual({
+      immutableLogoUrl: immutable,
+      availability: "public",
+    });
+  });
+
+  it("falls back to no branding when the key is absent", () => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(undefined))).toEqual({});
+  });
+
+  it.each([
+    "http://cdn.example.org/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/keiko-logo.svg", // not https
+    `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.png`, // not .svg
+    "https://cdn.example.org/keiko-logo.svg", // no content-hash path segment
+    `https://user:pw@cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`, // embedded credentials
+  ])("falls back to no branding for an invalid configured logo URL: %s", (logoUrl) => {
+    expect(resolvePrDescriptionBrandingFromConfig(configWithBranding(logoUrl))).toEqual({});
+  });
 });
 
 describe("toSafeObject", () => {
@@ -1170,7 +1649,7 @@ describe("toSafeObject", () => {
     expect(safe.capabilities?.[0]).toMatchObject({
       id: "example-private-chat",
       kind: "chat",
-      toolCalling: true,
+      toolCalling: false,
       structuredOutput: true,
     });
     expect(safe.capabilities?.[0]?.tokenAccounting).toEqual({
@@ -1403,6 +1882,62 @@ describe("parseModelCapability", () => {
     expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/contextWindow/);
   });
 
+  // Regression pin (audit KEIKO-0520): a kind:'chat' capability with contextWindow:0 is a
+  // misconfiguration — the whole chat runtime treats contextWindow<=0 as a degraded sentinel that
+  // surfaces later through disconnected symptoms (GEN-GATE-CONTEXT-001/004). PR-review
+  // follow-up (Codex thread 3770357725): the strict parser MUST reject a fresh chat capability
+  // with contextWindow:0. Legacy migration for pre-KEIKO-0520 persisted files runs separately
+  // in loadConfigFromFile via migrateLegacyChatContextWindows so upgrades still work; see the
+  // migration pin below for that path. Voice capabilities deliberately set contextWindow:0
+  // (gateway-setup.ts:377) and remain unrestricted.
+  it("rejects a chat capability whose contextWindow is 0", () => {
+    const raw = { ...validCapability(), contextWindow: 0 };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/contextWindow/);
+  });
+
+  it("migrates a legacy persisted chat capability with contextWindow:0 via the file-load walker", () => {
+    const migrated = migrateLegacyChatContextWindows({
+      providers: [{ capability: { ...validCapability(), contextWindow: 0 } }],
+    }) as { providers: readonly { capability: Record<string, unknown> }[] };
+    expect(migrated.providers[0]?.capability.contextWindow).toBe(4096);
+  });
+
+  // PR-review follow-up (Codex thread 3772192295): the migration walker MUST only touch
+  // pre-KEIKO-0520 legacy roots (missing schemaVersion OR schemaVersion == 1). A modern
+  // file that carries schemaVersion >= 2 with a hand-edited or corrupted contextWindow:0
+  // must reach the strict parser unchanged so the operator sees a real rejection instead
+  // of an invented 4096-token capacity.
+  it("does NOT migrate a modern root (schemaVersion >= 2) whose chat contextWindow is 0", () => {
+    const migrated = migrateLegacyChatContextWindows({
+      schemaVersion: 2,
+      providers: [{ capability: { ...validCapability(), contextWindow: 0 } }],
+    }) as { providers: readonly { capability: Record<string, unknown> }[] };
+    expect(migrated.providers[0]?.capability.contextWindow).toBe(0);
+  });
+
+  it("migrates a legacy root whose schemaVersion === 1", () => {
+    const migrated = migrateLegacyChatContextWindows({
+      schemaVersion: 1,
+      providers: [{ capability: { ...validCapability(), contextWindow: 0 } }],
+    }) as { providers: readonly { capability: Record<string, unknown> }[] };
+    expect(migrated.providers[0]?.capability.contextWindow).toBe(4096);
+  });
+
+  it("accepts a voice capability whose contextWindow is 0", () => {
+    const raw = {
+      ...validCapability(),
+      kind: "voice",
+      workflowEligible: false,
+      contextWindow: 0,
+      supportsSpeechInput: true,
+      supportsSpeechOutput: true,
+      voiceProviderLocality: "azure-foundry",
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.kind).toBe("voice");
+    expect(parsed.contextWindow).toBe(0);
+  });
+
   it("accepts an embedding capability whose workflowEligible is false", () => {
     const raw = { ...validCapability(), kind: "embedding", workflowEligible: false };
     const parsed = parseModelCapability(raw, "capabilities[0]");
@@ -1464,6 +1999,63 @@ describe("parseModelCapability", () => {
         "capabilities[0]",
       ),
     ).toThrow(/tokenAccounting\.counterId/u);
+  });
+
+  // live-journey-readiness-1: `pricing` is an optional, content-free public list price. Absent
+  // means the model carries no known dollar cost — a spend-budget enforcement layer must treat
+  // that as "unpriced" and fail closed rather than assume zero cost.
+  it("accepts and round-trips optional pricing", () => {
+    const raw = {
+      ...validCapability(),
+      pricing: { inputUsdPerMillionTokens: 3, outputUsdPerMillionTokens: 15 },
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.pricing).toEqual(raw.pricing);
+  });
+
+  it("omits pricing when the capability declares none (stays undefined, never defaulted)", () => {
+    const parsed = parseModelCapability(validCapability(), "capabilities[0]");
+    expect(parsed.pricing).toBeUndefined();
+  });
+
+  it("rejects a negative or non-finite pricing rate", () => {
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: { inputUsdPerMillionTokens: -1, outputUsdPerMillionTokens: 15 },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.inputUsdPerMillionTokens/u);
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: {
+            inputUsdPerMillionTokens: 3,
+            outputUsdPerMillionTokens: Number.POSITIVE_INFINITY,
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.outputUsdPerMillionTokens/u);
+  });
+
+  it("rejects an unknown pricing field (strict — no silent absorption)", () => {
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          pricing: {
+            inputUsdPerMillionTokens: 3,
+            outputUsdPerMillionTokens: 15,
+            discountCode: "friends-and-family",
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/pricing\.discountCode/u);
   });
 
   // Issue #1210: supportsInfilling / infillingAlignment are recognised strict-list keys and
@@ -2120,6 +2712,7 @@ describe("parseGatewayConfig top-level capabilities array", () => {
       modelId: "example-private-chat",
       capability: {
         kind: "chat",
+        contextWindow: 8_192,
         toolCalling: false,
         structuredOutput: false,
         supportsImageInput: false,
@@ -2147,7 +2740,7 @@ describe("parseGatewayConfig top-level capabilities array", () => {
     expect(config.capabilities).toHaveLength(1);
     expect(config.capabilities?.[0]).toMatchObject({
       id: "example-private-chat",
-      toolCalling: true,
+      toolCalling: false,
       structuredOutput: true,
       supportsImageInput: true,
       supportsDocumentInput: true,
@@ -2531,5 +3124,65 @@ describe("secret-reference resolution (#1320)", () => {
     const config = parseGatewayConfig(raw, {}, options);
     expect(called).toBe(false);
     expect(config.providers[0]?.apiKey).toBe("file-key");
+  });
+});
+
+// #2906 round 3 (KEIKO-0572 follow-up): keiko-ui's gatewayConfigParsing.ts cannot import this
+// package directly (ADR-0019), so its own REBUILT_CIRCUIT_BREAKER literal used to be a
+// hand-maintained copy of DEFAULT_CIRCUIT_BREAKER_CONFIG's VALUES, typed against the shared
+// SafeCircuitBreakerConfig shape but with no check that the numbers actually matched. Both sides
+// now import DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG from keiko-contracts/bff-wire -- this pins that
+// this package's own exported defaults still equal the contracts-owned value, so a future edit to
+// config.ts that reintroduces an independent literal for one of the three fields fails here rather
+// than silently drifting apart from the value keiko-ui also reads.
+describe("circuit breaker defaults stay pinned to the contracts-owned value", () => {
+  it("derives DEFAULT_CIRCUIT_BREAKER_CONFIG and its three exported numbers from DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG", () => {
+    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG).toEqual(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG);
+    expect(DEFAULT_FAILURE_THRESHOLD).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.failureThreshold);
+    expect(DEFAULT_COOLDOWN_MS).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.cooldownMs);
+    expect(DEFAULT_HALF_OPEN_PROBES).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.halfOpenProbes);
+  });
+});
+
+// Final-audit F13/F24: the ONE env-only provider-admission formula every caller (keiko-server's
+// production Gateway composition, the #3390 real-model qualification harness) must share instead
+// of restating a weaker copy that accepts the API key alone.
+describe("hasConfiguredEnvModelProvider", () => {
+  it("is false when only the API key half of the pair is set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when only the base-URL half of the pair is set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_BASE_URL: "https://gateway.internal.example/v1",
+      }),
+    ).toBe(false);
+  });
+
+  it("is true only once both halves of the pair are set", () => {
+    expect(
+      hasConfiguredEnvModelProvider({
+        KEIKO_MODEL_EXAMPLE_API_KEY: "sk-fixture-not-a-real-secret",
+        KEIKO_MODEL_EXAMPLE_BASE_URL: "https://gateway.internal.example/v1",
+      }),
+    ).toBe(true);
+  });
+
+  it("checks one specific model id's token when given, ignoring an unrelated qualifying pair", () => {
+    const env = {
+      KEIKO_MODEL_OTHER_API_KEY: "sk-fixture-not-a-real-secret",
+      KEIKO_MODEL_OTHER_BASE_URL: "https://gateway.internal.example/v1",
+    };
+    expect(hasConfiguredEnvModelProvider(env, "example")).toBe(false);
+    expect(hasConfiguredEnvModelProvider(env, "other")).toBe(true);
+  });
+
+  it("is false on an empty environment", () => {
+    expect(hasConfiguredEnvModelProvider({})).toBe(false);
   });
 });

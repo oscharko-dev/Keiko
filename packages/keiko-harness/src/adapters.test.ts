@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   CancelledError,
+  type GatewayCallRequest,
   type GatewayRequest,
   type GatewayStreamChunk,
+  type ModelGatewayLogContext,
   type NormalizedResponse,
-  type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "@oscharko-dev/keiko-tools";
 import { DryRunToolPort, GatewayModelPort } from "./adapters.js";
+import { HARNESS_CODES } from "./errors.js";
 
 function response(): NormalizedResponse {
   return {
@@ -80,36 +83,128 @@ describe("GatewayModelPort", () => {
     expect(seen).toBe(controller.signal);
     expect(received).toEqual(chunks);
   });
+
+  it("forwards the caller's logContext through call to the Gateway double (ADR-0173 D5)", async () => {
+    let seen: ModelGatewayLogContext | undefined;
+    const port = new GatewayModelPort({
+      chat: (req: GatewayCallRequest): Promise<NormalizedResponse> => {
+        seen = req.logContext;
+        return Promise.resolve(response());
+      },
+    });
+    const request: GatewayCallRequest = {
+      modelId: "m",
+      messages: [],
+      logContext: { correlationId: "run-42" },
+    };
+    await port.call(request, new AbortController().signal);
+    expect(seen).toEqual({ correlationId: "run-42" });
+  });
+
+  it("forwards the caller's logContext through callStream to the Gateway double (ADR-0173 D5)", async () => {
+    let seen: ModelGatewayLogContext | undefined;
+    const port = new GatewayModelPort({
+      chat: (): Promise<NormalizedResponse> => Promise.resolve(response()),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      chatStream: async function* (req: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
+        seen = req.logContext;
+        yield { type: "done", response: response() };
+      },
+    });
+    const request: GatewayCallRequest = {
+      modelId: "m",
+      messages: [],
+      logContext: { correlationId: "run-77" },
+    };
+    const received: GatewayStreamChunk[] = [];
+    for await (const chunk of port.callStream(request, new AbortController().signal)) {
+      received.push(chunk);
+    }
+    expect(seen).toEqual({ correlationId: "run-77" });
+    expect(received).toEqual([{ type: "done", response: response() }]);
+  });
+
+  // KEIKO-0463 — SonarJS S7786: after a type check, throw a TypeError (not a bare Error) so the
+  // rule stays green whenever this file is touched and downstream `err instanceof TypeError`
+  // guards remain correct.
+  // KEIKO-0594: this is also the only test exercising the unsupported-streaming guard itself
+  // (a ChatModel structurally lacking chatStream — the documented "structural fakes may omit it"
+  // case), so it additionally pins the exact message text, the externally observable contract.
+  it("throws a TypeError (not a bare Error) when callStream is used but the gateway lacks chatStream", () => {
+    const port = new GatewayModelPort({
+      chat: (): Promise<NormalizedResponse> => Promise.resolve(response()),
+    });
+    let thrown: unknown;
+    try {
+      port.callStream({ modelId: "m", messages: [] }, new AbortController().signal);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toBe("gateway does not support streaming");
+  });
+
+  it("leaves logContext undefined when the caller supplies a plain GatewayRequest", async () => {
+    let seen: ModelGatewayLogContext | undefined = { correlationId: "should-be-overwritten" };
+    const port = new GatewayModelPort({
+      chat: (req: GatewayCallRequest): Promise<NormalizedResponse> => {
+        seen = req.logContext;
+        return Promise.resolve(response());
+      },
+    });
+    const request: GatewayRequest = { modelId: "m", messages: [] };
+    await port.call(request, new AbortController().signal);
+    expect(seen).toBeUndefined();
+  });
 });
 
 describe("DryRunToolPort", () => {
-  const tools: readonly ToolDefinition[] = [
-    { name: "read_file", description: "read", parameters: {} },
-  ];
-
-  it("records the call without executing and returns an empty dry-run output", async () => {
-    const port = new DryRunToolPort(tools);
-    const result = await port.execute({
-      toolCallId: "tc-1",
-      toolName: "read_file",
-      arguments: { path: "src/foo.ts" },
-      signal: new AbortController().signal,
-    });
-    expect(result.toolCallId).toBe("tc-1");
-    expect(result.durationMs).toBe(0);
-    expect(port.calls()).toHaveLength(1);
-    expect(port.calls()[0]?.toolName).toBe("read_file");
-    expect(port.calls()[0]?.arguments).toEqual({ path: "src/foo.ts" });
+  it("does not fabricate completed output for an unavailable dry-run handler", async () => {
+    const port = new DryRunToolPort();
+    await expect(
+      port.execute({
+        toolCallId: "tc-1",
+        toolName: "read_file",
+        arguments: { path: "src/foo.ts" },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("unavailable");
+    expect(port.calls()).toHaveLength(0);
   });
 
-  it("listTools returns the registered list", () => {
-    expect(new DryRunToolPort(tools).listTools()).toEqual(tools);
+  // Relocates the prior pin "does not advertise productive tools even when legacy definitions are
+  // supplied" (adapters.ts previously took a caller-supplied `legacyDefinitions` constructor
+  // argument that could never make the port productive). That injection vector is now removed
+  // entirely -- the constructor takes no arguments -- so the fabrication-prevention invariant it
+  // guarded is now proven directly by execute() always refusing (the two tests in this file), and
+  // this test instead pins the ADR-0175 D1/D4 disposition: honest advertisement of the fixed
+  // compiled `legacy-native@1` projection, asserted against the canonical producer
+  // (@oscharko-dev/keiko-tools's TOOL_DEFINITIONS, packages/keiko-tools/src/schemas.ts) rather
+  // than a locally recomputed copy, paired with the same unconditional refusal for every one of
+  // the tools it lists.
+  it("advertises the compiled legacy-native catalog projection and refuses execution with a closed reason", async () => {
+    const port = new DryRunToolPort();
+    const advertised = port.listTools();
+    expect(advertised).toEqual(TOOL_DEFINITIONS);
+    expect(port.catalogBinding()).toBe(UNAVAILABLE_TOOL_CATALOG_BINDING);
+    expect(port.catalogBinding().handlerSetDigest).not.toBe(port.catalogBinding().projectionDigest);
+    expect(advertised.length).toBeGreaterThan(0);
+    for (const tool of advertised) {
+      const outcome = port.execute({
+        toolCallId: `tc-${tool.name}`,
+        toolName: tool.name,
+        arguments: {},
+        signal: new AbortController().signal,
+      });
+      await expect(outcome).rejects.toMatchObject({ category: HARNESS_CODES.TOOL_ERROR });
+    }
+    expect(port.calls()).toHaveLength(0);
   });
 
   it("rejects with CancelledError when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort("stop");
-    const port = new DryRunToolPort(tools);
+    const port = new DryRunToolPort();
     await expect(
       port.execute({
         toolCallId: "tc-2",

@@ -22,18 +22,20 @@
 // is media-and-turn-notification only by construction: no effect grants workflow authority, triggers a
 // model call, or writes to any store.
 
+import type {
+  VoicePlaybackEffect,
+  VoicePlaybackFailureKind,
+  VoicePlaybackPhase,
+  VoicePlaybackState,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type VoicePlaybackEffect,
-  type VoicePlaybackFailureKind,
-  type VoicePlaybackPhase,
-  type VoicePlaybackState,
   initialVoicePlaybackPhase,
   isActiveVoicePlaybackPhase,
   isSettledVoicePlaybackPhase,
   mapVoicePlaybackPhaseToWireState,
   voicePlaybackAllowedForProfile,
   voicePlaybackInterruptAllowedForProfile,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-playback";
 import type { VoiceProfile } from "@/lib/types";
 import { type VoiceClock, createBrowserVoiceClock } from "./voice-timebase";
 import type { VoiceTurnManagerEngine, VoiceTurnSignal } from "./voice-turn-manager";

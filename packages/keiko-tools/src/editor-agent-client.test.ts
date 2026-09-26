@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  DEFAULT_LSP_PROCESS_CONFIG,
-  DEFAULT_VERIFICATION_LIMITS,
-  MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS,
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentAction,
-  type EditorAgentSessionSnapshot,
-  type EditorAgentVerificationRunRequest,
+import type {
+  EditorAgentAction,
+  EditorAgentSessionSnapshot,
+  EditorAgentVerificationRunRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { DEFAULT_LSP_PROCESS_CONFIG } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
+import { DEFAULT_VERIFICATION_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   createFetchEditorAgentHttpTransport,
   DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,

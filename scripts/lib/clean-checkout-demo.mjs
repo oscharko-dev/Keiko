@@ -46,6 +46,8 @@ import {
 import { buildRedactor, rerankSelection } from "@oscharko-dev/keiko-server";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
+import { provisionedUsearchBinaryPath } from "../provision-usearch.mjs";
+
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const EMBEDDING_MODEL_ID = "keiko-clean-checkout-embedding";
 const RERANK_MODEL_ID = "keiko-clean-checkout-rerank";
@@ -202,9 +204,12 @@ export function resolveProvisionedUsearchPath({
   if (typeof configured === "string" && configured.length > 0 && existsSync(configured)) {
     return configured;
   }
-  const target = `${platform}-${arch}`;
-  const candidate = join(repoRoot, ".usearch", "2.26.0", target, "usearch.node");
-  return existsSync(candidate) ? candidate : undefined;
+  const candidate = provisionedUsearchBinaryPath(repoRoot, platform, arch);
+  return existingPath(candidate);
+}
+
+function existingPath(candidate) {
+  return candidate !== undefined && existsSync(candidate) ? candidate : undefined;
 }
 
 function resolveDemoVectorIndex(usearchBinaryPath) {

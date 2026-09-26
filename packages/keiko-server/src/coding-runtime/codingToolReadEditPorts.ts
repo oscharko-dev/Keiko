@@ -1,26 +1,53 @@
 import { createHash } from "node:crypto";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentAction,
-  type EditorAgentChangeset,
-  type EditorAgentGovernedAuthorityReference,
+import type {
+  EditorAgentAction,
+  EditorAgentChangeset,
+  EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
-import { detectWorkspaceAt, discoverWithStats, isDenied } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  discoverWithStats,
+  isDenied,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace";
 
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import {
+  correlationIdOrUnknown,
+  isValidCorrelationId,
+  UNKNOWN_CORRELATION_ID,
+} from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
-import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
+import {
+  isExactEditorAgentChangeset,
+  isGovernedReadPath,
+  type CodingToolReadResult,
+} from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
   CodingRuntimeEditorMutationLeaseRequest,
+  CodingRuntimeMutationOutcome,
 } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
-import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type {
+  SecureWorkspaceTextReadFailure,
+  SecureWorkspaceTextReadPort,
+} from "./secureWorkspaceTextRead.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 const MAX_READ_BYTES = 65_536;
 const RAW_SINGLE_FILE_PATCH =
@@ -34,9 +61,29 @@ type EditorChangesetRequest = CodingToolActionOf<"edit">;
 // EditorAgentFailureCode, plus this port's own transport/no-session markers) — never raw command
 // output — so, unlike the other governed ports, it is safe for `codingToolFacade.ts` to forward
 // verbatim instead of collapsing it to the bare status.
+//
+// `message`, where present, is a fixed, content-free, actionable ONE-SENTENCE explanation of the
+// closed `reasonCode` above it — never raw command output, never anything from the changeset or
+// the workspace. It exists because a bare reason code such as NO_ACTIVE_SESSION reads to the model
+// as an opaque failure it can only ask the operator about, instead of the actionable condition it
+// names (epic #3384 cascade, end-to-end run 2026-09-05: the model asked "how would you like to
+// proceed?" instead of telling the operator to open the Workbench). The activity-log diagnostic
+// for a refusal stays reason-code-only regardless (`emitEditRefusedDiagnostic` never reads this
+// field) — `message` is carried only on the outcome returned to the caller, never logged.
 type EditOutcome =
   | { readonly status: "completed" }
-  | { readonly status: "failed"; readonly reasonCode?: string | undefined };
+  | {
+      readonly status: "failed";
+      readonly reasonCode?: string | undefined;
+      readonly message?: string | undefined;
+    };
+
+// NO_ACTIVE_SESSION means the bounded wait for a live Workbench editor bridge
+// (bindLiveEditorSession) never found one for this run's workspace — the model's edit was refused
+// before it ever reached the editor route, so nothing was attempted against the tree.
+export const NO_ACTIVE_SESSION_MESSAGE =
+  "no Coding Workbench is connected for this workspace; keep the Workbench open and retry";
+const NO_ACTIVE_SESSION_DETAIL = { message: NO_ACTIVE_SESSION_MESSAGE } as const;
 
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
   Partial<Pick<EditorAgentHttpClient, "listSessions">>;
@@ -57,10 +104,22 @@ export interface CodingToolReadEditPortDeps {
   readonly resolveEditorActionContext: () => EditorActionContext;
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
   readonly resolveWorkspaceRoot?: (() => string | undefined) | undefined;
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly requiresEditorReview?: (() => boolean) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly mutationLeaseCoordinator?:
-    Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
+    | Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard" | "waitForMutation">
+    | undefined;
+  /**
+   * When true, a mutationGuard that carries no `binding` property at all fails closed at the
+   * preflight boundary — read/discover/edit return failed rather than proceeding as if no
+   * binding enforcement were required. Defaults to false so that pre-existing wirings and tests
+   * that supplied bindingless guards keep their prior semantics. The single production wiring
+   * (createRuntimeCodingToolFacade in productionManagedWorktreeTools.ts) opts in to lock the
+   * defense-in-depth behavior KEIKO-0469 called for; new/alternative wirings should follow.
+   */
+  readonly enforceProducerBinding?: boolean | undefined;
 }
 
 interface EditorActionContext {
@@ -124,45 +183,64 @@ function executeDiscoverSync(
 ):
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" } {
-  const binding = discoveryPreflight(deps, signal, mutationGuard);
-  if (binding === false) return { status: "failed" };
+  const preflight = discoveryPreflight(deps, signal, mutationGuard);
+  if (!preflight.ok) return { status: "failed" };
+  const binding = preflight.binding;
   try {
-    const workspaceRoot = deps.resolveWorkspaceRoot?.();
-    if (workspaceRoot === undefined) return { status: "failed" };
-    const workspace = detectWorkspaceAt(workspaceRoot);
-    const discovered = discoverWithStats(workspace, {
-      maxDepth: 40,
-      maxFiles: 20_000,
-      applyGitignore: true,
-    });
+    const resolved = discoveryWorkspace(deps);
+    if (resolved === undefined) return { status: "failed" };
+    const workspace = detectWorkspaceAt(resolved.root, resolved.fs);
+    const discovered = discoverWithStats(
+      workspace,
+      {
+        maxDepth: 40,
+        maxFiles: 20_000,
+        applyGitignore: true,
+      },
+      resolved.fs,
+    );
     const text = discoveredPathText(
       discovered.files.map(({ relativePath }): string => relativePath),
       request.query,
       request.maxResults,
     );
-    if (!discoveryPostflight(deps, workspaceRoot, binding, signal, mutationGuard)) {
+    if (!discoveryPostflight(deps, resolved.root, binding, signal, mutationGuard)) {
       return { status: "failed" };
     }
     return { status: "completed", read: discoveryReadResult(text) };
   } catch (error) {
-    emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, request.actionId, error);
+    emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, error);
     return { status: "failed" };
   }
 }
 
-const SAFE_DISCOVERY_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/u;
+interface DiscoveryWorkspace {
+  readonly root: string;
+  readonly fs?: WorkspaceFs | undefined;
+}
 
+function discoveryWorkspace(deps: CodingToolReadEditPortDeps): DiscoveryWorkspace | undefined {
+  if (deps.resolveWorkspaceRootAccess !== undefined) {
+    const access = deps.resolveWorkspaceRootAccess();
+    return access === undefined ? undefined : { root: access.canonicalRoot, fs: access.fs };
+  }
+  const root = deps.resolveWorkspaceRoot?.();
+  return root === undefined ? undefined : { root };
+}
+
+// Same rule as `editCorrelationId`/`editContextCorrelationId` below: the run id is the timeline a
+// discovery failure belongs to, and the ONE sanctioned stand-in when there is no run in scope is
+// UNKNOWN_CORRELATION_ID (correlation.ts, AGENTS.md §8). The local `[A-Za-z0-9:._-]{1,128}` regex
+// this replaced admitted the tool action id — a `session:call` shape the sink rewrites to
+// "invalid-correlation-id" — and otherwise fell back to an ad-hoc literal, so a wiring with no
+// producer binding logged a line indistinguishable from a hostile id (PR #3381 review).
 function emitDiscoveryFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   binding: RuntimeProducerBinding | undefined,
-  actionId: string,
   error: unknown,
 ): void {
-  const candidate = binding?.runId ?? actionId;
   emitServerDiagnostic(diagnostics, {
-    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(candidate)
-      ? candidate
-      : "coding-discovery-failure",
+    correlationId: correlationIdOrUnknown(binding?.runId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.workspace-discovery",
     source: "coding-tool-read-edit-ports.discover",
@@ -222,17 +300,288 @@ async function executeRead(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
-  | { readonly status: "failed" }
+  | { readonly status: "failed"; readonly reasonCode?: string }
 > {
-  const binding = readPreflight(deps, request, signal, mutationGuard);
-  if (binding === false) return { status: "failed" };
-  const result = await deps.secureWorkspaceTextRead.readText({
-    relativePath: request.relativePath,
-    signal,
-  });
-  if (!readPostflight(deps, result, binding, signal, mutationGuard)) return { status: "failed" };
-  if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) return { status: "failed" };
-  const window = readWindow(result.text, request.startLine, request.maxLines);
+  let binding = safeMutationBinding(mutationGuard);
+  try {
+    const preflight = readPreflight(deps, request, signal, mutationGuard);
+    if (!preflight.ok) return failedRead(deps, binding, request, "preflight-refused");
+    binding = preflight.binding;
+    const result = await deps.secureWorkspaceTextRead.readText({
+      relativePath: request.relativePath,
+      signal,
+    });
+    if (!result.ok) return failedRead(deps, binding, request, result.reason);
+    if (!readPostflight(deps, result, binding, signal, mutationGuard)) {
+      return failedRead(deps, binding, request, "postflight-refused");
+    }
+    if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) {
+      return failedRead(deps, binding, request, "response-too-large");
+    }
+    return completedRead(deps, binding, request, result.text);
+  } catch (error) {
+    return failedRead(deps, binding, request, "exception", error);
+  }
+}
+
+type WorkspaceReadFailureReason =
+  | SecureWorkspaceTextReadFailure
+  | "exception"
+  | "postflight-refused"
+  | "preflight-refused"
+  | "response-too-large";
+
+const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "unsupported-platform",
+    "workspace-unavailable",
+    "artifact-unverified",
+    "busy",
+    "cancelled",
+    "timeout",
+    "process-failed",
+    "protocol-invalid",
+    "denied",
+    "not-found",
+    "not-text",
+    "too-large",
+    "unstable",
+    "exception",
+    "postflight-refused",
+    "preflight-refused",
+    "response-too-large",
+  ],
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.workspace-read",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.workspaceRead",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "failed"],
+    },
+    reason: CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD,
+    targetPathSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    startLine: { type: "integer", dataClass: "count", required: false },
+    maxLines: { type: "integer", dataClass: "count", required: false },
+    frames: CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD,
+    causeChain: CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-workspace-read"],
+  proofIds: ["coding-runtime.workspace-read.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.editor-mutation.settled",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.completedEdit",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded", "failed", "cancelled"],
+    },
+    actionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["edit"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-editor-mutation"],
+  proofIds: ["coding-runtime.editor-mutation.settled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// #3610: a governed edit the editor route or this port refused is a decision, not a server
+// failure — a stale base (CONTENT_HASH_MISMATCH), a policy denial, an invalid patch, no live
+// Workbench. It rode the failure diagnostic at level error with errorKind internal, which also
+// opened a support incident for every stale edit. The reason is the closed code the model receives;
+// a client error's own code is free text, so it is recorded only as EDIT_CLIENT_ERROR. The first two
+// groups are the editor-agent conflict and failure codes; the op catalog needs them as literals, and
+// a test pins that every contract code is listed.
+const EDIT_REFUSAL_REASONS = [
+  "DIRTY",
+  "VERSION_MISMATCH",
+  "CONTENT_HASH_MISMATCH",
+  "NO_ACTIVE_SESSION",
+  "NO_ACTIVE_BRIDGE",
+  "INVALID_EDITS",
+  "OUT_OF_SCOPE",
+  "DECOMPOSE_PER_ROOT",
+  "PRECONDITION_REQUIRED",
+  "POLICY_DENIED",
+  "APPROVAL_REQUIRED",
+  "TIMED_OUT",
+  "QUEUE_FULL",
+  "CANCELLED",
+  "PROVIDER_UNAVAILABLE",
+  "UNSUPPORTED_OPERATION",
+  "LIMIT_EXCEEDED",
+  "DUPLICATE_ACTION",
+  "MUTATION_IN_FLIGHT",
+  "EDIT_PREPARE_FAILED",
+  "WORKSPACE_ACCESS_LOST",
+  "EDIT_MUTATION_FAILED",
+  "EDIT_CLIENT_ERROR",
+  "UNCLASSIFIED",
+] as const;
+type EditRefusalReason = (typeof EDIT_REFUSAL_REASONS)[number];
+const EDIT_REFUSAL_REASON_SET: ReadonlySet<string> = new Set(EDIT_REFUSAL_REASONS);
+
+const EDIT_PREPARE_CAUSES = [
+  "workspace-access-lost",
+  "cancelled",
+  "guard-denied",
+  "changeset-invalid",
+  "binding-unavailable",
+  "editor-context-unavailable",
+  "lease-unavailable",
+] as const;
+type EditPrepareCause = (typeof EDIT_PREPARE_CAUSES)[number];
+
+const EDIT_PREPARE_ERROR_KINDS: Readonly<Record<EditPrepareCause, ActivityLogErrorKind>> = {
+  "workspace-access-lost": "authority-denied",
+  cancelled: "cancelled",
+  "guard-denied": "authority-denied",
+  "changeset-invalid": "validation-failed",
+  "binding-unavailable": "authority-denied",
+  "editor-context-unavailable": "unavailable",
+  "lease-unavailable": "conflict",
+};
+
+const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.edit.refused",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.logEditRefused",
+  fields: {
+    reasonCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...EDIT_REFUSAL_REASONS],
+    },
+    // #3611 review: EDIT_PREPARE_FAILED covers several causes; this names which one refused the
+    // edit before it reached the editor route. The model-facing reason code stays the same.
+    prepareCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...EDIT_PREPARE_CAUSES],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-editor-mutation"],
+  proofIds: ["coding-runtime.edit.refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const EDIT_REFUSAL_ERROR_KINDS: Readonly<Record<EditRefusalReason, ActivityLogErrorKind>> = {
+  DIRTY: "conflict",
+  VERSION_MISMATCH: "conflict",
+  CONTENT_HASH_MISMATCH: "conflict",
+  DUPLICATE_ACTION: "conflict",
+  MUTATION_IN_FLIGHT: "conflict",
+  NO_ACTIVE_SESSION: "unavailable",
+  NO_ACTIVE_BRIDGE: "unavailable",
+  QUEUE_FULL: "unavailable",
+  PROVIDER_UNAVAILABLE: "unavailable",
+  EDIT_CLIENT_ERROR: "unavailable",
+  INVALID_EDITS: "validation-failed",
+  DECOMPOSE_PER_ROOT: "validation-failed",
+  PRECONDITION_REQUIRED: "validation-failed",
+  UNSUPPORTED_OPERATION: "validation-failed",
+  LIMIT_EXCEEDED: "validation-failed",
+  EDIT_PREPARE_FAILED: "validation-failed",
+  OUT_OF_SCOPE: "authority-denied",
+  POLICY_DENIED: "authority-denied",
+  APPROVAL_REQUIRED: "authority-denied",
+  WORKSPACE_ACCESS_LOST: "authority-denied",
+  TIMED_OUT: "timeout",
+  CANCELLED: "cancelled",
+  EDIT_MUTATION_FAILED: "internal",
+  UNCLASSIFIED: "unknown",
+};
+
+function editRefusalReason(reasonCode: string | undefined): EditRefusalReason {
+  if (reasonCode === undefined) return "UNCLASSIFIED";
+  return EDIT_REFUSAL_REASON_SET.has(reasonCode)
+    ? (reasonCode as EditRefusalReason)
+    : "EDIT_CLIENT_ERROR";
+}
+
+const WORKSPACE_READ_ERROR_KINDS: Partial<
+  Readonly<Record<WorkspaceReadFailureReason, ActivityLogErrorKind>>
+> = {
+  cancelled: "cancelled",
+  timeout: "timeout",
+  denied: "authority-denied",
+  "preflight-refused": "authority-denied",
+  "postflight-refused": "authority-denied",
+  "not-found": "unavailable",
+  "workspace-unavailable": "unavailable",
+  "too-large": "validation-failed",
+  "response-too-large": "validation-failed",
+  exception: "internal",
+  "process-failed": "internal",
+};
+
+function workspaceReadErrorKind(reason: WorkspaceReadFailureReason): ActivityLogErrorKind {
+  return WORKSPACE_READ_ERROR_KINDS[reason] ?? "read-failed";
+}
+
+function completedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+  text: string,
+): { readonly status: "completed"; readonly read: CodingToolReadResult } {
+  const window = readWindow(text, request.startLine, request.maxLines);
+  recordCompletedRead(deps, binding, request);
   return {
     status: "completed",
     read: {
@@ -240,11 +589,114 @@ async function executeRead(
       byteCount: Buffer.byteLength(window.text, "utf8"),
       // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
       // anchored to the governed read even when the model only saw a window of it.
-      digest: createHash("sha256").update(result.text, "utf8").digest("hex"),
+      digest: wholeFileDigest(text),
       totalLines: window.totalLines,
       ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
   };
+}
+
+// One formula for the digest a read reports and the pre-ask base check compares against (#3612).
+function wholeFileDigest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/**
+ * The digest a governed read of `relativePath` reports now, or undefined when that read would not
+ * return the whole file (denied path, missing file, over the read bound, read refused). The pre-ask
+ * base check of a changeset compares it with the model's `expectedContentHash` (#3612); only the
+ * comparison leaves the server, never the text. A denied path is never read, so the check cannot
+ * serve as a digest oracle for a file the model is not allowed to read.
+ */
+export async function governedWorkspaceFileDigest(
+  read: SecureWorkspaceTextReadPort,
+  relativePath: string,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (!isGovernedReadPath(relativePath)) return undefined;
+  const result = await read.readText({ relativePath, signal });
+  return result.ok && Buffer.byteLength(result.text, "utf8") <= MAX_READ_BYTES
+    ? wholeFileDigest(result.text)
+    : undefined;
+}
+
+function recordCompletedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_READ_OPERATION,
+      { correlationId: correlationIdOrUnknown(binding?.runId) },
+      {
+        state: "completed",
+        targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+        startLine: request.startLine ?? 1,
+        maxLines: request.maxLines ?? 0,
+      },
+    ),
+  );
+}
+
+// The refusals the secure read gives for the model's own request, by closed code: a path the policy
+// denies, a file that does not exist, is not text, or exceeds the helper's bound. They reach the
+// model and let the catalog settle the call as a refusal, not as a handler fault (#3615). A fault
+// stays bare -- including a port that returns more than the read bound, which is not the model's
+// request but a port this server must not trust.
+export const WORKSPACE_READ_REFUSAL_CODES = {
+  denied: "workspace-read-denied",
+  "not-found": "workspace-read-not-found",
+  "not-text": "workspace-read-not-text",
+  "too-large": "workspace-read-too-large",
+} as const satisfies Partial<Record<WorkspaceReadFailureReason, string>>;
+
+function readRefusalCode(reason: WorkspaceReadFailureReason): string | undefined {
+  return Object.hasOwn(WORKSPACE_READ_REFUSAL_CODES, reason)
+    ? WORKSPACE_READ_REFUSAL_CODES[reason as keyof typeof WORKSPACE_READ_REFUSAL_CODES]
+    : undefined;
+}
+
+function failedRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  request: RepositoryReadRequest,
+  reason: WorkspaceReadFailureReason,
+  error?: unknown,
+): { readonly status: "failed"; readonly reasonCode?: string } {
+  const correlationId = correlationIdOrUnknown(binding?.runId);
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_READ_OPERATION,
+      { correlationId, level: "warn", errorKind: workspaceReadErrorKind(reason) },
+      {
+        state: "failed",
+        reason,
+        targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+        ...(error === undefined
+          ? {}
+          : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+      },
+    ),
+  );
+  if (error !== undefined) emitReadFailureDiagnostic(deps.diagnostics, correlationId, error);
+  const reasonCode = readRefusalCode(reason);
+  return reasonCode === undefined ? { status: "failed" } : { status: "failed", reasonCode };
+}
+
+function emitReadFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.workspace-read",
+    source: "coding-tool-read-edit-ports.read",
+    errorClass: contentFreeErrorClass(error),
+    message: "workspace-read-failed",
+  });
 }
 
 /**
@@ -290,28 +742,41 @@ function slicedWindow(input: {
   };
 }
 
+/** A single explicit result shape for both preflight checks below: every branch returns an
+ * object literal discriminated on `ok`, instead of mixing a `RuntimeProducerBinding | undefined`
+ * payload with the bare boolean literal `false` "abort" signal. */
+type ReadEditPreflightOutcome =
+  | { readonly ok: false }
+  | { readonly ok: true; readonly binding: RuntimeProducerBinding | undefined };
+
 function readPreflight(
   deps: CodingToolReadEditPortDeps,
   request: RepositoryReadRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): RuntimeProducerBinding | undefined | false {
-  if (isAborted(signal) || isDenied(request.relativePath)) return false;
+): ReadEditPreflightOutcome {
+  if (isAborted(signal) || isDenied(request.relativePath) || !hasLiveWorkspaceAccess(deps)) {
+    return { ok: false };
+  }
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return false;
-  if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return false;
-  return isDenied(request.relativePath) ? false : binding;
+  if (binding === null) return { ok: false };
+  if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
+  if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return { ok: false };
+  return isDenied(request.relativePath) ? { ok: false } : { ok: true, binding };
 }
 
 function discoveryPreflight(
   deps: CodingToolReadEditPortDeps,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): RuntimeProducerBinding | undefined | false {
-  if (isAborted(signal)) return false;
+): ReadEditPreflightOutcome {
+  if (isAborted(signal)) return { ok: false };
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return false;
-  return readContextMatches(deps, binding) && checkGuard(mutationGuard) ? binding : false;
+  if (binding === null) return { ok: false };
+  if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
+  return readContextMatches(deps, binding) && checkGuard(mutationGuard)
+    ? { ok: true, binding }
+    : { ok: false };
 }
 
 function discoveryPostflight(
@@ -321,8 +786,9 @@ function discoveryPostflight(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): boolean {
+  const currentRoot = discoveryWorkspace(deps)?.root;
   return (
-    deps.resolveWorkspaceRoot?.() === workspaceRoot &&
+    currentRoot === workspaceRoot &&
     checkGuard(mutationGuard) &&
     readContextMatches(deps, binding) &&
     !isAborted(signal)
@@ -338,6 +804,7 @@ function readPostflight(
 ): result is Extract<typeof result, { readonly ok: true }> {
   return (
     result.ok &&
+    hasLiveWorkspaceAccess(deps) &&
     checkGuard(mutationGuard) &&
     readContextMatches(deps, binding) &&
     !isAborted(signal)
@@ -351,6 +818,12 @@ interface PreparedEdit {
   readonly workspaceRoot: string | undefined;
 }
 
+// EVERY failed exit here carries a closed reason code and one `edit-refused` line. The two that did
+// not — the prepare stage refusing (malformed changeset, revoked mutation guard, cross-wired
+// producer binding, unresolvable editor context) and the post-session-bind workspace-access recheck
+// — returned a bare `{ status: "failed" }` with nothing in the activity log, which is exactly the
+// workbench failure mode this file's diagnostic was added for: the model saw a retryable-looking
+// failure and re-issued the edit while the log stayed empty (cursor review, PR #3381).
 async function executeEdit(
   deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
@@ -358,7 +831,12 @@ async function executeEdit(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<EditOutcome> {
   const prepared = prepareEdit(deps, request, signal, mutationGuard);
-  if (prepared === undefined) return { status: "failed" };
+  if ("refused" in prepared) {
+    return editRefused(deps, editContextCorrelationId(deps), "EDIT_PREPARE_FAILED", {
+      prepareCause: prepared.refused,
+    });
+  }
+  const correlationId = editCorrelationId(prepared.action);
   try {
     const action = await bindLiveEditorSession(
       deps.editorAgentClient,
@@ -368,18 +846,73 @@ async function executeEdit(
     );
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return { status: "failed", reasonCode: "NO_ACTIVE_SESSION" };
+      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION", NO_ACTIVE_SESSION_DETAIL);
     }
+    if (!hasLiveWorkspaceAccess(deps)) {
+      discardMutationLease(deps, prepared.leaseRequest);
+      return editRefused(deps, correlationId, "WORKSPACE_ACCESS_LOST");
+    }
+    // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
+    const completion =
+      prepared.leaseRequest === undefined
+        ? undefined
+        : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
     const result = await deps.editorAgentClient.action(action, prepared.signal);
-    const completed = result.ok && editorStatusCompleted(result.value.result.status);
-    if (completed) return { status: "completed" };
+    if (result.ok && editorStatusCompleted(result.value.result.status)) {
+      return await completedEdit(deps, correlationId, completion);
+    }
     discardMutationLease(deps, prepared.leaseRequest);
-    return { status: "failed", reasonCode: editFailureReasonCode(result) };
+    return editRefused(
+      deps,
+      correlationId,
+      editFailureReasonCode(result),
+      editFailureDetail(result),
+    );
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
-    emitEditFailureDiagnostic(deps.diagnostics, prepared.action.actionId, error);
+    emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
     return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
+}
+
+async function completedEdit(
+  deps: CodingToolReadEditPortDeps,
+  correlationId: string,
+  completion: Promise<CodingRuntimeMutationOutcome> | undefined,
+): Promise<EditOutcome> {
+  if (completion === undefined) return { status: "completed" };
+  const outcome = await completion;
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION,
+      {
+        correlationId,
+        ...(outcome === "succeeded"
+          ? {}
+          : { level: "warn", errorKind: outcome === "cancelled" ? "cancelled" : "internal" }),
+      },
+      { state: outcome, actionKind: "edit" },
+    ),
+  );
+  const reasonCode = outcome === "cancelled" ? "CANCELLED" : "EDIT_MUTATION_FAILED";
+  return outcome === "succeeded"
+    ? { status: "completed" }
+    : editRefused(deps, correlationId, reasonCode);
+}
+
+function editRefused(
+  deps: CodingToolReadEditPortDeps,
+  correlationId: string,
+  reasonCode: string | undefined,
+  detail: { readonly message?: string; readonly prepareCause?: EditPrepareCause } = {},
+): EditOutcome {
+  const { message, prepareCause } = detail;
+  // The refusal line stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches
+  // the activity log, only the outcome returned to the caller.
+  logEditRefused(deps, correlationId, reasonCode, prepareCause);
+  return message === undefined
+    ? { status: "failed", reasonCode }
+    : { status: "failed", reasonCode, message };
 }
 
 // The closed vocabulary a rejected edit can name (EditorAgentConflictCode/EditorAgentFailureCode
@@ -394,19 +927,79 @@ function editFailureReasonCode(
   return outcome.conflict?.code ?? outcome.failure?.code;
 }
 
+// The editor route's own sentence for a conflict or failure -- "context mismatch at original line
+// 12", "A declared file is missing from the patch." -- is product-authored text over paths and line
+// numbers, never file content or command output. It rides to the caller (the facade decides what the
+// model sees) and, like `message` above, never into the activity log. Without it the model saw the
+// bare code and retried the same patch blind: the probe rehearsal of 2026-09-08 sent six
+// INVALID_EDITS patches in a row and then gave up without delivering (#3390).
+function editFailureDetail(result: Awaited<ReturnType<EditorAgentActionClient["action"]>>): {
+  readonly message?: string;
+} {
+  if (!result.ok) return {};
+  const outcome = result.value.result;
+  const message = outcome.conflict?.message ?? outcome.failure?.message;
+  return message === undefined ? {} : { message };
+}
+
+// The run id is the timeline an edit failure belongs to; the tool action id carries the sidecar's
+// `session:call` shape, which the diagnostics sink rejects as a correlation id (it wrote
+// "invalid-correlation-id" on every edit diagnostic before this, end-to-end run 2026-09-03).
+function editCorrelationId(action: EditorAgentAction): string {
+  const runId = action.authorityRef?.runId;
+  return runId !== undefined && isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
+// The prepare stage can refuse before any action exists, so that refusal takes its correlation from
+// the run's own editor context instead of an action that was never built. Same run id, same
+// timeline: a prepare refusal and an editor-route refusal for one run join on the one key.
+function editContextCorrelationId(deps: CodingToolReadEditPortDeps): string {
+  const runId = resolveEditorContext(deps)?.authorityRef.runId;
+  return runId !== undefined && isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
 function emitEditFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
-  actionId: string,
+  correlationId: string,
   error: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
-    correlationId: SAFE_DISCOVERY_CORRELATION_ID.test(actionId) ? actionId : "coding-edit-failure",
+    correlationId,
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.editor-changeset",
     source: "coding-tool-read-edit-ports.edit",
     errorClass: contentFreeErrorClass(error),
     message: "edit-transport-failed",
   });
+}
+
+// A governed edit the editor route refused (a policy denial, a conflict, a failed apply) is a
+// decision the activity log must be able to reconstruct: before 2026-09-03 the only trace was the
+// in-memory audit feed, and a workbench run that could never edit a file left an empty log. The
+// reason is the closed refusal vocabulary above, never content, at warn level (#3610).
+function logEditRefused(
+  deps: CodingToolReadEditPortDeps,
+  correlationId: string,
+  reasonCode: string | undefined,
+  prepareCause: EditPrepareCause | undefined,
+): void {
+  const reason = editRefusalReason(reasonCode);
+  const errorKind =
+    prepareCause === undefined
+      ? EDIT_REFUSAL_ERROR_KINDS[reason]
+      : EDIT_PREPARE_ERROR_KINDS[prepareCause];
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_EDIT_REFUSED_OPERATION,
+      { level: "warn", correlationId, errorKind },
+      {
+        reasonCode: reason,
+        ...(prepareCause === undefined ? {} : { prepareCause }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 async function bindLiveEditorSession(
@@ -447,21 +1040,32 @@ function waitForEditorSession(delayMs: number, signal: AbortSignal): Promise<boo
   });
 }
 
+// The checkGuard(mutationGuard) call this delegates into (validatedChangeset) runs at PREPARE
+// time — before bindLiveEditorSession's up-to-~11.75s session-binding wait and before the actual
+// mutating editorAgentClient.action() call. It is NOT the final mutation-authority recheck. The
+// true final-boundary recheck happens in packages/keiko-server/src/editor/agentRoutes.ts's
+// applyChangeset(), which calls claimRuntimeMutation() → deps.runtimeMutationLease.claim() → the
+// same mutationGuard closure registered by registerMutationLease() below (via
+// codingRuntimeEditorMutationLeaseCoordinator), immediately before applyPatch(). A future reader
+// must not treat the single local checkGuard() here as the only guard: the coordinator is what
+// binds the mutation authority to the commit boundary.
 function prepareEdit(
   deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): PreparedEdit | undefined {
-  const changeset = validatedChangeset(request, signal, mutationGuard);
-  if (changeset === undefined) return undefined;
+): PreparedEdit | { readonly refused: EditPrepareCause } {
+  const changeset = validatedChangeset(deps, request, signal, mutationGuard);
+  if (typeof changeset === "string") return { refused: changeset };
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return undefined;
+  if (binding === null || (binding === undefined && deps.enforceProducerBinding === true))
+    return { refused: "binding-unavailable" };
   const context = resolveEditorContext(deps);
-  if (context === undefined || !editorContextMatches(context, binding)) return undefined;
+  if (context === undefined || !editorContextMatches(context, binding))
+    return { refused: "editor-context-unavailable" };
   const action = changesetAction(request, changeset, context);
   const leaseRequest = registerMutationLease(deps, action, context, binding, mutationGuard);
-  if (binding !== undefined && leaseRequest === undefined) return undefined;
+  if (binding !== undefined && leaseRequest === undefined) return { refused: "lease-unavailable" };
   return {
     action,
     leaseRequest,
@@ -470,16 +1074,32 @@ function prepareEdit(
   };
 }
 
+function hasLiveWorkspaceAccess(deps: CodingToolReadEditPortDeps): boolean {
+  const resolveAccess = deps.resolveWorkspaceRootAccess;
+  if (resolveAccess === undefined) return true;
+  try {
+    const access = resolveAccess();
+    const expectedRoot = deps.resolveWorkspaceRoot?.();
+    return (
+      access !== undefined && (expectedRoot === undefined || access.canonicalRoot === expectedRoot)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function validatedChangeset(
+  deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): EditorAgentChangeset | undefined {
-  if (isAborted(signal) || !checkGuard(mutationGuard) || !("changeset" in request)) {
-    return undefined;
-  }
-  if (!isExactEditorAgentChangeset(request.changeset)) return undefined;
-  return normalizeRawSingleFilePatch(request.changeset);
+): EditorAgentChangeset | EditPrepareCause {
+  if (!hasLiveWorkspaceAccess(deps)) return "workspace-access-lost";
+  if (isAborted(signal)) return "cancelled";
+  if (!checkGuard(mutationGuard)) return "guard-denied";
+  if (!("changeset" in request) || !isExactEditorAgentChangeset(request.changeset))
+    return "changeset-invalid";
+  return normalizeRawSingleFilePatch(request.changeset) ?? "changeset-invalid";
 }
 
 function normalizeRawSingleFilePatch(
@@ -637,12 +1257,26 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+// Returns `null` when the guard carries a `binding` property whose shape is malformed, `undefined`
+// when the guard omits `binding` altogether, or the extracted binding when it is well-formed.
+// Callers that opted in to `enforceProducerBinding` (KEIKO-0469) treat both `null` and `undefined`
+// as fail-closed — otherwise `undefined` preserves the pre-existing "no binding, no check" path.
 function mutationBinding(
   mutationGuard: CodingToolMutationGuard,
 ): RuntimeProducerBinding | undefined | null {
   const record = mutationGuard as unknown as Record<string, unknown>;
   if (!("binding" in record)) return undefined;
   return isRuntimeProducerBinding(record.binding) ? record.binding : null;
+}
+
+function safeMutationBinding(
+  mutationGuard: CodingToolMutationGuard,
+): RuntimeProducerBinding | undefined {
+  try {
+    return mutationBinding(mutationGuard) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isRuntimeProducerBinding(value: unknown): value is RuntimeProducerBinding {

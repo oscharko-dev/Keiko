@@ -1,8 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { appendFileSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-command.mjs";
 
 const bundleRootName = ".portable-release-assets";
 export const PORTABLE_ASSETS_ARTIFACT_NAME = "portable-release-assets";
@@ -151,7 +150,7 @@ export function validatePortableAssetsRunSnapshot(config, run, artifacts) {
 }
 
 function ghJson(path) {
-  const result = spawnSync(resolveHostExecutable("gh"), ["api", path], { encoding: "utf8" });
+  const result = spawnHostExecutable("gh", ["api", path]);
   if (result.status !== 0) fail("GitHub run metadata could not be resolved.");
   try {
     return JSON.parse(result.stdout);
@@ -176,16 +175,15 @@ export function validatePortableAssetsRun(env = process.env) {
   );
 }
 
-function validateStableLatestBundleRequirement(config) {
-  if (config.tag === "latest" && !hasBundleInput(config)) {
-    fail("stable latest publishes require a reviewed portable asset bundle.");
-  }
-}
-
+// A stable `latest` publish no longer has to be HANDED a reviewed bundle: the downloads may
+// already sit on the GitHub Release, published by the governed evaluation lane. Demanding the
+// bundle as a dispatch input here refused the publish job before release-publish.mjs could look,
+// so the requirement now lives where it can see the truth — release-publish.mjs verifies that the
+// release actually carries all four downloads before npm learns the dist-tag (Codex finding on
+// #3051). Whatever IS handed in still passes the full qualified-run binding below.
 export function resolvePortableAssetsManifest(env = process.env, cwd = process.cwd()) {
   const config = portableAssetsConfig(env);
   validateBundleInputCompleteness(config);
-  validateStableLatestBundleRequirement(config);
   if (!hasBundleInput(config)) return config.manifest;
 
   return validateBundleManifestPath(config.manifest, cwd);

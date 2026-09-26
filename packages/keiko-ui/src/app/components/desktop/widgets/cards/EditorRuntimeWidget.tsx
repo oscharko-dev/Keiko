@@ -23,6 +23,7 @@
  * `disabled`/`deferred` and no model-generated code is produced or executed in v1.
  */
 import dynamic from "next/dynamic";
+import { createPortal } from "react-dom";
 import {
   memo,
   useCallback,
@@ -130,22 +131,24 @@ import {
   type TestGenerationFlowState,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
+import type {
+  GitEditorDiffResponse,
+  GitEditorDiffHunk,
+  GitEditorBlameLine,
+  EditorM7WatchEvent,
+  EditorCompletionSource,
+  ManagedLspSemanticTokenLegend,
+  EditorM7WorkspaceSnippetSnapshot,
+  WorkspaceReplaceApplyFile,
+  WorkspaceReplacePreviewTextRange,
+} from "@oscharko-dev/keiko-contracts";
+import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
+import { GIT_EDITOR_BLAME_MAX_LINES } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import {
-  editorBuiltinDocumentFormatting,
-  type GitEditorDiffResponse,
-  type GitEditorDiffHunk,
-  type GitEditorBlameLine,
-  GIT_EDITOR_BLAME_MAX_LINES,
-  type EditorM7WatchEvent,
   MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
   MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
-  matchingEditorM7Snippets,
-  type EditorCompletionSource,
-  type ManagedLspSemanticTokenLegend,
-  type EditorM7WorkspaceSnippetSnapshot,
-  type WorkspaceReplaceApplyFile,
-  type WorkspaceReplacePreviewTextRange,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import { matchingEditorM7Snippets } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 import {
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
@@ -220,6 +223,7 @@ import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/us
 import { Icons } from "../../Icons";
 
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import {
   useRegisterWorkspaceReplaceBuffer,
@@ -554,11 +558,6 @@ const FORMAT_ON_SAVE_CAPPED_MESSAGE =
   "Format-on-save stopped because the formatter hit a result limit and returned only part of the " +
   "reformat. Nothing was written. Turn format-on-save off to save this file unformatted.";
 const UTF8_ENCODER = new TextEncoder();
-/**
- * #2347 replaces this consumption seam with its server-resolved, minimum-wins capability result.
- * This slice deliberately cannot infer authorization from the browser-visible workspace root.
- */
-export const DEFAULT_DEBUG_CAPABILITY_ENABLED = false;
 
 /**
  * Out-parameter for `persist`: records the last text it optimistically adopted into the buffer.
@@ -1607,11 +1606,66 @@ function initialEditorLoadState(hasTarget: boolean): KeikoEditorLoadState {
   return hasTarget ? { status: "loading" } : { status: "ready" };
 }
 
-function activeDigestHash(
-  digest: { readonly content: string; readonly hash: string } | null,
-  content: string,
-): string | null {
+// KEIKO-0819: sizeBytes rides along with hash so both are computed from the same single
+// UTF8_ENCODER.encode(content) pass inside the debounced effect below, instead of a separate
+// per-keystroke encode.
+interface ActiveContentDigest {
+  readonly content: string;
+  readonly hash: string;
+  readonly sizeBytes: number;
+}
+
+function activeDigestHash(digest: ActiveContentDigest | null, content: string): string | null {
   return digest?.content === content ? digest.hash : null;
+}
+
+// The digest object itself, only when it matches the CURRENT content — null while the debounce
+// window has not yet settled for the latest edit. hash/sizeBytes read off the result are exact for
+// `content`, never stale or estimated (unlike activeContentDigest?.sizeBytes read directly, which
+// stays at its last resolved value instead of resetting to unknown on every keystroke).
+function freshContentDigest(
+  digest: ActiveContentDigest | null,
+  content: string,
+): ActiveContentDigest | null {
+  return digest?.content === content ? digest : null;
+}
+
+// Cheap, allocation-free UPPER bound on the UTF-8 byte length of `content`. Every UTF-16 code unit
+// encodes to at most 4 UTF-8 bytes, so this can only ever OVER-estimate — safe as a stand-in while
+// the exact, debounced digest for this content has not settled yet, never as a substitute for it.
+function conservativeByteEstimateUpperBound(content: string): number {
+  return content.length * 4;
+}
+
+// The byte count the HARD size-limit / write gate must read (`isMaxSizeExceeded` /
+// `effectiveReadOnly` in `@oscharko-dev/keiko-editor`'s save-state.ts, via `buffer.content.
+// sizeBytes`): byte-exact once the debounced digest has settled for this exact content
+// (`readyDigest` non-null), a conservative (never-under) UPPER-bound estimate otherwise. This gate
+// must fail SAFE — it must never let an over-limit buffer look smaller than it truly is — instead
+// of pairing a stale `ActiveContentDigest.sizeBytes` (whatever content last settled, not
+// necessarily `content`) with the current text (PR #3289 review).
+function writeGateSizeBytesEstimate(
+  readyDigest: ActiveContentDigest | null,
+  content: string,
+): number {
+  return readyDigest?.sizeBytes ?? conservativeByteEstimateUpperBound(content);
+}
+
+// The byte count the BEHAVIORAL large-file-mode / automatic-read-only signal must read: byte-exact
+// once settled (identical to the write gate above once `readyDigest` is non-null), a conservative
+// (never-OVER) LOWER-bound estimate otherwise — `content.length` (UTF-16 code units), which can
+// only ever UNDER-estimate the true UTF-8 byte count (minimum 1 byte per code unit). Unlike the
+// write gate, this signal must fail PERMISSIVE during the debounce window: feeding it the SAME *4
+// upper bound as the write gate marked an actually sub-500KB ASCII file read-only until the
+// debounce settled (PR #3289 review, comment 3865167711 — round-2 correction of the round-1 fix
+// above). Under-classifying here only ever means a large file stays fully-interactive a little too
+// long, never that a small one gets locked down; it resolves to the exact value the moment the
+// digest settles.
+function modeSelectionSizeBytesEstimate(
+  readyDigest: ActiveContentDigest | null,
+  content: string,
+): number {
+  return readyDigest?.sizeBytes ?? content.length;
 }
 
 function hasEditorTarget(root: string | undefined, file: string | undefined): boolean {
@@ -1917,7 +1971,7 @@ function EditorRuntimeWidget({
     const previousRoot = previousRuntimeRootRef.current;
     if (previousRoot === root) return;
     if (previousRoot !== undefined) {
-      disposeEditorModelRegistryRoot(previousRoot, "root-disposed");
+      disposeEditorModelRegistryRoot(previousRoot);
     }
     previousRuntimeRootRef.current = root;
   }, [root]);
@@ -1930,7 +1984,7 @@ function EditorRuntimeWidget({
         // one React commit. Defer final-window cleanup until after that commit's effects so the
         // transient zero does not destroy retained dirty models between sibling root sessions.
         queueMicrotask(() => {
-          if (liveEditorRuntimeInstances === 0) disposeAllUnattachedEditorModels("shutdown");
+          if (liveEditorRuntimeInstances === 0) disposeAllUnattachedEditorModels();
         });
       }
     };
@@ -2220,10 +2274,7 @@ function EditorRuntimeWidget({
     IDLE_EXTERNAL_CHANGE_STATE,
   );
   const [externalCompareBaseline, setExternalCompareBaseline] = useState<string | null>(null);
-  const [activeContentDigest, setActiveContentDigest] = useState<{
-    readonly content: string;
-    readonly hash: string;
-  } | null>(null);
+  const [activeContentDigest, setActiveContentDigest] = useState<ActiveContentDigest | null>(null);
   // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
   const [agentConflict, setAgentConflict] = useState<{
     readonly code: AgentConflictCode;
@@ -2338,9 +2389,18 @@ function EditorRuntimeWidget({
     tabSize: 2,
     insertSpaces: true,
   });
-  const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
-  const contentSizeBytes = contentBytes.length;
   const activeContentHash = activeDigestHash(activeContentDigest, content);
+  const readyContentDigest = freshContentDigest(activeContentDigest, content);
+  // PR #3289 review: content.length (UTF-16 code units) alone is only a LOWER bound on the UTF-8
+  // byte length — 200,000 CJK characters is ~600 KB of UTF-8 but a length of 200,000 — so it must
+  // never stand in for the byte count directly. Both estimates below are byte-exact whenever
+  // readyContentDigest has settled for the CURRENT content; they diverge only for the pending
+  // (unsettled) case, where the write gate needs a never-under UPPER bound and the behavioral
+  // mode-selection gate needs a never-over LOWER bound instead (see the two functions' docs) — a
+  // single shared conservative estimate fed BOTH gates fails one of them. Neither may feed
+  // sha256HexBytes, which needs the exact, debounced activeContentDigest instead.
+  const writeGateSizeBytes = writeGateSizeBytesEstimate(readyContentDigest, content);
+  const modeSelectionSizeBytes = modeSelectionSizeBytesEstimate(readyContentDigest, content);
   const activeContentDigestRef = useRef(activeContentDigest);
   activeContentDigestRef.current = activeContentDigest;
   const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
@@ -2367,15 +2427,20 @@ function EditorRuntimeWidget({
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void sha256HexBytes(contentBytes, content).then((hash) => {
-        if (!cancelled) setActiveContentDigest({ content, hash });
+      // KEIKO-0819: the full-buffer UTF-8 encode happens here, at most once per settled debounce
+      // window, not once per keystroke — the resulting byte count rides along with the hash so every
+      // byte-exact consumer (hot-exit maxBytes check, the buffer's reported sizeBytes) reads it back
+      // from activeContentDigest instead of re-encoding.
+      const bytes = UTF8_ENCODER.encode(content);
+      void sha256HexBytes(bytes, content).then((hash) => {
+        if (!cancelled) setActiveContentDigest({ content, hash, sizeBytes: bytes.length });
       });
     }, CONTENT_HASH_DEBOUNCE_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [content, contentBytes]);
+  }, [content]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2527,16 +2592,24 @@ function EditorRuntimeWidget({
       }
       return;
     }
-    if (maxBytes !== null && contentSizeBytes > maxBytes) return;
-    if (activeContentHash === null) return;
-    const timer = window.setTimeout(() => {
+    // KEIKO-0819: readyContentDigest is null until the debounced hash/size effect above has settled
+    // for this exact content, exactly as activeContentHash === null used to gate this write alone —
+    // the size check below is byte-exact for the CURRENT content whenever it runs, never stale or
+    // estimated, since content.length is never used here (see freshContentDigest).
+    if (readyContentDigest === null) return;
+    if (maxBytes !== null && readyContentDigest.sizeBytes > maxBytes) return;
+    // KEIKO-0819: readyContentDigest.hash is byte-exact for the current content and non-null by
+    // the guard above; activeContentHash is a wider `string | null` derived through activeDigestHash
+    // and does not narrow across the guard, so read the hash off the settled digest object directly.
+    const readyContentHash = readyContentDigest.hash;
+    const flushHotExitSnapshot = (): void => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
         workspaceRoot: root,
         relativePath: file,
         content,
         baseVersion: version,
-        contentHash: activeContentHash,
+        contentHash: readyContentHash,
         savedContentHash: version?.contentHash ?? null,
         updatedAt: Date.now(),
         paneId: paneId ?? "pane-1",
@@ -2544,20 +2617,33 @@ function EditorRuntimeWidget({
       };
       lastHotExitSnapshotKeyRef.current = snapshotKey;
       dropHotExitPersistenceFailure(writeEditorHotExitSnapshot(snapshot));
-    }, HOT_EXIT_WRITE_DEBOUNCE_MS);
-    return () => {
+    };
+    const timer = window.setTimeout(flushHotExitSnapshot, HOT_EXIT_WRITE_DEBOUNCE_MS);
+    // KEIKO-0337: a graceful tab close/refresh fires `pagehide`, not the debounce timer above, so
+    // the last <400ms of edits would otherwise never reach the hot-exit store. Clear the pending
+    // timer and flush synchronously — fire-and-forget, since `writeEditorHotExitSnapshot` is
+    // IndexedDB + async-hash based and pagehide handlers cannot await. `pagehide`, not
+    // `beforeunload`, is the correct modern event: it never blocks navigation or triggers a
+    // confirm-close prompt.
+    const handlePageHide = (): void => {
       window.clearTimeout(timer);
+      flushHotExitSnapshot();
+    };
+    window.addEventListener("pagehide", handlePageHide);
+    return (): void => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pagehide", handlePageHide);
     };
   }, [
     activeContentHash,
     content,
-    contentSizeBytes,
     dirty,
     file,
     fileModelMatchesTarget,
     hasTarget,
     maxBytes,
     paneId,
+    readyContentDigest,
     root,
     version,
     windowId,
@@ -2826,21 +2912,18 @@ function EditorRuntimeWidget({
   // settings, and debugging confirms use) instead of re-deriving the wrap here; it is a no-op while
   // the dialog is unmounted because the ref is then null.
   useDialogTabTrap(reloadConfirmRef);
+  useModalInteractionLock({
+    active: reloadConfirm && sessionActive,
+    initialFocusRef: reloadConfirmRef,
+  });
   useEffect(() => {
     if (!reloadConfirm) return;
-    // GEN-UI-FOCUS-006: capture the opener (the Reload button) before moving focus into the dialog,
-    // and restore it on close so keyboard focus returns to the trigger instead of being lost to <body>.
-    const opener = document.activeElement as HTMLElement | null;
-    reloadConfirmRef.current?.focus();
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") cancelReloadDiscard();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 
@@ -3204,10 +3287,10 @@ function EditorRuntimeWidget({
   }, [externalSaveRequest, file, onExternalSaveComplete, persist]);
 
   const onRuntimeError = useCallback((message: string): void => {
-    // A non-fatal theme-registration failure (e.g. the editor design tokens are not present on this
-    // surface). The editor still renders with Monaco's base theme; surface it for diagnostics rather
-    // than swallowing a system-boundary signal. Routed through the one client sink so the console
-    // access stays in a single reviewable place (0.3.0 audit, #2802).
+    // A non-fatal editor runtime notice: a code-owned sentence such as a theme-registration or a
+    // language-load failure (keiko-editor runtime-notice.ts, EditorSurface, EditorDiffSurface). The
+    // editor keeps working; the notice goes through the one client sink (0.3.0 audit, #2802), whose
+    // server side admits exactly these closed shapes (F29).
     reportClientDiagnostic(`Keiko editor runtime notice: ${message}`);
   }, []);
 
@@ -3902,8 +3985,8 @@ function EditorRuntimeWidget({
   );
 
   const largeFileMode = useMemo(
-    () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
-    [content, contentSizeBytes],
+    () => deriveLargeFileMode({ sizeBytes: modeSelectionSizeBytes, text: content }),
+    [content, modeSelectionSizeBytes],
   );
   const preferenceLargeFileMode = editorSettings.applied.largeFileMode;
   const largeFilePolicy = largeFileSettings(largeFileMode, preferenceLargeFileMode);
@@ -3940,10 +4023,14 @@ function EditorRuntimeWidget({
         deleted: sourceControlT("gitGutter.deleted"),
         openHunk: sourceControlT("gitGutter.openHunk"),
       },
-      resolve: async () => {
+      // #2906 review (comment 3865167732): the resolver used to ignore the AbortSignal
+      // git-gutter-bridge.ts passes into it, so a superseded refresh (or dispose) left both
+      // in-flight requests running to completion underneath the discarded result. Both hops now
+      // carry the SAME signal the bridge gave this call.
+      resolve: async (signal) => {
         const [staged, unstaged] = await Promise.all([
-          fetchGitStructuredDiff({ root, path: file, scope: "staged" }),
-          fetchGitStructuredDiff({ root, path: file, scope: "unstaged" }),
+          fetchGitStructuredDiff({ root, path: file, scope: "staged" }, signal),
+          fetchGitStructuredDiff({ root, path: file, scope: "unstaged" }, signal),
         ]);
         return {
           staged: hunksForPath(staged, file),
@@ -4341,11 +4428,28 @@ function EditorRuntimeWidget({
             content: {
               relativePath: file ?? "",
               text: content,
-              sizeBytes: contentSizeBytes,
+              // PR #3289 review: byte-exact once readyContentDigest has settled for this exact
+              // content; otherwise writeGateSizeBytes's conservative (never-under) UPPER-bound
+              // estimate. Must NEVER pair the current text with a stale, smaller settled sizeBytes
+              // (the old `activeContentDigest?.sizeBytes ?? 0`, which stays at whatever content
+              // last settled regardless of `content` above) — isMaxSizeExceeded / effectiveReadOnly
+              // (@oscharko-dev/keiko-editor's save-state.ts) is a hard size-limit / read-only gate
+              // and must never see this buffer look smaller than it actually is, e.g. immediately
+              // after a paste that pushes a small file over budget, while the debounce is pending.
+              // (This is deliberately the UPPER-bound estimate, unlike largeFileMode's below —
+              // see modeSelectionSizeBytesEstimate's doc for why the two gates diverge.)
+              sizeBytes: writeGateSizeBytes,
               truncated: false,
             },
           },
-    [content, contentSizeBytes, editorReadOnlyBySettings, file, fileModel, fileModelMatchesTarget],
+    [
+      content,
+      writeGateSizeBytes,
+      editorReadOnlyBySettings,
+      file,
+      fileModel,
+      fileModelMatchesTarget,
+    ],
   );
   const modelViewStateKey = editorModelViewStateKey(
     hasTarget,
@@ -6606,18 +6710,34 @@ function EditorRuntimeWidget({
     }
   };
 
-  const renderLocalHistoryProtectionBanner = (): ReactNode =>
-    localHistoryProtection?.status === "degraded" ? (
-      <output className="ed-recovery" data-testid="editor-local-history-protection">
-        <span>
-          {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
-          {localHistoryProtectionGuidance(localHistoryProtection.reason)}{" "}
-          {commonT("editor.localHistoryProtection.diagnosticReference", {
-            correlationId: localHistoryProtection.correlationId,
-          })}
-        </span>
-      </output>
-    ) : null;
+  const renderLocalHistoryProtectionBanner = (): ReactNode => {
+    if (localHistoryProtection?.status === "degraded") {
+      return (
+        <output className="ed-recovery" data-testid="editor-local-history-protection">
+          <span>
+            {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
+            {localHistoryProtectionGuidance(localHistoryProtection.reason)}{" "}
+            {commonT("editor.localHistoryProtection.diagnosticReference", {
+              correlationId: localHistoryProtection.correlationId,
+            })}
+          </span>
+        </output>
+      );
+    }
+    if (localHistoryProtection?.status === "suppressed") {
+      return (
+        <output className="ed-recovery" data-testid="editor-local-history-protection">
+          <span>
+            {commonT("editor.localHistoryProtection.suppressedSecretDetected")}{" "}
+            {commonT("editor.localHistoryProtection.diagnosticReference", {
+              correlationId: localHistoryProtection.correlationId,
+            })}
+          </span>
+        </output>
+      );
+    }
+    return null;
+  };
 
   const renderExternalChangeBanner = (): ReactNode => (
     <>
@@ -6685,38 +6805,38 @@ function EditorRuntimeWidget({
     </>
   );
 
-  const renderReloadConfirmation = (): ReactNode => (
-    <>
-      {reloadConfirm ? (
-        <div className="ed-dialog-backdrop">
-          <dialog
-            open
-            className="ed-dirty-dialog"
-            ref={reloadConfirmRef}
-            aria-modal="true"
-            aria-labelledby="editor-reload-confirm-title"
-            tabIndex={-1}
-            style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
-          >
-            <h2 id="editor-reload-confirm-title">Discard unsaved changes?</h2>
-            <p>
-              {`Reloading from disk replaces this buffer with the saved file and discards your unsaved editor changes${
-                file !== undefined && file.length > 0 ? ` in ${file}` : ""
-              }.`}
-            </p>
-            <div className="ed-dialog-actions">
-              <button type="button" className="ed-reload" onClick={confirmReloadDiscard}>
-                Discard and reload
-              </button>
-              <button type="button" className="ed-icon-action" onClick={cancelReloadDiscard}>
-                Cancel
-              </button>
-            </div>
-          </dialog>
-        </div>
-      ) : null}
-    </>
-  );
+  const renderReloadConfirmation = (): ReactNode => {
+    if (!reloadConfirm) return null;
+    const dialog = (
+      <div className="ed-dialog-backdrop">
+        <dialog
+          open
+          className="ed-dirty-dialog"
+          ref={reloadConfirmRef}
+          aria-modal="true"
+          aria-labelledby="editor-reload-confirm-title"
+          tabIndex={-1}
+          style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
+        >
+          <h2 id="editor-reload-confirm-title">Discard unsaved changes?</h2>
+          <p>
+            {`Reloading from disk replaces this buffer with the saved file and discards your unsaved editor changes${
+              file !== undefined && file.length > 0 ? ` in ${file}` : ""
+            }.`}
+          </p>
+          <div className="ed-dialog-actions">
+            <button type="button" className="ed-reload" onClick={confirmReloadDiscard}>
+              Discard and reload
+            </button>
+            <button type="button" className="ed-icon-action" onClick={cancelReloadDiscard}>
+              Cancel
+            </button>
+          </div>
+        </dialog>
+      </div>
+    );
+    return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
+  };
 
   const renderAgentConflictBanner = (): ReactNode => (
     <>

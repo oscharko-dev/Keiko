@@ -10,7 +10,7 @@ const repoRoot = resolve(here, "..", "..");
 const workflow = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygiene.yml"), "utf8");
 const config = readFileSync(resolve(repoRoot, ".github/zizmor.yml"), "utf8");
 
-const ZIZMOR_ACTION_SHA = "6599ee8b7a49aef6a770f63d261d214911a7ce02";
+const ZIZMOR_ACTION_SHA = "cc914d7f3750a2d13d75c7f184a1060aa0e9d482";
 
 // The job these assertions moved from contained zizmor and nothing else; the one they moved to runs
 // four tools. Scoping to the step keeps the pin as tight as it was: another step carrying
@@ -49,10 +49,12 @@ describe("zizmor workflow job", () => {
     expect(config).toMatch(/cache-poisoning:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- ci\.yml:\d+/u);
   });
 
-  it("documents the misfeature ignore with the Windows MSVC toolchain constraint", () => {
-    expect(config).toMatch(
-      /misfeature:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- portable-assets\.yml:\d+/u,
-    );
+  it("carries no misfeature ignore since the MSVC GITHUB_ENV steps were removed", () => {
+    // The only misfeature exception covered the workflow steps that persisted the MSVC
+    // environment via GITHUB_ENV. Those steps are gone (the staging script owns MSVC
+    // resolution, #3075), so the ignore block must stay gone with them — a new misfeature
+    // exception requires its own documented justification, not a revival of this one.
+    expect(config).not.toMatch(/misfeature:/u);
   });
 
   it("documents the adhoc-packages ignore with the npm Trusted Publishing bootstrap constraint", () => {

@@ -6,11 +6,23 @@
 // SIGTERM→SIGKILL escalation, stdout/stderr byte caps) and its stderr is treated as confidential:
 // callers receive typed failures, never raw process output.
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { join } from "node:path";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  resolveWindowsPowerShellExecutable,
+  resolveWindowsSystemDirectory,
+  type WindowsBinaryExistsCheck,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+  type WindowsSystemDirectoryIdentityCheck,
+} from "@oscharko-dev/keiko-security";
 import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
-import { NATIVE_FILE_DIALOG_MAX_SELECTIONS } from "@oscharko-dev/keiko-contracts";
-import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
+import { NATIVE_FILE_DIALOG_MAX_SELECTIONS } from "@oscharko-dev/keiko-contracts/runtime/native-file-dialog";
+import {
+  buildSandboxEnv,
+  nodeWindowsTreeKill,
+  type WindowsTreeKill,
+  type WindowsTreeKillDisposition,
+} from "@oscharko-dev/keiko-tools";
 import { MACOS_NATIVE_FILE_DIALOG_SCRIPT, WINDOWS_NATIVE_FILE_DIALOG_SCRIPT } from "./scripts.js";
 
 // A native dialog is a human interaction: users legitimately keep it open while they search.
@@ -30,6 +42,12 @@ export interface NativeFileDialogAdapterResult {
 
 export interface NativeFileDialogAdapter {
   open(request: NativeFileDialogRequest): Promise<NativeFileDialogAdapterResult>;
+  // #2906: cancels the in-flight open() call, if any -- a no-op when no open() is running or it
+  // has already settled. Does not itself resolve/reject the open() promise; a real adapter's
+  // cancel() causes the underlying platform process to be killed, which then settles open() (as
+  // a rejection) on its own. A caller must still await the original open() promise to know
+  // cancellation has actually finished.
+  cancel(): void;
 }
 
 export type NativeFileDialogAdapterFailureReason = "timeout" | "failed" | "unsupported";
@@ -52,6 +70,8 @@ export interface NativeDialogProcessResult {
   readonly stderr: string;
   readonly timedOut: boolean;
   readonly outputExceeded: boolean;
+  readonly windowsTreeKill: WindowsTreeKillDisposition;
+  readonly windowsTreeKillEscalation?: WindowsTreeKillDisposition | undefined;
 }
 
 export type NativeDialogProcessRunner = (
@@ -59,6 +79,11 @@ export type NativeDialogProcessRunner = (
   args: readonly string[],
   stdin: string,
   timeoutMs: number,
+  // #2906: an optional cancellation signal, independent of the interaction timeout above -- the
+  // BFF route uses this to kill an orphaned dialog process as soon as the client disconnects,
+  // instead of waiting out the full 10-minute interaction budget.
+  signal?: AbortSignal,
+  options?: NativeDialogProcessOptions,
 ) => Promise<NativeDialogProcessResult>;
 
 interface BoundedCapture {
@@ -108,6 +133,79 @@ interface KillEscalation {
   readonly wasTriggered: () => boolean;
   readonly triggerOutputCapKill: () => void;
   readonly clear: () => void;
+  readonly evidence: () => Pick<
+    NativeDialogProcessResult,
+    "windowsTreeKill" | "windowsTreeKillEscalation"
+  >;
+}
+
+export interface NativeDialogProcessOptions {
+  readonly platform?: NodeJS.Platform | undefined;
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  readonly childEnv?: NodeJS.ProcessEnv | undefined;
+  readonly killWindowsTree?: WindowsTreeKill | undefined;
+  readonly spawnProcess?:
+    | ((
+        command: string,
+        args: readonly string[],
+        options: {
+          readonly shell: false;
+          readonly windowsHide: true;
+          readonly stdio: ["pipe", "pipe", "pipe"];
+          readonly env: NodeJS.ProcessEnv;
+        },
+      ) => ChildProcessWithoutNullStreams)
+    | undefined;
+}
+
+function spawnDialogChild(
+  command: string,
+  args: readonly string[],
+  processOptions: NativeDialogProcessOptions,
+): ChildProcessWithoutNullStreams {
+  const spawnProcess =
+    processOptions.spawnProcess ??
+    ((spawnCommand, spawnArgs, options): ChildProcessWithoutNullStreams =>
+      spawn(spawnCommand, [...spawnArgs], options));
+  return spawnProcess(command, args, {
+    shell: false,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: processOptions.childEnv ?? buildDialogEnv(),
+  });
+}
+
+function dialogChildExited(child: ChildProcess): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
+
+function terminateDialogChild(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  options: NativeDialogProcessOptions,
+): WindowsTreeKillDisposition {
+  // Node releases the process handle at `exit`, before stdio has necessarily drained and `close`
+  // settles this runner. A timeout or output event in that window must not target the now-unowned
+  // raw pid: Windows may already have reused it for an unrelated process tree.
+  if (dialogChildExited(child)) return "not-attempted";
+  let disposition: WindowsTreeKillDisposition = "not-attempted";
+  if ((options.platform ?? process.platform) === "win32" && child.pid !== undefined) {
+    try {
+      disposition = (options.killWindowsTree ?? nodeWindowsTreeKill)(
+        child.pid,
+        options.processEnv ?? process.env,
+      );
+    } catch {
+      disposition = "failed";
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // The child may have exited after the ownership check. Termination is idempotent and the
+    // ordinary close event remains the only settlement proof.
+  }
+  return disposition;
 }
 
 // SIGTERM at the interaction deadline, SIGKILL shortly after for a helper that ignores it. The
@@ -116,17 +214,23 @@ interface KillEscalation {
 // for anywhere near the full interaction timeout. `wasTriggered()` stays scoped to the
 // interaction-deadline path only, so `NativeDialogProcessResult.timedOut` keeps meaning exactly
 // "the interaction timeout fired" and does not get muddied by an output-cap kill.
-function startKillEscalation(child: ChildProcess, timeoutMs: number): KillEscalation {
+function startKillEscalation(
+  child: ChildProcess,
+  timeoutMs: number,
+  options: NativeDialogProcessOptions,
+): KillEscalation {
   let triggered = false;
   let killTimer: NodeJS.Timeout | undefined;
+  let windowsTreeKill: WindowsTreeKillDisposition = "not-attempted";
+  let windowsTreeKillEscalation: WindowsTreeKillDisposition | undefined;
   const escalateToSigkill = (): void => {
     killTimer = setTimeout(() => {
-      child.kill("SIGKILL");
+      windowsTreeKillEscalation = terminateDialogChild(child, "SIGKILL", options);
     }, SIGKILL_ESCALATION_MS);
   };
   const timer = setTimeout(() => {
     triggered = true;
-    child.kill("SIGTERM");
+    windowsTreeKill = terminateDialogChild(child, "SIGTERM", options);
     escalateToSigkill();
   }, timeoutMs);
   return {
@@ -134,13 +238,17 @@ function startKillEscalation(child: ChildProcess, timeoutMs: number): KillEscala
     triggerOutputCapKill: (): void => {
       if (killTimer !== undefined) return;
       clearTimeout(timer);
-      child.kill("SIGTERM");
+      windowsTreeKill = terminateDialogChild(child, "SIGTERM", options);
       escalateToSigkill();
     },
     clear: (): void => {
       clearTimeout(timer);
       if (killTimer !== undefined) clearTimeout(killTimer);
     },
+    evidence: () => ({
+      windowsTreeKill,
+      ...(windowsTreeKillEscalation === undefined ? {} : { windowsTreeKillEscalation }),
+    }),
   };
 }
 
@@ -163,45 +271,61 @@ function buildDialogEnv(processEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 }
 
 // Bounded runner for the dialog helper process. Modeled on the git route runner (shell:false,
-// windowsHide, timeout, byte caps, curated env) plus stdin delivery.
+// windowsHide, timeout, byte caps, curated env) plus stdin delivery. Cancellation is handled here
+// rather than passed to spawn: on Windows the shared taskkill must enumerate the live descendant
+// tree BEFORE the immediate PowerShell child is signalled. The ordinary close event remains the
+// only successful settlement proof.
+function wireDialogOutput(
+  child: ChildProcessWithoutNullStreams,
+  stdout: BoundedCapture,
+  stderr: BoundedCapture,
+  escalation: KillEscalation,
+): void {
+  child.stdout.on("data", (chunk: Buffer) => {
+    appendBounded(stdout, chunk, MAX_STDOUT_BYTES);
+    if (stdout.exceeded) escalation.triggerOutputCapKill();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    appendBounded(stderr, chunk, MAX_STDERR_BYTES);
+  });
+}
+
 export function runNativeDialogProcess(
   command: string,
   args: readonly string[],
   stdin: string,
   timeoutMs: number,
+  signal?: AbortSignal,
+  processOptions: NativeDialogProcessOptions = {},
 ): Promise<NativeDialogProcessResult> {
   return new Promise<NativeDialogProcessResult>((resolveProcess) => {
-    const child = spawn(command, [...args], {
-      shell: false,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: buildDialogEnv(),
-    });
+    const child = spawnDialogChild(command, args, processOptions);
     const stdout: BoundedCapture = { value: "", exceeded: false };
     const stderr: BoundedCapture = { value: "", exceeded: false };
-    const escalation = startKillEscalation(child, timeoutMs);
+    const escalation = startKillEscalation(child, timeoutMs, processOptions);
+    const handleAbort = (): void => {
+      escalation.triggerOutputCapKill();
+    };
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    if (signal?.aborted === true) handleAbort();
     let settled = false;
     const settle = (exitCode: number | null): void => {
       if (settled) return;
       settled = true;
       escalation.clear();
+      signal?.removeEventListener("abort", handleAbort);
       resolveProcess({
         exitCode,
         stdout: stdout.value,
         stderr: stderr.value,
         timedOut: escalation.wasTriggered(),
         outputExceeded: stdout.exceeded,
+        ...escalation.evidence(),
       });
     };
-    child.stdout.on("data", (chunk: Buffer) => {
-      appendBounded(stdout, chunk, MAX_STDOUT_BYTES);
-      if (stdout.exceeded) escalation.triggerOutputCapKill();
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      appendBounded(stderr, chunk, MAX_STDERR_BYTES);
-    });
-    // Spawn failure (binary missing / not executable) surfaces as exit 127 like the git runner;
-    // the adapter maps it to a typed error, never a throw into the route.
+    wireDialogOutput(child, stdout, stderr, escalation);
+    // Spawn failure (binary missing / not executable) surfaces as exit 127 like the git runner.
+    // Cancellation is not passed to spawn and therefore cannot fabricate an AbortError here.
     child.on("error", () => {
       settle(127);
     });
@@ -220,7 +344,11 @@ export function runNativeDialogProcess(
 function processSummary(result: NativeDialogProcessResult): string {
   const exit = result.exitCode === null ? "null" : String(result.exitCode);
   const stderrBytes = String(Buffer.byteLength(result.stderr, "utf8"));
-  return `exitCode=${exit} stderrBytes=${stderrBytes} outputExceeded=${String(result.outputExceeded)}`;
+  const escalation = result.windowsTreeKillEscalation ?? "not-attempted";
+  return (
+    `exitCode=${exit} stderrBytes=${stderrBytes} outputExceeded=${String(result.outputExceeded)} ` +
+    `windowsTreeKill=${result.windowsTreeKill} windowsTreeKillEscalation=${escalation}`
+  );
 }
 
 // Closed shape: an adapter is a fixed, first-party script (scripts.ts) and its stdout is
@@ -281,8 +409,17 @@ async function runAdapterScript(
   command: string,
   args: readonly string[],
   stdin: string,
+  signal?: AbortSignal,
+  processOptions?: NativeDialogProcessOptions,
 ): Promise<NativeFileDialogAdapterResult> {
-  const result = await runProcess(command, args, stdin, NATIVE_FILE_DIALOG_TIMEOUT_MS);
+  const result = await runProcess(
+    command,
+    args,
+    stdin,
+    NATIVE_FILE_DIALOG_TIMEOUT_MS,
+    signal,
+    processOptions,
+  );
   if (result.timedOut) {
     throw new NativeFileDialogAdapterError(
       "timeout",
@@ -333,48 +470,130 @@ function stdinConfig(request: NativeFileDialogRequest): AdapterStdinConfig {
   };
 }
 
+// #2906: shared cancellation bookkeeping for the two spawning adapters below. Each open() call
+// gets its own AbortController; cancel() aborts whichever one is currently active. The route
+// enforces single-flight (at most one open() per adapter instance), but a settled call still
+// clears its own controller so a stale cancel() from an already-finished call can never reach a
+// later, unrelated open().
+function cancellableAdapter(
+  run: (
+    signal: AbortSignal,
+    request: NativeFileDialogRequest,
+  ) => Promise<NativeFileDialogAdapterResult>,
+): NativeFileDialogAdapter {
+  let active: AbortController | undefined;
+  return {
+    open(request): Promise<NativeFileDialogAdapterResult> {
+      const controller = new AbortController();
+      active = controller;
+      return run(controller.signal, request).finally(() => {
+        if (active === controller) active = undefined;
+      });
+    },
+    cancel(): void {
+      active?.abort();
+    },
+  };
+}
+
 // macOS: fixed SIP-protected binary, static JXA program as the only script argument.
 export function createMacosNativeFileDialogAdapter(
   runProcess: NativeDialogProcessRunner = runNativeDialogProcess,
 ): NativeFileDialogAdapter {
-  return {
-    open(request): Promise<NativeFileDialogAdapterResult> {
-      return runAdapterScript(
-        runProcess,
-        "/usr/bin/osascript",
-        ["-l", "JavaScript", "-e", MACOS_NATIVE_FILE_DIALOG_SCRIPT],
-        JSON.stringify(stdinConfig(request)),
-      );
-    },
-  };
+  return cancellableAdapter((signal, request) =>
+    runAdapterScript(
+      runProcess,
+      "/usr/bin/osascript",
+      ["-l", "JavaScript", "-e", MACOS_NATIVE_FILE_DIALOG_SCRIPT],
+      JSON.stringify(stdinConfig(request)),
+      signal,
+    ),
+  );
 }
 
 // Windows PowerShell 5.1 ships with every supported Windows; the absolute path avoids PATH
 // hijacking. `-EncodedCommand` expects base64(utf16le(script)) and is not subject to script-file
 // execution policy. The stdin config is base64-wrapped so the bytes stay ASCII regardless of the
 // console input codepage.
-function windowsPowershellPath(): string {
-  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
-  return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+export interface WindowsNativeDialogSystemOptions {
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
+  readonly identityCheck?: WindowsSystemDirectoryIdentityCheck | undefined;
+}
+
+interface WindowsNativeDialogSystem {
+  readonly command: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+function windowsDialogSystem(
+  options: WindowsNativeDialogSystemOptions = {},
+): WindowsNativeDialogSystem {
+  // The system root comes from the SHARED trusted-System32 decision, never from a raw env read.
+  // This was the whole-class counter-example the PR #3355 review found: `process.env.SystemRoot`
+  // with no validation at all, joined and then SPAWNED. `resolveWindowsSystemDirectory` rejects the
+  // substitutions a bare read accepts — UNC (`\\attacker\share`), device paths (`\\?\C:\Windows`),
+  // root-relative (`\Windows`, resolves against the CURRENT drive), bare-relative (resolves against
+  // the process cwd, i.e. the workspace), traversal, control characters, cmd metacharacters, and
+  // NTFS alternate-data-stream colons — and it fails CLOSED rather than falling back to a default a
+  // hostile environment could also have tampered with.
+  //
+  // `resolveWindowsSystemBinary` cannot be used here: it joins exactly one flat `System32/<name>`
+  // segment, while PowerShell 5.1 lives under a nested `WindowsPowerShell\v1.0`. The validated ROOT
+  // is what matters, so the remaining segments are joined from literals that never touch the
+  // environment. Same shape as keiko-cli's `windowsPowerShellExecutable`.
+  const processEnv = options.processEnv ?? process.env;
+  try {
+    const systemRoot = resolveWindowsSystemDirectory(processEnv, options.identityCheck);
+    const command = resolveWindowsPowerShellExecutable(
+      processEnv,
+      options.existsAsFile,
+      options.identityCheck,
+    );
+    return {
+      command,
+      env: {
+        ...buildDialogEnv(processEnv),
+        SystemRoot: systemRoot,
+        WINDIR: systemRoot,
+      },
+    };
+  } catch (error) {
+    if (error instanceof WindowsSystemBinaryMissingError) {
+      throw new NativeFileDialogAdapterError(
+        "unsupported",
+        "native dialog system helper is unavailable",
+      );
+    }
+    if (error instanceof WindowsSystemDirectoryError) {
+      throw new NativeFileDialogAdapterError(
+        "failed",
+        "native dialog system directory was refused",
+      );
+    }
+    throw error;
+  }
 }
 
 export function createWindowsNativeFileDialogAdapter(
   runProcess: NativeDialogProcessRunner = runNativeDialogProcess,
+  systemOptions: WindowsNativeDialogSystemOptions = {},
 ): NativeFileDialogAdapter {
   const encodedScript = Buffer.from(WINDOWS_NATIVE_FILE_DIALOG_SCRIPT, "utf16le").toString(
     "base64",
   );
-  return {
-    open(request): Promise<NativeFileDialogAdapterResult> {
-      const config = Buffer.from(JSON.stringify(stdinConfig(request)), "utf8").toString("base64");
-      return runAdapterScript(
-        runProcess,
-        windowsPowershellPath(),
-        ["-NoProfile", "-STA", "-EncodedCommand", encodedScript],
-        config,
-      );
-    },
-  };
+  return cancellableAdapter(async (signal, request) => {
+    const config = Buffer.from(JSON.stringify(stdinConfig(request)), "utf8").toString("base64");
+    const system = windowsDialogSystem(systemOptions);
+    return await runAdapterScript(
+      runProcess,
+      system.command,
+      ["-NoProfile", "-STA", "-EncodedCommand", encodedScript],
+      config,
+      signal,
+      { processEnv: system.env, childEnv: system.env },
+    );
+  });
 }
 
 // Platform dispatch. Unsupported platforms get an adapter that fails typed-`unsupported`, so the
@@ -393,6 +612,9 @@ export function createNativeFileDialogAdapter(
           "native dialogs are unsupported on this platform",
         ),
       );
+    },
+    cancel(): void {
+      // Nothing is ever in flight on an unsupported platform -- open() always rejects immediately.
     },
   };
 }

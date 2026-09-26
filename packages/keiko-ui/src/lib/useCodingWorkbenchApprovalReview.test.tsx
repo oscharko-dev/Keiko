@@ -1,7 +1,16 @@
+import { draftDeliveryReview } from "../app/components/desktop/widgets/coding-workbench/_draftDeliveryTestSupport";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimePendingApprovalReview,
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+} from "@oscharko-dev/keiko-contracts";
 
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 import {
   useCodingWorkbenchApprovalReview,
   type UseCodingWorkbenchApprovalReviewInput,
@@ -10,7 +19,8 @@ import {
 const getApprovalReviewMock = vi.hoisted(() => vi.fn());
 const pairingSettledMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./coding-app-session-client", () => ({
+vi.mock("./coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./coding-app-session-client")>()),
   codingAppSessionPairingSettled: pairingSettledMock,
 }));
 
@@ -36,6 +46,32 @@ function active(): CodingWorkbenchRuntimeApprovalReviewChannelPayload {
   return { session: "active", pending: REVIEW };
 }
 
+function commitReview(runId = "run-1"): CodingWorkbenchRuntimePendingApprovalReview {
+  return {
+    ...REVIEW,
+    verifiedCommit: {
+      message: "fix: never copy this message into a diagnostic",
+      result: {
+        schemaVersion: "1",
+        status: "approval-required",
+        reason: "approval-required",
+        recordedAt: "2026-09-04T10:00:00.000Z",
+        proposalId: REVIEW.requestId,
+        runId,
+        envelopeDigest: "a".repeat(64),
+        runtimeAuthorityDigest: "b".repeat(64),
+        workspaceDigest: "c".repeat(64),
+        repositoryDigest: "d".repeat(64),
+        baseSha: "1".repeat(40),
+        parentSha: "2".repeat(40),
+        stagedTreeDigest: "3".repeat(64),
+        messageDigest: "4".repeat(64),
+        verificationEvidenceId: "verification-3386",
+      },
+    },
+  };
+}
+
 async function flushRead(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -55,13 +91,81 @@ describe("useCodingWorkbenchApprovalReview", () => {
     vi.restoreAllMocks();
   });
 
+  it("#3386: publishes a matching commit and records only its bounded facts", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    getApprovalReviewMock.mockResolvedValue({ session: "active", pending: commitReview() });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.review).toEqual(commitReview());
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] verified commit review ready: files 2 tree 333333333333",
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("never copy");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("src/alpha.ts");
+  });
+
+  it("#3386: refuses a commit from another run even when the permission identifier matches", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    getApprovalReviewMock.mockResolvedValue({
+      session: "active",
+      pending: commitReview("other-run"),
+    });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => expect(result.current.status).toBe("unavailable"));
+    expect(result.current.review).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] verified commit review unavailable: binding-mismatch",
+    );
+  });
+
+  it.each(["push", "pull-request"] as const)(
+    "#3387: logs only bounded %s review facts",
+    async (action) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const pending = draftDeliveryReview(action);
+      getApprovalReviewMock.mockResolvedValue({ session: "active", pending });
+      const { result } = renderHook(() =>
+        useCodingWorkbenchApprovalReview({ ...RUN, permissionRequestId: pending.requestId }),
+      );
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      const phase = action === "push" ? "push-proposed" : "pr-proposed";
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        `[keiko] draft delivery review ready: ${phase} head 333333333333`,
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(
+        /Original template|reviewed delivery|owner|Closes/u,
+      );
+    },
+  );
+
+  it("#3387: hides delivery review from another run and records the closed failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const pending = draftDeliveryReview("pull-request");
+    getApprovalReviewMock.mockResolvedValue({ session: "active", pending });
+    const { result } = renderHook(() =>
+      useCodingWorkbenchApprovalReview({
+        runId: "other-run",
+        permissionRequestId: pending.requestId,
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe("unavailable"));
+    expect(result.current.review).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] draft delivery review unavailable: binding-mismatch",
+    );
+  });
+
   it("stays idle and reads nothing while no approval is pending", async () => {
     const { result } = renderHook(() =>
       useCodingWorkbenchApprovalReview({ runId: "run-1", permissionRequestId: undefined }),
     );
     await flushRead();
 
-    expect(result.current).toEqual({ status: "idle", review: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      review: null,
+      retry: expect.any(Function),
+    });
     expect(getApprovalReviewMock).not.toHaveBeenCalled();
   });
 
@@ -71,19 +175,56 @@ describe("useCodingWorkbenchApprovalReview", () => {
     );
     await flushRead();
 
-    expect(result.current).toEqual({ status: "idle", review: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      review: null,
+      retry: expect.any(Function),
+    });
     expect(getApprovalReviewMock).not.toHaveBeenCalled();
   });
 
   it("waits for pairing to settle, then publishes the reviewable changeset facts", async () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
-    expect(result.current).toEqual({ status: "loading", review: null });
+    expect(result.current).toEqual({
+      status: "loading",
+      review: null,
+      retry: expect.any(Function),
+    });
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "ready", review: REVIEW });
+      expect(result.current).toEqual({
+        status: "ready",
+        review: REVIEW,
+        retry: expect.any(Function),
+      });
     });
     expect(pairingSettledMock).toHaveBeenCalledOnce();
     expect(getApprovalReviewMock).toHaveBeenCalledWith("run-1", expect.any(AbortSignal));
+  });
+
+  // Workbench audit, 2026-09-03: before `retry`, a transient failure while a file-edit approval was
+  // open left the operator stuck on "unavailable" forever — nothing else re-triggers a fetch while
+  // runId/permissionRequestId stay the same during that one decision.
+  it("re-reads on demand via retry() without any input changing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    getApprovalReviewMock.mockRejectedValueOnce(new Error("transient"));
+    getApprovalReviewMock.mockResolvedValueOnce(active());
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(getApprovalReviewMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.retry();
+    });
+    expect(result.current.status).toBe("loading");
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+    expect(result.current.review).toEqual(REVIEW);
+    expect(getApprovalReviewMock).toHaveBeenCalledTimes(2);
   });
 
   it("reports unavailable for an unpaired window instead of an empty change summary", async () => {
@@ -91,7 +232,11 @@ describe("useCodingWorkbenchApprovalReview", () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "unavailable", review: null });
+      expect(result.current).toEqual({
+        status: "unavailable",
+        review: null,
+        retry: expect.any(Function),
+      });
     });
   });
 
@@ -100,8 +245,50 @@ describe("useCodingWorkbenchApprovalReview", () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "unavailable", review: null });
+      expect(result.current).toEqual({
+        status: "unavailable",
+        review: null,
+        retry: expect.any(Function),
+      });
     });
+  });
+
+  // #3381 review: the channel read and the runtime snapshot advance independently, so a read
+  // issued for P1 can be answered with the review of the P2 the server has moved on to. Published
+  // under P1's id it renders P2's paths and magnitude beside P1's approve/deny controls — the input
+  // never changed, so the hook's own input scoping cannot see it.
+  it("reports unavailable when the channel answers with a different request's review", async () => {
+    getApprovalReviewMock.mockResolvedValue({
+      session: "active",
+      pending: { ...REVIEW, requestId: "permission-8", paths: ["src/gamma.ts"], fileCount: 1 },
+    });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(result.current.review).toBeNull();
+  });
+
+  it("reports unavailable when a retry answers with a newer request's review", async () => {
+    getApprovalReviewMock.mockResolvedValueOnce(active());
+    getApprovalReviewMock.mockResolvedValueOnce({
+      session: "active",
+      pending: { ...REVIEW, requestId: "permission-9" },
+    });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => {
+      expect(result.current.review).toEqual(REVIEW);
+    });
+
+    act(() => {
+      result.current.retry();
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(result.current.review).toBeNull();
   });
 
   it("reports unavailable and stays diagnosable when the channel read fails", async () => {
@@ -110,7 +297,11 @@ describe("useCodingWorkbenchApprovalReview", () => {
     const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
 
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "unavailable", review: null });
+      expect(result.current).toEqual({
+        status: "unavailable",
+        review: null,
+        retry: expect.any(Function),
+      });
     });
     expect(warn).toHaveBeenCalledOnce();
   });
@@ -137,9 +328,17 @@ describe("useCodingWorkbenchApprovalReview", () => {
 
     // The scoped state is discarded the moment the input changes: a stale review can never be
     // rendered against a different approval decision.
-    expect(result.current).toEqual({ status: "loading", review: null });
+    expect(result.current).toEqual({
+      status: "loading",
+      review: null,
+      retry: expect.any(Function),
+    });
     await waitFor(() => {
-      expect(result.current).toEqual({ status: "ready", review: next });
+      expect(result.current).toEqual({
+        status: "ready",
+        review: next,
+        retry: expect.any(Function),
+      });
     });
   });
 
@@ -155,5 +354,35 @@ describe("useCodingWorkbenchApprovalReview", () => {
     expect(capturedSignal?.aborted).toBe(false);
     unmount();
     expect(capturedSignal?.aborted).toBe(true);
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+describe("useCodingWorkbenchApprovalReview after a re-pair without a page load (F65)", () => {
+  it("reads the review again", async () => {
+    vi.useRealTimers();
+    pairingSettledMock.mockResolvedValue(true);
+    getApprovalReviewMock.mockResolvedValue(active());
+    renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => expect(getApprovalReviewMock).toHaveBeenCalled());
+    const before = getApprovalReviewMock.mock.calls.length;
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(getApprovalReviewMock.mock.calls.length).toBeGreaterThan(before));
   });
 });

@@ -12,10 +12,17 @@
 // with an OPERATION-COUNT assertion that catches the actual regression CLASS deterministically,
 // regardless of machine speed. The store and the git worktree adapter are wrapped in transparent
 // counting proxies (no production change) so we can prove the algorithmic shape directly:
-//   - reconcile / health over N instances in ONE repository must fetch the git worktree list ONCE
-//     (not N times — the N+1 / O(N²) per-instance `git worktree list` spawn is the exact regression the
-//     grouping-by-repository code prevents), enumerate the store ONCE (one listAll, not per-instance),
-//     and perform O(N) — not O(N²) — persist writes.
+//   - health over N instances in ONE repository must fetch the git worktree list ONCE (not N times —
+//     the N+1 / O(N²) per-instance `git worktree list` spawn is the exact regression the
+//     grouping-by-repository code prevents). reconcile's per-instance `ws:<id>` critical section
+//     (KEIKO-0996, #3339) fetches it lazily instead — ZERO times for this fixture's backlog of
+//     already-gone worktrees, and never more than once per instance that still has one — so it must
+//     never scale past the count of instances with a live worktree (bounded to single digits per
+//     repository at the documented realistic scale, ADR-0093 D4), and specifically never once
+//     eagerly per repository regardless of live-worktree count (that shape is exactly what let it
+//     reuse a snapshot taken before a concurrent repair/cleanup's mutation — see the reconcile test
+//     below). Both paths enumerate the store ONCE (one listAll, not per-instance), and perform O(N) —
+//     not O(N²) — persist writes.
 //   - a workspace switch must touch NEITHER a full-store enumeration NOR a git worktree list — a stray
 //     listAll / `git status` slipped into setActive is O(N) in the backlog size and would fail the
 //     count assertion even on an infinitely fast machine.
@@ -269,10 +276,19 @@ describe(`task-workspace performance bounds at N=${String(SCALE)} (ADR-0093 D4)`
     expect(report?.entries.every((e) => e.status !== "healthy")).toBe(true);
     expect(ms).toBeLessThan(RECONCILE_BUDGET_MS);
     // Deterministic backstop for the exact O(N²) / N+1 regression the wall-clock budget proxies:
-    //  - The N instances live in ONE repository, so the `git worktree list` spawn must run EXACTLY once.
-    //    A per-instance spawn (the classic N+1 that re-fetches the worktree list inside the loop) would
-    //    make this SCALE, and it would RED here on any machine, fast or slow.
-    expect(ops.listWorktrees).toBe(1);
+    //  - The N instances live in ONE repository, and none of them has a worktree left on disk (this
+    //    fixture's whole point — "the realistic shape of a many-paused-workspaces backlog"), so the
+    //    `git worktree list` spawn must run ZERO times: reconciliation.ts's per-instance `ws:<id>`
+    //    critical section (KEIKO-0996, #3339) fetches the worktree list lazily, through a factory
+    //    `gatherFacts` only invokes when THIS instance's worktree still exists on disk (a PR #3348
+    //    review finding: fetching it once, eagerly, per repository — the ORIGINAL shape of this pin,
+    //    which asserted 1 — reused a snapshot captured before any instance's lock was attempted, so a
+    //    concurrent repair/cleanup mutating the worktree while reconcile was queued behind that instance's
+    //    lock was invisible). 0 is a STRICTLY TIGHTER bound than the previous 1, not a relaxed one: a
+    //    regression back to a per-instance spawn (the classic N+1 that re-fetches the worktree list
+    //    inside the loop) would still make this SCALE to `SCALE`, and RED here on any machine, fast or
+    //    slow, exactly as it did against the eager version of this code.
+    expect(ops.listWorktrees).toBe(0);
     //  - The instance set is enumerated ONCE (a single listAll), never re-scanned per instance.
     expect(ops.listAll).toBe(1);
     //  - Persistence is O(N): exactly one upsert per instance (the classification write), not O(N²).

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -7,7 +7,14 @@ import type {
   UpdateSession,
   UpdateSessionStatus,
 } from "@/lib/types";
+import { ApiError } from "@/lib/api";
 import { UpdateWindow, type UpdateWindowApi } from "./UpdateWindow";
+import styles from "./UpdateWindow.module.css";
+
+const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", () => ({
+  reportClientDiagnostic: reportClientDiagnosticMock,
+}));
 
 function preflight(overrides: Partial<UpdatePreflightReport> = {}): UpdatePreflightReport {
   return {
@@ -26,6 +33,15 @@ function preflight(overrides: Partial<UpdatePreflightReport> = {}): UpdatePrefli
     blockers: [],
     manualUpdateRequired: false,
     oneClickEligible: true,
+    candidate: {
+      schemaVersion: "1",
+      candidateId: "candidate-0.2.10",
+      targetVersion: "0.2.10",
+      confirmationDigest: "a".repeat(64),
+      executionToken: "b".repeat(64),
+      issuedAt: "2026-06-30T12:00:00.000Z",
+      expiresAt: "2026-06-30T12:10:00.000Z",
+    },
     patchNotes: {
       collapsed: true,
       summary: "Plain-language patch notes.",
@@ -41,6 +57,9 @@ function session(overrides: Partial<UpdateSession> = {}): UpdateSession {
   return {
     schemaVersion: "1",
     sessionId: "update-session-1",
+    candidateId: "candidate-0.2.10",
+    candidateDigest: "c".repeat(64),
+    correlationId: "update-correlation-1",
     packageName: "@oscharko-dev/keiko",
     targetVersion: "0.2.10",
     restartCommandPreview: {
@@ -57,6 +76,11 @@ function session(overrides: Partial<UpdateSession> = {}): UpdateSession {
       label: "keiko restart --port 1990 --host 127.0.0.1 --state-dir '/tmp/keiko update state'",
     },
     phase: "running",
+    lifecycle: {
+      phase: "downloading",
+      progress: { completedBytes: 0 },
+      cancellationCutoff: "not-reached",
+    },
     failureReason: "none",
     startedAt: "2026-06-30T12:00:00.000Z",
     updatedAt: "2026-06-30T12:00:01.000Z",
@@ -131,10 +155,16 @@ function portableReleaseReport(
         assetId: 120,
         releaseId: 12,
         sizeBytes: 48_000_000,
+        uncompressedSizeBytes: 96_000_000,
         sha256: "0".repeat(64),
         manifestAssetName: "macos-arm64-portable-manifest.json",
+        manifestAssetId: 121,
+        manifestSizeBytes: 4_096,
         manifestSha256: "1".repeat(64),
         checksumAssetName: "macos-arm64-SHA256SUMS.txt",
+        checksumAssetId: 122,
+        checksumSizeBytes: 512,
+        checksumSha256: "2".repeat(64),
         checksumVerified: true,
       },
     },
@@ -181,7 +211,6 @@ function apiFor(
     checkPreflight: vi.fn(async () => report),
     fetchSessionStatus: vi.fn(async () => status),
     startSession: vi.fn(async () => session({ phase: "preparing", message: "Preparing update." })),
-    retrySession: vi.fn(async () => session({ phase: "preparing", message: "Retrying update." })),
     cancelSession: vi.fn(async () => session({ phase: "cancelled", message: "Update cancelled." })),
     verifyRestart: vi.fn(async () => session({ phase: "succeeded", message: "Update verified." })),
     fetchRemediationStatus: vi.fn(async () => rem),
@@ -208,6 +237,38 @@ function restoreClipboard(descriptor: PropertyDescriptor | undefined): void {
 }
 
 describe("UpdateWindow", () => {
+  it("starts initial remediation preparation before session status resolves", async () => {
+    let resolveSession!: (status: UpdateSessionStatus) => void;
+    const impactReport = preflight({
+      impact: {
+        entries: [],
+        releaseNoteBullets: ["Memory state requires repair."],
+        affectedStateStores: ["memory-vault"],
+        stateImpact: [],
+        userActionRequired: true,
+        remediations: ["repair-required"],
+      },
+    });
+    const status = sessionStatus();
+    const api = apiFor({ report: impactReport, status });
+    vi.mocked(api.fetchSessionStatus).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+
+    render(<UpdateWindow api={api} />);
+
+    await waitFor(() => {
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("heading", { name: "Update available" })).toBeNull();
+
+    resolveSession(status);
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+  });
+
   it("renders a normal available update with collapsed patch notes and details", async () => {
     const api = apiFor();
     const { container } = render(<UpdateWindow api={api} />);
@@ -226,7 +287,11 @@ describe("UpdateWindow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Install update" }));
     await waitFor(() => {
-      expect(api.startSession).toHaveBeenCalledWith({ targetVersion: "0.2.10" });
+      expect(api.startSession).toHaveBeenCalledWith({
+        candidateId: "candidate-0.2.10",
+        confirmationDigest: "a".repeat(64),
+        executionToken: "b".repeat(64),
+      });
     });
   });
 
@@ -253,7 +318,11 @@ describe("UpdateWindow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Update Keiko" }));
     await waitFor(() => {
-      expect(api.startSession).toHaveBeenCalledWith({ targetVersion: "0.2.10" });
+      expect(api.startSession).toHaveBeenCalledWith({
+        candidateId: "candidate-0.2.10",
+        confirmationDigest: "a".repeat(64),
+        executionToken: "b".repeat(64),
+      });
     });
   });
 
@@ -346,6 +415,25 @@ describe("UpdateWindow", () => {
       "href",
       "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.10",
     );
+  });
+
+  it("keeps the manual update action when no executable candidate claim exists", async () => {
+    const manualReport = portableReleaseReport({
+      manualUpdateRequired: true,
+      oneClickEligible: false,
+      userActionRequired: true,
+    });
+    Reflect.deleteProperty(manualReport, "candidate");
+    const api = apiFor({
+      report: manualReport,
+      status: portableManagedStatus(),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByText("Portable update needs attention")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open manual download" })).toBeInTheDocument();
+    expect(screen.queryByText(/needs a new server-approved update claim/i)).toBeNull();
   });
 
   it("uses policy-disabled copy for portable-managed updates blocked by local policy", async () => {
@@ -636,7 +724,8 @@ describe("UpdateWindow", () => {
           {
             code: "portable-signing-unverified",
             severity: "high",
-            message: "The portable update is missing verified signing or notarization evidence.",
+            message:
+              "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
             userActionRequired: true,
           },
         ],
@@ -651,7 +740,9 @@ describe("UpdateWindow", () => {
     expect(screen.queryByRole("link", { name: "Open manual download" })).toBeNull();
     fireEvent.click(screen.getByText("Technical details and logs"));
     expect(
-      screen.getByText("The portable update is missing verified signing or notarization evidence."),
+      screen.getByText(
+        "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -1063,7 +1154,7 @@ describe("UpdateWindow", () => {
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     const clipboardDescriptor = setClipboard(writeText);
 
-    render(<UpdateWindow api={api} />);
+    const { container } = render(<UpdateWindow api={api} />);
 
     expect(
       await screen.findByRole("heading", { name: "Critical update available" }),
@@ -1116,6 +1207,14 @@ describe("UpdateWindow", () => {
       screen.queryByText("yarn global add --ignore-scripts @oscharko-dev/keiko@latest"),
     ).toBeNull();
     expect(screen.getByText(yarnTargetCommand)).toBeInTheDocument();
+
+    const npmCommand = screen.getByText(npmTargetCommand);
+    const commandCopyCodeClass = styles.cmpCommandCopyCode;
+    if (commandCopyCodeClass === undefined) throw new Error("Expected command wrap class");
+    expect(npmCommand).toHaveClass(commandCopyCodeClass);
+    expect(npmCommand).not.toHaveAttribute("tabindex");
+    expect(npmCommand.textContent).toBe(npmTargetCommand);
+    expect(await axe(container)).toHaveNoViolations();
 
     const npmCopyButton = screen.getByRole("button", { name: "Copy npm command" });
     fireEvent.click(npmCopyButton);
@@ -1451,6 +1550,9 @@ describe("UpdateWindow", () => {
           targetVersion: "0.2.10",
         }),
       );
+    });
+    await waitFor(() => {
+      expect(api.fetchRemediationStatus).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -2102,7 +2204,7 @@ describe("UpdateWindow", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Retry update" }));
     await waitFor(() => {
-      expect(api.retrySession).toHaveBeenCalledTimes(1);
+      expect(api.checkPreflight).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -2124,7 +2226,365 @@ describe("UpdateWindow", () => {
     await waitFor(() => {
       expect(api.checkPreflight).toHaveBeenCalledTimes(1);
     });
-    expect(api.retrySession).not.toHaveBeenCalled();
+  });
+
+  it("requires a fresh server claim before presenting another install action", async () => {
+    const { candidate: _candidate, ...reportWithoutClaim } = preflight();
+    const api = apiFor({ report: reportWithoutClaim });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(
+      await screen.findByText(/needs a new server-approved update claim/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Install update" })).toBeNull();
+  });
+
+  it("does not offer retry for a session bound to a replaced candidate", async () => {
+    const replacement = preflight({
+      candidate: {
+        schemaVersion: "1",
+        candidateId: "candidate-replacement",
+        targetVersion: "0.2.10",
+        confirmationDigest: "d".repeat(64),
+        executionToken: "e".repeat(64),
+        issuedAt: "2026-06-30T12:01:00.000Z",
+        expiresAt: "2026-06-30T12:11:00.000Z",
+      },
+    });
+    const api = apiFor({
+      report: replacement,
+      status: sessionStatus({
+        lastSession: session({
+          phase: "failed",
+          retryable: true,
+          message: "Old candidate failed.",
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("button", { name: "Install update" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Retry update" })).toBeNull();
+  });
+
+  it("retains server-projected progress and reconnects after a transient poll failure", async () => {
+    vi.useFakeTimers();
+    const running = sessionStatus({
+      activeSession: session({ phase: "running", message: "Installing update.", cancelable: true }),
+    });
+    const recovered = sessionStatus({
+      lastSession: session({
+        phase: "succeeded",
+        message: "Update verified by the local Keiko backend.",
+        cancelable: false,
+      }),
+    });
+    const api = apiFor({ status: running });
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(running)
+      .mockRejectedValueOnce(new ApiError("INTERNAL", "temporary BFF outage", 503))
+      .mockResolvedValueOnce(recovered);
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      reportClientDiagnosticMock.mockClear();
+      expect(screen.getByRole("progressbar", { name: "Update progress" })).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(screen.getByText(/Reconnecting to the local Keiko backend/i)).toBeInTheDocument();
+      expect(screen.getByRole("progressbar", { name: "Update progress" })).toBeInTheDocument();
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "update-window: transient-poll-failed",
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByText("Update verified by the local Keiko backend.")).toBeInTheDocument();
+      expect(screen.queryByText(/Reconnecting to the local Keiko backend/i)).toBeNull();
+      expect(api.fetchRemediationStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a startup-recovery-pending poll without replacing server-projected progress", async () => {
+    vi.useFakeTimers();
+    const running = sessionStatus({
+      activeSession: session({ phase: "running", message: "Installing update.", cancelable: true }),
+    });
+    const recovered = sessionStatus({
+      lastSession: session({
+        phase: "succeeded",
+        message: "Startup recovery verified the update.",
+        cancelable: false,
+      }),
+    });
+    const api = apiFor({ status: running });
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(running)
+      .mockRejectedValueOnce(
+        new ApiError("STARTUP_RECOVERY_PENDING", "startup recovery is in progress", 409),
+      )
+      .mockResolvedValueOnce(recovered);
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(screen.getByText(/Reconnecting to the local Keiko backend/i)).toBeInTheDocument();
+      expect(screen.getByRole("progressbar", { name: "Update progress" })).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByText("Startup recovery verified the update.")).toBeInTheDocument();
+      expect(screen.queryByText(/Reconnecting to the local Keiko backend/i)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses remediation across progress polls and refreshes it on lifecycle transitions", async () => {
+    vi.useFakeTimers();
+    const impactReport = preflight({
+      impact: {
+        entries: [],
+        releaseNoteBullets: ["Memory state requires repair."],
+        affectedStateStores: ["memory-vault"],
+        stateImpact: [
+          {
+            store: "memory-vault",
+            description: "Memory state requires repair.",
+            remediation: "repair-required",
+            userActionRequired: true,
+          },
+        ],
+        userActionRequired: true,
+        remediations: ["repair-required"],
+      },
+    });
+    const downloading = sessionStatus({
+      activeSession: session({
+        lifecycle: {
+          phase: "downloading",
+          progress: { completedBytes: 1, totalBytes: 100 },
+          cancellationCutoff: "not-reached",
+        },
+      }),
+    });
+    const progressed = sessionStatus({
+      activeSession: session({
+        updatedAt: "2026-06-30T12:00:02.000Z",
+        message: "Downloaded more bytes.",
+        lifecycle: {
+          phase: "downloading",
+          progress: { completedBytes: 50, totalBytes: 100 },
+          cancellationCutoff: "not-reached",
+        },
+      }),
+    });
+    const verifying = sessionStatus({
+      activeSession: session({
+        lifecycle: {
+          phase: "verifying",
+          progress: { completedBytes: 100, totalBytes: 100 },
+          cancellationCutoff: "mutation-started",
+        },
+      }),
+    });
+    const completed = sessionStatus({
+      lastSession: session({
+        phase: "succeeded",
+        lifecycle: {
+          phase: "succeeded",
+          progress: { completedBytes: 100, totalBytes: 100 },
+          cancellationCutoff: "handoff-committed",
+        },
+        cancelable: false,
+        restartRequired: false,
+      }),
+    });
+    const api = apiFor({ report: impactReport, status: downloading });
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(downloading)
+      .mockResolvedValueOnce(progressed)
+      .mockResolvedValueOnce(verifying)
+      .mockResolvedValueOnce(completed);
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("progressbar", { name: "Update progress" })).toHaveAttribute(
+        "value",
+        "50",
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+      expect(api.prepareRemediationStatus).toHaveBeenCalledTimes(3);
+      expect(api.fetchSessionStatus).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling and shows recovery for a terminal typed poll response", async () => {
+    vi.useFakeTimers();
+    const running = sessionStatus({
+      activeSession: session({ phase: "running", message: "Installing update.", cancelable: true }),
+    });
+    const api = apiFor({ status: running });
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(running)
+      .mockRejectedValueOnce(
+        new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid update status response.", 502),
+      );
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+
+      expect(screen.getByRole("alert")).toHaveTextContent("Invalid update status response.");
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+      expect(screen.queryByText(/Reconnecting to the local Keiko backend/i)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(api.fetchSessionStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling when a successful status response contains malformed JSON", async () => {
+    vi.useFakeTimers();
+    const running = sessionStatus({
+      activeSession: session({ phase: "running", message: "Installing update.", cancelable: true }),
+    });
+    const api = apiFor({ status: running });
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(running)
+      .mockRejectedValueOnce(new SyntaxError("Unexpected token in update status response"));
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Unexpected token in update status response",
+      );
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+      expect(screen.queryByText(/Reconnecting to the local Keiko backend/i)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(api.fetchSessionStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an accepted start visible when the first status read loses the BFF", async () => {
+    vi.useFakeTimers();
+    const idle = sessionStatus();
+    const accepted = session({ phase: "preparing", message: "Preparing accepted update." });
+    const recovered = sessionStatus({ activeSession: accepted });
+    const api = apiFor({ status: idle });
+    vi.mocked(api.startSession).mockResolvedValueOnce(accepted);
+    vi.mocked(api.fetchSessionStatus)
+      .mockResolvedValueOnce(idle)
+      .mockRejectedValueOnce(new TypeError("local BFF restarted"))
+      .mockResolvedValueOnce(recovered);
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole("button", { name: "Install update" })).toBeEnabled();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Install update" }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByText("Preparing accepted update.")).toBeInTheDocument();
+      expect(screen.getByRole("progressbar", { name: "Update progress" })).toBeInTheDocument();
+      expect(screen.getByText(/Reconnecting to the local Keiko backend/i)).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Update status unavailable" })).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(screen.getByText("Preparing accepted update.")).toBeInTheDocument();
+      expect(screen.queryByText(/Reconnecting to the local Keiko backend/i)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not infer acceptance or begin polling when the start mutation is rejected", async () => {
+    vi.useFakeTimers();
+    const api = apiFor({ status: sessionStatus() });
+    vi.mocked(api.startSession).mockRejectedValueOnce(new TypeError("start request failed"));
+
+    try {
+      render(<UpdateWindow api={api} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Install update" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByRole("alert")).toHaveTextContent("start request failed");
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+      expect(screen.queryByRole("progressbar", { name: "Update progress" })).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(api.fetchSessionStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders in-flight update progress as indeterminate", async () => {
@@ -2143,6 +2603,29 @@ describe("UpdateWindow", () => {
     const progress = await screen.findByRole("progressbar", { name: "Update progress" });
     expect(progress).not.toHaveAttribute("value");
     expect(progress).not.toHaveAttribute("aria-valuenow");
+  });
+
+  it("projects bounded progress and server-owned cancellation cutoff", async () => {
+    const api = apiFor({
+      status: sessionStatus({
+        activeSession: session({
+          phase: "running",
+          cancelable: true,
+          lifecycle: {
+            phase: "activating",
+            progress: { completedBytes: 30, totalBytes: 100 },
+            cancellationCutoff: "mutation-started",
+          },
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    const progress = await screen.findByRole("progressbar", { name: "Update progress" });
+    expect(progress).toHaveAttribute("max", "100");
+    expect(progress).toHaveAttribute("value", "30");
+    expect(screen.queryByRole("button", { name: "Cancel update" })).toBeNull();
   });
 
   it("uses the displayed session target for restart verification when the report target is missing", async () => {

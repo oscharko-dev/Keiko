@@ -852,6 +852,34 @@ describe("ExportBar — approvedOnly scope control (Issue #282 A11y-3)", () => {
     await selectExportAdapter(user, "csv");
     expect(screen.getByRole("checkbox", { name: /approved only/i })).toBeInTheDocument();
   });
+
+  it("clears the omission alert when the operator toggles the 'Approved only' scope", async () => {
+    // PR-review follow-up (Codex thread 3772192299): omittedCount belongs to the export
+    // whose scope produced it. Before this fix, toggling the scope preserved a stale alert
+    // that would claim the newly-selected scope caused the omission — misleading. Now the
+    // scope-toggle handler clears result state alongside the scope change.
+    const user = userEvent.setup();
+    const exportImpl = vi.fn().mockResolvedValue({
+      dryRun: false,
+      adapter: "csv",
+      filename: "run.csv",
+      contentType: "text/csv",
+      byteLen: 10,
+      body: "id\n1",
+      omittedByQualityGate: 3,
+    }) as unknown as ExportQiRunFn;
+    render(<ExportBar runId="run-omit" exportImpl={exportImpl} />);
+    // First: run an all-candidate export that surfaces the omission alert.
+    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-export-omitted")).toBeInTheDocument();
+    });
+    // Toggling the scope back MUST clear the alert — the count no longer describes the
+    // currently-selected scope.
+    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
+    expect(screen.queryByTestId("qi-export-omitted")).not.toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

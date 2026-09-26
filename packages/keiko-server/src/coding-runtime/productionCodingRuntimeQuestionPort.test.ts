@@ -172,21 +172,34 @@ describe("production coding runtime question port fail-closed branches", () => {
     });
   });
 
-  it("fails closed when the underlying question surface throws", async () => {
-    const port = createProductionRuntimeQuestionPort(
-      guardedRuns({
-        list: () => Promise.reject(new Error("runtime protocol failure")),
-        answer: () => Promise.reject(new Error("runtime protocol failure")),
-        reject: () => Promise.reject(new Error("runtime protocol failure")),
-      }),
-    );
-    await expect(port.list(operation("run-1", "list-1", 1))).resolves.toBeUndefined();
-    await expect(
-      port.answer({ ...operation("run-1", "answer-1", 2), questionId: "que_1", answers: [["a"]] }),
-    ).resolves.toBe(false);
-    await expect(
-      port.reject({ ...operation("run-1", "reject-1", 3), questionId: "que_1" }),
-    ).resolves.toBe(false);
+  it("propagates transport failures and releases reservations for a same-request retry", async () => {
+    const failure = new Error("runtime protocol failure");
+    const list = vi
+      .fn<() => Promise<{ questions: [] }>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue({ questions: [] });
+    const answer = vi
+      .fn<() => Promise<boolean>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(true);
+    const reject = vi
+      .fn<() => Promise<boolean>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(true);
+    const port = createProductionRuntimeQuestionPort(guardedRuns({ list, answer, reject }));
+    const listRequest = operation("run-1", "list-1", 1);
+    const answerRequest = {
+      ...operation("run-1", "answer-1", 2),
+      questionId: "que_1",
+      answers: [["a"]],
+    };
+    const rejectRequest = { ...operation("run-1", "reject-1", 3), questionId: "que_1" };
+    await expect(port.list(listRequest)).rejects.toBe(failure);
+    await expect(port.list(listRequest)).resolves.toEqual({ questions: [] });
+    await expect(port.answer(answerRequest)).rejects.toBe(failure);
+    await expect(port.answer(answerRequest)).resolves.toBe(true);
+    await expect(port.reject(rejectRequest)).rejects.toBe(failure);
+    await expect(port.reject(rejectRequest)).resolves.toBe(true);
   });
 
   it("returns nothing when the runtime reports no listable questions", async () => {

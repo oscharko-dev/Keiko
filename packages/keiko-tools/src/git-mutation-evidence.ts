@@ -35,13 +35,16 @@ import type {
   GitDeliveryRecoveryMetadata,
   GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_PREFLIGHT_RECOVERY_ACTION_HINT } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
 import {
   GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
-  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   gitDeliveryRecoveryDispositionForBlockReason,
   gitDeliveryRecoveryDispositionForExecutionError,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-evidence";
+import {
+  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import type {
@@ -49,7 +52,7 @@ import type {
   GitMutationOutcome,
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationLifecyclePhase } from "./git-mutation-taxonomy.js";
-import type { GitPreflightFinding, GitPreflightFindingCode } from "./git-mutation-preflight.js";
+import type { GitPreflightFinding } from "./git-mutation-preflight.js";
 
 // ─── Build input + dependencies ─────────────────────────────────────────────────────────────
 
@@ -131,10 +134,17 @@ const ACTION_HINT_BY_BLOCK_REASON: Readonly<
   Record<GitDeliveryBlockReason, GitDeliveryRecoveryActionHint>
 > = {
   "policy-pack-blocked": "adjust-policy-target",
+  "authority-denied": "adjust-policy-target",
   "protected-branch": "adjust-policy-target",
   "provider-capability-absent": "adjust-policy-target",
   "approval-expired": "request-approval",
+  // KEIKO-0147: the granting user is not in the decision's requiredApprovers set — the fix is a
+  // fresh approval from one of the named approvers.
+  "approver-not-authorized": "request-approval",
   "risk-class-ceiling": "adjust-policy-target",
+  // KEIKO-0154: the branch head advanced between approval and execute — the operator refreshes
+  // the readiness read and re-issues the merge with the new head, exactly the retry semantics.
+  "head-hash-mismatch": "retry",
   "no-applicable-rule": "adjust-policy-target",
 } as const;
 
@@ -147,30 +157,9 @@ const ACTION_HINT_BY_EXECUTION_ERROR: Readonly<
   "network-failure": "wait-for-provider",
   conflict: "resolve-conflicts",
   "precondition-failed": "resolve-conflicts",
+  "signature-failed": "configure-signing",
   timeout: "retry",
   "internal-error": "retry",
-} as const;
-
-const ACTION_HINT_BY_PREFLIGHT_FINDING: Readonly<
-  Record<GitPreflightFindingCode, GitDeliveryRecoveryActionHint>
-> = {
-  "detached-head": "recover-via-strategy",
-  "branch-already-exists": "retry",
-  "base-branch-missing": "retry",
-  "switch-target-missing": "retry",
-  "no-changes-to-stage": "stage-changes",
-  "nothing-staged-to-unstage": "stage-changes",
-  "nothing-staged-to-commit": "stage-changes",
-  "untracked-files-impacted": "stage-changes",
-  "no-upstream-configured": "configure-upstream",
-  "nothing-to-push": "retry",
-  "non-fast-forward": "resolve-conflicts",
-  "remote-alias-missing": "configure-upstream",
-  "remote-unreachable": "wait-for-provider",
-  "operation-in-progress": "abort-in-progress-operation",
-  "no-operation-to-abort": "retry",
-  "recovery-target-unset": "recover-via-strategy",
-  "dirty-worktree-impacts-recovery": "recover-via-strategy",
 } as const;
 
 function recoveryForBlockReason(reason: GitDeliveryBlockReason): GitDeliveryRecoveryMetadata {
@@ -189,7 +178,7 @@ function recoveryForPreflight(
   const code = findings[0]?.code;
   return {
     disposition: "user-fixable",
-    ...(code !== undefined ? { actionHint: ACTION_HINT_BY_PREFLIGHT_FINDING[code] } : {}),
+    ...(code !== undefined ? { actionHint: GIT_PREFLIGHT_RECOVERY_ACTION_HINT[code] } : {}),
   };
 }
 
@@ -206,6 +195,13 @@ function recoveryForRecoveryRequired(
   result: GitDeliveryExecutionResult,
   inputs: GitDeliveryResolvedInputs,
 ): GitDeliveryRecoveryMetadata {
+  if (result.errorCode === "signature-failed") {
+    return {
+      disposition: "user-fixable",
+      actionHint: ACTION_HINT_BY_EXECUTION_ERROR[result.errorCode],
+      executionErrorCode: result.errorCode,
+    };
+  }
   const strategy = inputs.kind === "recovery" ? inputs.recoveryStrategyHint : undefined;
   return {
     disposition: "user-fixable",

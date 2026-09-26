@@ -112,7 +112,7 @@ describe("public entrypoint surface", () => {
   // scrubbed, so its literal value is part of the wire contract that keiko-server and the UI both
   // read. Importing it from the package entrypoint locks the export against silent drift.
   it("exports the profile display-name redaction field from the package entrypoint", async () => {
-    const entrypoint = await import("./index.js");
+    const entrypoint = await import("./workspace-profile.js");
     expect(entrypoint.WORKSPACE_PROFILE_DISPLAY_NAME_FIELD).toBe("profileDisplayName");
     const redaction: WorkspaceProfileExportRedaction = {
       settingId: entrypoint.WORKSPACE_PROFILE_DISPLAY_NAME_FIELD,

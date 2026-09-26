@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
+  type UpdateCandidateSnapshot,
   type UpdateInstallMode,
   type UpdatePortableSidecarSummary,
   type UpdatePortableStagingSummary,
   type UpdatePortableTarget,
   type UpdateSessionFailureReason,
 } from "@oscharko-dev/keiko-contracts";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import { isRecord } from "./update-preflight-registry.js";
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
@@ -24,6 +27,8 @@ export const MAX_ENTRY_BYTES = 256 * 1024 * 1024;
 export const MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_ARCHIVE_ENTRIES = 60_000;
 export const MAX_INFLATE_RATIO = 100;
+export const PORTABLE_OPERATION_TIMEOUT_MS = 15 * 60_000;
+export const MIN_PORTABLE_DISK_MARGIN_BYTES = 512 * 1024 * 1024;
 export const UPDATE_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 export const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 export const COMMIT_SHA = /^[a-f0-9]{40}$/u;
@@ -47,11 +52,19 @@ export interface TextAsset {
 }
 
 export interface PortableUpdateStageInput {
+  readonly candidate: UpdateCandidateSnapshot;
   readonly sessionId: string;
   readonly targetVersion: string;
   readonly installMode: UpdateInstallMode;
   readonly runtimeFacts?: UpdateRuntimeFacts | undefined;
   readonly signal?: AbortSignal | undefined;
+  readonly onProgress?: ((progress: PortableUpdateStageProgress) => void) | undefined;
+}
+
+export interface PortableUpdateStageProgress {
+  readonly phase: "downloading" | "staging" | "verifying";
+  readonly completedBytes: number;
+  readonly totalBytes?: number | undefined;
 }
 
 export interface PortablePlatformVerificationInput {
@@ -76,6 +89,10 @@ export interface PortableUpdateStagerOptions {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly egress?: (() => GatewayEgressConfig | undefined) | undefined;
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly availableDiskBytes?: ((path: string) => number) | undefined;
+  readonly releaseTrustedKeys?: readonly PortableReleaseTrustedKey[] | undefined;
+  readonly now?: (() => number) | undefined;
 }
 
 export class PortableUpdateStagingError extends Error {
@@ -104,16 +121,19 @@ export function runtimeFor(target: UpdatePortableTarget): {
   readonly arch: string;
 } {
   if (target === "windows-x64") return { platform: "win32", arch: "x64" };
+  if (target === "linux-x64") return { platform: "linux", arch: "x64" };
   if (target === "macos-arm64") return { platform: "darwin", arch: "arm64" };
   return { platform: "darwin", arch: "x64" };
 }
 
 export function primaryLauncher(target: UpdatePortableTarget): string {
-  return target === "windows-x64" ? "Keiko.exe" : "Keiko.app";
+  if (target === "windows-x64") return "Keiko.exe";
+  return target === "linux-x64" ? "Keiko" : "Keiko.app";
 }
 
 export function signatureKind(target: UpdatePortableTarget): string {
-  return target === "windows-x64" ? "authenticode" : "developer-id-notarized";
+  if (target === "windows-x64") return "authenticode";
+  return target === "linux-x64" ? "github-oidc-attested" : "developer-id-notarized";
 }
 
 export function recordAt(
@@ -155,6 +175,13 @@ export function manifestArchiveSha(manifest: Record<string, unknown>): string | 
 
 export function assertAbort(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw new PortableUpdateStagingError("cancelled", "cancelled");
+}
+
+export function reportPortableProgress(
+  input: PortableUpdateStageInput,
+  progress: PortableUpdateStageProgress,
+): void {
+  input.onProgress?.(progress);
 }
 
 export function portableStageSummary(input: {

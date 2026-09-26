@@ -13,43 +13,36 @@
 }
 
 .workspaceWindow:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 5px;
+  outline: none;
 }
 
-/* Issue #2150 — rendered as a sibling overlay in Workspace.tsx (one per
-   selected window, z-indexed above the topmost window), NOT as styling on the
-   window element itself. A window's own box-shadow/pseudo-elements stack as
-   part of its own z-indexed box: wherever a higher-z window overlaps a
-   selected-but-lower-z window, the higher window's opaque body would paint
-   over the ring, making a correctly-selected window appear unselected. The
-   overlay is its own stacking context above every window, so it stays fully
-   visible regardless of window overlap or stacking order. */
+.workspaceWindow:focus-visible:not([data-selected="true"]) {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.workspaceWindow.workspaceWindow[data-top="true"],
+.workspaceWindow.workspaceWindow[data-selected="true"] {
+  border-color: transparent;
+}
+
+/* Rendered as a sibling overlay in Workspace.tsx (one per selected window),
+   not as another border/pseudo-element inside the window chassis. The overlay
+   uses the selected window's own z-index: it stays tied to the selected window,
+   and foreground windows correctly cover it where they overlap. */
 .selectionRing {
   position: absolute;
   left: 0;
   top: 0;
   border-radius: var(--radius-surface);
   pointer-events: none;
-  box-shadow:
-    0 0 0 2px var(--focus-ring),
-    0 0 0 7px color-mix(in oklch, var(--accent) 14%, transparent);
-}
-
-.selectionRing::after {
-  position: absolute;
-  inset: -5px;
-  content: "";
-  border: 1px solid var(--accent-line);
-  border-radius: inherit;
-  opacity: 0.7;
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .marquee,
   .workspaceWindow,
-  .selectionRing,
-  .selectionRing::after {
+  .selectionRing {
     animation: none;
     transition: none;
   }

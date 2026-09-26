@@ -9,6 +9,20 @@
 // stripped of unsafe format characters before it can reach a model or the harness.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type {
+  CodingContextOmission,
+  CodingContextSourceKind,
+  EditorAgentDiagnostic,
+  EditorAgentSessionSnapshot,
+  GitEditorBlameResponse,
+  GitEditorDiffResponse,
+  GitRepositoryStatusResponse,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+  LanguageRange,
+  RetrievalQuery,
+  RetrievalReference,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_EDITOR_BLAME_MAX_LINES,
   GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
@@ -16,30 +30,19 @@ import {
   GIT_AGENT_CONTEXT_MAX_HUNKS,
   parseGitEditorBlameResponse,
   parseGitEditorDiffResponse,
-  stripUnsafeFormatChars,
-  validateGitRepositoryStatusResponse,
-  type CodingContextOmission,
-  type CodingContextSourceKind,
-  type EditorAgentDiagnostic,
-  type EditorAgentSessionSnapshot,
-  type GitEditorBlameResponse,
-  type GitEditorDiffResponse,
-  type GitRepositoryStatusResponse,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-  type LanguageRange,
-  type RetrievalQuery,
-  type RetrievalReference,
-} from "@oscharko-dev/keiko-contracts";
-import type { MemoryScope, ProjectId, WorkspaceId } from "@oscharko-dev/keiko-contracts/memory";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { findGitHubIssueReferences } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateGitRepositoryStatusResponse } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import type { MemoryScope, ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import {
   DEFAULT_SEARCH_LIMITS,
   detectWorkspaceAt,
   readExcerpt,
   searchText,
   type SearchScope,
+  type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readCitationExcerpt } from "@oscharko-dev/keiko-local-knowledge";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { UiHandlerDeps } from "../deps.js";
@@ -53,11 +56,16 @@ import {
   type CodeContextSource,
 } from "../coding-context/codeContextConnector.js";
 import { createGitHubCodeContextConnector } from "../coding-context/githubCodeContextConnector.js";
+import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
+import {
+  gitHubCodeContextPortFor,
+  githubRemoteOwnerAndRepoFor,
+  isGitHubIssueReaderAuthorized,
+} from "../coding-context/githubIssueReaderAuthorization.js";
 import { createJiraCodeContextConnector } from "../coding-context/jiraCodeContextConnector.js";
 import { handleGitBlame, handleGitStatus, handleGitStructuredDiff } from "../gitRoutes.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
 import { vaultAsQueryPort } from "../memory-conv-handlers.js";
-import { LOCAL_CONVERSATION_MEMORY_USER_ID } from "../memory-conversation-context.js";
 import { memoryCapturePolicyForDeps } from "../memory-capture-policy.js";
 import {
   buildConversationRetrievalSignals,
@@ -89,12 +97,20 @@ export interface ProviderOutcome {
 export interface ProviderContext {
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly maxBytesPerExcerpt: number;
   // Request metadata keeps the stable `nowMs`; lease decisions use this live clock at consumption.
   readonly currentTimeMs: () => number;
   readonly nowMs: number;
   readonly gitContextReader?: GitContextReader | undefined;
+  /**
+   * The originating editor request's correlation id. The git context is assembled by CALLING the
+   * git routes in-process, so without it every line those routes emit — a failed read, a
+   * spawn-boundary refusal — lands under `UNKNOWN_CORRELATION_ID` and cannot be joined to the
+   * editor operation that triggered it (AGENTS.md §8 Rule 1).
+   */
+  readonly correlationId?: string | undefined;
 }
 
 export interface GitContextReadResult {
@@ -108,6 +124,7 @@ export type GitContextReader = (input: {
   readonly realRoot: string;
   readonly activeFile: string | null;
   readonly startLine: number;
+  readonly correlationId?: string | undefined;
 }) => Promise<GitContextReadResult | undefined>;
 
 const REPO_SEARCH_MAX_HITS = 6;
@@ -136,7 +153,7 @@ export interface EditorStateContextLease {
 
 function basename(scopePath: string): string {
   const parts = scopePath.split("/");
-  return parts[parts.length - 1] ?? scopePath;
+  return parts.at(-1) ?? scopePath;
 }
 
 // strip-then-redact, mirroring grounded-qa redactString: format-char stripping first (GRD-001)
@@ -223,9 +240,13 @@ function omission(
   return { sourceKind, reason };
 }
 
-function buildScope(realRoot: string, relativePaths: readonly string[]): SearchScope {
+function buildScope(
+  realRoot: string,
+  relativePaths: readonly string[],
+  fs: WorkspaceFs,
+): SearchScope {
   return {
-    workspace: detectWorkspaceAt(realRoot, nodeWorkspaceFs),
+    workspace: detectWorkspaceAt(realRoot, fs),
     scopeId: "editor-coding-context",
     relativePaths,
   };
@@ -244,6 +265,7 @@ function buildQuery(text: string, symbol: string | undefined, nowMs: number): Re
 async function readHitExcerpt(
   signal: AbortSignal,
   scope: SearchScope,
+  fs: WorkspaceFs,
   atom: { scopePath: string; lineRange: { startLine: number; endLine: number } | undefined },
   maxBytes: number,
 ): Promise<{ content: string; truncated: boolean } | undefined> {
@@ -258,7 +280,7 @@ async function readHitExcerpt(
         endLine,
         maxBytes,
       },
-      { signal },
+      { signal, fs },
     );
     return { content: result.content, truncated: result.truncated };
   } catch {
@@ -393,12 +415,20 @@ export function runEditorStateProvider(
 }
 
 // ─── read-only Git-context provider ────────────────────────────────────────────────
-function gitRouteContext(path: string): import("../routes.js").RouteContext {
+// Carries the originating request's correlation id into the in-process git route call, so the
+// lines that route emits are joinable to the editor operation rather than orphaned under
+// `UNKNOWN_CORRELATION_ID`. `RouteContext.correlationId` is optional and the project runs
+// `exactOptionalPropertyTypes`, so it is spread rather than assigned.
+function gitRouteContext(
+  path: string,
+  correlationId: string | undefined,
+): import("../routes.js").RouteContext {
   return {
     req: {} as IncomingMessage,
     res: {} as ServerResponse,
     params: {},
     url: new URL(path, "http://127.0.0.1"),
+    correlationId,
   };
 }
 
@@ -414,10 +444,11 @@ async function readStructuredDiff(
   realRoot: string,
   activeFile: string,
   scope: "staged" | "unstaged",
+  correlationId: string | undefined,
 ): Promise<GitEditorDiffResponse | undefined> {
   const query = new URLSearchParams({ root: realRoot, path: activeFile, scope });
   const result = await handleGitStructuredDiff(
-    gitRouteContext(`/api/git/diff/structured?${query.toString()}`),
+    gitRouteContext(`/api/git/diff/structured?${query.toString()}`, correlationId),
     deps,
     deps.gitRouteOptions,
   );
@@ -430,6 +461,7 @@ async function readBlame(
   realRoot: string,
   activeFile: string,
   startLine: number,
+  correlationId: string | undefined,
 ): Promise<GitEditorBlameResponse | undefined> {
   const query = new URLSearchParams({
     root: realRoot,
@@ -438,7 +470,7 @@ async function readBlame(
     maxLines: String(Math.min(GIT_AGENT_CONTEXT_MAX_BLAME_LINES, GIT_EDITOR_BLAME_MAX_LINES)),
   });
   const result = await handleGitBlame(
-    gitRouteContext(`/api/git/blame?${query.toString()}`),
+    gitRouteContext(`/api/git/blame?${query.toString()}`, correlationId),
     deps,
     deps.gitRouteOptions,
   );
@@ -449,7 +481,7 @@ async function readBlame(
 const defaultGitContextReader: GitContextReader = async (input) => {
   const query = new URLSearchParams({ root: input.realRoot });
   const result = await handleGitStatus(
-    gitRouteContext(`/api/git/status?${query.toString()}`),
+    gitRouteContext(`/api/git/status?${query.toString()}`, input.correlationId),
     input.deps,
     input.deps.gitRouteOptions,
   );
@@ -458,10 +490,22 @@ const defaultGitContextReader: GitContextReader = async (input) => {
   if (input.activeFile === null) return { status, diffs: [], blame: undefined };
   const diffs = await Promise.all(
     (["staged", "unstaged"] as const).map((scope) =>
-      readStructuredDiff(input.deps, input.realRoot, input.activeFile ?? "", scope),
+      readStructuredDiff(
+        input.deps,
+        input.realRoot,
+        input.activeFile ?? "",
+        scope,
+        input.correlationId,
+      ),
     ),
   );
-  const blame = await readBlame(input.deps, input.realRoot, input.activeFile, input.startLine);
+  const blame = await readBlame(
+    input.deps,
+    input.realRoot,
+    input.activeFile,
+    input.startLine,
+    input.correlationId,
+  );
   return {
     status,
     diffs: diffs.filter((diff): diff is GitEditorDiffResponse => diff !== undefined),
@@ -598,6 +642,7 @@ async function readGitContext(
       realRoot: ctx.realRoot,
       activeFile: snapshot.activeFile,
       startLine: (snapshot.cursor?.line ?? 0) + 1,
+      correlationId: ctx.correlationId,
     });
   } catch {
     return undefined;
@@ -655,7 +700,7 @@ async function readFocusExcerpt(
         endLine: FILES_FOCUS_MAX_LINES,
         maxBytes: ctx.maxBytesPerExcerpt,
       },
-      { signal: ctx.signal },
+      { signal: ctx.signal, fs: ctx.fs },
     );
     return prepareExcerpt(ctx, {
       sourceKind: "files-focus",
@@ -680,6 +725,7 @@ async function searchHitExcerpts(
   try {
     hits = await searchText(scope, buildQuery(term, symbol, ctx.nowMs), DEFAULT_SEARCH_LIMITS, {
       signal: ctx.signal,
+      fs: ctx.fs,
       ...(ctx.deps.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndex: ctx.deps.workspaceIndexForRoot(scope.workspace.root) }),
@@ -692,7 +738,7 @@ async function searchHitExcerpts(
     if (isAborted(ctx.signal)) {
       break;
     }
-    const hit = await readHitExcerpt(ctx.signal, scope, atom, ctx.maxBytesPerExcerpt);
+    const hit = await readHitExcerpt(ctx.signal, scope, ctx.fs, atom, ctx.maxBytesPerExcerpt);
     if (hit === undefined) {
       continue;
     }
@@ -747,8 +793,8 @@ export async function runRepoSearchProvider(
     return { excerpts: [], omission: omission("repo-search", "unavailable") };
   }
   const focusPaths = [input.documentPath, ...(input.changedFiles ?? [])];
-  const focusScope = buildScope(ctx.realRoot, focusPaths);
-  const searchScope = buildScope(ctx.realRoot, []);
+  const focusScope = buildScope(ctx.realRoot, focusPaths, ctx.fs);
+  const searchScope = buildScope(ctx.realRoot, [], ctx.fs);
   const excerpts = await readFocusExcerpts(ctx, focusScope, input.documentPath, input.changedFiles);
   if (excerpts === "denied") {
     return { excerpts: [], omission: omission("files-focus", "denied") };
@@ -839,12 +885,7 @@ export async function runLocalKnowledgeProvider(
 
 // ─── Memory provider (query-only, reuses retrieveMemoryContext) ───────────────────────
 function editorMemoryScopes(realRoot: string): readonly MemoryScope[] {
-  return [
-    { kind: "workspace", workspaceId: realRoot as WorkspaceId },
-    { kind: "project", projectId: realRoot as ProjectId },
-    { kind: "user", userId: LOCAL_CONVERSATION_MEMORY_USER_ID },
-    { kind: "global" },
-  ];
+  return [{ kind: "project", projectId: realRoot as ProjectId }];
 }
 
 async function runMemoryRetrieval(
@@ -948,9 +989,9 @@ export async function runMemoryProvider(
 const CONNECTED_CONTEXT_MAX_REFS = 4;
 const CONNECTED_CONTEXT_RUN_ID = "editor-coding-context";
 const CONNECTED_CONTEXT_SCORE = 0.75;
-// `owner/repo#123`; GitHub serves pull requests from the issues endpoint, so "issue" reads both.
-const GITHUB_REF_PATTERN =
-  /([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})#([1-9]\d{0,9})/gu;
+// `owner/repo#123` is found and admitted by the shared parser leaf (#3385) — this provider used to
+// carry the third copy of that regex. GitHub serves pull requests from the issues endpoint, so
+// "issue" reads both.
 const JIRA_REF_PATTERN = /\b([A-Z][A-Z0-9_]{1,20})-([1-9]\d{0,9})\b/gu;
 
 interface ConnectedContextIntake {
@@ -965,13 +1006,15 @@ const CONNECTED_CONTEXT_UNCONFIGURED: CodeContextConnector = {
 };
 
 function githubContextRefs(queryText: string): CodeContextRef[] {
-  const refs: CodeContextRef[] = [];
-  for (const [, ownerAndRepo, objectId] of queryText.matchAll(GITHUB_REF_PATTERN)) {
-    if (ownerAndRepo !== undefined && objectId !== undefined) {
-      refs.push({ source: "github", objectKind: "issue", ownerAndRepo, objectId });
-    }
-  }
-  return refs;
+  // Bounded at the scan, before de-duplication: a query can name the same object many times, and
+  // the cap below is on distinct refs, so the scan asks for every candidate up to the text's own
+  // capacity for them — the parser leaf keeps that linear.
+  return findGitHubIssueReferences(queryText, Number.MAX_SAFE_INTEGER).map((reference) => ({
+    source: "github",
+    objectKind: "issue",
+    ownerAndRepo: reference.ownerAndRepo,
+    objectId: String(reference.issueNumber),
+  }));
 }
 
 function jiraContextRefs(queryText: string): CodeContextRef[] {
@@ -1014,9 +1057,16 @@ function connectorAuthorizedInEnv(deps: UiHandlerDeps, key: string): boolean {
 function connectedContextScopes(
   deps: UiHandlerDeps,
   config: CodeContextConnectorConfig,
+  // The port this intake will actually read through, NOT the launch-time field. Keying the scope
+  // off `deps.codingContextGitHubPort` meant that starting Keiko without an initial project built a
+  // working fallback port and could carry a live grant, and then withheld `source-control.read` so
+  // `authorizeCodeContextRead` answered `missing-scope` — denying the exact case the fallback
+  // exists to serve. The pack route already derives its flag from the resolved port; this is the
+  // editor twin catching up.
+  githubPort: GitHubCodeContextApiPort | undefined,
 ): readonly CodingWorkbenchConnectorScope[] {
   const scopes: CodingWorkbenchConnectorScope[] = [];
-  if (deps.codingContextGitHubPort !== undefined && config.github_connector_authorized === true) {
+  if (githubPort !== undefined && config.github_connector_authorized === true) {
     scopes.push("source-control.read");
   }
   if (deps.codingContextJiraPort !== undefined && config.jira_connector_authorized === true) {
@@ -1025,12 +1075,34 @@ function connectedContextScopes(
   return scopes;
 }
 
-function connectedContextIntake(deps: UiHandlerDeps): ConnectedContextIntake | undefined {
-  const githubPort = deps.codingContextGitHubPort;
+function connectedContextIntake(
+  deps: UiHandlerDeps,
+  repositoryRoot: string,
+  correlationId: string | undefined,
+  // The `owner/repo` this checkout's remote resolves to; resolved by the async caller because
+  // reading a git remote is a subprocess. Undefined denies every GitHub ref.
+  allowedOwnerAndRepo: string | undefined,
+): ConnectedContextIntake | undefined {
+  // Same rule as the route: the port follows the repository this provider is operating on. Building
+  // it only from the launch project left GitHub context permanently unavailable whenever Keiko was
+  // started without an initial project, however the grant was set.
+  const githubPort =
+    deps.codingContextGitHubPort ?? gitHubCodeContextPortFor(repositoryRoot, deps.env);
   const jiraPort = deps.codingContextJiraPort;
   if (githubPort === undefined && jiraPort === undefined) return undefined;
   const connectorConfig: CodeContextConnectorConfig = {
-    github_connector_authorized: connectorAuthorizedInEnv(deps, "GITHUB_CONNECTOR_AUTHORIZED"),
+    // #3385: the GitHub reader is authorized per local checkout by a persisted grant, not by a
+    // launch-path environment variable. The grant is written through
+    // `PUT /api/coding-workbench/github-authorization`; no settings screen calls that route yet, so
+    // "the settings surface" would overstate what exists. The root is the one this provider is
+    // actually operating on (`ctx.realRoot`), not the process-wide launch directory: an editor
+    // working in checkout B must be denied unless B itself carries a grant, and A's grant must
+    // never authorize B. Jira keeps its existing environment gate; #3385 does not change it.
+    github_connector_authorized: isGitHubIssueReaderAuthorized(deps, repositoryRoot, {
+      correlationId,
+    }),
+    // The grant admits GitHub; this says WHICH repository it admits.
+    github_allowed_owner_and_repo: allowedOwnerAndRepo,
     jira_connector_authorized: connectorAuthorizedInEnv(deps, "JIRA_CONNECTOR_AUTHORIZED"),
   };
   return {
@@ -1045,7 +1117,7 @@ function connectedContextIntake(deps: UiHandlerDeps): ConnectedContextIntake | u
           : createJiraCodeContextConnector(jiraPort),
     },
     connectorConfig,
-    connectorScopes: connectedContextScopes(deps, connectorConfig),
+    connectorScopes: connectedContextScopes(deps, connectorConfig, githubPort),
     effectiveMode: deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
   };
 }
@@ -1116,8 +1188,26 @@ export async function runConnectedContextProvider(
   input: { readonly queryText: string | undefined },
 ): Promise<ProviderOutcome> {
   const refs = connectedContextRefs(input.queryText);
-  const intake = connectedContextIntake(ctx.deps);
-  if (isAborted(ctx.signal) || refs.length === 0 || intake === undefined) {
+  // Decide whether there is anything to serve BEFORE resolving the remote: that resolution is a
+  // git subprocess plus an activity line, and the first shape of this provider ran it on every chat
+  // query — refs or no refs, live or already aborted. A query that names no connector ref never
+  // reaches GitHub or Jira, so it has no business spawning git to find out which repository it may
+  // not read.
+  if (isAborted(ctx.signal) || refs.length === 0) {
+    return { excerpts: [], omission: omission("connected-context", "unavailable") };
+  }
+  const intake = connectedContextIntake(
+    ctx.deps,
+    ctx.realRoot,
+    ctx.correlationId,
+    await githubRemoteOwnerAndRepoFor(
+      ctx.realRoot,
+      ctx.deps.env,
+      ctx.deps.codingContextGitHubRemoteResolver,
+      { correlationId: ctx.correlationId },
+    ),
+  );
+  if (isAborted(ctx.signal) || intake === undefined) {
     return { excerpts: [], omission: omission("connected-context", "unavailable") };
   }
   const result = await readConnectedContextPack(ctx, intake, refs);

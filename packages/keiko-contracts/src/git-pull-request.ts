@@ -34,6 +34,11 @@ import type {
 // Pinned schema version. A breaking change adds a NEW literal member; this one is never mutated.
 export const GIT_PULL_REQUEST_SCHEMA_VERSION = "1" as const;
 
+export {
+  isGitPullRequestIdentity,
+  type GitPullRequestIdentity,
+} from "./git-pull-request-identity.js";
+
 // ─── Change type (input to metadata synthesis) ──────────────────────────────────────────────────────
 
 export type GitPrChangeType = "feat" | "fix" | "refactor" | "docs" | "chore" | "test" | "mixed";
@@ -157,14 +162,23 @@ export interface GitPullRequestReadinessSummary {
 
 // ─── Draft-vs-ready recommendation ──────────────────────────────────────────────────────────────────
 
+// "keep-as-is" is the no-op outcome for a PR that already exists, is already ready for review, and
+// has nothing outstanding. Without it the derivation had to reuse "update-to-ready" for that case,
+// which is what made the recommendation meaningless for the PRs it was supposed to serve.
 export type GitPullRequestRecommendation =
-  "create-as-draft" | "create-as-ready" | "update-to-ready" | "keep-as-draft" | "blocked";
+  | "create-as-draft"
+  | "create-as-ready"
+  | "update-to-ready"
+  | "keep-as-draft"
+  | "keep-as-is"
+  | "blocked";
 
 export const GIT_PR_RECOMMENDATIONS: readonly GitPullRequestRecommendation[] = [
   "create-as-draft",
   "create-as-ready",
   "update-to-ready",
   "keep-as-draft",
+  "keep-as-is",
   "blocked",
 ] as const;
 
@@ -301,7 +315,7 @@ function primaryAreaOf(narrative: GitPullRequestChangeNarrative): string | undef
 
 function humaniseBranchSlug(headBranch: string): string {
   const segments = headBranch.split("/");
-  const tail = segments[segments.length - 1] ?? headBranch;
+  const tail = segments.at(-1) ?? headBranch;
   const tokens = tail.split("-").filter((t) => t.length > 0);
   // Drop a leading run of `issue` markers and pure-numeric issue numbers (e.g. "issue-477-…",
   // "1234-…"), keeping only the descriptive remainder of the slug.
@@ -317,8 +331,23 @@ function humaniseBranchSlug(headBranch: string): string {
   return tokens.slice(start).join(" ").trim();
 }
 
+// KEIKO-0829: keep the 72-UTF-16-unit contract (TITLE_MAX is a code-unit budget, matching
+// GitHub's own PR-title length count). `String.prototype.slice(0, N)` cuts on UTF-16 code units
+// and can split a surrogate pair, producing a lone surrogate — back off one unit when the cut
+// falls between a high and low surrogate so a two-code-unit astral character is either kept
+// whole or dropped whole, never bisected. Pinned by both a lone-surrogate regression and an
+// astral-input regression asserting `.length <= TITLE_MAX`.
+//
+// `codePointAt` here is used strictly for the surrogate-half detection at the cut boundary — a
+// high surrogate (0xD800–0xDBFF) as an ISOLATED unit reads back as itself even from
+// `codePointAt`, which is exactly what we need. We only look at one code unit; there is no
+// astral-value shift to consider.
 function clampTitle(title: string): string {
-  return title.length <= TITLE_MAX ? title : title.slice(0, TITLE_MAX).trimEnd();
+  if (title.length <= TITLE_MAX) return title;
+  let cut = TITLE_MAX;
+  const boundary = title.codePointAt(cut - 1) ?? 0;
+  if (boundary >= 0xd800 && boundary <= 0xdbff) cut -= 1;
+  return title.slice(0, cut).trimEnd();
 }
 
 function composeTitle(narrative: GitPullRequestChangeNarrative, headBranch: string): string {
@@ -341,11 +370,13 @@ function composeRiskNarrative(
   );
 }
 
+// KEIKO-0829: the trailing `_baseBranch` parameter was never read — every consumer already
+// carries the base branch on GitPullRequestChangeNarrative when the narrative surface needs it.
+// Dropped from the signature so callers do not pass a value that is discarded on the wire.
 export function synthesizePullRequestMetadata(
   narrative: GitPullRequestChangeNarrative,
   riskDigest: GitPullRequestRiskDigest,
   headBranch: string,
-  _baseBranch: string,
 ): GitPullRequestMetadataDraft {
   const primaryArea = primaryAreaOf(narrative);
   const summarySection: GitPrSummarySection = {
@@ -473,9 +504,19 @@ export function gitPullRequestRecommendationFor(
   if (!readiness.objectExists) {
     return riskDigest.isDraft ? "create-as-draft" : "create-as-ready";
   }
-  // The PR exists and has no blocking blockers. Advisory blockers (pending checks, missing approvals)
-  // counsel keeping it as a draft; a clean PR is recommended for the move to ready-for-review.
-  return readiness.blockers.length > 0 ? "keep-as-draft" : "update-to-ready";
+  // The PR exists and has no blocking blockers. Its OWN draftness is recorded as the `draft-pr`
+  // advisory, so counting the raw blocker list inverted both draft-lifecycle recommendations:
+  // every clean draft was told to stay a draft, and every already-ready PR got a no-op
+  // `update-to-ready`. Draftness is read from `reviewReady` instead — on this branch (PR exists, no
+  // blocking blockers) it is exactly `!isDraft` by its own definition above, so no re-derivation
+  // from the blockers array and no wire-shape change is needed.
+  if (readiness.reviewReady) {
+    return "keep-as-is";
+  }
+  // Genuine advisories (pending checks, missing approvals) counsel keeping the draft; a draft with
+  // nothing else outstanding is the one PR the promotion to ready-for-review can apply to.
+  const otherAdvisories = readiness.blockers.filter((b) => b.code !== "draft-pr");
+  return otherAdvisories.length > 0 ? "keep-as-draft" : "update-to-ready";
 }
 
 // ─── Suggestion derivations (PURE, deterministic) ───────────────────────────────────────────────────
@@ -512,19 +553,44 @@ export function gitPullRequestReviewerSuggestionsFor(
 export function gitPullRequestLabelSuggestionsFor(
   narrative: GitPullRequestChangeNarrative,
 ): GitPullRequestLabelSuggestion {
-  const labels = new Set<string>();
-  labels.add(LABEL_BY_CHANGE_TYPE[narrative.changeType]);
-  for (const area of narrative.areas) {
-    if (area.length > 0) {
-      labels.add(`area:${area}`);
-    }
-  }
-  return { suggestedLabelNames: [...labels], basis: "change-type" };
+  const areaLabels = narrative.areas
+    .filter((area) => area.length > 0)
+    .map((area) => `area:${area}`);
+  const changeTypeLabel = LABEL_BY_CHANGE_TYPE[narrative.changeType];
+  const includeChangeType = typeof changeTypeLabel === "string" && changeTypeLabel.length > 0;
+  const suggestedLabelNames = [
+    ...new Set([...(includeChangeType ? [changeTypeLabel] : []), ...areaLabels]),
+  ];
+  // KEIKO-0829: the previous implementation hard-coded "change-type" regardless of what was
+  // actually produced, so the "area" and "none" basis members were unreachable. Derive from
+  // what LABEL_BY_CHANGE_TYPE actually returned: unknown-future changeType → "" (unmapped) so
+  // basis falls to "area" (if any) or "none" (if the narrative also had no area).
+  const basis: GitPrLabelSuggestionBasis = deriveLabelBasis(includeChangeType, areaLabels.length);
+  return { suggestedLabelNames, basis };
+}
+
+function deriveLabelBasis(
+  includeChangeType: boolean,
+  areaLabelCount: number,
+): GitPrLabelSuggestionBasis {
+  if (includeChangeType) return "change-type";
+  if (areaLabelCount > 0) return "area";
+  return "none";
 }
 
 // Extracts issue-ref tokens from the head branch name only (e.g. "claude/issue-477-..." → "#477",
 // "fix/1234-..." → "#1234"). Deterministic; never scans commit bodies in this leaf.
-const BRANCH_ISSUE_RE = /(?:issue[-/])?(\d{1,7})/gi;
+//
+// A digit run only counts when it is a token in its own right: either behind an explicit
+// `issue-`/`issue/` marker, or starting a segment (string start, `/`, `_`, `-`) and ending at one
+// (string end, `/`, `_`, `-`). Without those boundaries every digit run in a branch name became an
+// issue ref — "feat/v2-api" suggested #2, "fix/utf8-bug" suggested #8 — and a run longer than the
+// cap was truncated into a DIFFERENT issue plus a stray ref ("12345678" → #1234567 and #8). These
+// refs reach the PR preview, where a consumer rendering them as closing keywords would close
+// unrelated issues on merge. A run longer than the cap now matches nothing rather than truncating.
+// Only server-owned creation from a frozen issue binding may add a closing directive (#3387);
+// these branch-inferred suggestions remain advisory Refs under ADR-0086 D9.
+const BRANCH_ISSUE_RE = /(?:^|[/_-])(?:issue[-/])?(\d{1,7})(?=$|[/_-])/gi;
 
 export function gitPullRequestLinkageSuggestionsFor(
   headBranch: string,
@@ -558,6 +624,47 @@ function isBlockerArray(value: unknown): value is readonly GitPullRequestReadine
   return Array.isArray(value) && value.every(isGitPullRequestReadinessBlocker);
 }
 
+function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
+  return blockers.some((blocker) => blocker.severity === "blocking");
+}
+
+// Every code collectAdvisoryBlockers ever constructs via advisory(...) — kept immediately beside
+// that function so the two cannot silently drift. Every other blocker code is only ever
+// constructed via blocking(...), and (unlike git-merge.ts's dual-purpose "checks-failing") the two
+// producers' code sets are fully disjoint here. hasBlockingBlocker above trusts the SUPPLIED
+// severity, so a payload could relabel a code that is always blocking in practice (e.g.
+// "merge-conflict") as "advisory", clear hasBlockingBlocker's check, and pass reviewReady:true for
+// a genuinely conflicted PR.
+const CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT: ReadonlySet<GitPullRequestReadinessBlockerCode> =
+  new Set(["draft-pr", "checks-pending", "approval-insufficient"]);
+
+function hasIllegitimateAdvisoryBlocker(
+  blockers: readonly GitPullRequestReadinessBlocker[],
+): boolean {
+  return blockers.some(
+    (blocker) =>
+      blocker.severity === "advisory" &&
+      !CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT.has(blocker.code),
+  );
+}
+
+// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
+// been seen, no blocking entry may follow.
+function isSeverityRanked(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
+  let sawAdvisory = false;
+  for (const blocker of blockers) {
+    if (blocker.severity === "advisory") {
+      sawAdvisory = true;
+    } else if (sawAdvisory) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Same gap as isGitMergeReadinessSummary: the documented invariants (reviewReady implies the object
+// exists and carries no blocking blocker; blocking entries precede advisory ones) were unchecked, so
+// a summary could assert reviewReady while carrying a blocking blocker.
 export function isGitPullRequestReadinessSummary(
   value: unknown,
 ): value is GitPullRequestReadinessSummary {
@@ -566,7 +673,10 @@ export function isGitPullRequestReadinessSummary(
     value.schemaVersion === GIT_PULL_REQUEST_SCHEMA_VERSION &&
     isBoolean(value.objectExists) &&
     isBoolean(value.reviewReady) &&
-    isBlockerArray(value.blockers)
+    isBlockerArray(value.blockers) &&
+    (!value.reviewReady || (value.objectExists && !hasBlockingBlocker(value.blockers))) &&
+    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
+    isSeverityRanked(value.blockers)
   );
 }
 

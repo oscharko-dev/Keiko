@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { ReactElement } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
@@ -27,16 +27,48 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
   const wsRef = useRef<HTMLDivElement>(null);
   const ws = useWorkspace(wsRef, { cameraSmoothness });
   const files = ws.wins?.find((win) => win.id === "files-1");
+  // Issue #2402 — observable `wins` identity: a snapped no-op content-zoom step
+  // must not flip the array identity (that identity drives persistence scheduling,
+  // connection pruning, and selection normalization downstream).
+  const lastWinsRef = useRef<readonly AppWindow[] | null>(null);
+  const winsIdentityChangesRef = useRef(0);
+  if (ws.wins !== lastWinsRef.current) {
+    lastWinsRef.current = ws.wins;
+    winsIdentityChangesRef.current += 1;
+  }
 
   return (
     <main ref={wsRef} data-testid="workspace" className="workspace">
       <section className="window" data-window-id="files-1">
         <div data-testid="window-target" />
+        <div data-testid="scroll-target" style={{ overflowY: "auto", width: 100, height: 80 }}>
+          <div style={{ width: 100, height: 300 }} />
+        </div>
       </section>
       <output data-testid="files-zoom">{files?.zoom ?? "missing"}</output>
       <output data-testid="view-zoom">{ws.view.zoom}</output>
       <output data-testid="view-x">{ws.view.x}</output>
       <output data-testid="view-y">{ws.view.y}</output>
+      <output data-testid="selected-window-ids">{ws.selection.selectedWindowIds.join(",")}</output>
+      <output data-testid="wins-identity-changes">{winsIdentityChangesRef.current}</output>
+      <button type="button" onClick={() => ws.api.activateWindow("files-1")}>
+        Activate files
+      </button>
+      <button type="button" onClick={() => ws.api.toggleTool("governedGit")}>
+        Toggle Git
+      </button>
+      <button type="button" onClick={() => ws.api.add("governedGit")}>
+        Add Git
+      </button>
+      <button type="button" onClick={ws.api.tileAll}>
+        Tile all
+      </button>
+      <button type="button" onClick={ws.api.splitFront}>
+        Split front
+      </button>
+      <button type="button" onClick={ws.api.cascade}>
+        Cascade
+      </button>
       <button type="button" onClick={ws.api.fitView}>
         Fit
       </button>
@@ -59,6 +91,21 @@ function mockWorkspaceRect(): void {
   });
 }
 
+function setScrollableGeometry(
+  element: HTMLElement,
+  geometry: {
+    readonly clientHeight: number;
+    readonly scrollHeight: number;
+    readonly scrollTop: number;
+  },
+): void {
+  Object.defineProperties(element, {
+    clientHeight: { configurable: true, value: geometry.clientHeight },
+    scrollHeight: { configurable: true, value: geometry.scrollHeight },
+  });
+  element.scrollTop = geometry.scrollTop;
+}
+
 describe("useWorkspace wheel zoom routing", () => {
   afterEach(() => {
     cleanup();
@@ -66,7 +113,7 @@ describe("useWorkspace wheel zoom routing", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes Ctrl/Command wheel over a window to that window's content zoom", async () => {
+  it("routes Ctrl/Command wheel over a window to workspace zoom", async () => {
     window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
     render(<Harness />);
     mockWorkspaceRect();
@@ -82,8 +129,187 @@ describe("useWorkspace wheel zoom routing", () => {
       deltaY: -100,
     });
 
-    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.2"));
+    await waitFor(() =>
+      expect(Number(screen.getByTestId("view-zoom").textContent)).toBeGreaterThan(1),
+    );
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("keeps Ctrl/Command wheel inside the active window from zooming the workspace", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+
+    fireEvent.wheel(screen.getByTestId("window-target"), {
+      bubbles: true,
+      cancelable: true,
+      clientX: 200,
+      clientY: 200,
+      ctrlKey: true,
+      deltaY: -100,
+    });
+
     expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("keeps trackpad pan over non-scrollable window chrome routed to the workspace view", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
+
+    fireEvent.wheel(screen.getByTestId("window-target"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 20,
+      deltaY: 40,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    });
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("keeps two-finger wheel over scrollable unselected window content routed to workspace pan", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-y")).toHaveTextContent("0"));
+    const scrollTarget = screen.getByTestId("scroll-target");
+    setScrollableGeometry(scrollTarget, { clientHeight: 80, scrollHeight: 300, scrollTop: 40 });
+
+    fireEvent.wheel(scrollTarget, {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 40,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    });
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("lets active scrollable window content consume two-finger wheel before workspace pan", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+    const scrollTarget = screen.getByTestId("scroll-target");
+    setScrollableGeometry(scrollTarget, { clientHeight: 80, scrollHeight: 300, scrollTop: 40 });
+
+    const event = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 40,
+    });
+    scrollTarget.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("keeps workspace fixed when active window content reaches its scroll edge", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+    await waitFor(() => expect(screen.getByTestId("view-y")).toHaveTextContent("0"));
+    const scrollTarget = screen.getByTestId("scroll-target");
+    setScrollableGeometry(scrollTarget, { clientHeight: 80, scrollHeight: 300, scrollTop: 220 });
+
+    fireEvent.wheel(scrollTarget, {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 40,
+    });
+
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("activates a tool window when opening it from the workspace rail", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle Git" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("governedGit"),
+    );
+  });
+
+  it("activates a singleton window when adding it from a shell-bound open path", async () => {
+    window.localStorage.setItem(
+      WORKSPACE_STORAGE_KEY,
+      JSON.stringify([
+        appWindow({ id: "files-1", type: "files", z: 1 }),
+        appWindow({ id: "chat-1", type: "chat", cfg: {}, z: 2 }),
+        appWindow({ id: "editor-1", type: "editor", cfg: {}, z: 3 }),
+      ]),
+    );
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Git" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("governedGit"),
+    );
+  });
+
+  it.each([
+    { label: "Tile all", minimizedTop: true },
+    { label: "Split front", minimizedTop: false },
+    { label: "Cascade", minimizedTop: true },
+  ])("activates a deterministic window owner after $label", async ({ label, minimizedTop }) => {
+    window.localStorage.setItem(
+      WORKSPACE_STORAGE_KEY,
+      JSON.stringify([
+        appWindow({ id: "files-1", type: "files", z: 1 }),
+        appWindow({ id: "chat-1", type: "chat", cfg: {}, z: 4, minimized: minimizedTop }),
+        appWindow({ id: "editor-1", type: "editor", cfg: {}, z: 3 }),
+      ]),
+    );
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("selected-window-ids")).toHaveTextContent(""));
+    fireEvent.click(screen.getByRole("button", { name: label }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("chat-1"),
+    );
   });
 
   it("keeps Ctrl/Command wheel over free workspace routed to workspace zoom", async () => {
@@ -249,7 +475,7 @@ describe("useWorkspace wheel zoom routing", () => {
     });
   });
 
-  it("routes Ctrl wheel inside a window after a direct workspace pan", async () => {
+  it("routes Ctrl wheel over a window to workspace zoom after a direct workspace pan", async () => {
     const callbacks: FrameRequestCallback[] = [];
     vi.spyOn(performance, "now").mockReturnValue(0);
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(
@@ -297,12 +523,15 @@ describe("useWorkspace wheel zoom routing", () => {
       deltaY: -100,
     });
 
-    expect(cancelAnimationFrameSpy).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.2");
-      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
-      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    act(() => {
+      callbacks.at(-1)?.(0);
+      callbacks.at(-1)?.(500);
     });
+    await waitFor(() => {
+      expect(Number(screen.getByTestId("view-zoom").textContent)).toBeGreaterThan(1);
+      expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+    });
+    expect(cancelAnimationFrameSpy).not.toHaveBeenCalled();
   });
 
   it("uses immediate updates for smooth mode when reduced motion is requested", async () => {

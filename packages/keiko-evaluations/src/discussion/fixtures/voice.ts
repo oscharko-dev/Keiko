@@ -27,6 +27,7 @@ const voiceSttReview: DiscussionEvalFixture = {
     expectedUncertaintyDisclosure: true,
     expectedDecisionRecommendation: false,
     expectedContradictionPolicies: ["disclose-and-defer"],
+    expectsRecoveredContext: false,
   },
 };
 

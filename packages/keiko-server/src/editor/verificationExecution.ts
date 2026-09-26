@@ -12,12 +12,67 @@
 // reported `denied`.
 
 import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
+import { createHash } from "node:crypto";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   runVerification,
   type VerificationPlan,
   type VerificationReport,
+  type VerificationStepOutput,
+  type VerificationDeps,
 } from "@oscharko-dev/keiko-verification";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/mutex.js";
+
+const verificationWorkspaces = createWorkspaceMutexRegistry();
+const VERIFICATION_WORKSPACE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.verification.workspace",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.verificationExecution.workspaceAdmission",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["waiting", "acquired", "released"],
+    },
+    workspaceDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["verification-runner-failure"],
+  proofIds: ["editor.verification.workspace.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function workspaceAdmission(
+  args: ExecuteVerificationArgs,
+  state: "waiting" | "acquired" | "released",
+): void {
+  (args.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      VERIFICATION_WORKSPACE_OPERATION,
+      { correlationId: args.correlationId ?? UNKNOWN_CORRELATION_ID },
+      { state, workspaceDigest: createHash("sha256").update(args.workspace.root).digest("hex") },
+    ),
+  );
+}
 
 export interface NetworkIsolationProbe {
   readonly available: boolean;
@@ -46,6 +101,24 @@ export interface ExecuteVerificationArgs {
   // The cwd probed for network-isolation capability; defaults to the workspace root. Post-apply passes
   // its `realRoot` here to keep its probe cwd byte-identical to the pre-extraction behavior.
   readonly probeCwd?: string | undefined;
+  // The caller's own run-scoped correlation id (e.g. VerificationRunnerManager's per-run
+  // `entry.correlationId`), threaded onto the termination-evidence line below when the caller has
+  // one. Callers without a request-scoped id (or that have not been updated to pass one) fall back
+  // to UNKNOWN_CORRELATION_ID exactly as before — this field is additive.
+  readonly correlationId?: string | undefined;
+  // Activity-log port for the runCommand termination-evidence seam, mirroring every sibling
+  // composition site (command-runner.ts, terminal.ts, containerRunner.ts, …). Defaults to
+  // processServerLogSink() so production logging needs no wiring; tests inject a capture sink —
+  // without this seam the evidence line was unobservable to any test in this file.
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly fs?: WorkspaceFs | undefined;
+  // ADR-0043 D17: install the manifest's declared dependencies before the first script step when
+  // the installed tree is not current. Off unless the caller asks, exactly like the orchestrator.
+  readonly dependencyBootstrap?: "off" | "auto" | undefined;
+  // The orchestrator's redacted output tail of a step that did not pass (ADR-0126 D3), forwarded
+  // as it happens; never part of the persisted report.
+  readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
 }
 
 export interface ExecuteVerificationResult {
@@ -53,17 +126,77 @@ export interface ExecuteVerificationResult {
   readonly probe: NetworkIsolationProbe;
 }
 
+// Builds the runCommand termination-evidence callback for one verification run, tagged with the
+// caller's own correlationId when it has one (audit finding: VerificationRunnerManager already
+// tracks a per-run correlationId at both its call sites but never forwarded it this far). Exported
+// for direct unit coverage: forcing this seam through a REAL timeout/abort in a test would make the
+// assertion host-dependent — on a host with no enforcing sandbox backend the run denies BEFORE
+// spawning (see this file's own host-adaptive test) and onTerminated never fires at all.
+export function verificationTerminationHandler(
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): (evidence: CommandTerminationEvidence) => void {
+  return (evidence): void => {
+    logCommandTermination(activityLog, correlationId ?? UNKNOWN_CORRELATION_ID, evidence);
+  };
+}
+
+export function verificationDependencyFailureHandler(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+): NonNullable<VerificationDeps["onDependencyBootstrapFailure"]> {
+  return ({ stage, error }): void => {
+    emitServerDiagnostic(
+      diagnostics,
+      serverDiagnosticFromError({
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation: "verification.dependency-bootstrap",
+        source: `verification.dependency-bootstrap.${stage}`,
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+  };
+}
+
 // Probe, then run the plan under enforced, fail-closed egress isolation. Behavior is identical to the
 // composition postApplyVerification.ts performed inline before this extraction.
 export async function executeVerificationEnforced(
   args: ExecuteVerificationArgs,
 ): Promise<ExecuteVerificationResult> {
+  workspaceAdmission(args, "waiting");
+  return verificationWorkspaces.runExclusive(fileWriteKeys(args.workspace.root), async () => {
+    workspaceAdmission(args, "acquired");
+    try {
+      return await executeExclusiveVerification(args);
+    } finally {
+      workspaceAdmission(args, "released");
+    }
+  });
+}
+
+async function executeExclusiveVerification(
+  args: ExecuteVerificationArgs,
+): Promise<ExecuteVerificationResult> {
   const probe = probeNetworkIsolation(args.probeCwd ?? args.workspace.root);
+  const activityLog = args.activityLog ?? processServerLogSink();
   const report = await runVerification(args.plan, {
     workspace: args.workspace,
+    ...(args.fs === undefined ? {} : { fs: args.fs }),
     signal: args.signal,
     networkEnforcement: "enforce-or-fail-closed",
     enforcedNetworkAvailable: probe.available,
+    // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
+    // timeout/abort leaves its verified Windows tree-kill disposition in the log.
+    onTerminated: verificationTerminationHandler(activityLog, args.correlationId),
+    onDependencyBootstrapFailure: verificationDependencyFailureHandler(
+      args.diagnostics,
+      args.correlationId,
+    ),
+    ...(args.dependencyBootstrap === undefined
+      ? {}
+      : { dependencyBootstrap: args.dependencyBootstrap }),
+    ...(args.onStepOutput === undefined ? {} : { onStepOutput: args.onStepOutput }),
   });
   return { report, probe };
 }

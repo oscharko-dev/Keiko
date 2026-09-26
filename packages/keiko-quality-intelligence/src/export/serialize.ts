@@ -9,7 +9,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 import { adaptToAlm } from "./adapters/alm.js";
 import { adaptToCsv } from "./adapters/csv.js";

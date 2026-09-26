@@ -27,7 +27,11 @@ import {
   type TaskType,
 } from "@oscharko-dev/keiko-harness";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import { createEvaluationModelProvider, type EvaluationConfigLoader } from "./model-provider.js";
+import {
+  createEvaluationModelProvider,
+  type EvaluationConfigLoader,
+  type EvaluationModelProviderDeps,
+} from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
 import { checkSurfaceParity, type SurfaceParityDeps } from "./surface-parity.js";
 import {
@@ -67,6 +71,8 @@ export interface EvalRunnerDeps {
   readonly surfaceParity?: SurfaceParityDeps | undefined;
   // Optional live-config loader injected by higher layers that own local credential vault access.
   readonly configLoader?: EvaluationConfigLoader | undefined;
+  // The Activity Log port the live Model Gateway writes through (#3532), injected by the CLI.
+  readonly gatewayLogSink?: EvaluationModelProviderDeps["logSink"];
 }
 
 export interface EvalRunOptions {
@@ -112,6 +118,7 @@ function resolveModelPort(
     ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
     ...(deps.env === undefined ? {} : { env: deps.env }),
     ...(deps.configLoader === undefined ? {} : { configLoader: deps.configLoader }),
+    ...(deps.gatewayLogSink === undefined ? {} : { logSink: deps.gatewayLogSink }),
   });
 }
 
@@ -141,7 +148,13 @@ async function runWorkflow(
     sink: deps.sink,
     now: deps.now,
     idSource: deps.idSource,
-    ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
+    // The verify stage's egress enforcement is explicit-only (KEIKO-0096): it no longer infers a
+    // test/fake spawn from injection alone, because a real governed run injects its spawn the same
+    // way. `fakeSpawn` here is a hardcoded, deterministic, offline-only stub (never real network),
+    // so this hermetic evaluation harness requests the degrade mode by name.
+    ...(deps.spawn === undefined
+      ? {}
+      : { spawn: deps.spawn, verificationNetworkEnforcement: "enforce-or-degrade" as const }),
   };
   if (fixture.workflowKind === "unit-tests") {
     const report = await generateUnitTests(
@@ -167,6 +180,28 @@ interface PersistAndCheckOptions {
   readonly finishedAt: number;
 }
 
+// KEIKO-0372: extract the WorkflowTerminalStatus collapse so runner.test.ts can drive a
+// synthesized status (including "cancelled") through it directly, and so the invariant lives in a
+// named, exported helper the server's statusOrFailed can be compared against side-by-side. Before
+// this extraction the runner's collapse was a two-way ternary that reported any non-rejected/failed
+// status as "completed" — including "cancelled" — diverging from packages/keiko-server/src/run-engine.ts
+// which preserves "cancelled" as its own terminal. That is exactly the #2643 anti-pattern (two
+// consumers restating the same formula until one drifts).
+export function collapseEvaluationRunStatus(
+  rawStatus: unknown,
+): "completed" | "cancelled" | "failed" {
+  const status = typeof rawStatus === "string" ? rawStatus : "failed";
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+  if (status === "rejected" || status === "failed") {
+    return "failed";
+  }
+  return "completed";
+}
+
+// Module-private: `collapseEvaluationRunStatus` above is the seam the KEIKO-0372 regression test
+// needs, so this stays unexported rather than widening the package surface for nothing.
 function persistAndCheck(options: PersistAndCheckOptions): {
   readonly manifestValid: boolean;
   readonly evidenceRef: string;
@@ -183,14 +218,13 @@ function persistAndCheck(options: PersistAndCheckOptions): {
     startedAt,
     finishedAt,
   } = options;
-  const status = typeof report.status === "string" ? report.status : "failed";
   const evidence = persistWorkflowEvidence(
     {
       runId,
       fingerprint: evalFingerprint(fixture, workspaceRoot, modelId),
       modelId: typeof report.modelId === "string" ? report.modelId : "eval-model",
       kind: fixture.workflowKind,
-      status: status === "rejected" || status === "failed" ? "failed" : "completed",
+      status: collapseEvaluationRunStatus(report.status),
       startedAt,
       finishedAt,
       workspaceRoot,
@@ -269,7 +303,10 @@ async function runFixture(
       model: resolveModelPort(fixture, options, deps, modelId),
       writer,
       sink,
-      spawn: fixture.apply === true ? fakeSpawn(0, "ok") : undefined,
+      spawn:
+        fixture.apply === true
+          ? fakeSpawn(fixture.applyVerificationExitCode ?? 0, "ok")
+          : undefined,
       now,
       idSource,
     });

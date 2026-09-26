@@ -2,6 +2,7 @@ import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.j
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 import { validateStrictUtcInstant } from "./coding-workbench-runtime-api-validation.js";
 import { isVerificationKind } from "./editor-verification.js";
+import { MODEL_REASONING_EFFORTS } from "./gateway.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
@@ -11,6 +12,7 @@ import {
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_GATES,
   CODING_WORKBENCH_MODEL_SOURCES,
+  CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_NETWORK_MODES,
@@ -30,6 +32,7 @@ import {
   type CodingWorkbenchRuntimeEventKind,
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchValidationResult,
+  isCodingWorkbenchModeWidening,
 } from "./coding-workbench.js";
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
@@ -245,7 +248,7 @@ function validateModelProfile(value: unknown, path: string, errors: string[]): v
   }
   validateAllowedKeys(
     value,
-    ["profileId", "source", "supportsStreaming", "supportsToolCalling"],
+    ["profileId", "source", "supportsStreaming", "supportsToolCalling", "reasoningEffort"],
     path,
     errors,
   );
@@ -258,6 +261,12 @@ function validateModelProfile(value: unknown, path: string, errors: string[]): v
   }
   if (typeof value.supportsToolCalling !== "boolean") {
     errors.push(`${path}.supportsToolCalling must be a boolean`);
+  }
+  if (
+    value.reasoningEffort !== undefined &&
+    !isOneOf(value.reasoningEffort, MODEL_REASONING_EFFORTS)
+  ) {
+    errors.push(`${path}.reasoningEffort is invalid`);
   }
 }
 
@@ -664,6 +673,9 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "passedCount",
     "failedCount",
     "skippedCount",
+    "failureLocationCount",
+    "failureLocationsTruncated",
+    "verificationTargetDigest",
   ),
   "artifact-produced": runtimeEventAllowedKeys(
     "artifactKind",
@@ -696,6 +708,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "failureSummary",
     "retryable",
   ),
+  "operator-decision": runtimeEventAllowedKeys("operatorDecision", "auxiliaryOutcome"),
   "failure-redacted": runtimeEventAllowedKeys("failureCode", "failureSummary", "retryable"),
 } as const satisfies Readonly<Record<CodingWorkbenchRuntimeEventKind, readonly string[]>>);
 
@@ -975,6 +988,28 @@ function validateRuntimeEventCounts(value: Record<string, unknown>, errors: stri
   if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
     errors.push("event.retryable must be a boolean");
   }
+  validateOptionalFailureLocationEvidence(value, errors);
+}
+
+function validateOptionalFailureLocationEvidence(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    value.failureLocationCount !== undefined &&
+    !isSafeIntegerOrZero(value.failureLocationCount)
+  ) {
+    errors.push("event.failureLocationCount must be a non-negative safe integer");
+  }
+  if (
+    value.failureLocationsTruncated !== undefined &&
+    typeof value.failureLocationsTruncated !== "boolean"
+  ) {
+    errors.push("event.failureLocationsTruncated must be a boolean");
+  }
+  if (value.verificationTargetDigest !== undefined) {
+    validateDigest(value.verificationTargetDigest, "event.verificationTargetDigest", errors);
+  }
 }
 
 function validateRuntimeEventSafeText(value: Record<string, unknown>, errors: string[]): void {
@@ -993,10 +1028,11 @@ function validateRuntimeEventModeOrdering(value: Record<string, unknown>, errors
   ) {
     return;
   }
-  if (
-    CODING_WORKBENCH_MODES.indexOf(value.effectiveMode) >
-    CODING_WORKBENCH_MODES.indexOf(value.requestedMode)
-  ) {
+  // Authority ordering is decided by the package's own comparator, not by array position. Reading
+  // the order off CODING_WORKBENCH_MODES.indexOf forked the single source of truth the package
+  // declares for mode authority: reordering that array — a change that looks purely cosmetic —
+  // would silently invert this check while every other authority decision stayed correct.
+  if (isCodingWorkbenchModeWidening(value.requestedMode, value.effectiveMode)) {
     errors.push("event.effectiveMode must be no higher than event.requestedMode");
   }
 }
@@ -1175,6 +1211,29 @@ function validateSkillInvokedEventFields(value: Record<string, unknown>, errors:
   requireAuxiliaryOutcome(value, errors);
 }
 
+// The decision being asked of the human is REQUIRED: an event that cannot name it would pause a run
+// without saying what the operator has to decide, which is the failure this event exists to prevent.
+// `auxiliaryOutcome` stays optional and carries the phase: absent means the decision is open and a
+// governed tool is waiting on it, present means it settled.
+function validateOperatorDecisionEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  validateRequiredEnumField(
+    value,
+    "operatorDecision",
+    CODING_WORKBENCH_OPERATOR_DECISIONS,
+    "event",
+    errors,
+  );
+  if (
+    value.auxiliaryOutcome !== undefined &&
+    !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
+  ) {
+    errors.push("event.auxiliaryOutcome is invalid");
+  }
+}
+
 function validateChildRunStartedEventFields(
   value: Record<string, unknown>,
   errors: string[],
@@ -1210,6 +1269,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   "skill-invoked": validateSkillInvokedEventFields,
   "child-run-started": validateChildRunStartedEventFields,
   "child-run-completed": validateChildRunCompletedEventFields,
+  "operator-decision": validateOperatorDecisionEventFields,
   "failure-redacted": validateFailureRedactedEventFields,
 } as const);
 

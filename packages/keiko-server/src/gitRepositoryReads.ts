@@ -17,10 +17,8 @@ import type {
   GitRepositoryStatusResponse,
   GitUnavailableReason,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  GIT_HISTORY_SCHEMA_VERSION,
-  GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+import { GIT_HISTORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-history";
+import { GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
 import {
   classifyFailure,
   optionsWithDefaults,
@@ -31,7 +29,7 @@ import {
   type NormalizedGitRouteOptions,
   type RepositoryContext,
 } from "./gitRoutes.js";
-import { containsPath } from "@oscharko-dev/keiko-git";
+import { containsPath, GIT_BASE_ARGS } from "@oscharko-dev/keiko-git";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { FilesError, runFilesHandler } from "./files.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -80,13 +78,26 @@ function gitSummaryCacheKey(
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
   return JSON.stringify({
     root: ctx.url.searchParams.get("root") ?? "",
-    runner: gitRunnerCacheId(options.runner),
+    // `runnerIdentity`, never `runner`: the normalized `runner` is a per-request observation
+    // wrapper (see NormalizedGitRouteOptions), so keying on it would mint a fresh cache key for
+    // every request and turn this cache into a permanent miss. The identity that must partition
+    // the cache is the UNDERLYING runner — which is what two tests with different fakes differ in.
+    runner: gitRunnerCacheId(options.runnerIdentity),
     maxStatusBytes: options.maxStatusBytes,
     timeoutMs: options.timeoutMs,
     sessionId: session?.sessionId ?? "",
   });
 }
 
+// A cache hit runs no git, so it writes no `git.process.*` line — and must not: those lines report
+// a PROCESS outcome, and the route tests pin that a request which never reaches the runner leaves
+// none. Synthesising one for a replayed answer would say a git command failed when none ran.
+//
+// That would have left a real gap, because the cache stores FAILURE bodies too: a second request
+// receiving a replayed `available: false` projection would have had no joinable cause anywhere in
+// its own timeline. Rather than fake a line, `storeGitSummary` below drops an unavailable entry as
+// soon as it resolves, so the next request recomputes and records its own failure under its own
+// correlation id. The cache keeps doing its job for the healthy, high-frequency case it exists for.
 function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntry | undefined {
   const byKey = gitSummaryCache.get(deps);
   const cached = byKey?.get(key);
@@ -109,6 +120,43 @@ function storeGitSummary(deps: UiHandlerDeps, key: string, value: Promise<RouteR
   }
   byKey.set(key, { expiresAt: now + GIT_SUMMARY_CACHE_TTL_MS, value });
   gitSummaryCache.set(deps, byKey);
+  // An UNAVAILABLE answer is evicted the moment it resolves. Replaying one would serve a later
+  // request a failure projection whose cause lives on an earlier request's timeline, under an
+  // earlier correlation id — unreconstructible from that request's own line (AGENTS.md §8 Rule 1).
+  // Recomputing instead costs one bounded git read on a repository that is already failing, and
+  // only for the request that actually asks; the healthy path this cache exists for is untouched.
+  // Best-effort: a rejected promise is left to the existing catch in `handleGitSummary`.
+  //
+  // WHY THIS IS RACE-FREE FOR A GENUINELY LATER REQUEST: the eviction `.then()` below is the
+  // FIRST reaction registered on `value` (attached synchronously here, before `handleGitSummary`
+  // returns it to its own caller), so when `value` settles, Node drains every microtask reaction
+  // on it — this one included — before the event loop proceeds to its next macrotask. A later,
+  // genuinely separate HTTP request is processed as a macrotask, so it can never observe the Map
+  // between "value settled" and "this callback ran": those are the same turn of the event loop.
+  // Verified empirically (a controlled resolve + `setImmediate` probe), not asserted from theory.
+  //
+  // WHAT THIS DOES NOT COVER: two requests that are ALREADY concurrent when the first one misses
+  // the cache share the SAME in-flight promise by design — that is the cache's actual job, and
+  // running the same git command twice for two requests 5ms apart would be worse. Both receive an
+  // ACCURATE (never stale) response, but only one `git.process.failed` line exists, stamped with
+  // whichever request's correlation id started the computation. That is not a replay of a stale
+  // entry; it is one real git run two requests legitimately shared. See the pinned test below.
+  void value
+    .then((result) => {
+      if (!isUnavailableSummaryBody(result.body)) return;
+      if (gitSummaryCache.get(deps)?.get(key)?.value === value) byKey.delete(key);
+    })
+    .catch(() => undefined);
+}
+
+// The content-free unavailable projection every failing read path in this module returns.
+function isUnavailableSummaryBody(body: unknown): boolean {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    "available" in body &&
+    (body as { readonly available?: unknown }).available === false
+  );
 }
 
 function redacted<T>(deps: UiHandlerDeps, value: T): T {
@@ -197,7 +245,7 @@ function runGit(
   options: NormalizedGitRouteOptions,
   args: readonly string[],
 ): Promise<GitProcessResult> {
-  return options.runner(["--no-pager", "--no-optional-locks", "-C", repo.repositoryRoot, ...args], {
+  return options.runner([...GIT_BASE_ARGS, "-C", repo.repositoryRoot, ...args], {
     cwd: repo.repositoryRoot,
     maxBytes: options.maxStatusBytes,
     timeoutMs: options.timeoutMs,
@@ -221,7 +269,17 @@ async function readLastSync(
     const path = isAbsolute(rawPath) ? rawPath : resolve(repo.repositoryRoot, rawPath);
     if (!containsPath(repo.repositoryRoot, path)) return undefined;
     const info = await stat(path);
-    return { lastFetchAtMs: Math.round(info.mtimeMs) };
+    const lastFetchAtMs = Math.round(info.mtimeMs);
+    // Codex P2 (thread 3788736980): a pre-epoch mtime (a restored archive, or `touch -d
+    // 1960-01-01`) makes Node report a NEGATIVE mtimeMs, which Math.round preserves -- and the
+    // wire contract declares lastFetchAtMs a non-negative integer
+    // (git-repository-summary.ts's isGitLastSyncMetadata, pinned by its own test asserting
+    // lastFetchAtMs: -1 is rejected). Reconciled on the producer side, not by loosening that
+    // validator: a pre-epoch mtime is a filesystem artifact, not a meaningful "last synced at"
+    // signal, so it is omitted here the same way every other "cannot determine" case above is,
+    // rather than forwarding a value the contract then fails a legitimate local repository on.
+    if (lastFetchAtMs < 0) return undefined;
+    return { lastFetchAtMs };
   } catch {
     return undefined;
   }
@@ -302,7 +360,7 @@ export async function handleGitSummary(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const cacheKey = gitSummaryCacheKey(ctx, deps, options);
     const cached = cachedGitSummary(deps, cacheKey);
     if (cached !== undefined) return cached.value;
@@ -349,7 +407,7 @@ export async function handleGitRemotes(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const repo = await resolveRepository(ctx, deps, options);
     if (isUnavailable(repo)) {
       const body = unavailableRemotes(repo.root, repo.repositoryRoot, repo.reason);
@@ -505,7 +563,7 @@ export async function handleGitHistory(
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
     const limit = parseInteger(
       ctx.url.searchParams.get("limit"),
       HISTORY_LIMIT_DEFAULT,

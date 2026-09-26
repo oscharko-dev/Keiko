@@ -100,13 +100,19 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await page.goto("/");
   const chatWindow = page.getByRole("region", { name: "Chat — E2E chat send" });
   await expect(chatWindow).toBeVisible();
-
   const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
   await expect(composer).toBeVisible();
   await composer.click();
   await composer.fill("Ping the deterministic provider");
+  const sendButton = chatWindow.getByRole("button", { name: "Send message" });
+  // Relocated pin (0.3.12, tri-state readiness — the customer restart incident): a model this
+  // process never probed is UNKNOWN, not blocked, so the very first send needs NO manual
+  // Settings readiness check and no reload. The send button is usable immediately; the send
+  // below succeeds because the SERVER verifies the model on demand at admission — this journey
+  // now proves the whole self-service path in a real browser.
+  await expect(sendButton).toBeEnabled();
 
-  await chatWindow.getByRole("button", { name: "Send message" }).click();
+  await sendButton.click();
 
   // The user's message echoes into the transcript immediately, and the assistant reply arrives as
   // streamed SSE deltas. Asserting the deterministic marker renders proves the WHOLE path worked:

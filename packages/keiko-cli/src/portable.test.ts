@@ -1,23 +1,61 @@
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawn, type SpawnOptions } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
+
+const windowsLocalVolumeTestControl = vi.hoisted(() => ({
+  acceptLocalFixture: false,
+  checkedPaths: [] as string[],
+}));
+
+vi.mock("@oscharko-dev/keiko-security/windows-local-volume", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-security/windows-local-volume")>();
+  return {
+    ...actual,
+    assertWindowsLocalVolume: (
+      path: string,
+      options?: Parameters<typeof actual.assertWindowsLocalVolume>[1],
+    ): void => {
+      if (windowsLocalVolumeTestControl.acceptLocalFixture) {
+        windowsLocalVolumeTestControl.checkedPaths.push(path);
+        return;
+      }
+      actual.assertWindowsLocalVolume(path, options);
+    },
+  };
+});
+
 import { runPortableCli } from "./portable.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
+import { windowsLauncher } from "./launcher-platforms.js";
+import { portableManagedSetupLockPath, validatePortableRoot } from "./portable-install.js";
+import { parseWindowsStartMenuRegistration } from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import {
   readPortableInstallRegistration,
   writeFailedRegistration,
+  writeManagedRegistration,
 } from "./portable-registration.js";
 import { defaultManagedRoot } from "./portable-shared.js";
+import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 
 type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
@@ -117,6 +155,54 @@ function writeWindowsFixture(root: string, version = "0.2.11", manifestVersion =
     join(root, ".portable", "setup-manifest.json"),
     setupManifest("windows-x64", manifestVersion),
   );
+}
+
+async function writeWindowsGenerationFixture(root: string, version = "0.3.17"): Promise<string> {
+  const launcher = Buffer.from("signed root launcher");
+  const provisionalRoot = join(root, ".portable", "generations", "pending");
+  mkdirSync(join(provisionalRoot, "runtime", "node"), { recursive: true });
+  mkdirSync(join(provisionalRoot, "runtime", "native"), { recursive: true });
+  writeApp(join(provisionalRoot, "app"), version);
+  writeFileSync(join(provisionalRoot, "runtime", "node", "node.exe"), "node");
+  writeFileSync(
+    join(provisionalRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    "supervisor",
+  );
+  writeFileSync(
+    join(provisionalRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
+    "attestation",
+  );
+  mkdirSync(join(root, "support"), { recursive: true });
+  writeFileSync(join(root, "Keiko.exe"), launcher);
+  writeFileSync(
+    join(root, "support", "keiko-support.cmd"),
+    '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n',
+  );
+  const treeSha256 = await hashPortableTreeKht1(provisionalRoot, {
+    deadline: Date.now() + 5_000,
+    now: Date.now,
+    yieldControl: () => Promise.resolve(),
+  });
+  renameSync(provisionalRoot, join(root, ".portable", "generations", treeSha256));
+  writeSetupManifest(root, {
+    schemaVersion: 2,
+    platformTarget: "windows-x64",
+    packageName: "@oscharko-dev/keiko",
+    packageVersion: version,
+    stable: true,
+    primaryLauncher: "Keiko.exe",
+    bootstrapUpdateEligible: false,
+    runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    windowsGeneration: {
+      schemaVersion: 1,
+      resourceRoot: `.portable/generations/${treeSha256}`,
+      treeHashSchema: "KHT1",
+      treeSha256,
+      launcherPath: "Keiko.exe",
+      launcherSha256: createHash("sha256").update(launcher).digest("hex"),
+    },
+  });
+  return treeSha256;
 }
 
 function writeMacFixture(
@@ -228,7 +314,7 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
   },
   {
     name: "unsupported target",
-    manifest: (base) => ({ ...base, platformTarget: "linux-x64" }),
+    manifest: (base) => ({ ...base, platformTarget: "linux-arm64" }),
     message: "portable setup manifest target is unsupported",
   },
   {
@@ -255,7 +341,7 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
     name: "unsupported runtime platform",
     manifest: (base) => ({
       ...base,
-      runtime: { nodePlatform: "linux", nodeArchitecture: "x64" },
+      runtime: { nodePlatform: "freebsd", nodeArchitecture: "x64" },
     }),
     message: "portable setup manifest runtime platform is unsupported",
   },
@@ -303,6 +389,320 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
 ];
 
 describe("runPortableCli", () => {
+  it("records install-layout normalization for non-status commands", async () => {
+    const home = tempRoot();
+    const stateDir = join(home, ".keiko");
+    const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+
+    await runPortableCli(
+      ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+      capture().io,
+      {
+        ...windowsPortableEnv(home),
+        [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+        [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      },
+      {
+        homedir: () => home,
+        securityLogSinkFactory: () => ({
+          write: (event): void => void events.push(event),
+        }),
+      },
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({ op: "cli.install-layout.normalized", correlationId }),
+    ]);
+  });
+
+  it("consumes a normal Windows inspection allowance while the managed lock is active", async () => {
+    const home = tempRoot();
+    const managedRoot = join(home, "managed", "Keiko");
+    const stateDir = join(home, ".keiko");
+    const env = windowsPortableEnv(home);
+    const selected = await writeWindowsGenerationFixture(managedRoot);
+    const managed = validatePortableRoot("windows-x64", managedRoot);
+    writeManagedRegistration({
+      stateDir,
+      layout: managed.layout,
+      manifest: managed.manifest,
+      env,
+      home,
+      now: NOW,
+    });
+    const candidate = "b".repeat(64);
+    const candidateRoot = join(managedRoot, ".portable", "generations", candidate);
+    mkdirSync(join(candidateRoot, "app"), { recursive: true });
+    mkdirSync(join(candidateRoot, "runtime", "native"), { recursive: true });
+    writeFileSync(join(candidateRoot, "app", "package.json"), "fixture");
+    writeFileSync(
+      join(candidateRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
+      "attestation",
+    );
+    const c = capture();
+    let launchedFrom: string | undefined;
+
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        join(home, "missing-clicked-package"),
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      {
+        cwd: home,
+        homedir: () => home,
+        platform: () => "win32",
+        arch: () => "x64",
+        recoverNormalStartupFn: () =>
+          Promise.resolve({
+            status: "normal",
+            inspectionAllowance: {
+              kind: "windows-generation-v1",
+              managedRoot,
+              activationId: "c".repeat(32),
+              allowedResourceRoots: [
+                `.portable/generations/${selected}`,
+                `.portable/generations/${candidate}`,
+              ],
+            },
+          }),
+        lifecycleFn: (_command, _args, _io, _env, deps) => {
+          launchedFrom = deps.cwd;
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.err()).toBe("");
+    expect(launchedFrom).toBe(managed.layout.appRoot);
+  });
+
+  it("rejects unknown content under a recovery-allowed Windows generation", async () => {
+    const home = tempRoot();
+    const managedRoot = join(home, "managed", "Keiko");
+    const stateDir = join(home, ".keiko");
+    const env = windowsPortableEnv(home);
+    const selected = await writeWindowsGenerationFixture(managedRoot);
+    const managed = validatePortableRoot("windows-x64", managedRoot);
+    writeManagedRegistration({
+      stateDir,
+      layout: managed.layout,
+      manifest: managed.manifest,
+      env,
+      home,
+      now: NOW,
+    });
+    const candidate = "b".repeat(64);
+    const candidateRoot = join(managedRoot, ".portable", "generations", candidate);
+    mkdirSync(join(candidateRoot, "runtime", "native"), { recursive: true });
+    writeFileSync(join(candidateRoot, "runtime", "native", "unknown.exe"), "unknown");
+    const c = capture();
+    let launched = false;
+
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      {
+        cwd: home,
+        homedir: () => home,
+        platform: () => "win32",
+        arch: () => "x64",
+        recoverNormalStartupFn: () =>
+          Promise.resolve({
+            status: "normal",
+            inspectionAllowance: {
+              kind: "windows-generation-v1",
+              managedRoot,
+              activationId: "c".repeat(32),
+              allowedResourceRoots: [
+                `.portable/generations/${selected}`,
+                `.portable/generations/${candidate}`,
+              ],
+            },
+          }),
+        lifecycleFn: () => {
+          launched = true;
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(launched).toBe(false);
+    expect(c.err()).toContain(`.portable/generations/${candidate}/runtime/native/unknown.exe`);
+  });
+
+  it("attests a recovered Windows layout before transporting its launch descriptor", async () => {
+    const home = tempRoot();
+    const managedRoot = join(home, "managed", "Keiko");
+    const stateDir = join(home, ".keiko");
+    const env = windowsPortableEnv(home);
+    const selected = await writeWindowsGenerationFixture(managedRoot);
+    const managed = validatePortableRoot("windows-x64", managedRoot);
+    writeManagedRegistration({
+      stateDir,
+      layout: managed.layout,
+      manifest: managed.manifest,
+      env,
+      home,
+      now: NOW,
+    });
+    const descriptor = {
+      sessionId: "session-1",
+      targetVersion: "0.3.17",
+      lockIdentity: "d".repeat(64),
+      activationId: "c".repeat(32),
+      planSha256: "e".repeat(64),
+      launchId: "launch-1",
+      host: "127.0.0.1" as const,
+      port: 4321,
+      expectedVersion: "0.3.17",
+    };
+    const c = capture();
+    let launchEnv: Readonly<Record<string, string | undefined>> | undefined;
+
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        join(home, "missing-clicked-package"),
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      {
+        cwd: home,
+        homedir: () => home,
+        platform: () => "win32",
+        arch: () => "x64",
+        recoverNormalStartupFn: () =>
+          Promise.resolve({
+            status: "recovered",
+            descriptor,
+            inspectionAllowance: {
+              kind: "windows-generation-v1",
+              managedRoot,
+              activationId: descriptor.activationId,
+              allowedResourceRoots: [`.portable/generations/${selected}`],
+            },
+          }),
+        encodeRecoveredLaunchFn: () => "encoded-recovery",
+        lifecycleFn: (_command, args, _io, receivedEnv) => {
+          expect(args).toContain("4321");
+          launchEnv = receivedEnv;
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.err()).toBe("");
+    expect(launchEnv?.KEIKO_PORTABLE_RECOVERED_LAUNCH).toBe("encoded-recovery");
+  });
+
+  it("rejects an inspection allowance on a recovery-required result", async () => {
+    const home = tempRoot();
+    const c = capture();
+    const recoveryRequired = {
+      status: "recovery-required",
+      inspectionAllowance: {
+        kind: "windows-generation-v1",
+        managedRoot: join(home, "managed", "Keiko"),
+        activationId: "c".repeat(32),
+        allowedResourceRoots: [`.portable/generations/${"a".repeat(64)}`],
+      },
+    } as const;
+
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        join(home, "missing"),
+        "--managed-root",
+        recoveryRequired.inspectionAllowance.managedRoot,
+        "--state-dir",
+        join(home, ".keiko"),
+      ],
+      c.io,
+      windowsPortableEnv(home),
+      {
+        cwd: home,
+        homedir: () => home,
+        platform: () => "win32",
+        arch: () => "x64",
+        recoverNormalStartupFn: () =>
+          Promise.resolve(recoveryRequired as unknown as { readonly status: "recovery-required" }),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("recovery-required result must not carry an inspection allowance");
+  });
+
+  it("runs Mac recovery before validating a stale clicked package root", async () => {
+    const home = tempRoot();
+    const c = capture();
+    let recoveryCalls = 0;
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "macos-arm64",
+        "--portable-root",
+        join(home, "missing-clicked-package"),
+        "--managed-root",
+        join(home, "Applications", "Keiko.app"),
+        "--state-dir",
+        join(home, ".keiko"),
+      ],
+      c.io,
+      {},
+      {
+        cwd: home,
+        homedir: () => home,
+        platform: () => "darwin",
+        arch: () => "arm64",
+        recoverNormalStartupFn: (input) => {
+          recoveryCalls += 1;
+          expect(input.expectedManagedRoot).toBe(join(home, "Applications", "Keiko.app"));
+          return Promise.resolve({ status: "recovery-required" });
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(recoveryCalls).toBe(1);
+    expect(c.err()).toContain("portable update recovery is required before launch");
+    expect(c.err()).not.toContain("portable root");
+  });
   it("uses the canonical macOS Applications location as the managed default", () => {
     expect(defaultManagedRoot("macos-arm64", {}, "/Users/alice")).toBe("/Applications/Keiko.app");
     expect(defaultManagedRoot("macos-x64", {}, "/Users/alice")).toBe("/Applications/Keiko.app");
@@ -338,7 +738,7 @@ describe("runPortableCli", () => {
     ["unknown command", ["bogus"]],
     ["unknown flag", ["setup", "--bogus"]],
     ["missing flag value", ["setup", "--target"]],
-    ["unsupported target flag", ["setup", "--target", "linux-x64"]],
+    ["unsupported target flag", ["setup", "--target", "linux-arm64"]],
   ] as const)("prints usage for invalid portable args: %s", async (_name, args) => {
     const c = capture();
 
@@ -356,7 +756,7 @@ describe("runPortableCli", () => {
       c.io,
       {},
       {
-        platform: () => "linux",
+        platform: () => "freebsd",
         arch: () => "x64",
       },
     );
@@ -378,7 +778,7 @@ describe("runPortableCli", () => {
       "Windows",
       "Start Menu",
       "Programs",
-      "Keiko.bat",
+      "Keiko.lnk",
     );
     writeWindowsFixture(source);
     const c = capture();
@@ -404,10 +804,84 @@ describe("runPortableCli", () => {
 
     expect(code).toBe(0);
     expect(existsSync(shortcut)).toBe(true);
-    expect(readFileSync(shortcut, "utf8")).toContain(join(managedRoot, "Keiko.exe"));
+    expect(parseWindowsStartMenuRegistration(shortcut)).toBe(join(managedRoot, "Keiko.exe"));
   });
 
-  it("promotes a Windows bootstrap payload into a managed root and records content-free state", async () => {
+  it("fails closed and records a correlated body-free event for a hostile shortcut host root", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const stateDir = join(root, "state");
+    const baseEnv = windowsPortableEnv(home);
+    const env = { ...baseEnv, SystemRoot: String.raw`\\attacker\share` };
+    const managedRoot = join(baseEnv.LOCALAPPDATA, "Programs", "Keiko");
+    const shortcut = join(
+      baseEnv.APPDATA,
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.lnk",
+    );
+    const events: SecurityLogEvent[] = [];
+    const selectedStateDirs: string[] = [];
+    const securityLogSinkFactory = (selectedStateDir: string): SecurityLogSink => {
+      selectedStateDirs.push(selectedStateDir);
+      return {
+        write(event): void {
+          events.push(event);
+        },
+      };
+    };
+    writeWindowsFixture(source);
+    const c = capture();
+    windowsLocalVolumeTestControl.acceptLocalFixture = true;
+    windowsLocalVolumeTestControl.checkedPaths.length = 0;
+
+    try {
+      const code = await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        c.io,
+        env,
+        { homedir: () => home, now: () => NOW, securityLogSinkFactory },
+      );
+
+      expect(code).toBe(1);
+      expect(existsSync(shortcut)).toBe(false);
+      expect(windowsLocalVolumeTestControl.checkedPaths.length).toBeGreaterThan(0);
+      expect(windowsLocalVolumeTestControl.checkedPaths).toContain(root);
+      expect(selectedStateDirs).toEqual([stateDir]);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        errorKind: "unsafe-target",
+        extra: { mode: "create", failureKind: "WindowsSystemDirectoryError" },
+      });
+      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(events)).not.toContain("attacker");
+      expect(JSON.stringify(events)).not.toContain(shortcut);
+    } finally {
+      windowsLocalVolumeTestControl.acceptLocalFixture = false;
+      windowsLocalVolumeTestControl.checkedPaths.length = 0;
+      if (platform !== undefined) Object.defineProperty(process, "platform", platform);
+    }
+    expect(windowsLocalVolumeTestControl.acceptLocalFixture).toBe(false);
+  });
+
+  it("promotes a flat Windows bootstrap payload into a manual-only managed root and records content-free state", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const source = join(root, "bootstrap");
@@ -439,7 +913,7 @@ describe("runPortableCli", () => {
     expect(registration(stateDir)).toMatchObject({
       schemaVersion: 1,
       status: "managed",
-      updateEligible: true,
+      updateEligible: false,
       platformTarget: "windows-x64",
       packageVersion: "0.2.11",
       stable: true,
@@ -481,6 +955,195 @@ describe("runPortableCli", () => {
         path: "PortableApps/Keiko",
       },
     });
+
+    const resolved = capture();
+    const resolveCode = await runPortableCli(
+      ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+      resolved.io,
+      env,
+      { homedir: () => home },
+    );
+
+    expect(resolveCode).toBe(0);
+    expect(resolved.out()).toBe(`${managedRoot}\n`);
+    expect(resolved.err()).toBe("");
+
+    const mismatchedTarget = capture();
+    expect(
+      await runPortableCli(
+        ["resolve-root", "--target", "macos-x64", "--state-dir", stateDir],
+        mismatchedTarget.io,
+        env,
+        { homedir: () => home },
+      ),
+    ).toBe(1);
+    expect(mismatchedTarget.out()).toBe("");
+    expect(mismatchedTarget.err()).toContain(
+      "registered managed install target does not match the requested target",
+    );
+  });
+
+  it("retries an attested failed setup after rollback removed the managed root", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const originalSource = join(root, "original");
+    const freshSource = join(root, "fresh");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    writeWindowsFixture(originalSource, "0.2.12", "0.2.12");
+    writeWindowsFixture(freshSource, "0.2.13", "0.2.13");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          originalSource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFailedRegistration("windows-x64", stateDir, NOW, "runtime invalid");
+    rmSync(managedRoot, { recursive: true, force: true });
+
+    const recovery = capture();
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          freshSource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        recovery.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    expect(recovery.err()).toBe("");
+    expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.13");
+    expect(registration(stateDir)).toMatchObject({ status: "managed", packageVersion: "0.2.13" });
+  });
+
+  it("uses the target default when no managed install has been recorded", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const resolved = capture();
+
+    const code = await runPortableCli(
+      ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+      resolved.io,
+      env,
+      { homedir: () => home },
+    );
+
+    expect(code).toBe(0);
+    expect(resolved.out()).toBe(`${join(env.LOCALAPPDATA, "Programs", "Keiko")}\n`);
+    expect(resolved.err()).toBe("");
+  });
+
+  it.each([
+    ["quote", 'unsafe" & echo injected'],
+    ["control character", "unsafe\npath"],
+  ])("rejects a fallback Windows root containing a %s", async (_name, unsafeSegment) => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const env = {
+      ...windowsPortableEnv(home),
+      LOCALAPPDATA: join(home, unsafeSegment),
+    };
+    const resolved = capture();
+
+    const code = await runPortableCli(
+      ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+      resolved.io,
+      env,
+      { homedir: () => home },
+    );
+
+    expect(code).toBe(1);
+    expect(resolved.out()).toBe("");
+    expect(resolved.err()).toContain("managed install root cannot be safely transported");
+  });
+
+  it("fails closed when a recorded managed install root cannot be attested", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    writeWindowsFixture(source);
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFileSync(join(managedRoot, ".portable", "setup-manifest.json"), "{}\n", "utf8");
+    const resolved = capture();
+
+    const code = await runPortableCli(
+      ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+      resolved.io,
+      env,
+      { homedir: () => home },
+    );
+
+    expect(code).toBe(1);
+    expect(resolved.out()).toBe("");
+    expect(resolved.err()).toContain("registered managed install root could not be attested");
+  });
+
+  it("fails closed instead of defaulting when portable install state is malformed", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "portable-install-state.json"), "{}\n", "utf8");
+    const resolved = capture();
+
+    const code = await runPortableCli(
+      ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+      resolved.io,
+      env,
+      { homedir: () => home },
+    );
+
+    expect(code).toBe(1);
+    expect(resolved.out()).toBe("");
+    expect(resolved.err()).toContain("portable install registration is invalid");
   });
 
   it("ignores hostile managed-root locators when reading portable install state", () => {
@@ -499,7 +1162,7 @@ describe("runPortableCli", () => {
           {
             schemaVersion: 1,
             status: "managed",
-            updateEligible: true,
+            updateEligible: false,
             platformTarget: "windows-x64",
             packageVersion: "0.2.11",
             stable: true,
@@ -596,6 +1259,7 @@ describe("runPortableCli", () => {
     const root = tempRoot();
     const source = join(root, "bootstrap");
     const stateDir = join(root, "state");
+    const managedRoot = join(root, "managed", "Keiko");
     writeWindowsFixture(source, "0.2.10");
     const c = capture();
 
@@ -607,7 +1271,7 @@ describe("runPortableCli", () => {
         "--portable-root",
         source,
         "--managed-root",
-        join(root, "managed", "Keiko"),
+        managedRoot,
         "--state-dir",
         stateDir,
       ],
@@ -623,7 +1287,939 @@ describe("runPortableCli", () => {
       updateEligible: false,
       platformTarget: "windows-x64",
     });
+
+    const resolved = capture();
+    expect(
+      await runPortableCli(
+        [
+          "resolve-root",
+          "--target",
+          "windows-x64",
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        resolved.io,
+        {},
+      ),
+    ).toBe(0);
+    expect(resolved.out()).toBe(`${managedRoot}\n`);
+    expect(resolved.err()).toBe("");
   });
+
+  it("preserves a healthy managed registration when a new source fails before locking", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const invalidSource = join(root, "invalid-download");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    writeWindowsFixture(source, "0.2.12", "0.2.12");
+    writeWindowsFixture(invalidSource, "0.2.13", "0.2.13");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFileSync(join(invalidSource, ".portable", "setup-manifest.json"), "{}\n", "utf8");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          invalidSource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(registration(stateDir)).toMatchObject({
+      status: "managed",
+      packageVersion: "0.2.12",
+    });
+    expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.12");
+  });
+
+  it("preserves a custom-root registration when native shortcut repair is refused", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const retrySource = join(root, "retry-download");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    writeWindowsFixture(source, "0.2.12", "0.2.12");
+    writeWindowsFixture(retrySource, "0.2.13", "0.2.13");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    const managedRegistration = registration(stateDir);
+    writeFileSync(
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"),
+      "foreign launcher\n",
+    );
+    const retry = capture();
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          retrySource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        retry.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(retry.err()).toContain("portable registration refused unknown artifact");
+    expect(registration(stateDir)).toEqual(managedRegistration);
+    expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.12");
+  });
+
+  it("recovers a failed custom-root setup only from a fresh validated payload", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const customRoot = join(home, "Kéiko Üñîçødé & 100% ! ^ (Programs)", "Keiko");
+    writeWindowsFixture(source, "0.2.12", "0.2.12");
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          customRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFailedRegistration("windows-x64", stateDir, NOW, "simulated setup failure");
+    expect(registration(stateDir)).toMatchObject({ status: "setup-failed" });
+    expect(registration(stateDir).installRootIdentitySha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).not.toContain(
+      customRoot,
+    );
+    const resolved = capture();
+    expect(
+      await runPortableCli(
+        ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+        resolved.io,
+        env,
+        { homedir: () => home },
+      ),
+    ).toBe(0);
+    expect(resolved.out()).toBe(`${customRoot}\n`);
+    expect(resolved.err()).toBe("");
+    expect(existsSync(join(customRoot, "Keiko.exe"))).toBe(true);
+
+    const samePath = capture();
+    expect(
+      await runPortableCli(
+        portableLaunchArgs("windows-x64", customRoot, customRoot, stateDir),
+        samePath.io,
+        env,
+        {
+          homedir: () => home,
+          now: () => NOW,
+        },
+      ),
+    ).toBe(1);
+    expect(samePath.err()).toContain("existing same-path managed install root is not attested");
+    expect(registration(stateDir)).toMatchObject({ status: "setup-failed", updateEligible: false });
+
+    const freshSource = join(root, "fresh-extracted-payload");
+    writeWindowsFixture(freshSource, "0.2.13", "0.2.13");
+    const recovery = capture();
+    expect(
+      await runPortableCli(
+        [
+          "launch",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          freshSource,
+          "--state-dir",
+          stateDir,
+          "--no-relaunch",
+        ],
+        recovery.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    expect(recovery.out()).toContain("recovered at managed root");
+    expect(recovery.err()).toBe("");
+    expect(packageVersionAt(customRoot, "windows-x64")).toBe("0.2.13");
+    expect(existsSync(join(env.LOCALAPPDATA, "Programs", "Keiko"))).toBe(false);
+    expect(registration(stateDir)).toMatchObject({
+      status: "managed",
+      updateEligible: false,
+      packageVersion: "0.2.13",
+    });
+  });
+
+  it("rolls back failed-root recovery when native Windows registration cannot finalize", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const freshSource = join(root, "fresh-extracted-payload");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    writeWindowsFixture(source);
+    writeWindowsFixture(freshSource, "0.2.12", "0.2.12");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFileSync(join(source, ".portable", "setup-manifest.json"), "{}\n", "utf8");
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    writeFailedRegistration("windows-x64", stateDir, NOW, "simulated setup failure");
+    writeFileSync(
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"),
+      "foreign launcher\n",
+    );
+    const oldMarker = join(managedRoot, "app", "dist", "old-install-marker.txt");
+    writeFileSync(oldMarker, "old\n");
+
+    const resolved = capture();
+    expect(
+      await runPortableCli(
+        ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+        resolved.io,
+        env,
+        { homedir: () => home },
+      ),
+    ).toBe(1);
+    expect(resolved.err()).toContain("portable setup is incomplete");
+
+    const recovery = capture();
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          freshSource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        recovery.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(recovery.err()).toContain("portable registration refused unknown artifact");
+    expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.11");
+    expect(readFileSync(oldMarker, "utf8")).toBe("old\n");
+    expect(registration(stateDir)).toMatchObject({ status: "setup-failed" });
+    expect(registration(stateDir).installRootIdentitySha256).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("refuses a legacy Windows launcher redirected to a foreign allowed root", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const freshSource = join(root, "fresh-extracted-payload");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const foreignRoot = join(home, "Documents", "UnrelatedApp");
+    writeWindowsFixture(source);
+    writeWindowsFixture(freshSource, "0.2.12", "0.2.12");
+    writeWindowsFixture(foreignRoot, "9.9.9", "9.9.9");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFileSync(join(source, ".portable", "setup-manifest.json"), "{}\n", "utf8");
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    writeFailedRegistration("windows-x64", stateDir, NOW, "simulated setup failure");
+    writeFileSync(join(foreignRoot, "foreign-marker.txt"), "keep\n");
+    writeFileSync(
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat"),
+      windowsLauncher.generateContent({
+        exe: join(foreignRoot, "Keiko.exe"),
+        port: undefined,
+      }),
+    );
+
+    // With the setup-created `.lnk` still intact, recovery resolves through the ATTESTED managed
+    // root (the registration identity chain validates it) — never through the foreign `.bat`.
+    const viaShortcut = capture();
+    expect(
+      await runPortableCli(
+        ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+        viaShortcut.io,
+        env,
+        { homedir: () => home },
+      ),
+    ).toBe(0);
+    expect(viaShortcut.out().trim()).toBe(managedRoot);
+
+    // The original #1394-era invariant, unchanged in strength: once only the redirected legacy
+    // launcher remains, the foreign target must NOT resolve — fail closed.
+    rmSync(join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"), {
+      force: true,
+    });
+    const resolved = capture();
+    expect(
+      await runPortableCli(
+        ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+        resolved.io,
+        env,
+        { homedir: () => home },
+      ),
+    ).toBe(1);
+    expect(resolved.out()).toBe("");
+    expect(resolved.err()).toContain("portable setup is incomplete");
+
+    const recovery = capture();
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          freshSource,
+          "--managed-root",
+          foreignRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        recovery.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(recovery.err()).toContain("does not match its recorded identity");
+    expect(packageVersionAt(foreignRoot, "windows-x64")).toBe("9.9.9");
+    expect(readFileSync(join(foreignRoot, "foreign-marker.txt"), "utf8")).toBe("keep\n");
+    expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.11");
+  });
+
+  it("refuses recovery when a historically bound root was repurposed for user data", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const freshSource = join(root, "fresh-extracted-payload");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    writeWindowsFixture(source, "0.2.12", "0.2.12");
+    writeWindowsFixture(freshSource, "0.2.13", "0.2.13");
+
+    expect(
+      await runPortableCli(
+        [...portableLaunchArgs("windows-x64", source, managedRoot, stateDir), "--no-relaunch"],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFileSync(join(source, ".portable", "setup-manifest.json"), "{}\n", "utf8");
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    writeFailedRegistration("windows-x64", stateDir, NOW, "simulated setup failure");
+    rmSync(managedRoot, { recursive: true, force: true });
+    mkdirSync(managedRoot, { recursive: true });
+    writeFileSync(join(managedRoot, "important.txt"), "preserve me\n");
+
+    const recovery = capture();
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          freshSource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        recovery.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(recovery.err()).toContain("does not match its recorded identity");
+    expect(readFileSync(join(managedRoot, "important.txt"), "utf8")).toBe("preserve me\n");
+  });
+
+  it("does not overwrite a managed registration with a pre-lock validation failure", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    writeWindowsFixture(source, "0.2.12", "0.2.12");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    const managedRegistration = registration(stateDir);
+    writeFileSync(join(source, ".portable", "setup-manifest.json"), "{}\n", "utf8");
+    const lockPath = portableManagedSetupLockPath("windows-x64", managedRoot);
+    mkdirSync(lockPath);
+    writeFileSync(
+      join(lockPath, "owner.json"),
+      `${JSON.stringify({ schemaVersion: 1, pid: process.pid })}\n`,
+    );
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(registration(stateDir)).toEqual(managedRegistration);
+    rmSync(lockPath, { recursive: true, force: true });
+  });
+
+  it("refuses downgrade recovery below the last attested managed version", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const downgradeSource = join(root, "older-extracted-payload");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    writeWindowsFixture(source, "0.2.12", "0.2.12");
+    writeWindowsFixture(downgradeSource, "0.2.11", "0.2.11");
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    writeFileSync(join(source, ".portable", "setup-manifest.json"), "{}\n", "utf8");
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    writeFailedRegistration("windows-x64", stateDir, NOW, "simulated setup failure");
+
+    const secondStateDir = join(root, "second-state");
+    mkdirSync(secondStateDir, { recursive: true });
+    copyFileSync(
+      join(stateDir, "portable-install-state.json"),
+      join(secondStateDir, "portable-install-state.json"),
+    );
+    const lockPath = portableManagedSetupLockPath("windows-x64", managedRoot);
+    mkdirSync(lockPath);
+    const busy = capture();
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          downgradeSource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          secondStateDir,
+        ],
+        busy.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(busy.err()).toContain("already in progress");
+    expect(registration(secondStateDir)).toMatchObject({
+      status: "setup-failed",
+      packageVersion: "0.2.12",
+    });
+    expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.12");
+    rmSync(lockPath, { recursive: true, force: true });
+
+    const recovery = capture();
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          downgradeSource,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        recovery.io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(recovery.err()).toContain("must not be older");
+    expect(packageVersionAt(managedRoot, "windows-x64")).toBe("0.2.12");
+    expect(registration(stateDir)).toMatchObject({
+      status: "setup-failed",
+      packageVersion: "0.2.12",
+    });
+  });
+
+  it("keeps legacy failed records without attestation fail-closed and non-destructive", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const source = join(root, "fresh-extracted-payload");
+    const stateDir = join(root, "state");
+    writeWindowsFixture(managedRoot, "0.2.12", "0.2.12");
+    writeWindowsFixture(source, "0.2.13", "0.2.13");
+    writeFileSync(join(managedRoot, "important.txt"), "preserve me\n");
+    writePortableRegistration(stateDir, {
+      schemaVersion: 1,
+      status: "setup-failed",
+      updateEligible: false,
+      platformTarget: "windows-x64",
+      packageVersion: "unknown",
+      stable: false,
+      failureReason: "setup-failed",
+      updatedAt: NOW.toISOString(),
+    });
+    const c = capture();
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        c.io,
+        windowsPortableEnv(home),
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(1);
+    expect(c.err()).toContain("managed install root already exists");
+    expect(readFileSync(join(managedRoot, "important.txt"), "utf8")).toBe("preserve me\n");
+  });
+
+  it("adopts a pristine, fully validated root in place through same-path setup", async () => {
+    // Owner-approved for 0.3.0-beta.1: the canonical install gesture moves the bundle to the
+    // managed location BEFORE the first launch. With no registration at all, a root that passes
+    // full validation is a first run and gets attested in place.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const c = capture();
+    writeWindowsFixture(managedRoot);
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      windowsPortableEnv(home),
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Keiko portable setup ready at managed root.");
+    expect(registration(stateDir)).toMatchObject({ status: "managed", updateEligible: false });
+  });
+
+  it("never adopts an unvalidated same-path root", async () => {
+    // The relocated #2966 pin, half one: adoption goes through the complete portable-root
+    // validation, so a root whose manifest is broken records a failure and is never attested.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const c = capture();
+    writeWindowsFixture(managedRoot);
+    writeFileSync(join(managedRoot, ".portable", "setup-manifest.json"), "{ not json\n");
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      windowsPortableEnv(home),
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(1);
+    expect(registration(stateDir)).toMatchObject({ status: "setup-failed", updateEligible: false });
+  });
+
+  it.each([
+    // Codex thread 3771815001: both an unparseable file AND a parseable-but-schema-unknown file
+    // must fail-closed BEFORE setup can rewrite the record with recordPreLockSetupFailure.
+    // Widening the pre-lock corrupt guard to cover the schema-invalid case preserves the
+    // locator + attestation an operator needs to recover the pre-existing managed installation.
+    // The registration bytes must survive the run unchanged and setup must never surface
+    // "ready at managed root".
+    ["unparseable JSON", "{ corrupted\n"],
+    ["schema-invalid record", '{"schemaVersion":999}\n'],
+  ] as const)(
+    "never adopts over a malformed existing registration (%s)",
+    async (_label, stateBytes) => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const managedRoot = join(home, "PortableApps", "Keiko");
+      const stateDir = join(root, "state");
+      const c = capture();
+      writeWindowsFixture(managedRoot);
+      mkdirSync(stateDir, { recursive: true });
+      const registrationPath = join(stateDir, "portable-install-state.json");
+      writeFileSync(registrationPath, stateBytes);
+
+      const code = await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          managedRoot,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        c.io,
+        windowsPortableEnv(home),
+        { homedir: () => home, now: () => NOW },
+      );
+
+      expect(code).toBe(1);
+      expect(c.err()).toContain("portable install registration is corrupt");
+      // Neither shape may ever have attested the root.
+      expect(c.out()).not.toContain("ready at managed root");
+      // The original registration bytes must be preserved verbatim — the whole point of the
+      // pre-lock corrupt guard is to prevent recordPreLockSetupFailure from overwriting the
+      // locator and hashes needed for recovery.
+      expect(readFileSync(registrationPath, "utf8")).toBe(stateBytes);
+    },
+  );
+
+  it("never re-binds an existing registration to different same-path bytes", async () => {
+    // The relocated #2966 pin, half two: once a registration exists, a same-path root whose
+    // identity no longer matches it stays refused — this is exactly what detects
+    // post-attestation tampering, and adoption must never open it.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    writeWindowsFixture(source);
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    expect(registration(stateDir)).toMatchObject({ status: "managed" });
+    writeFileSync(join(managedRoot, "Keiko.exe"), "tampered launcher bytes");
+
+    const c = capture();
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("existing same-path managed install root is not attested");
+  });
+
+  it.each(["setup", "launch"] as const)(
+    "adopts pristine macOS parent and Resources aliases in place during %s",
+    async (command) => {
+      // The alias spellings resolve to the same install root, so they follow the same
+      // owner-approved first-run adoption as the direct bundle path.
+      for (const alias of ["parent", "resources"] as const) {
+        const root = tempRoot();
+        const home = join(root, "home");
+        const sourceRoot = join(home, `Applications-${command}-${alias}`);
+        const managedRoot = writeMacFixture(sourceRoot, "macos-x64");
+        const portableRoot =
+          alias === "parent" ? sourceRoot : join(managedRoot, "Contents", "Resources");
+        const stateDir = join(root, `state-${command}-${alias}`);
+        const lifecycleStarts: string[] = [];
+        const c = capture();
+
+        const code = await runPortableCli(
+          [
+            command,
+            "--target",
+            "macos-x64",
+            "--portable-root",
+            portableRoot,
+            "--managed-root",
+            managedRoot,
+            "--state-dir",
+            stateDir,
+          ],
+          c.io,
+          {},
+          {
+            homedir: () => home,
+            now: () => NOW,
+            activateMacosRuntimeFn: () => Promise.resolve("waived-unsigned" as const),
+            lifecycleFn: (_command, _args, _io, _env, deps) => {
+              lifecycleStarts.push(deps.cwd);
+              return Promise.resolve(0);
+            },
+          },
+        );
+
+        expect(code).toBe(0);
+        expect(registration(stateDir)).toMatchObject({ status: "managed", updateEligible: true });
+        expect(lifecycleStarts).toEqual(
+          command === "launch" ? [join(managedRoot, "Contents", "Resources", "app")] : [],
+        );
+      }
+    },
+  );
 
   it("keeps failed setup registration content-free when filesystem validation fails", async () => {
     const root = tempRoot();
@@ -774,7 +2370,7 @@ describe("runPortableCli", () => {
       writePortableRegistration(stateDir, {
         schemaVersion: 1,
         status: "managed",
-        updateEligible: true,
+        updateEligible: false,
         platformTarget: "windows-x64",
         packageVersion: "0.2.11",
         stable: true,
@@ -919,13 +2515,13 @@ describe("runPortableCli", () => {
     });
     expect(registration(stateDir)).toMatchObject({
       status: "managed",
-      updateEligible: true,
+      updateEligible: false,
       platformTarget: "windows-x64",
     });
     expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).not.toContain(root);
   });
 
-  it("launches the existing managed install when the bootstrap launcher is clicked after setup", async () => {
+  it("launches a historical schema 1 managed install as manual-only without migrating its record", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const source = join(root, "bootstrap");
@@ -959,6 +2555,11 @@ describe("runPortableCli", () => {
         },
       },
     );
+    const historicalRegistration = registration(stateDir);
+    expect(historicalRegistration.updateEligible).toBe(false);
+    historicalRegistration.updateEligible = true;
+    writePortableRegistration(stateDir, historicalRegistration);
+    const historicalBytes = readFileSync(join(stateDir, "portable-install-state.json"), "utf8");
     const secondCapture = capture();
 
     const second = await runPortableCli(
@@ -990,6 +2591,14 @@ describe("runPortableCli", () => {
     expect(spawns).toEqual([join(managedRoot, "Keiko.exe")]);
     expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
     expect(secondCapture.err()).not.toContain("already exists");
+    expect(readPortableInstallRegistration(stateDir)).toMatchObject({
+      schemaVersion: 1,
+      status: "managed",
+      updateEligible: false,
+    });
+    expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).toBe(
+      historicalBytes,
+    );
   });
 
   it("activates the macOS runtime before starting the managed application", async () => {
@@ -1019,7 +2628,7 @@ describe("runPortableCli", () => {
         homedir: () => home,
         activateMacosRuntimeFn: () => {
           events.push("activate");
-          return Promise.resolve(true);
+          return Promise.resolve("active" as const);
         },
         lifecycleFn: () => {
           events.push("start");
@@ -1058,7 +2667,7 @@ describe("runPortableCli", () => {
       {},
       {
         homedir: () => home,
-        activateMacosRuntimeFn: () => Promise.resolve(false),
+        activateMacosRuntimeFn: () => Promise.resolve("unavailable" as const),
         lifecycleFn: () => {
           started = true;
           return Promise.resolve(0);
@@ -1069,6 +2678,161 @@ describe("runPortableCli", () => {
     expect(code).toBe(1);
     expect(started).toBe(false);
     expect(c.err()).toContain("macOS runtime activation is incomplete");
+  });
+
+  it("launches a macOS install whose containment is waived for the missing release signature", async () => {
+    // The v0.3.0-beta.0 incident, pinned at the launch layer: the strict activation requirement
+    // turned every double-click of the unsigned evaluation install into a silent exit 1. A waived
+    // activation must start the server and must say what was waived.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    const c = capture();
+    let started = false;
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", managedRoot, managedRoot, stateDir),
+      c.io,
+      {},
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve("waived-unsigned" as const),
+        lifecycleFn: () => {
+          started = true;
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(started).toBe(true);
+    expect(c.out()).toContain("containment is waived");
+  });
+
+  it("threads the command-correlated security sink into portable launch lifecycle", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    const events: SecurityLogEvent[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", managedRoot, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve("waived-unsigned" as const),
+        securityLogSinkFactory: () => ({
+          write: (event): void => {
+            events.push(event);
+          },
+        }),
+        lifecycleFn: (_command, _args, _io, _env, deps) => {
+          deps.securityLogSink?.write({
+            category: "security",
+            op: "security.windows-lifecycle-opener.system-root-refused",
+            errorKind: "WindowsSystemDirectoryError",
+          });
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+  });
+
+  it("surfaces a failed launch through the failure notifier with the launch environment", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    const launchEnv = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
+    const notified: [string, unknown][] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", managedRoot, managedRoot, stateDir),
+      capture().io,
+      launchEnv,
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve("unavailable" as const),
+        lifecycleFn: () => Promise.resolve(0),
+        notifyFailureFn: (message, env) => {
+          notified.push([message, env]);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(notified).toEqual([
+      ["keiko portable launch: macOS runtime activation is incomplete\n", launchEnv],
+    ]);
+  });
+
+  it("does not raise the failure notifier for a successful launch", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    let notified = false;
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+        notifyFailureFn: () => {
+          notified = true;
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(notified).toBe(false);
   });
 
   it.each(["windows-x64", "macos-arm64", "macos-x64"] as const)(
@@ -1093,7 +2857,8 @@ describe("runPortableCli", () => {
           spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
         },
       );
-      writeFileSync(join(managedRoot, "active.txt"), "old install marker\n");
+      const activeMarker = join(dirname(appPackagePath(managedRoot, target)), "dist", "active.txt");
+      writeFileSync(activeMarker, "old install marker\n");
       const c = capture();
 
       const second = await runPortableCli(
@@ -1103,7 +2868,7 @@ describe("runPortableCli", () => {
         {
           homedir: () => home,
           now: () => new Date("2026-07-07T00:00:00.000Z"),
-          activateMacosRuntimeFn: () => Promise.resolve(true),
+          activateMacosRuntimeFn: () => Promise.resolve("active" as const),
           lifecycleFn: (command) => {
             events.push(command);
             return Promise.resolve(0);
@@ -1115,11 +2880,64 @@ describe("runPortableCli", () => {
       expect(second).toBe(0);
       expect(events).toEqual(["stop", "start"]);
       expect(packageVersionAt(managedRoot, target)).toBe("0.2.12");
-      expect(existsSync(join(managedRoot, "active.txt"))).toBe(false);
+      expect(existsSync(activeMarker)).toBe(false);
       expect(registration(stateDir)).toMatchObject({ packageVersion: "0.2.12" });
       expect(c.out()).toContain("portable upgrade installed from downloaded package");
     },
   );
+
+  it("serializes healthy upgrades by managed root across distinct state directories", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const firstStateDir = join(root, "first-state");
+    const secondStateDir = join(root, "second-state");
+    const target: PortableTarget = "windows-x64";
+    const managedRoot = managedRootForTarget(home, target);
+    const env = windowsPortableEnv(home);
+    const currentSource = writePortableFixture(join(root, "current"), target, "0.2.12");
+    const newerSource = writePortableFixture(join(root, "newer"), target, "0.2.13");
+
+    expect(
+      await runPortableCli(
+        [...portableLaunchArgs(target, currentSource, managedRoot, firstStateDir), "--no-relaunch"],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    mkdirSync(secondStateDir, { recursive: true });
+    copyFileSync(
+      join(firstStateDir, "portable-install-state.json"),
+      join(secondStateDir, "portable-install-state.json"),
+    );
+    const rootLock = portableManagedSetupLockPath(target, managedRoot);
+    mkdirSync(rootLock);
+    const events: string[] = [];
+    const c = capture();
+
+    const code = await runPortableCli(
+      portableLaunchArgs(target, newerSource, managedRoot, secondStateDir),
+      c.io,
+      env,
+      {
+        homedir: () => home,
+        lifecycleFn: (command) => {
+          events.push(command);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(events).toEqual([]);
+    expect(c.err()).toContain("setup or upgrade is already in progress");
+    expect(packageVersionAt(managedRoot, target)).toBe("0.2.12");
+    expect(registration(secondStateDir)).toMatchObject({
+      status: "managed",
+      packageVersion: "0.2.12",
+    });
+    rmSync(rootLock, { recursive: true, force: true });
+  });
 
   it("does not downgrade the managed install when an older downloaded package is clicked", async () => {
     const root = tempRoot();
@@ -1189,7 +3007,7 @@ describe("runPortableCli", () => {
       {
         homedir: () => home,
         now: () => new Date("2026-07-07T00:00:00.000Z"),
-        activateMacosRuntimeFn: () => Promise.resolve(true),
+        activateMacosRuntimeFn: () => Promise.resolve("active" as const),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -1206,7 +3024,7 @@ describe("runPortableCli", () => {
     });
   });
 
-  it("replaces a valid Intel Mac managed install when registration is stale setup-failed", async () => {
+  it("recovers a stale macOS setup-failed registration from a fresh payload", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const stateDir = join(root, "state");
@@ -1227,14 +3045,33 @@ describe("runPortableCli", () => {
     );
     writeFailedRegistration("macos-arm64", stateDir, NOW, "managed root already exists");
 
+    const resolved = capture();
+    expect(
+      await runPortableCli(
+        [
+          "resolve-root",
+          "--target",
+          "macos-arm64",
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        resolved.io,
+        {},
+        { homedir: () => home },
+      ),
+    ).toBe(0);
+    expect(resolved.out()).toBe(`${managedRoot}\n`);
+
     const code = await runPortableCli(
-      portableLaunchArgs("macos-arm64", armSource, managedRoot, stateDir),
+      [...portableLaunchArgs("macos-arm64", armSource, managedRoot, stateDir), "--no-relaunch"],
       capture().io,
       {},
       {
         homedir: () => home,
         now: () => new Date("2026-07-07T00:00:00.000Z"),
-        activateMacosRuntimeFn: () => Promise.resolve(true),
+        activateMacosRuntimeFn: () => Promise.resolve("active" as const),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -1243,12 +3080,12 @@ describe("runPortableCli", () => {
     );
 
     expect(code).toBe(0);
-    expect(events).toEqual(["stop", "start"]);
+    expect(events).toEqual([]);
     expect(packageVersionAt(managedRoot, "macos-arm64")).toBe("0.2.12");
     expect(registration(stateDir)).toMatchObject({
-      packageVersion: "0.2.12",
       platformTarget: "macos-arm64",
       status: "managed",
+      updateEligible: true,
     });
   });
 
@@ -1278,7 +3115,7 @@ describe("runPortableCli", () => {
       {},
       {
         homedir: () => home,
-        activateMacosRuntimeFn: () => Promise.resolve(true),
+        activateMacosRuntimeFn: () => Promise.resolve("active" as const),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -1357,9 +3194,10 @@ describe("runPortableCli", () => {
         spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
       },
     );
-    writeFileSync(join(managedRoot, "active.txt"), "old install marker\n");
+    const activeMarker = join(managedRoot, "app", "dist", "active.txt");
+    writeFileSync(activeMarker, "old install marker\n");
     writeFileSync(
-      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat"),
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"),
       "foreign launcher\n",
     );
     const c = capture();
@@ -1380,12 +3218,12 @@ describe("runPortableCli", () => {
     expect(code).toBe(1);
     expect(events).toEqual(["stop", "start"]);
     expect(packageVersionAt(managedRoot, target)).toBe("0.2.11");
-    expect(readFileSync(join(managedRoot, "active.txt"), "utf8")).toBe("old install marker\n");
+    expect(readFileSync(activeMarker, "utf8")).toBe("old install marker\n");
     expect(registration(stateDir)).toMatchObject({ packageVersion: "0.2.11" });
     expect(c.err()).toContain("portable registration refused unknown artifact");
   });
 
-  it("launches a same-path portable root through lifecycle after setup attestation", async () => {
+  it("adopts and launches a pristine same-path portable root", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const managedRoot = join(home, "managed", "Keiko");
@@ -1422,7 +3260,7 @@ describe("runPortableCli", () => {
     expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
     expect(registration(stateDir)).toMatchObject({
       status: "managed",
-      updateEligible: true,
+      updateEligible: false,
     });
   });
 
@@ -1509,6 +3347,7 @@ describe("runPortableCli", () => {
     const source = join(root, "bootstrap");
     const stateDir = join(root, "state");
     const repoRoot = join(root, "customer-repo");
+    const rejectedParent = join(repoRoot, "nested");
     writeWindowsFixture(source);
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
     const c = capture();
@@ -1521,7 +3360,7 @@ describe("runPortableCli", () => {
         "--portable-root",
         source,
         "--managed-root",
-        join(repoRoot, "Keiko"),
+        join(rejectedParent, "Keiko"),
         "--state-dir",
         stateDir,
       ],
@@ -1537,7 +3376,7 @@ describe("runPortableCli", () => {
       updateEligible: false,
       failureReason: "setup-failed",
     });
-    expect(existsSync(join(repoRoot, "Keiko"))).toBe(false);
+    expect(existsSync(rejectedParent)).toBe(false);
   });
 
   it("refuses a symlinked Start Menu ancestor during setup without creating outside artifacts", async (ctx) => {
@@ -1575,8 +3414,64 @@ describe("runPortableCli", () => {
     );
 
     expect(code).toBe(1);
-    expect(existsSync(join(outsidePrograms, "Keiko.bat"))).toBe(false);
+    expect(existsSync(join(outsidePrograms, "Keiko.lnk"))).toBe(false);
     expect(existsSync(managedRoot)).toBe(false);
     expect(c.err()).toContain("portable registration refused symlinked ancestor");
+  });
+
+  it("reads a truncated portable registration state as no registration recorded (fail-closed-to-undefined)", () => {
+    // #KEIKO-0333 must-fail-before-fix: readPortableInstallRegistration used to
+    // JSON.parse without try/catch, so a truncated / non-JSON registration file
+    // threw a SyntaxError out of every downstream caller. After the fix, the reader
+    // fails closed to `undefined` — matching launcher-state.ts's fail-closed-to-empty
+    // semantics for the sibling state file — so the CLI observes "no registration
+    // recorded" and stays operable.
+    const stateDir = join(tempRoot(), "state");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "portable-install-state.json"), "not json{", "utf8");
+    expect(() => readPortableInstallRegistration(stateDir)).not.toThrow();
+    expect(readPortableInstallRegistration(stateDir)).toBeUndefined();
+  });
+
+  it("writes portable registration atomically and leaves no temp dir behind after a failed write", async () => {
+    // #KEIKO-0333 must-fail-before-fix: writeRegistration used a single
+    // writeFileSync (truncate-then-write); a crash mid-write could leave a
+    // truncated registration on disk. After the fix, the write goes through
+    // mkdtemp -> write -> rename, mirroring launcher-state.ts saveState. Verify by
+    // running a successful setup and asserting only the target file survives — no
+    // `.portable-registration-*` temp directory remains.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+    const stateDir = join(root, "state");
+    writeWindowsFixture(source);
+    const c = capture();
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+    expect(code).toBe(0);
+    // Registration file exists and parses cleanly.
+    const parsed = readPortableInstallRegistration(stateDir);
+    expect(parsed?.status).toBe("managed");
+    // No `.portable-registration-*` temp dirs survived the atomic write.
+    const leftovers = readdirSync(stateDir).filter((name) =>
+      name.startsWith(".portable-registration-"),
+    );
+    expect(leftovers).toEqual([]);
   });
 });

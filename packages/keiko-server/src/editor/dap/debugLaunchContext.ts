@@ -19,6 +19,7 @@ import type {
   DebugSpawnEnvelope,
   DebugWorkspaceIdentity,
 } from "./debugCapsulePlan.js";
+import { deriveDebugRuntimeMountIdentityDigest } from "./debugIdentityDigest.js";
 import type { DebugLaunchCatalogDeps } from "./debugLaunchCatalog.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import { deriveCatalogDebugTarget, deriveFileDebugTarget } from "./debugLaunchCatalog.js";
@@ -298,9 +299,7 @@ function inspectRuntime(path: string): DebugRuntimeMountInspection {
   // repeated final-mount assertion is intentionally retained as defense in depth.
   const valid = stat.isDirectory() && (stat.mode & 0o777) === 0o700 && stat.uid === currentUid();
   if (!valid) throw new Error("INVALID_DEBUG_RUNTIME");
-  const identityDigest = createHash("sha256")
-    .update(JSON.stringify([real, stat.dev, stat.ino, stat.mode, stat.uid]))
-    .digest("hex");
+  const identityDigest = deriveDebugRuntimeMountIdentityDigest(real, stat);
   return Object.freeze({
     hostRealPath: real,
     mode: "0700",

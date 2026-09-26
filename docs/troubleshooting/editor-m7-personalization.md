@@ -32,8 +32,9 @@ cannot widen model, egress, sandbox, patch-apply, budget, or delivery authority.
 # Confirm the local UI is healthy.
 keiko status
 
-# Check the UI log for redacted settings route failures.
-tail -n 200 .keiko/ui.log
+# Check the Activity Log for failed settings requests (route templates and errorKind only).
+keiko support export --out keiko-support.jsonl
+keiko support analyze keiko-support.jsonl --clusters
 ```
 
 In the browser, refresh the Editor Settings panel. A policy-locked setting should remain visible but
@@ -45,7 +46,7 @@ the private settings store and did not write new state.
 - If the setting is policy-locked, keep the deployment ceiling in place unless an operator explicitly
   intends to permit that feature. For AI assistance, enabling the UI setting is not enough when the
   operator ceiling denies the feature.
-- If settings are unavailable after a restart, preserve `.keiko/ui.log` and report the redacted
+- If settings are unavailable after a restart, preserve a `keiko support export` bundle and report the redacted
   reason code. Do not delete private state stores unless a maintainer has identified the affected
   record and confirmed the recovery path.
 - Use the Settings panel reset action for ordinary rollback. Reset is revision-guarded and does not
@@ -76,7 +77,8 @@ This prevents dirty buffers from being overwritten by stale or incomplete disk e
 
 ```bash
 # Check for watcher and editor route diagnostics without exposing source content.
-tail -n 200 .keiko/ui.log
+keiko support export --out keiko-support.jsonl
+keiko support analyze keiko-support.jsonl --clusters
 ```
 
 If the status names `sequence-gap`, `event-overflow`, `native-watch-unavailable`, `root-replaced`,
@@ -119,8 +121,9 @@ activate model or mutating behavior during upgrade.
 # Confirm the UI process sees the intended operator environment.
 keiko status
 
-# Inspect redacted UI diagnostics for the activation reason code.
-tail -n 200 .keiko/ui.log
+# Inspect the redacted Activity Log for the activation reason code.
+keiko support export --out keiko-support.jsonl
+keiko support analyze keiko-support.jsonl --clusters
 ```
 
 The UI status reason code is the authoritative next step: `EXPLICIT_OPT_IN_REQUIRED` requires a user

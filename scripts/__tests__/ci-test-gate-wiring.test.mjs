@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,8 +18,49 @@ const windowsNativeQuality = readFileSync(
   resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
   "utf8",
 );
+const linuxPortableLauncher = readFileSync(
+  resolve(repoRoot, "scripts/check-linux-portable-launcher.sh"),
+  "utf8",
+);
+const portableSha256 = readFileSync(
+  resolve(repoRoot, "native/portable-launcher/keiko-portable-sha256.h"),
+  "utf8",
+);
+const updateCoordinator = readFileSync(
+  resolve(repoRoot, "native/portable-launcher/keiko-portable-update-coordinator.h"),
+  "utf8",
+);
+
+// Each `cc \` block runs to the first non-indented line, so a pair can only be read out of the
+// SAME invocation. A source that is commented out, or pointed at another command's -o target,
+// changes the extracted pairs and fails the assertion.
+const EXPECTED_LINUX_PROOFS = [
+  { output: "keiko-portable-launcher-test", source: "keiko-portable-launcher.test.c" },
+  { output: "keiko-portable-sha256-test", source: "keiko-portable-sha256.test.c" },
+  { output: "keiko-portable-tree-hash-test", source: "keiko-portable-tree-hash.test.c" },
+];
+
+function linuxProofPairs(script) {
+  return script
+    .split(/^cc \\$/mu)
+    .slice(1)
+    .map((block) => block.split(/\n(?=\S)/u)[0] ?? "")
+    .filter((command) => command.includes("-Werror"))
+    .map((command) => ({
+      output: /-o "\$scratch\/([A-Za-z0-9._-]+)"/u.exec(command)?.[1],
+      source: /portable-launcher\/([A-Za-z0-9._-]+\.test\.c)"/u.exec(command)?.[1],
+    }));
+}
 const windowsLauncher = readFileSync(
   resolve(repoRoot, "native/portable-launcher/keiko-portable-launcher.c"),
+  "utf8",
+);
+const setupBootstrapSource = readFileSync(
+  resolve(repoRoot, "native/setup-bootstrap/keiko-setup-bootstrap.c"),
+  "utf8",
+);
+const runtimeSupervisorSource = readFileSync(
+  resolve(repoRoot, "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"),
   "utf8",
 );
 const windowsRfc3161QualityProject = readFileSync(
@@ -43,6 +84,30 @@ const mutationSecurityWorkflow = readFileSync(
 );
 const portableAssetsWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/portable-assets.yml"),
+  "utf8",
+);
+const releaseCandidateWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/release-candidate.yml"),
+  "utf8",
+);
+const releaseAlignmentWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/release-alignment.yml"),
+  "utf8",
+);
+const releaseAdvanceWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/release-advance.yml"),
+  "utf8",
+);
+const secretScanningQueueWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/secret-scanning-queue.yml"),
+  "utf8",
+);
+const nightlyPerfEvidenceWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/nightly-perf-evidence.yml"),
+  "utf8",
+);
+const codeTaskRealBinaryWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/code-task-real-binary.yml"),
   "utf8",
 );
 const htmlManualReleaseEvidence = readFileSync(
@@ -92,6 +157,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run test:coverage:ui",
   // Browser release proof.
   "npm run test:e2e:smoke",
+  "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "npm run test:e2e:editor-debugging-2348",
   // Performance e2e evidence + freshness/budget gate (Step 07, GEN-TEST-E2E-001).
   "npm run test:e2e:workspace-perf",
@@ -108,10 +174,13 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:knowledge-m2-closeout",
   "npm run check:context-quality",
   // Server error observability gate (Step 11, RB-6 / GEN-OBS-DIAGNOSTICS-901): the top-level 500 must
-  // carry a correlation id + logged cause. Goes red against a bare error-swallowing `.catch`.
-  "npm run check:error-observability",
+  // carry a correlation id + logged cause. Goes red against a bare error-swallowing `.catch`. It runs
+  // inside the Activity Log implementation gate, whose composition and required-job placement are
+  // pinned step by step in check-activity-log.test.mjs.
+  "npm run check:activity-log",
   // Editor bundle release evidence (Step 06, RB-3).
   "npm run check:editor-release-evidence",
+  "npm run check:update-ui-evidence",
   // Version-drift governance (Step 06, RB-15).
   "npm run check:version-consistency",
   // Dependency-placement hygiene (Step 11, GEN-SYNTH-COVERAGE-005 / GEN-PKG-DEPENDENCY-001/003/004):
@@ -152,7 +221,53 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("keeps package coverage blob paths aligned with the governed Vitest 4 reporter", () => {
+    expect(rootManifest.scripts["test:coverage:packages:shard"]).toContain("--reporter=blob");
+    expect(rootManifest.scripts["test:coverage:packages:merge"]).toContain(
+      "--mergeReports=.vitest-reports",
+    );
+    expect(ci).toContain("path: .vitest-reports/");
+    expect(ci).toContain("path: .vitest-reports\n");
+    expect(ci).toContain("find .vitest-reports -maxdepth 1 -name 'blob-*.json'");
+    expect(ci).toContain("run: rm -rf .vitest-reports");
+  });
+
+  it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
+    const windowsJobStart = ci.indexOf("  cross-platform-smoke:");
+    const windowsJobEnd = ci.indexOf("\n  node-26-compatibility:", windowsJobStart);
+    const windowsJob = ci.slice(windowsJobStart, windowsJobEnd);
+    const buildStep = ci.indexOf("      - name: Build", windowsJobStart);
+    const fixtureStep = ci.indexOf(
+      "      - name: Verify the Windows portable handoff protocol fixture",
+      windowsJobStart,
+    );
+    const nextStep = ci.indexOf(
+      "      - name: Verify Git executable Windows reparse containment",
+      fixtureStep,
+    );
+    expect(windowsJobStart).toBeGreaterThan(-1);
+    expect(windowsJob).toContain("runs-on: ${{ matrix.os }}");
+    expect(windowsJob).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
+    expect(buildStep).toBeGreaterThan(-1);
+    expect(buildStep).toBeLessThan(windowsJobEnd);
+    expect(fixtureStep).toBeGreaterThan(buildStep);
+    expect(fixtureStep).toBeLessThan(windowsJobEnd);
+    expect(nextStep).toBeGreaterThan(fixtureStep);
+    const fixtureGate = ci.slice(fixtureStep, nextStep);
+    expect(fixtureGate).toContain("if: runner.os == 'Windows'");
+    expect(fixtureGate).toContain(
+      "node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
+    );
+    expect(fixtureGate).toContain(
+      "packages/keiko-server/src/update-portable-handoff-receipts.test.ts",
+    );
+  });
+
   it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {
+    const evidenceStep = ci.slice(
+      ci.indexOf("      - name: Build internal packages so contracts dist resolves for UI tsc"),
+      ci.indexOf("      - name: Security audit UI dependencies"),
+    );
     const performanceStep = ci.slice(
       ci.indexOf("      - name: Refresh workspace performance evidence"),
       ci.indexOf("      - name: Build package and UI assets"),
@@ -160,13 +275,18 @@ describe("CI test/gate wiring guard", () => {
     expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
     expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
-    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
     // ADR-0139 D7: the immutable editor evidence is validated on pull requests and merge groups;
     // the workspace refresh and freshness gate stay on push/dispatch (post-merge) only.
-    expect(performanceStep).toContain(
+    expect(evidenceStep).toContain(
       "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
     );
-    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("npm run check:tool-catalog-performance");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:coding-runtime");
+    expect(ci.indexOf("Validate tool-catalog performance evidence")).toBeLessThan(
+      ci.indexOf("Install Playwright browser"),
+    );
     expect(performanceStep).toContain("Upload redacted performance evidence");
     expect(performanceStep).toContain("if-no-files-found: warn");
     expect(performanceStep).not.toContain("always()");
@@ -189,11 +309,135 @@ describe("CI test/gate wiring guard", () => {
     expect(windowsLauncher).not.toContain("wchar_t command[98304]");
   });
 
+  it("binds every Linux proof source to the binary its own cc command builds and runs", () => {
+    // linux-x64 shipped a POSIX path written against Darwin and never compiled: the release tag run
+    // died on <CommonCrypto/CommonDigest.h>. macOS and Windows had always compiled the sha256 and
+    // tree-hash proofs beside the launcher test; Linux compiled only the launcher test, which is why
+    // a header with no Linux branch reached a tag unnoticed.
+    //
+    // Independent substring checks would not prove this: one source could be compiled into all three
+    // binary names while the other two names survive only in comments, and the omitted proofs would
+    // never run. Each pair is therefore read out of ONE cc invocation, and the negative cases below
+    // prove a substituted or commented-out source is rejected.
+    expect(linuxProofPairs(linuxPortableLauncher)).toEqual(EXPECTED_LINUX_PROOFS);
+    for (const { output } of EXPECTED_LINUX_PROOFS) {
+      expect(linuxPortableLauncher).toContain(`\n"$scratch/${output}"\n`);
+    }
+  });
+
+  it("rejects a Linux proof whose source is substituted into another binary's command", () => {
+    const substituted = linuxPortableLauncher.replace(
+      "keiko-portable-tree-hash.test.c",
+      "keiko-portable-launcher.test.c",
+    );
+    expect(substituted).not.toBe(linuxPortableLauncher);
+    expect(linuxProofPairs(substituted)).not.toEqual(EXPECTED_LINUX_PROOFS);
+  });
+
+  it("rejects a Linux proof whose source line is commented out", () => {
+    const commented = linuxPortableLauncher.replace(
+      '  "$root/native/portable-launcher/keiko-portable-sha256.test.c" \\\n',
+      "",
+    );
+    expect(commented).not.toBe(linuxPortableLauncher);
+    expect(linuxProofPairs(commented)).not.toEqual(EXPECTED_LINUX_PROOFS);
+  });
+
+  it("keeps the portable crypto and rename paths from assuming Apple again", () => {
+    // The header used to branch `_WIN32` / `#else`, so "not Windows" silently meant macOS.
+    expect(portableSha256).toContain("#elif defined(__APPLE__)");
+    expect(portableSha256).toContain("CommonCrypto/CommonDigest.h");
+    // ADR-0121 names renameat2 as the reviewed Linux primitive; the call sites must route through
+    // the guarded helpers rather than calling the Darwin syscall directly.
+    expect(updateCoordinator).toContain("keiko_coordinator_exchange_at");
+    expect(updateCoordinator).toContain("keiko_coordinator_relocate_at");
+    expect(updateCoordinator).toContain("RENAME_EXCHANGE");
+    expect(updateCoordinator).toContain("RENAME_NOREPLACE");
+    const directDarwinCalls = updateCoordinator
+      .split("\n")
+      .filter((line) => line.includes("renameatx_np(")).length;
+    expect(directDarwinCalls).toBe(2);
+  });
+
+  it("compiles and runs the native setup-bootstrap under the strict native quality bar (#2992)", () => {
+    // The setup bootstrap that replaced IExpress must be held to /W4 /WX /analyze and its behavior
+    // test must actually execute — dropping either from the native quality gate fails this pin.
+    expect(windowsNativeQuality).toContain("native/setup-bootstrap/keiko-setup-bootstrap.c");
+    expect(windowsNativeQuality).toContain(
+      "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c",
+    );
+    expect(windowsNativeQuality).toContain("Windows setup-bootstrap behavior verification failed");
+    expect(windowsNativeQuality).toContain('/DKEIKO_SETUP_TARGET="windows-x64"');
+  });
+
+  it("keeps the #2992 security invariants in the native setup bootstrap", () => {
+    // These are the three properties that close the IExpress /C: signature-laundering class. Each
+    // is pinned here so it cannot be silently removed from the signed installer without a red gate.
+    // 1. Loader hardening: System32 is preferred, the CWD/same-directory is not (DLL planting).
+    expect(setupBootstrapSource).toContain(
+      "SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)",
+    );
+    expect(setupBootstrapSource).toContain('SetDllDirectoryW(L"")');
+    // 2. Closed argument allowlist — /quiet or /Q only, everything else rejected with code 87.
+    expect(setupBootstrapSource).toContain('_wcsicmp(arg, L"/quiet") == 0');
+    expect(setupBootstrapSource).toContain('_wcsicmp(arg, L"/Q") == 0');
+    expect(setupBootstrapSource).toContain("KEIKO_EXIT_BAD_ARGUMENT = 87");
+    // 3. Payload bound to the baked digest, and tar resolved from System32 (never PATH).
+    expect(setupBootstrapSource).toContain("KEIKO_SETUP_PAYLOAD_SHA256_HEX");
+    expect(setupBootstrapSource).toContain("BCRYPT_SHA256_ALGORITHM");
+    expect(setupBootstrapSource).toContain("GetSystemDirectoryW");
+  });
+
+  it("keeps the staged Windows runtime supervisor out of its writable DLL search path", () => {
+    expect(windowsNativeQuality).toContain("MSVC runtime-supervisor quality analysis failed");
+    expect(windowsNativeQuality).toContain("build-runtime-supervisor.mjs");
+    expect(runtimeSupervisorSource).toContain(
+      "SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)",
+    );
+    expect(runtimeSupervisorSource).toContain('SetDllDirectoryW(L"")');
+  });
+
   it("pins the PKCS assembly required by the RFC3161 analyzer build", () => {
-    expect(windowsRfc3161QualityProject).toContain("<TargetFramework>net8.0</TargetFramework>");
+    // KEIKO-0892: net8.0-windows (not the OS-agnostic net8.0) is required so CA1416 recognizes the
+    // four unannotated crypt32.dll P/Invoke sites in windows-portable-rfc3161.cs as
+    // platform-restricted, adding a project-level defense-in-depth layer alongside the
+    // orchestration-level Windows-only enforcement (PowerShell caller name + runner.os gate).
+    expect(windowsRfc3161QualityProject).toContain(
+      "<TargetFramework>net8.0-windows</TargetFramework>",
+    );
+    expect(windowsRfc3161QualityProject).not.toContain("<TargetFramework>net8.0</TargetFramework>");
     expect(windowsRfc3161QualityProject).toContain(
       '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
     );
+  });
+
+  it("commits the RFC3161 NuGet lock the analyzer restore is required to honor", () => {
+    expect(existsSync(resolve(repoRoot, "scripts/native-quality/packages.lock.json"))).toBe(true);
+    expect(windowsRfc3161QualityProject).toContain(
+      "<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>",
+    );
+    const rfc3161Build = windowsNativeQuality.slice(
+      windowsNativeQuality.indexOf("dotnet build $project"),
+      windowsNativeQuality.indexOf('throw ".NET analyzer quality build failed"'),
+    );
+    const activeBuild = rfc3161Build
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(activeBuild).toContain('"-p:RestoreLockedMode=true"');
+  });
+
+  it("fails when the RFC3161 build invocation drops locked restore", () => {
+    const rfc3161Build = windowsNativeQuality.slice(
+      windowsNativeQuality.indexOf("dotnet build $project"),
+      windowsNativeQuality.indexOf('throw ".NET analyzer quality build failed"'),
+    );
+    const weakened = rfc3161Build.replace('"-p:RestoreLockedMode=true"', "");
+    const activeBuild = weakened
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(activeBuild).not.toContain('"-p:RestoreLockedMode=true"');
   });
 
   it("keeps the Windows RFC3161 boundary namespaced and P/Invoke resolution constrained", () => {
@@ -213,33 +457,69 @@ describe("CI test/gate wiring guard", () => {
       extendedE2e,
       releaseWorkflow,
       portableAssetsWorkflow,
+      releaseCandidateWorkflow,
+      releaseAdvanceWorkflow,
       mutationSecurityWorkflow,
+      secretScanningQueueWorkflow,
+      releaseAlignmentWorkflow,
+      nightlyPerfEvidenceWorkflow,
+      codeTaskRealBinaryWorkflow,
     ].join("\n");
-    const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
+    const node24SetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
+    const node26SetupCount = runtimeWorkflows.match(/node-version: "26\.8\.1"/gu)?.length ?? 0;
+    const nodeSetupCount = node24SetupCount + node26SetupCount;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
-    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
-    // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
-    // adopted the governed runtime. The retired hosted performance policy no longer adds a lane.
-    // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
-    // governed toolchain.
-    expect(nodeSetupCount).toBe(24);
+    // This inventory covers every workflow that selects Node. Issue #3403 retired the six
+    // credential-bound Apple/Microsoft production-signing lanes; Issue #3451 adds three Linux
+    // staging/qualification lanes; ADR-0177 adds the dev release-rehearsal readiness lane and the
+    // standing release-alignment lane; ADR-0177 D8 adds the release-candidate plan and tag lanes and
+    // the stable build's publish-request lane. Epic #3495 (#3498) retired the wait-for-checks
+    // release-verify lane. Issue #3519 keeps Windows in the full cross-platform matrix while making
+    // that matrix omit only the Windows leg for positively classified non-Windows PRs. ADR-0177 D9
+    // replaces the stable build's publish-handoff lane with release.yml's request and authorize lanes
+    // and release-advance.yml's event-driven start lane.
+    // The load-bearing pairing below proves every lane verifies the governed toolchain, while the
+    // exact counts make a removed or unreviewed new lane fail.
+    // ADR-0178 adds one Node lane: `verified-tree`, the resolver that answers whether this exact
+    // tree was already proven green. It sets up Node 24 and verifies the governed toolchain like
+    // every other lane, so `verificationCount === nodeSetupCount` below still holds.
+    // Issue #3594 adds the required customer-shape qualification job to the release workflow.
+    // It uses the same pinned Node 24 setup and toolchain verification before staging the package.
+    expect(node24SetupCount).toBe(31);
+    expect(node26SetupCount).toBe(1);
+    expect(nodeSetupCount).toBe(32);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
+    expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
   });
 
-  it("executes typecheck, build, and install smokes on every desktop OS", () => {
+  it("executes typecheck, build, and install smokes on Linux, macOS, and Windows", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
-    const end = ci.indexOf("\n  ui:", start);
+    const end = ci.indexOf("\n  node-26-compatibility:", start);
     const crossPlatform = ci.slice(start, end);
-    expect(crossPlatform).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain("Typecheck the complete package graph");
     expect(crossPlatform).toContain("- name: Build");
     expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
     expect(crossPlatform).toContain("Verify productive native sources on macOS");
     expect(crossPlatform).toContain("Verify productive native sources on Windows");
     expect(crossPlatform).not.toContain("npm test");
+  });
+
+  it("keeps Windows in the full cross-platform proof instead of a slim side job", () => {
+    const start = ci.indexOf("  cross-platform-smoke:");
+    const end = ci.indexOf("\n  node-26-compatibility:", start);
+    const crossPlatform = ci.slice(start, end);
+    expect(ci).not.toContain("windows-cross-platform-smoke");
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
+    expect(crossPlatform).toContain("npm run typecheck");
+    expect(crossPlatform).toContain("npm run build");
+    expect(crossPlatform).toContain("npm run prepare:bin");
+    expect(crossPlatform).toContain("npm run build:ui");
+    expect(crossPlatform).toContain("npm run smoke:install");
+    expect(crossPlatform).toContain("Verify productive native sources on Windows");
+    expect(crossPlatform).toContain("Smoke the Windows setup bootstrap");
   });
 
   for (const command of REQUIRED_CI_COMMANDS) {

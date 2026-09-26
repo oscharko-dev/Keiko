@@ -82,7 +82,7 @@ function readiness(): CodingWorkbenchRuntimeReadiness {
 }
 
 // `pairing: null` deliberately leaves the boot pairing dimension unconfirmed, mirroring a window
-// whose honest workspaces read has not resolved yet (release-audit F-08/RG-12).
+// whose honest workspaces read has not resolved yet.
 function readyState(
   switching = false,
   pairing: CodingWorkbenchPairingState | null = "paired",
@@ -224,13 +224,18 @@ describe("Coding Workbench live state", () => {
   });
 
   it("resets timeline and stream state only when server truth changes to a different run", () => {
+    const streamable = codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+      kind: "run-set",
+      snapshot: snapshot({ runId: "run-1", state: "running" }),
+    });
     const withEvent = codingWorkbenchRuntimeReducer(
-      codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+      codingWorkbenchRuntimeReducer(streamable, {
         kind: "events-received",
         events: [event(1)],
       }),
       { kind: "stream-set", stream: { runId: "run-1", cursor: "cursor-1", connected: true } },
     );
+    expect(withEvent.stream.status).toBe("ready");
 
     const next = codingWorkbenchRuntimeReducer(withEvent, {
       kind: "run-set",
@@ -239,6 +244,74 @@ describe("Coding Workbench live state", () => {
 
     expect(next.events).toEqual([]);
     expect(next.stream).toMatchObject({ status: "idle", value: null });
+  });
+
+  it("clears stale stream failures once the current run reaches terminal server truth", () => {
+    let state = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "running",
+        pendingPermission: undefined,
+      }),
+    });
+    state = codingWorkbenchRuntimeReducer(state, {
+      kind: "resource-failed",
+      resource: "stream",
+      status: "error",
+      error: { code: "STREAM_UNAVAILABLE", message: "stream unavailable", retryable: true },
+    });
+    expect(state.stream.status).toBe("error");
+
+    const terminal = codingWorkbenchRuntimeReducer(state, {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "succeeded",
+        revision: 5,
+        pendingPermission: undefined,
+      }),
+    });
+
+    expect(terminal.run.value).toMatchObject({ runId: "run-1", state: "succeeded", revision: 5 });
+    expect(terminal.stream).toMatchObject({ status: "idle", value: null, error: null });
+  });
+
+  it("ignores late stream failures after the streamable run has already settled", () => {
+    const settled = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "succeeded",
+        revision: 5,
+        pendingPermission: undefined,
+      }),
+    });
+
+    const lateError = codingWorkbenchRuntimeReducer(settled, {
+      kind: "resource-failed",
+      resource: "stream",
+      status: "error",
+      error: { code: "STREAM_UNAVAILABLE", message: "stream unavailable", retryable: true },
+    });
+
+    expect(lateError).toBe(settled);
+    expect(lateError.stream).toMatchObject({ status: "idle", value: null, error: null });
+  });
+
+  it("ignores late stream readiness after the streamable run has already settled", () => {
+    const settled = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "succeeded",
+        revision: 5,
+        pendingPermission: undefined,
+      }),
+    });
+
+    const lateReady = codingWorkbenchRuntimeReducer(settled, {
+      kind: "stream-set",
+      stream: { runId: "run-1", cursor: "cursor-late", connected: true },
+    });
+
+    expect(lateReady.stream).toMatchObject({ status: "idle", value: null, error: null });
   });
 
   it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
@@ -336,6 +409,11 @@ describe("Coding Workbench live state", () => {
       }),
     });
     expect(acknowledged.canRetry).toBe(true);
+    // #3390: the composer's single "Start coding run" action — not only the recovery panel's
+    // separate Retry button — must become reachable once the server has recorded the
+    // acknowledgement, or an operator who used the primary control after a restart sends no
+    // request at all and has no way to launch a replacement run short of wiping local state.
+    expect(acknowledged.canStart).toBe(true);
   });
 
   it("keeps independent resource errors scoped to their own recovery lane", () => {
@@ -364,18 +442,14 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
     });
   }
 
-  // ADR-0141: without a launcher-paired app session, a run start is guaranteed to fail authority
-  // resolution (403, serverPrincipal() empty). Before this pin the readiness aggregation ignored
-  // pairing entirely, so an unpaired window narrated "Ready to start" over a start that could
-  // never succeed.
-  it("keeps Start blocked until the paired app session is confirmed", () => {
+  it("admits Start only for a confirmed paired browser session", () => {
     expect(startable(null).canStart).toBe(false);
     expect(startable("unknown").canStart).toBe(false);
     expect(startable("unpaired").canStart).toBe(false);
     expect(startable("paired").canStart).toBe(true);
   });
 
-  it("keeps recovery Retry blocked in an unpaired window", () => {
+  it("admits recovery Retry only for a confirmed paired browser session", () => {
     const recovery = (pairing: CodingWorkbenchPairingState): CodingWorkbenchRuntimeState =>
       codingWorkbenchRuntimeReducer(readyState(false, pairing), {
         kind: "run-set",
@@ -387,6 +461,7 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
           pendingPermission: undefined,
         }),
       });
+    expect(recovery("unknown").canRetry).toBe(false);
     expect(recovery("unpaired").canRetry).toBe(false);
     expect(recovery("paired").canRetry).toBe(true);
   });
@@ -400,6 +475,20 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
 });
 
 describe("mode selection, setup plans, and mutation failures", () => {
+  it("stores model and reasoning selections while resetting stale effort on model changes", () => {
+    const modelSelected = codingWorkbenchRuntimeReducer(
+      { ...readyState(), reasoningEffort: "high" },
+      { kind: "select-model", modelId: "gpt-5.4" },
+    );
+    expect(modelSelected).toMatchObject({ selectedModelId: "gpt-5.4", reasoningEffort: null });
+
+    const effortSelected = codingWorkbenchRuntimeReducer(modelSelected, {
+      kind: "select-reasoning-effort",
+      effort: "medium",
+    });
+    expect(effortSelected.reasoningEffort).toBe("medium");
+  });
+
   it("keeps the state identity when the requested mode does not change", () => {
     const state = readyState();
     expect(

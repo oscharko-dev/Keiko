@@ -28,10 +28,7 @@ describe("FilesWidget Git decoration accessibility", () => {
           name: "src",
           path: "src",
           kind: "directory",
-          sizeBytes: 0,
-          modifiedAt: 1,
           extension: null,
-          symlink: false,
           readable: true,
         },
         {
@@ -41,7 +38,6 @@ describe("FilesWidget Git decoration accessibility", () => {
           sizeBytes: 1,
           modifiedAt: 1,
           extension: "ts",
-          symlink: false,
           readable: true,
         },
         {
@@ -51,7 +47,6 @@ describe("FilesWidget Git decoration accessibility", () => {
           sizeBytes: 1,
           modifiedAt: 1,
           extension: "log",
-          symlink: false,
           readable: true,
         },
       ],

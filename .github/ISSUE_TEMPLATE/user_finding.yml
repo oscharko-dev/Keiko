@@ -1,11 +1,13 @@
 name: User Finding
 description: Report a bug or defect found while using Keiko.
-labels: ["User Findings", "bug", "status: new"]
+labels: ["type: user-finding", "bug", "status: new"]
 body:
   - type: markdown
     attributes:
       value: |
         Use this form for bugs found by pilot or production users.
+
+        **If you believe you have found a security vulnerability or a data-loss issue, do not describe it here.** Report it privately through [GitHub Security Advisories](https://github.com/oscharko-dev/Keiko/security/advisories/new), as [SECURITY.md](https://github.com/oscharko-dev/Keiko/blob/dev/SECURITY.md) requires. This form is public, so anything filed here is disclosed before a fix exists. The `Data loss or security concern` impact option below is for a finding whose security relevance only becomes clear later — it is not a private channel.
 
         Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets. Redact sensitive values before submitting.
 
@@ -90,9 +92,6 @@ body:
     validations:
       required: true
 
-  # ── OPTION B: Maintainer release impact triage ──────────────────────────────
-  # Single textarea with `value:` → structure stays visible while typing.
-
   - type: textarea
     id: maintainer_triage
     attributes:
@@ -106,9 +105,7 @@ body:
         Supported-from versions: 
         Affected state stores: 
         User action required and remediation: 
-        Internal-only rationale: 
-
-  # ── end of triage section ────────────────────────────────────────────────────
+        Internal-only rationale:
 
   - type: checkboxes
     id: submission_safety

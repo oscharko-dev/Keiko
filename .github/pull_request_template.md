@@ -30,10 +30,6 @@ Refs #<issue_number>
 - [ ] Issue label remains `status: in progress` until verified auto-merge, then becomes `status: done`.
 - [ ] Autonomous repair stayed on the PR branch; no direct `dev` push, force-push, finding dismissal, or required-gate bypass occurred.
 - [ ] Native auto-merge was armed only after the ADR-0135 direct required checks settled.
-- [ ] If Keiko for Quality is enabled, arming followed ADR-0170 D5: the current-head review had
-      terminated, or the bounded wait expired, every nonterminal run for that head was
-      cancelled first, and the expiry is recorded on the PR as a delivery-policy event. A cancelled
-      or expired review is never described as clean.
 
 ## Product Impact
 
@@ -72,6 +68,12 @@ SonarCloud` job demands zero unresolved issues — see [`docs/qa/local-sonar.md`
 - [ ] `npm run check:ui-i18n` passes, or no UI production source changed.
 - [ ] Local verification commands or rationale are listed below.
 - [ ] Reuse/extension/generalization evidence or gap rationale is listed below.
+- [ ] The added or changed behaviour leaves body-free evidence in the activity log through an
+      existing log port (AGENTS.md §8), the emitted `op` / `correlationId` / `errorKind` are asserted
+      by a test, any new `op` is in the regenerated catalog, and `npm run check:activity-log`
+      passes — or this change touches no product
+      runtime behaviour (repository tooling under `scripts/`, docs, or test-only), and that is
+      stated below.
 
 Local verification:
 

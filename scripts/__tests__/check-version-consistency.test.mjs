@@ -47,10 +47,12 @@ function writeJson(root, relative, value) {
 // Builds a mini-repo that PASSES every branch of the gate. Individual tests then mutate one
 // field to prove that the corresponding failure branch fires (and names the offender).
 function writeCleanRoot(root, { version = VERSION } = {}) {
-  // 1) Copy the script into <root>/scripts so its repoRoot === <root>.
+  // 1) Copy the script into <root>/scripts so its repoRoot === <root>, together with the shared
+  // helpers it imports relatively (scripts/lib/json.mjs since housekeeping wave 4).
   const scriptDir = join(root, "scripts");
-  mkdirSync(scriptDir, { recursive: true });
+  mkdirSync(join(scriptDir, "lib"), { recursive: true });
   copyFileSync(REAL_SCRIPT, join(scriptDir, "check-version-consistency.mjs"));
+  copyFileSync(join(REPO_ROOT, "scripts", "lib", "json.mjs"), join(scriptDir, "lib", "json.mjs"));
 
   // 2) Copy the two real root facade files byte-for-byte (pinned-hash + exact-listing checks).
   for (const relative of REAL_ROOT_SRC_FILES) {
@@ -59,15 +61,32 @@ function writeCleanRoot(root, { version = VERSION } = {}) {
     copyFileSync(join(REPO_ROOT, relative), absolute);
   }
 
-  // 3) Root manifest establishes the expected version.
+  // 3) Root manifest establishes the expected version and pins one workspace package.
   writeJson(root, "package.json", {
     name: "@oscharko-dev/keiko",
     version,
     private: true,
+    dependencies: { "@oscharko-dev/keiko-contracts": version },
+  });
+
+  // 3b) The lockfile carries the root and every workspace entry at that version; a nested
+  //     node_modules entry under a workspace is not a workspace and keeps its own version.
+  writeJson(root, "package-lock.json", {
+    name: "@oscharko-dev/keiko",
+    version,
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "@oscharko-dev/keiko", version },
+      "packages/keiko-contracts": { name: "@oscharko-dev/keiko-contracts", version },
+      "packages/keiko-harness": { name: "@oscharko-dev/keiko-harness", version },
+      "packages/keiko-harness/node_modules/typescript": { version: "5.7.3" },
+      "packages/keiko-sdk": { name: "@oscharko-dev/keiko-sdk", version },
+    },
   });
 
   // 4) keiko-contracts: manifest + KEIKO_PRODUCT_VERSION + a second KEIKO_*_VERSION constant,
-  //    all agreeing with the root version.
+  //    all agreeing with the root version. Runtime constants deliberately live outside the
+  //    type-only root barrel.
   writeJson(root, "packages/keiko-contracts/package.json", {
     name: "@oscharko-dev/keiko-contracts",
     version,
@@ -75,7 +94,7 @@ function writeCleanRoot(root, { version = VERSION } = {}) {
   });
   writeFile(
     root,
-    "packages/keiko-contracts/src/index.ts",
+    "packages/keiko-contracts/src/version.ts",
     [
       `export const KEIKO_CONTRACTS_VERSION = "${version}" as const;`,
       `export const KEIKO_PRODUCT_VERSION = "${version}" as const;`,
@@ -105,7 +124,7 @@ function writeCleanRoot(root, { version = VERSION } = {}) {
     root,
     "packages/keiko-sdk/src/index.ts",
     [
-      'import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";',
+      'import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";',
       "export const SDK_VERSION: string = KEIKO_PRODUCT_VERSION;",
       "",
     ].join("\n"),
@@ -196,7 +215,7 @@ describe("check-version-consistency gate", () => {
     });
     writeFile(
       root,
-      "packages/keiko-contracts/src/index.ts",
+      "packages/keiko-contracts/src/version.ts",
       [
         'export const KEIKO_CONTRACTS_VERSION = "0.2.99" as const;',
         'export const KEIKO_PRODUCT_VERSION = "0.2.99" as const;',
@@ -213,6 +232,66 @@ describe("check-version-consistency gate", () => {
   });
 
   // RED path C: a workspace package.json version drifts from the root version.
+  it("fails and names the lockfile entry a hand-written cut left behind", () => {
+    // The 1.0.0 cut: every manifest at the new version, the lockfile's workspace entries not.
+    root = makeRoot();
+    writeCleanRoot(root);
+    const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    lock.packages["packages/keiko-harness"].version = "0.1.0";
+    writeJson(root, "package-lock.json", lock);
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `package-lock.json: packages/keiko-harness is 0.1.0, but root is ${VERSION}`,
+    );
+  });
+
+  it("fails and names a dependency pin on a workspace package that was not moved", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    writeJson(root, "packages/keiko-harness/package.json", {
+      name: "@oscharko-dev/keiko-harness",
+      version: VERSION,
+      private: true,
+      dependencies: { "@oscharko-dev/keiko-contracts": "0.1.0" },
+    });
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `keiko-harness/package.json: dependency @oscharko-dev/keiko-contracts is pinned to 0.1.0, but root is ${VERSION}`,
+    );
+  });
+
+  it("fails and names a workspace the lockfile does not list", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    delete lock.packages["packages/keiko-harness"];
+    writeJson(root, "package-lock.json", lock);
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "package-lock.json: packages/keiko-harness has no entry, so the lockfile was not refreshed",
+    );
+  });
+
+  it("fails when the lockfile is missing", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    rmSync(join(root, "package-lock.json"));
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("package-lock.json is missing.");
+  });
+
   it("fails and names the offending package when a workspace package.json version drifts", () => {
     root = makeRoot();
     writeCleanRoot(root);

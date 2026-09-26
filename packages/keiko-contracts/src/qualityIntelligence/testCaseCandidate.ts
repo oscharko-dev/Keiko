@@ -12,19 +12,13 @@ import type {
   QualityIntelligenceTestCaseId,
 } from "./ids.js";
 
-export type QualityIntelligencePriority = "P0" | "P1" | "P2" | "P3";
+// KEIKO-0522: const-first + `(typeof X)[number]` (matches retentionPolicy.ts / testQualityRubric.ts)
+// so the union type can never drift from the enumerable array it is derived from.
+export const QUALITY_INTELLIGENCE_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 
-export const QUALITY_INTELLIGENCE_PRIORITIES: readonly QualityIntelligencePriority[] = [
-  "P0",
-  "P1",
-  "P2",
-  "P3",
-] as const;
+export type QualityIntelligencePriority = (typeof QUALITY_INTELLIGENCE_PRIORITIES)[number];
 
-export type QualityIntelligenceRiskClass =
-  "safety" | "compliance" | "regression" | "functional" | "visual";
-
-export const QUALITY_INTELLIGENCE_RISK_CLASSES: readonly QualityIntelligenceRiskClass[] = [
+export const QUALITY_INTELLIGENCE_RISK_CLASSES = [
   "safety",
   "compliance",
   "regression",
@@ -32,11 +26,17 @@ export const QUALITY_INTELLIGENCE_RISK_CLASSES: readonly QualityIntelligenceRisk
   "visual",
 ] as const;
 
-export type QualityIntelligenceTestCaseStatus =
-  "proposed" | "accepted" | "rejected" | "needs-review";
+export type QualityIntelligenceRiskClass = (typeof QUALITY_INTELLIGENCE_RISK_CLASSES)[number];
 
-export const QUALITY_INTELLIGENCE_TEST_CASE_STATUSES: readonly QualityIntelligenceTestCaseStatus[] =
-  ["proposed", "accepted", "rejected", "needs-review"] as const;
+export const QUALITY_INTELLIGENCE_TEST_CASE_STATUSES = [
+  "proposed",
+  "accepted",
+  "rejected",
+  "needs-review",
+] as const;
+
+export type QualityIntelligenceTestCaseStatus =
+  (typeof QUALITY_INTELLIGENCE_TEST_CASE_STATUSES)[number];
 
 export interface QualityIntelligenceTestCaseCandidate {
   readonly id: QualityIntelligenceTestCaseId;

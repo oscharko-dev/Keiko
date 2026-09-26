@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   portableReleaseAuthorityFailures,
+  releaseAuthorityDrift,
+  repositoryReleaseAuthorityDrift,
   releaseRequiredChecks,
   workflowJobNames,
 } from "../check-release-required-workflow-names.mjs";
@@ -114,5 +116,37 @@ describe("portableReleaseAuthorityFailures", () => {
       "  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'",
     ].join("\n");
     expect(portableReleaseAuthorityFailures(release, portable)).toEqual(["RELEASE_BASE_BRANCH"]);
+  });
+});
+
+describe("releaseAuthorityDrift", () => {
+  const release = [
+    "env:",
+    "  RELEASE_BASE_BRANCH: release/1.0",
+    "  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'",
+  ].join("\n");
+
+  it("names every dependent workflow whose authority drifted, and only those", () => {
+    const drifted = release.replace("release/1.0", () => "dev");
+    expect(
+      releaseAuthorityDrift(release, [
+        { file: "portable-assets.yml", source: release },
+        { file: "release-candidate.yml", source: drifted },
+      ]),
+    ).toEqual(["release-candidate.yml release authority drifted: RELEASE_BASE_BRANCH"]);
+  });
+
+  it("holds the committed publish starter (release-advance.yml) to release.yml's authority", () => {
+    expect(repositoryReleaseAuthorityDrift()).toEqual([]);
+  });
+
+  it("reads every dependent workflow through the given reader", () => {
+    const read = (file) =>
+      file === "release-advance.yml"
+        ? "env:\n  RELEASE_BASE_BRANCH: dev\n  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'"
+        : "env:\n  RELEASE_BASE_BRANCH: release/1.0\n  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'";
+    expect(repositoryReleaseAuthorityDrift(read)).toEqual([
+      "release-advance.yml release authority drifted: RELEASE_BASE_BRANCH",
+    ]);
   });
 });

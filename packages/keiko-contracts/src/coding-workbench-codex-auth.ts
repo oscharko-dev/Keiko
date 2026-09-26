@@ -5,6 +5,7 @@ import {
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
+import { deepFreeze } from "./deep-freeze.js";
 
 export type CodingWorkbenchCodexAuthMethod =
   "chatgpt-browser-login" | "chatgpt-device-code" | "codex-access-token";
@@ -356,6 +357,70 @@ function validateSetupPlanPolicy(record: Record<string, unknown>, errors: string
   }
 }
 
+// A setup plan's method DETERMINES its command label, whether a secret is typed, and how that
+// secret travels. Those three fields were each validated in isolation, so a plan could name
+// `chatgpt-browser-login` while carrying the access-token command label and requiresSecretInput
+// true — a combination no producer emits and no operator could act on, describing a login flow that
+// does not exist. This table is the ONE formula for the rule; keiko-server's
+// coding-codex-subscription.ts used to carry its own hand-written copy (a private commandLabelFor
+// plus `accessToken = method === "codex-access-token"`) that could drift from this table and make
+// the server build a plan its own validator (below) rejects. The server now calls
+// `codingWorkbenchCodexAuthMethodRowFor` instead of restating the mapping.
+export interface CodingWorkbenchCodexAuthMethodRow {
+  readonly commandLabel: CodingWorkbenchCodexAuthCommandLabel;
+  readonly requiresSecretInput: boolean;
+  readonly credentialTransport?: CodingWorkbenchCodexCredentialTransport | undefined;
+}
+
+// deepFreeze, not Object.freeze: Object.freeze is shallow, and codingWorkbenchCodexAuthMethodRowFor
+// below hands each row object out to external callers by reference (keiko-server's setupPlanFor
+// among them) — a plain Object.freeze on the outer record would still leave every inner row
+// object writable, letting a caller rewrite requiresSecretInput or credentialTransport
+// process-wide and making validateSetupPlanMethodConsistency agree with the corrupted row it
+// reads from this same table (KEIKO-0139's exact bug class).
+const CODEX_AUTH_METHOD_ROWS: Readonly<
+  Record<CodingWorkbenchCodexAuthMethod, CodingWorkbenchCodexAuthMethodRow>
+> = deepFreeze({
+  "chatgpt-browser-login": { commandLabel: "codex-login", requiresSecretInput: false },
+  "chatgpt-device-code": {
+    commandLabel: "codex-login-device-auth",
+    requiresSecretInput: false,
+  },
+  "codex-access-token": {
+    commandLabel: "codex-login-with-access-token",
+    requiresSecretInput: true,
+    credentialTransport: "stdin",
+  },
+});
+
+// The canonical producer for a Codex auth method's command label, secret-input requirement, and
+// credential transport. `validateSetupPlanMethodConsistency` below and keiko-server's
+// `setupPlanFor` (coding-codex-subscription.ts) both call this instead of each keeping their own
+// copy of the mapping, so a plan can never disagree with the one formula that builds it.
+export function codingWorkbenchCodexAuthMethodRowFor(
+  method: CodingWorkbenchCodexAuthMethod,
+): CodingWorkbenchCodexAuthMethodRow {
+  return CODEX_AUTH_METHOD_ROWS[method];
+}
+
+function validateSetupPlanMethodConsistency(
+  record: Record<string, unknown>,
+  errors: string[],
+): void {
+  const method = record.method;
+  if (!isOneOf(method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) return;
+  const row = codingWorkbenchCodexAuthMethodRowFor(method);
+  if (record.commandLabel !== row.commandLabel) {
+    errors.push("setup.commandLabel does not match setup.method");
+  }
+  if (record.requiresSecretInput !== row.requiresSecretInput) {
+    errors.push("setup.requiresSecretInput does not match setup.method");
+  }
+  if (record.credentialTransport !== row.credentialTransport) {
+    errors.push("setup.credentialTransport does not match setup.method");
+  }
+}
+
 export function validateCodingWorkbenchCodexAuthSetupPlan(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchCodexAuthSetupPlan> {
@@ -369,13 +434,56 @@ export function validateCodingWorkbenchCodexAuthSetupPlan(
   if (value.credentialTransport !== undefined && value.credentialTransport !== "stdin") {
     errors.push("setup.credentialTransport is invalid");
   }
+  validateSetupPlanMethodConsistency(value, errors);
   return errors.length > 0
     ? { ok: false, errors }
     : { ok: true, value: value as unknown as CodingWorkbenchCodexAuthSetupPlan };
 }
 
-export function selectCodingWorkbenchRuntimeProfile(
+// KEIKO-0708 / #3321: redistribution of the Codex CLI adapter has not been approved yet, so
+// `selectCodingWorkbenchRuntimeProfile` below must keep returning `codexSubscriptionAllowed: false`
+// and `runtimeBinarySources: []` for the Codex model source, instead of hand-writing that `false` /
+// `[]` as a bare literal with no explanation at the point of the decision.
+//
+// This constant is only the contract layer's static default — it is NOT where redistribution
+// approval is granted or recorded. The actual approval record lives in
+// `portable-runtime-approvals.json` (`releaseApproval.redistribution.status` /
+// `reviewReference`; see ADR-0140 D3 and ADR-0163) and is verified at runtime through
+// `deps.codexRuntimeAvailability.isApprovedVerified()`
+// (`packages/keiko-server/src/coding-codex-subscription.ts`), which projects the unapproved case
+// as the `redistribution-unapproved` status via `codexSubscriptionProfileForEnv`. Do not flip this
+// constant to `true` as a way to grant approval — flip it only once a `codex-cli` entry exists in
+// that catalog and the server-side gate verifies it.
+export const CODEX_REDISTRIBUTION_APPROVED = false as const;
+
+// Exported so tests can drive both the approved and unapproved branches directly, without needing
+// to mock module-level state: the derivation itself — not just the constant's current value — is
+// what must stay pinned. `codex` gates on the model source; `approved` gates on redistribution
+// approval. Both must hold for Codex runtime binaries or the Codex subscription to be authorized —
+// a non-Codex model source must never report `codexSubscriptionAllowed: true`, no matter how
+// `CODEX_REDISTRIBUTION_APPROVED` is set.
+export function deriveCodexRuntimeAuthorization(
+  codex: boolean,
+  approved: boolean,
+): Pick<
+  CodingWorkbenchRuntimeProfileSelection,
+  "codexSubscriptionAllowed" | "runtimeBinarySources"
+> {
+  const allowed = codex && approved;
+  return {
+    codexSubscriptionAllowed: allowed,
+    runtimeBinarySources: allowed ? CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES : [],
+  };
+}
+
+// Exported (in addition to selectCodingWorkbenchRuntimeProfile) so tests can drive the wrapper's
+// own `approved` branch directly. selectCodingWorkbenchRuntimeProfile always calls this with the
+// live CODEX_REDISTRIBUTION_APPROVED constant, which is false today -- a test that only calls
+// selectCodingWorkbenchRuntimeProfile can never observe the wrapper's `approved: true` path, so it
+// cannot tell a real derivation from a reverted bare-literal one. This builder closes that gap.
+export function buildCodingWorkbenchRuntimeProfile(
   modelSource: CodingWorkbenchModelSource,
+  approved: boolean,
 ): CodingWorkbenchRuntimeProfileSelection {
   const codex = modelSource === "chatgpt-codex-subscription-profile";
   return {
@@ -384,7 +492,12 @@ export function selectCodingWorkbenchRuntimeProfile(
     runtimeSource: codex ? "codex-cli-adapter" : "keiko-sidecar",
     adapterKind: codex ? "codex-cli-adapter" : "model-gateway-sidecar",
     sidecarGatewayAllowed: !codex,
-    codexSubscriptionAllowed: false,
-    runtimeBinarySources: [],
+    ...deriveCodexRuntimeAuthorization(codex, approved),
   };
+}
+
+export function selectCodingWorkbenchRuntimeProfile(
+  modelSource: CodingWorkbenchModelSource,
+): CodingWorkbenchRuntimeProfileSelection {
+  return buildCodingWorkbenchRuntimeProfile(modelSource, CODEX_REDISTRIBUTION_APPROVED);
 }

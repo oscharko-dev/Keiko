@@ -87,13 +87,11 @@ export interface SelectMemoriesForForgetOptions {
 }
 
 export interface BuildForgetOperationsOptions {
-  // The contracts type literally pins `userAcknowledgedDestructive` to `true`, so this
-  // flag is set unconditionally on the produced envelope. The boolean lives on the option
-  // bundle so the BFF can use the type-level pin as a compile-time gate at the call site
-  // (e.g. require the request-level acknowledgement to be threaded into this options
-  // bundle rather than hard-coded somewhere downstream).
   readonly writeTombstone: boolean;
   readonly reason?: MemoryForgetReason;
+  // Archived retention candidates require an explicit, caller-bound acknowledgement.
+  // The reason code alone is not proof because any caller can construct it.
+  readonly acknowledgedArchivedMemoryIds?: readonly MemoryId[];
 }
 
 // ─── Correction options ───────────────────────────────────────────────────────

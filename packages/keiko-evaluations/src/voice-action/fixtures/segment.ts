@@ -13,7 +13,7 @@ import type {
 import {
   voiceTranscriptSegmentRedactionClass,
   voiceTranscriptSegmentReplayClass,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 
 export interface SegmentSpec {
   readonly id: string;

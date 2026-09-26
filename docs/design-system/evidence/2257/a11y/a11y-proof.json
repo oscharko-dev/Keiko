@@ -1,8 +1,9 @@
 {
   "issue": 2257,
   "surface": "live-coding-workbench",
-  "status": "verified",
-  "verified": true,
+  "status": "historical",
+  "verified": false,
+  "retirementNote": "Housekeeping 2026-08-10: the producing suite coding-workbench-2257 and its config were retired after months without a running lane; these axe results record the verification as it stood when captured and are no longer reproducible by a lane. Live a11y coverage: coding-workbench-2253 in the extended e2e matrix.",
   "standard": "WCAG 2.2 AA",
   "requiredMaximumSerious": 0,
   "requiredMaximumCritical": 0,

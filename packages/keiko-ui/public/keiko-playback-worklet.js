@@ -14,8 +14,22 @@
 // Worklet -> main thread:
 //   { type: "position", frames }      periodic frames-played report
 //   { type: "ended" }                 the buffer drained after the "end" marker (natural completion)
+//   { type: "backpressure", dropped } PCM samples refused because MAX_CAPACITY_SAMPLES was reached
+//                                     (audit KEIKO-0471); the producer should pause sending.
 //
 // Raw audio is transient render-thread data only; nothing is persisted.
+
+// Hard ceiling on ring-buffer growth (audit KEIKO-0471). Without one, a producer that keeps
+// posting PCM into a worklet whose output is never drained (a detached/never-started
+// AudioContext, or a runaway sender) grows the buffer without bound. Sized generously for one
+// realistic worst-case streamed utterance: 30s at the 24kHz mono rate this pipeline actually
+// runs at (see TARGET_SAMPLE_RATE in assistant-speech-streaming.ts, which creates the
+// AudioContext at 24kHz so the worklet plays samples 1:1 with no resample). The real
+// AudioWorkletGlobalScope exposes a live `sampleRate` global, but this file already hardcodes the
+// 24kHz assumption elsewhere (see `primeFrames = 2400 // ~100ms at 24kHz` below) rather than
+// reading it, so the ceiling follows the same convention instead of adding a second, inconsistent
+// way to learn the rate.
+const MAX_CAPACITY_SAMPLES = 720000; // 30s * 24000 Hz — no numeric separators for ES2019 compat
 
 class KeikoPlaybackProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -28,7 +42,6 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
     this.primeFrames = 2400; // ~100ms at 24kHz; overridden by the config message
     this.primed = false;
     this.draining = false;
-    this.everPlayed = false;
     this.ended = false;
     this.framesPlayed = 0;
     this.sinceReport = 0;
@@ -43,8 +56,14 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
       return;
     }
     let cap = this.capacity === 0 ? 1 << 15 : this.capacity;
-    while (cap < need) {
+    while (cap < need && cap < MAX_CAPACITY_SAMPLES) {
       cap *= 2;
+    }
+    cap = Math.min(cap, MAX_CAPACITY_SAMPLES);
+    if (this.ring !== null && cap === this.capacity) {
+      // Already at the bounded ceiling (or the ceiling did not change): nothing to reallocate.
+      // The caller must not write more than the remaining free space — see handle()'s `writable`.
+      return;
     }
     const next = new Float32Array(cap);
     for (let i = 0; i < this.size; i += 1) {
@@ -65,38 +84,66 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
     this.ended = false;
   }
 
-  handle(data) {
-    if (data === null || (typeof data === "object" && data.type === "flush")) {
+  handleControl(data) {
+    if (data === null || data.type === "flush") {
       this.reset();
-      return;
+      return true;
     }
-    if (typeof data === "object" && data.type === "config") {
+    if (data.type === "config") {
       if (typeof data.primeFrames === "number" && data.primeFrames >= 0) {
         this.primeFrames = data.primeFrames;
       }
-      return;
+      return true;
     }
-    if (typeof data === "object" && data.type === "end") {
+    if (data.type === "end") {
       this.draining = true;
       // Force any sub-prime remainder to play out, then complete once drained.
       this.primed = true;
       if (this.size === 0) {
         this.finish();
       }
+      return true;
+    }
+    return false;
+  }
+
+  handle(data) {
+    if (data === null || typeof data === "object") {
+      if (this.handleControl(data)) return;
+    }
+    // Otherwise: an Int16Array of PCM samples. Guard the shape before touching any ring-buffer
+    // state (KEIKO-0735 / KEIKO-1009): the only sender (assistant-speech-streaming.ts) always
+    // constructs a real Int16Array over this same-origin, first-party MessagePort — it is not an
+    // externally-reachable trust boundary — but without this guard a malformed message (e.g. a
+    // plain object with no numeric `.length`) would fall through to `pcm.length` as `undefined`,
+    // corrupting `this.size`/`this.capacity` to `NaN` via `ensureCapacity`. On a shape that is not
+    // an Int16Array, ignore the message the same way this function already ignores other
+    // malformed/empty input (see the `n === 0` early return below): a silent defensive return,
+    // not error propagation back across the render-thread boundary.
+    if (!(data instanceof Int16Array)) {
       return;
     }
-    // Otherwise: an Int16Array of PCM samples.
     const pcm = data;
     const n = pcm.length;
     if (n === 0) {
       return;
     }
     this.ensureCapacity(n);
-    for (let i = 0; i < n; i += 1) {
+    // Bound the write to whatever room ensureCapacity actually secured. Once the ring is pinned at
+    // MAX_CAPACITY_SAMPLES, `ensureCapacity` refuses to grow further, so `n` can exceed the free
+    // space — writing past it would wrap the tail into not-yet-drained head data and silently
+    // corrupt the buffer. Instead we write only what fits and report the remainder as dropped
+    // (audit KEIKO-0471) so the producer can react to backpressure instead of losing audio unseen.
+    const writable = Math.min(n, Math.max(0, this.capacity - this.size));
+    for (let i = 0; i < writable; i += 1) {
       this.ring[this.tail] = pcm[i] / 32768;
       this.tail = (this.tail + 1) % this.capacity;
     }
-    this.size += n;
+    this.size += writable;
+    const dropped = n - writable;
+    if (dropped > 0) {
+      this.port.postMessage({ type: "backpressure", dropped });
+    }
     if (this.size >= this.primeFrames) {
       this.primed = true;
     }
@@ -145,7 +192,6 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
 
   recordProduced(produced) {
     if (produced <= 0) return;
-    this.everPlayed = true;
     this.framesPlayed += produced;
     this.sinceReport += produced;
     // Report position roughly every ~50ms so the main thread has a fresh media offset.

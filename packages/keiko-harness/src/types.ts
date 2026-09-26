@@ -46,6 +46,16 @@ export type {
   BrowserTrustWarningEvent,
   BrowserErrorEvent,
   BrowserEvent,
+  ToolShapingDegradedReason,
+  ToolShapingDegradedEvent,
+  SinkDegradedReason,
+  SinkDegradedEvent,
+  ContextCompactedEvent,
   HarnessEvent,
 } from "@oscharko-dev/keiko-contracts";
-export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES } from "@oscharko-dev/keiko-contracts";
+export {
+  TERMINAL_STATES,
+  isTerminalHarnessState,
+  DEFAULT_LIMITS,
+  HARNESS_CODES,
+} from "@oscharko-dev/keiko-contracts/runtime/harness";

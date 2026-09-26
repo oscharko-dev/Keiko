@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "reviewKind": "postmerge-github-review-settlement",
+  "repository": "oscharko-dev/Keiko",
+  "integrationPr": 3394,
+  "ownerIssue": 3386,
+  "sourceHead": "41aeca96072d30de30d6bf84e1102c1efece65b3",
+  "currentHead": "96188897e245d8fa5f02949e8655854ad08a7e86",
+  "ownedSourceDigest": "4a13a6f50e50acc58fa13262e8689032d1acd83deaf862577e3e88173f55d519",
+  "binding": {
+    "catalogRevision": "713b56bb6f032cb64aae480fe7de9b07aece4b05a1e4cd645e620aae27721f4b",
+    "profile": {
+      "id": "opencode",
+      "version": 1
+    },
+    "projectionDigest": "201df77730101f5fc1c1d16fe297314d25193f8c5463dc329e6bd5c4b0eaa8ae",
+    "handlerSetDigest": "21192a69a4c7ea069fd1b86618ddce6304ca4d2d93a5ef1f5c60efd096702d91"
+  },
+  "reviewThreads": {
+    "total": 399,
+    "resolved": 399,
+    "unresolved": 0,
+    "current": 52,
+    "currentResolved": 52,
+    "currentUnresolved": 0,
+    "evidenceRef": "github:oscharko-dev/Keiko#pull/3394/review-threads@41aeca96072d30de30d6bf84e1102c1efece65b3"
+  }
+}

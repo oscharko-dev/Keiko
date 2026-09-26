@@ -71,7 +71,7 @@ Preflight is a pure function of `(resolvedInputs, GitWorktreeSnapshot)`. The sna
 
 Each finding carries:
 
-- `code` — a closed, specific code (e.g. `branch-already-exists`, `no-upstream-configured`,
+- `code` — a closed, specific code (e.g. `branch-already-exists`, `verified-commit-drifted`,
   `nothing-staged-to-commit`, `remote-unreachable`).
 - `severity` — `blocking` (halts) or `advisory` (informs).
 - `remediation` — `user-actionable` (the operator can fix it) or `internal` (a kernel/caller fault).
@@ -121,7 +121,7 @@ The `GitMutationOutcome` union binds a status (`succeeded` / `approval-required`
 codes map to categories through a total table:
 
 - `provider-rejected`, `network-failure` → `provider-failure`
-- `conflict`, `precondition-failed` → `recovery-required`
+- `conflict`, `precondition-failed`, `signature-failed` → `recovery-required`
 - `timeout`, `internal-error` → `execution-failure`
 
 A new error code would fail the build rather than fall through to an untyped default. Consumers branch
@@ -135,11 +135,23 @@ returns its recorded result instead of mutating twice. Only successes are journa
 blocked action did not apply, so re-running it is the caller's intended retry.
 
 A non-zero git exit at execution time is classified `precondition-failed` (a
-time-of-check/time-of-use gap against the live repository), which routes to `recovery-required`. A
+time-of-check/time-of-use gap against the live repository), which routes to `recovery-required`.
+Signing failures are the explicit exception: commit operations use Git signing and classify signing
+tool, key, agent, and verification setup failures as `signature-failed`, so the UI can show a
+user-fixable `configure-signing` repair instead of a generic repository-state error. A
 partially-applied multi-step plan (for example, `stash-and-reset` where the stash succeeds but the
 reset fails) reports `partial` with attempted/succeeded unit counts.
 
-## 7. What this kernel does not do
+## 7. Signed commit execution
+
+Governed local commit execution follows the repository and user Git configuration for commit
+identity and signing, including SSH signing (`gpg.format=ssh`) used by regulated customer
+environments. The adapter invokes ordinary commits with `git commit --gpg-sign` and verified
+tree-bound commits with `git commit-tree -S`, preserving the same signed-commit requirement across
+both execution paths. If the configured signer cannot produce a verifiable commit, execution fails
+closed with `signature-failed` and leaves no unsigned commit behind.
+
+## 8. What this kernel does not do
 
 - It does not execute remote or provider actions (push, PR, merge); those are #476–#478 behind a
   separate gateway.

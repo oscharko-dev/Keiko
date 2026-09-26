@@ -48,7 +48,9 @@ describe("wireDiffEditorOnMount", () => {
       themeVariant: "dark",
       onThemeError,
     });
-    expect(onThemeError).toHaveBeenCalled();
+    expect(onThemeError).toHaveBeenCalledWith(
+      expect.stringMatching(/^diff-theme-registration-failed \(error=[A-Z][A-Za-z0-9_]*\)$/u),
+    );
     expect(typeof controller.goToNextDiff).toBe("function");
   });
 

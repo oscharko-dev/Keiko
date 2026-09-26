@@ -340,6 +340,50 @@ describe("coding safe-activity contract", () => {
       expect(validateCodingSafeActivityFeed({ ...feed, plan: value }).ok).toBe(false);
     }
   });
+
+  // KEIKO-0749: validatePlan / validateTurn / validateMessage each call `serializedBytes` (a
+  // full JSON.stringify traversal) to check the deep byte budget. Before the fix they ran that
+  // call even when the structure had already failed shape validation — wasting a deep
+  // traversal on a value the caller is going to reject anyway. Prove the fix skips it by
+  // spying on JSON.stringify and asserting a single already-invalid message produces no
+  // deep-serialise call.
+  it("skips the deep JSON.stringify call when the structure has already failed (KEIKO-0749)", async () => {
+    const { vi } = await import("vitest");
+    const spy = vi.spyOn(JSON, "stringify");
+    try {
+      const invalidFeed = {
+        availability: "available",
+        turns: [
+          {
+            turnId: "turn_1",
+            messages: [
+              // Missing `role` → validateMessage's exactKeys / role checks fire, so the byte-budget
+              // branch must be skipped (was invoked pre-fix regardless).
+              {
+                messageId: "msg_1",
+                occurredAt: "2026-07-18T17:00:00.003Z",
+                segments: [],
+                truncated: false,
+              },
+            ],
+            tools: [],
+            truncated: false,
+          },
+        ],
+        truncated: false,
+      };
+      const result = validateCodingSafeActivityFeed(invalidFeed);
+      expect(result.ok).toBe(false);
+      // JSON.stringify may still be called once at the whole-feed byte check when the shape errors
+      // are gathered into an array; the KEIKO-0749 fix skips the deep serialise calls PER MESSAGE
+      // when that message already failed. A pre-fix run stringified the invalid message
+      // separately during validateMessage; the post-fix path emits fewer calls than the input has
+      // messages+turns+plans (3 potential nested calls in this fixture).
+      expect(spy.mock.calls.length).toBeLessThan(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 function plan(): CodingSafeActivityPlan {

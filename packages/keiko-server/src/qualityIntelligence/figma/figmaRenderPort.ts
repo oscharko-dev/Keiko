@@ -20,6 +20,8 @@ import {
   gatewayFetch,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 
 /** Default request timeout in milliseconds for Figma render downloads. */
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -46,6 +48,7 @@ export type FigmaRenderPort = (request: FigmaRenderRequest) => Promise<FigmaRend
 export interface FigmaRenderPortOptions {
   readonly timeoutMs?: number;
   readonly maxResponseBytes?: number;
+  readonly correlationId?: string;
 }
 
 /**
@@ -107,6 +110,8 @@ export const createDefaultFigmaRenderPort = (
         redirect: "manual",
         signal,
         maxResponseBytes,
+        log: processServerLogSink(),
+        logContext: { correlationId: options?.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(egress !== undefined ? { egress } : {}),
         ...(fetchImpl !== undefined ? { fetchImpl } : {}),
       });

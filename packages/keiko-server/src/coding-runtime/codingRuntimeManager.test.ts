@@ -1,3 +1,4 @@
+import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -14,8 +15,10 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
-import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,
@@ -47,18 +50,22 @@ import {
   type RuntimeTreeSignal,
 } from "./runtimeProcessSupervisor.js";
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
+import { createInMemoryGitDeliveryApprovalStore } from "../gitDelivery/approvalStore.js";
+import { computePortableSidecarPayloadTreeDigest } from "./devLanePortableCodingRuntime.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   codingToolApprovalBindingDigest,
   createCodingToolApprovalBridge,
 } from "./codingToolApprovalBridge.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_GOVERNED_ACTION_PERMISSION } from "./opencodeToolSchemas.js";
+import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
 
 const tempDirs: string[] = [];
-const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const TEST_QUALIFICATION: RuntimeQualificationIdentity = {
   platform: "win32",
   arch: "x64",
@@ -677,10 +684,17 @@ function createPortableRuntimeFixture(): {
   const executableDigest = digest("#!/bin/sh\n");
   const licenseDigest = digest("approved license\n");
   const sbomDigest = digest('{"bomFormat":"CycloneDX"}\n');
-  const executableTreeSha256 = digest(`opencode-sidecar\0${executableDigest}\0`);
-  const payloadSha256 = digest(
-    `LICENSE\0${licenseDigest}\0opencode-sidecar\0${executableDigest}\0sbom.cdx.json\0${sbomDigest}\0`,
-  );
+  // KEIKO-0180: use the exported canonical tree-digest formula instead of hand-restating
+  // filename\0sha256\0 concatenation. If the production formula moves, this test moves with it
+  // instead of the fixture drifting silently.
+  const executableTreeSha256 = computePortableSidecarPayloadTreeDigest([
+    { relativePath: "opencode-sidecar", sha256: executableDigest },
+  ]);
+  const payloadSha256 = computePortableSidecarPayloadTreeDigest([
+    { relativePath: "LICENSE", sha256: licenseDigest },
+    { relativePath: "opencode-sidecar", sha256: executableDigest },
+    { relativePath: "sbom.cdx.json", sha256: sbomDigest },
+  ]);
   return {
     resourceRoot,
     executablePath,
@@ -694,8 +708,8 @@ function createPortableRuntimeFixture(): {
       sbomEvidencePath: `${payloadRootPath}/sbom.cdx.json`,
       sbomEvidenceSha256: sbomDigest,
       protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
       availability: {
         redistributionApproved: true,
         payloadPresent: true,
@@ -710,7 +724,7 @@ function createPortableRuntimeFixture(): {
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "1.17.17",
+        upstreamVersion: "2.0.10",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "http-sse",
@@ -768,6 +782,7 @@ interface PermissionLineInput {
   readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
   readonly approvalDigest?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
@@ -832,8 +847,8 @@ describe("coding runtime manager", () => {
       sbomEvidencePath: "runtime/sidecars/opencode-adapter/sbom.evidence.json",
       sbomEvidenceSha256: "b".repeat(64),
       protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
       availability: {
         redistributionApproved: true,
         payloadPresent: true,
@@ -862,6 +877,7 @@ describe("coding runtime manager", () => {
 
     const result = resolveCodingRuntimeSidecarLaunchTarget(managedInstallRoot, sidecar, {
       target: "macos-arm64",
+      platformAttested: true,
       qualificationVerified: true,
     });
 
@@ -1533,6 +1549,96 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
+  // ADR-0163 D9: the packaged evaluation lane is the second admission policy that honestly claims
+  // no platform signature and no supervisor qualification. It shares the ONE parameterized
+  // evaluator with the dev lane — a third hand-written check list would guarantee drift between
+  // the discovery-time and launch-time gates.
+  describe("evaluation-lane admission launch gate", () => {
+    function evaluationManager(
+      portable: ReturnType<typeof createPortableRuntimeFixture>,
+      harness: ReturnType<typeof createSpawnHarness>,
+      availabilityOverrides: Partial<
+        ReturnType<typeof createPortableRuntimeFixture>["verification"]["availability"]
+      > = {},
+    ): CodingRuntimeManager {
+      return createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        portableRuntimeResolver: () => ({
+          verification: {
+            ...portable.verification,
+            availability: {
+              ...portable.verification.availability,
+              signatureVerified: false,
+              qualificationVerified: false,
+              ...availabilityOverrides,
+            },
+          },
+          resourceRoot: portable.resourceRoot,
+          target: "windows-x64",
+          admission: "functional-evaluation-lane",
+        }),
+      });
+    }
+
+    it("admits an honestly unqualified evaluation record whose disk facts verify", () => {
+      const fixture = createManagedFixture();
+      const portable = createPortableRuntimeFixture();
+      const harness = createSpawnHarness();
+      expect(
+        evaluationManager(portable, harness).start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toEqual({ ok: true, runId: "run-1988", status: "ready" });
+      expect(harness.children).toHaveLength(1);
+    });
+
+    it.each([
+      ["the sidecar payload", "archive-digest-mismatch"],
+      ["only the executable", "archive-digest-mismatch"],
+    ] as const)(
+      "keeps the discovery-to-launch tamper window fail-closed when %s drifts",
+      (scenario, failureCode) => {
+        const fixture = createManagedFixture();
+        const portable = createPortableRuntimeFixture();
+        const harness = createSpawnHarness();
+        const manager = evaluationManager(portable, harness);
+        if (scenario === "only the executable") {
+          writeFileSync(portable.executablePath, "tampered executable\n");
+        } else {
+          writeFileSync(
+            join(portable.resourceRoot, portable.verification.licenseEvidencePath),
+            "tampered\n",
+          );
+        }
+        expect(
+          manager.start(
+            launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          ),
+        ).toEqual({ ok: false, failureCode, retryable: false });
+        expect(harness.children).toHaveLength(0);
+      },
+    );
+
+    it("re-asserts every stored check inside the evaluation admission domain", () => {
+      const fixture = createManagedFixture();
+      for (const { overrides, failureCode } of [
+        { overrides: { redistributionApproved: false }, failureCode: "redistribution-unapproved" },
+        { overrides: { runtimeVersionVerified: false }, failureCode: "runtime-version-mismatch" },
+        { overrides: { protocolSchemaVerified: false }, failureCode: "protocol-schema-mismatch" },
+      ] as const) {
+        const portable = createPortableRuntimeFixture();
+        const harness = createSpawnHarness();
+        expect(
+          evaluationManager(portable, harness, overrides).start(
+            launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          ),
+        ).toEqual({ ok: false, failureCode, retryable: false });
+        expect(harness.children).toHaveLength(0);
+      }
+    });
+  });
+
   // #2475 / ADR-0140: the launch-time availability re-check asserts exactly the checks the
   // record's admission policy performed. A dev-lane record never claims platform signature or
   // supervisor qualification; a record without an admission marker keeps the full packaged set.
@@ -1740,7 +1846,8 @@ describe("coding runtime manager", () => {
         operation: "coding-runtime.emit",
         source: "coding-runtime-manager.emit",
         errorClass: "InvalidRuntimeEvent",
-        message: "runtime-event-invalid:runtime-started",
+        message: "runtime-event-invalid",
+        code: "runtime-started",
       }),
     );
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
@@ -1752,10 +1859,10 @@ describe("coding runtime manager", () => {
   // code is a bounded number, not content, and belongs on the redacted diagnostic channel keyed by
   // the run's correlation id.
   it.each([
-    [9, "runtime-exit-code:9"],
-    [0, "runtime-exit-code:0"],
-    [null, "runtime-exit-code:signal"],
-  ] as const)("records runtime exit code %s in an operator diagnostic", async (code, message) => {
+    [9, "9"],
+    [0, "0"],
+    [null, "signal"],
+  ] as const)("records runtime exit code %s in an operator diagnostic", async (code, exitCode) => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
@@ -1780,10 +1887,52 @@ describe("coding runtime manager", () => {
         operation: "coding-runtime.exit",
         source: "coding-runtime-manager.exit",
         errorClass: "RuntimeUnexpectedExit",
-        message,
+        message: "runtime-exit-code",
+        code: exitCode,
       }),
     );
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
+  });
+
+  // #3593: a sidecar that dies mid-run with a non-zero exit is one closed failure event, never a
+  // blank transcript, and its exit line carries the Keiko-code frames of the site that observed it.
+  it("reports a non-zero sidecar exit as one failure event and one framed exit line", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      diagnostics,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const beforeExit = events.length;
+    harness.children[0]?.exit(1);
+    await settle();
+
+    expect(events.slice(beforeExit)).toEqual([
+      expect.objectContaining({
+        runId: "run-1988",
+        kind: "failure-redacted",
+        failureCode: "failure-redacted",
+        failureSummary: "runtime-failed",
+      }),
+    ]);
+    const exitLines = diagnostics.record.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.operation === "coding-runtime.exit");
+    expect(exitLines).toEqual([expect.objectContaining({ correlationId: "run-1988", code: "1" })]);
+    expect(exitLines[0]?.frames?.[0]).toMatch(
+      /^packages\/keiko-server\/(?:dist|src)\/coding-runtime\/codingRuntimeManager\.(?:js|ts):\d+:\d+$/u,
+    );
+    expect(JSON.stringify(exitLines)).not.toContain(fixture.workspaceRoot);
   });
 
   it("projects bounded body-free summaries for hostile stdout, stderr and non-zero exit", async () => {
@@ -1977,7 +2126,8 @@ describe("coding runtime manager", () => {
       source: "coding-runtime-manager.stderr",
       errorClass: "RuntimeStderrSummary",
     });
-    expect(diagnostic?.message).toMatch(/^runtime-stderr-counts:bytes=\d+:lines=\d+:truncated=/u);
+    expect(diagnostic?.message).toBe("runtime-stderr-counts");
+    expect(diagnostic?.code).toMatch(/^bytes=\d+:lines=\d+:truncated=/u);
 
     const stopped = manager.stop("run-1988");
     child.exit(0);
@@ -2399,6 +2549,226 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(events)).not.toContain(fixture.workspaceRoot);
   });
 
+  it("denies a supervised edit after managed-root authority is revoked", async () => {
+    const fixture = createManagedFixture();
+    mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
+    writeFileSync(join(fixture.workspaceRoot, "src", "allowed.ts"), "export {};\n");
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    let access: WorkspaceRootAccess | undefined = {
+      kind: "managed-task",
+      canonicalRoot: fixture.workspaceRoot,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: fixture.workspaceRoot,
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      resolveWorkspaceRootAccess: () => access,
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    access = undefined;
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-revoked-file",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "src/allowed.ts",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 0,
+      }),
+    );
+    await settle();
+
+    expect(events.some((event) => event.kind === "diff-summarized")).toBe(false);
+    expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toBeDefined();
+  });
+
+  // #3347 owner P1: the run surface proves workspace access once, before backend construction, and
+  // OpenCode/Codex preparation then awaits. Without a proof at the spawn itself, a worktree archived
+  // during that await still received a long-lived runtime tree rooted in the stale path.
+  it("starts no runtime tree when managed-root authority is revoked during OpenCode preparation", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    let access: WorkspaceRootAccess | undefined = {
+      kind: "managed-task",
+      canonicalRoot: fixture.workspaceRoot,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: fixture.workspaceRoot,
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      resolveWorkspaceRootAccess: () => access,
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+      openCodeLifecycleAdapter: {
+        prepare: async () => {
+          // The deferred preparation the finding names: admission has already proved the root and
+          // the spawn has not happened yet.
+          await settle();
+          access = undefined;
+          return { ok: true, env: {} } as const;
+        },
+        handshake: () => Promise.resolve({ ok: true }),
+      },
+    });
+
+    const result = await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      failureCode: "workspace-root-denied",
+      retryable: false,
+    });
+    expect(harness.captures).toEqual([]);
+    expect(harness.children).toEqual([]);
+    expect(events.some((event) => event.kind === "runtime-started")).toBe(false);
+  });
+
+  it("starts no Codex tree when managed-root authority is revoked during Codex preparation", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    let access: WorkspaceRootAccess | undefined = {
+      kind: "managed-task",
+      canonicalRoot: fixture.workspaceRoot,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: fixture.workspaceRoot,
+    };
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      resolveWorkspaceRootAccess: () => access,
+      codexLifecycleAdapter: qualifiedCodexAdapter({
+        prepare: async (request): Promise<ExpectedCodexLifecyclePrepareResult> => {
+          const prepared = prepareManagedCodexStateRoot(request);
+          await settle();
+          access = undefined;
+          return prepared;
+        },
+      }),
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "workspace-root-denied", retryable: false });
+    expect(harness.captures).toEqual([]);
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("spawns in the freshly proven canonical root while managed authority still holds", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: fixture.workspaceRoot,
+        fs: nodeWorkspaceFs,
+        repositoryRoot: fixture.workspaceRoot,
+      }),
+      openCodeLifecycleAdapter: {
+        prepare: async () => {
+          await settle();
+          return { ok: true, env: {} } as const;
+        },
+        handshake: () => Promise.resolve({ ok: true }),
+      },
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(harness.captures).toHaveLength(1);
+    expect(harness.captures[0]?.cwd).toBe(fixture.workspaceRoot);
+  });
+
+  // Behavioral replacement for the former KEIKO-0557 source-text-grep pin (#2906): a benign-
+  // looking in-workspace symlink whose REAL target is deny-listed, but which stays inside the
+  // sidecar's own approved scope after symlink resolution -- so the pre-existing containment
+  // check (resolveContainedEditTarget, which already realpath-resolves the target to test scope
+  // membership) would ADMIT it on scope grounds alone. Only the classification this finding adds
+  // -- checking isDenied against the REAL resolved relative path, not just the lexical
+  // targetPath -- catches it. (A symlink whose real target escapes the scope entirely, e.g.
+  // pointing above the workspace root, is already denied by that pre-existing containment check
+  // for an unrelated reason and would not distinguish the fix from its absence.)
+  it("classifies a symlink's real resolved target for sensitivity, not just its lexical name (#2906)", async () => {
+    const fixture = createManagedFixture();
+    mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
+    // The sensitive file AND the symlink both live inside the approved "src" scope, so
+    // resolveContainedEditTarget's own scope-membership check passes either way -- isolating the
+    // sensitivity classification as the only thing that can still deny this.
+    writeFileSync(join(fixture.workspaceRoot, "src", ".env"), "SECRET=1\n");
+    // The symlink's own lexical name ("config-alias") matches no deny pattern; only its REAL
+    // resolved target, "src/.env", does.
+    symlinkSync(
+      join(fixture.workspaceRoot, "src", ".env"),
+      join(fixture.workspaceRoot, "src", "config-alias"),
+    );
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-2906-file-denied",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "src/config-alias",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 2,
+        deletedLines: 0,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "out-of-scope-file-edit",
+      retryable: false,
+    });
+    expect(events.some((event) => event.kind === "diff-summarized")).toBe(false);
+  });
+
   it("enforces supervised verification command allowlist before emitting summaries", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -2475,8 +2845,10 @@ describe("coding runtime manager", () => {
       action: "verification" as const,
       actionId: "session:call",
       idempotencyKey: "session:call",
-      verifierId: "typecheck",
+      verifierId: "targeted-test",
+      targetPath: "src/math.test.ts",
     };
+    const targetPathHash = createHash("sha256").update(request.targetPath, "utf8").digest("hex");
     const approvalProof = {
       approvalId: request.actionId,
       approvalDigest: codingToolApprovalBindingDigest("run-1991", request),
@@ -2510,6 +2882,7 @@ describe("coding runtime manager", () => {
         idempotencyKey: request.idempotencyKey,
         approvalId: approvalProof.approvalId,
         approvalDigest: approvalProof.approvalDigest,
+        targetPathHash,
       }),
     );
     await settle();
@@ -2517,7 +2890,7 @@ describe("coding runtime manager", () => {
     expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
       permissionRequest: {
         requestId: "permission-verification",
-        commandLabel: "typecheck",
+        commandLabel: "targeted-test",
       },
     });
     expect(
@@ -2551,11 +2924,108 @@ describe("coding runtime manager", () => {
     ).toBe(false);
   });
 
+  it("raises a pendingPermission for a governed CI observation and admits it exactly once after approval (3941816393)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const codingToolApprovals = createCodingToolApprovalBridge();
+    const request = {
+      action: "git" as const,
+      operation: "ci" as const,
+      actionId: "session:ci-call",
+      idempotencyKey: "session:ci-call",
+    };
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest("run-1991", request),
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      codingToolApprovals,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const projected = projectOpenCodePermissionEvent(
+      {
+        id: "evt_ci_observe",
+        type: "permission.asked",
+        properties: {
+          id: "per_ci_observe",
+          sessionID: "ses_1",
+          permission: OPENCODE_GOVERNED_ACTION_PERMISSION,
+          patterns: ["ci"],
+          always: [],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-07T13:05:00.000Z",
+            actionKind: "ci-observe",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            policyReason: "approval-required",
+            commandLabel: "ci",
+            actionId: request.actionId,
+            idempotencyKey: request.idempotencyKey,
+            approvalId: approvalProof.approvalId,
+            approvalDigest: approvalProof.approvalDigest,
+          },
+        },
+      },
+      "ses_1",
+    );
+    if (projected === undefined) throw new Error("expected governed CI projection");
+    harness.children[0]?.stdout.write(`${JSON.stringify(projected)}\n`);
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: { requestId: projected.requestId, actionKind: "ci-observe" },
+    });
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(
+      manager.issueApproval({
+        runId: "run-1991",
+        requestId: projected.requestId,
+        actionKind: "ci-observe",
+        approvedByUserId: "operator",
+      }).ok,
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+  });
+
   it("rolls back the issued approval when verification bridge activation fails", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const approvalStore = createInMemorySupervisedCodingApprovalStore();
     const consume = vi.spyOn(approvalStore, "consume");
+    const invalidateRun = vi.spyOn(approvalStore, "invalidateRun");
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
       processEnv: {},
@@ -2576,14 +3046,9 @@ describe("coding runtime manager", () => {
         approvedByUserId: "operator",
       }),
     ).toEqual({ ok: false, failureCode: "approval-activation-failed", retryable: false });
-    expect(consume).toHaveBeenCalledOnce();
-    const rollback = consume.mock.calls[0]?.[0];
-    expect(rollback?.approval.approvalId).toMatch(/^sca_/u);
-    expect(rollback?.binding).toMatchObject({
-      runId: "run-1991",
-      requestId: "permission-without-bridge-observation",
-    });
-    expect(rollback?.nowMs).toBe(Date.parse("2026-07-07T13:00:00.000Z"));
+    expect(consume).not.toHaveBeenCalled();
+    expect(invalidateRun).toHaveBeenCalledOnce();
+    expect(invalidateRun).toHaveBeenCalledWith("run-1991");
   });
 
   it("refuses approval issuance while paused and restores it on resume (#2386)", async () => {
@@ -2735,6 +3200,64 @@ describe("coding runtime manager", () => {
     });
     expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
     expect(events.some((event) => event.kind === "artifact-produced")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
+  });
+
+  it("reuses the trusted metadata recorded when a task approval was issued", async (): Promise<void> => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      now: () => 1_000,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const issued = manager.issueApproval({
+      runId: "run-1988",
+      requestId: "perm-task-verification",
+      actionKind: "verification-command",
+      grantScope: "task",
+      commandTemplateId: "governed-typecheck",
+      safeArgumentClasses: ["workspace-contained"],
+      approvedByUserId: "operator",
+    });
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) throw new Error("expected task approval issue to succeed");
+
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-task-verification",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "approval-required",
+        commandLabel: "typecheck",
+        executable: "npm",
+        args: ["run", "typecheck"],
+        passedCount: 1,
+        failedCount: 0,
+        skippedCount: 0,
+        approvalToken: issued.approval,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "verification-summarized")).toMatchObject({
+      verificationKind: "verification-command",
+      verificationStatus: "passed",
+    });
+    expect(events.some((event) => event.failureCode === "approval-proof-stale")).toBe(false);
     expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
   });
 
@@ -3580,6 +4103,8 @@ describe("coding runtime manager", () => {
   it.each([
     ["authenticated-health-version", "runtime-version-mismatch"],
     ["authenticated-health", "protocol-schema-mismatch"],
+    // #3603: a refused gateway challenge is not a protocol schema mismatch.
+    ["gateway-challenge", "gateway-challenge-failed"],
     ["endpoint-invalid", "protocol-schema-mismatch"],
     ["preparation-missing", "protocol-schema-mismatch"],
     ["readiness-failed", "protocol-schema-mismatch"],
@@ -3617,7 +4142,8 @@ describe("coding runtime manager", () => {
         correlationId: "run-1988",
         operation: "coding-runtime.handshake",
         errorClass: "OpenCodeHandshakeFailure",
-        message: `runtime-handshake-phase:${reason}`,
+        message: "runtime-handshake-failed",
+        code: reason,
       }),
     );
   });
@@ -3627,10 +4153,12 @@ describe("coding runtime manager", () => {
     try {
       const fixture = createManagedFixture();
       const child = fakeChild();
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
       let observedSignal: AbortSignal | undefined;
       let resolveHandshake: ((result: { readonly ok: true }) => void) | undefined;
       const manager = createTestCodingRuntimeManager({
         processEnv: {},
+        diagnostics,
         supervisor: testSupervisor(() => ({
           ...child.handle,
           kill: (signal): void => {
@@ -3663,6 +4191,15 @@ describe("coding runtime manager", () => {
         retryable: true,
       });
       expect(observedSignal?.aborted).toBe(true);
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlationId: "run-1988",
+          operation: "coding-runtime.handshake",
+          errorClass: "OpenCodeHandshakeFailure",
+          message: "runtime-handshake-failed",
+          code: "timeout",
+        }),
+      );
       resolveHandshake?.({ ok: true });
       await Promise.resolve();
       expect(manager.health()).toEqual({ status: "stopped" });
@@ -4088,6 +4625,98 @@ describe("run-bound stop authority", () => {
     expect(manager.health()).toMatchObject({ status: "ready" });
     await expect(manager.stop("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
   });
+
+  // Regression: KEIKO-0386. resume()/pause() must reject when the active runtime is mid-teardown
+  // (stopRequested/status !== "ready"), the same guard issueApproval() already enforces. Without
+  // it, an operator racing a crash sees an ok:true pause/resume for a runtime the manager is in
+  // the middle of disposing.
+  it("KEIKO-0386: refuses pause/resume once the runtime is mid-teardown", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    // Simulate a child exit / crash — this drives handleExit which sets stopRequested=true and
+    // status="stopping" synchronously.
+    harness.children[0]?.exit(1);
+    await Promise.resolve();
+    expect(manager.pause("run-1988")).toEqual({
+      ok: false,
+      failureCode: "runtime-stopped",
+      retryable: false,
+    });
+    expect(manager.resume("run-1988")).toEqual({
+      ok: false,
+      failureCode: "runtime-stopped",
+      retryable: false,
+    });
+  });
+
+  // Regression: PR #3099 R4 P1. Two overlapping reconcile() calls after a prior teardown
+  // returned reap-unproven both need to be admitted (the second one might arrive from a
+  // different operator), but they must fold onto a SHARED in-flight promise instead of both
+  // entering the supervisor and disposing / releasing the same tree. Before the reconcilePromise
+  // slot, both admissions raced.
+  it("R4-P1: concurrent reconcile calls fold onto a shared promise instead of racing the supervisor", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    // Mirror the SIGKILL-escalation setup that drives the first stop to reap-unproven.
+    const setTimer = vi.fn((callback: () => void): unknown => {
+      callback();
+      return undefined;
+    });
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn, { setTimer }),
+      processEnv: {},
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await expect(manager.stop("run-1988")).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    // Now the process actually exits (operator killed it out-of-band).
+    harness.children[0]?.exit(0);
+    // Fire TWO reconcile calls in the same tick — they must return the same result and both
+    // observe the shared teardown outcome without re-entering the supervisor.
+    const first = manager.reconcile("run-1988");
+    const second = manager.reconcile("run-1988");
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toEqual({ ok: true, status: "stopped" });
+    expect(b).toEqual({ ok: true, status: "stopped" });
+    // A subsequent reconcile call after active is cleared still returns cleanly.
+    await expect(manager.reconcile("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+  });
+
+  // Regression: KEIKO-0402. A client-initiated stop() racing an in-flight crash teardown must not
+  // enter the supervisor a second time. Before the tearingDown guard, the two paths raced through
+  // revokeAndTerminate concurrently.
+  it("KEIKO-0402: a stop racing a crash-triggered teardown does not re-enter the supervisor", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const child = harness.children[0];
+    // Fire the child-exit callback synchronously — handleExit → finalizeUnexpectedExit is now
+    // in flight (via a microtask), stopRequested=true and tearingDown=true are already set.
+    child?.exit(0);
+    // In the SAME tick, before any await, a client stop() races in. With the tearingDown guard
+    // it must fold onto a stopped result rather than enter revokeAndTerminate a second time.
+    const raced = manager.stop("run-1988");
+    await expect(raced).resolves.toEqual({ ok: true, status: "stopped" });
+    // Only ONE lifecycle child exists; the manager did not spawn or re-signal it.
+    expect(harness.children).toHaveLength(1);
+  });
 });
 
 /**
@@ -4098,6 +4727,66 @@ describe("run-bound stop authority", () => {
  * dropped every one of them and no operator surface could recover them.
  */
 describe("governed-assist approval reviewability", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "issues only the exact one-action Git approval through its existing owner in %s",
+    async (mode) => {
+      const fixture = createManagedFixture();
+      const harness = createSpawnHarness();
+      const approvalStore = createInMemorySupervisedCodingApprovalStore();
+      const issueUnrelated = vi.spyOn(approvalStore, "issue");
+      const issued = createInMemoryGitDeliveryApprovalStore().issue({
+        binding: {
+          projectId: fixture.workspaceRoot,
+          operation: "commit",
+          command: {},
+          runId: "run-1988",
+          envelopeDigest: "a".repeat(64),
+        },
+        approvedByUserId: "operator",
+        nowMs: 1_000,
+      });
+      const issueCommit = vi.fn((runId: string, requestId: string) =>
+        runId === "run-1988" && requestId === "commit-123" ? issued : undefined,
+      );
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        approvalStore,
+        codingToolApprovals: { ...createCodingToolApprovalBridge(), issueCommit },
+        now: () => 1_000,
+      });
+      await manager.start({
+        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        requestedMode: mode,
+        effectiveMode: mode,
+      });
+      const request = {
+        runId: "run-1988",
+        requestId: "commit-123",
+        actionKind: "commit" as const,
+        approvedByUserId: "operator",
+      };
+      expect(manager.issueApproval({ ...request, grantScope: "task" }).ok).toBe(false);
+      expect(manager.issueApproval({ ...request, runId: "run-other" }).ok).toBe(false);
+      expect(issueCommit).not.toHaveBeenCalled();
+      expect(manager.issueApproval({ ...request, requestId: "commit-missing" }).ok).toBe(false);
+      expect(manager.issueApproval(request)).toMatchObject({
+        ok: true,
+        approval: {
+          approvalId: issued.approval.approvalId,
+          approvalToken: issued.approval.approvalToken,
+        },
+        approvalDigest: issued.approvalTokenHash,
+      });
+      expect(issueUnrelated).not.toHaveBeenCalled();
+      expect(manager.pause(request.runId).ok).toBe(true);
+      issueCommit.mockClear();
+      expect(manager.issueApproval(request).ok).toBe(false);
+      expect(issueCommit).not.toHaveBeenCalled();
+      await manager.stop(request.runId);
+    },
+  );
+
   it("retains the reviewable changeset facts of the pending file-edit approval", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -4181,4 +4870,66 @@ describe("governed-assist approval reviewability", () => {
     expect(manager.pendingApprovalReview("run-1991", "perm-2802-other")).toBeUndefined();
     expect(manager.pendingApprovalReview("run-2088", "perm-2802-escape")).toBeUndefined();
   });
+});
+
+describe("immutable draft delivery manager approvals", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "routes %s push approval through the existing exact one-action service",
+    async (mode) => {
+      const delivery = new DraftDeliveryFixture();
+      const managed = createManagedFixture();
+      const harness = createSpawnHarness();
+      const bridge = createCodingToolApprovalBridge(undefined, undefined, delivery.service);
+      const approvalStore = createInMemorySupervisedCodingApprovalStore();
+      const unrelated = vi.spyOn(approvalStore, "issue");
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        codingToolApprovals: bridge,
+        approvalStore,
+        now: () => delivery.now,
+      });
+      try {
+        await delivery.recordVerifiedCommit();
+        const proposal = await delivery.service.proposePush();
+        if (proposal.status !== "recorded") throw new Error("missing proposal");
+        await manager.start({
+          ...launchRequest(managed.workspaceRoot, managed.managedRoot, managed.executablePath),
+          runId: "run-1",
+          requestedMode: mode,
+          effectiveMode: mode,
+        });
+        const request = {
+          runId: "run-1",
+          requestId: proposal.record.proposalId,
+          actionKind: "push" as const,
+          approvedByUserId: "operator",
+        };
+        expect(manager.pendingApprovalReview("run-1", request.requestId)).toMatchObject({
+          draftDelivery: { record: proposal.record },
+        });
+        expect(manager.issueApproval({ ...request, actionKind: "pull-request" }).ok).toBe(false);
+        expect(manager.issueApproval({ ...request, grantScope: "task" }).ok).toBe(false);
+        expect(manager.issueApproval({ ...request, runId: "other-run" }).ok).toBe(false);
+        expect(manager.issueApproval(request).ok).toBe(true);
+        expect(unrelated).not.toHaveBeenCalled();
+        const action = {
+          action: "delivery",
+          actionId: "a",
+          idempotencyKey: "a",
+          intent: "push",
+          phase: "execute",
+          proposalId: request.requestId,
+        } as const;
+        expect(bridge.matchesDelivery?.("run-1", action)).toBe(true);
+        expect(bridge.consumeDelivery?.("run-1", action)).toBeDefined();
+        expect(bridge.consumeDelivery?.("run-1", action)).toBeUndefined();
+        manager.pause("run-1");
+        expect(manager.issueApproval(request).ok).toBe(false);
+      } finally {
+        await manager.stop("run-1");
+        delivery.close();
+      }
+    },
+  );
 });

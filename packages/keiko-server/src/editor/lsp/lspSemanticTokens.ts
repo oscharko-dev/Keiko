@@ -1,3 +1,9 @@
+import type {
+  ManagedLspSemanticTokenData,
+  ManagedLspSemanticTokenLegend,
+  ManagedLspSemanticTokenModifier,
+  ManagedLspSemanticTokenType,
+} from "@oscharko-dev/keiko-contracts";
 import {
   MANAGED_LSP_CAPABILITY_SCHEMA_VERSION,
   MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
@@ -7,11 +13,7 @@ import {
   MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
   parseManagedLspSemanticTokenData,
   parseManagedLspSemanticTokenLegend,
-  type ManagedLspSemanticTokenData,
-  type ManagedLspSemanticTokenLegend,
-  type ManagedLspSemanticTokenModifier,
-  type ManagedLspSemanticTokenType,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 
 export const MANAGED_LSP_SEMANTIC_MAX_DOCUMENT_BYTES = 256 * 1024;
 const MAX_LEGEND_VALUE_CHARS = 64;

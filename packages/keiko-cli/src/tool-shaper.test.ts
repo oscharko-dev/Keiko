@@ -3,7 +3,7 @@
 // Pure/total: malformed output and non-command tools never throw and yield no observation.
 
 import { describe, expect, it } from "vitest";
-import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
 import type { ToolCallResult } from "@oscharko-dev/keiko-harness";
 import { createHarnessToolShaper } from "./tool-shaper.js";
 

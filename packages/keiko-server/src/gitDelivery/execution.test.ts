@@ -4,45 +4,189 @@
 // outcome status. This proves the whole local-execution stack end-to-end and covers the default-seam
 // branches the route tests inject around.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryRepoPolicyPack,
-  type WorkspaceInstance,
+import type {
+  GitDeliveryExecutionResult,
+  GitDeliveryRepoPolicyPack,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
-import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import type {
+  GitLocalMutationAdapter,
+  GitMutationLifecycleResult,
+  GitWorktreeSnapshot,
+} from "@oscharko-dev/keiko-tools";
+import type { NodeGitWorktreeReaderDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+
+// Spies on the two staged-content readers the F1 audit fix wires into a runCommand
+// termination-evidence callback (readStagedPathsFor / readStagedConflictMarkerFileCountFor,
+// exercised below) while delegating to the REAL implementation for every export — including
+// readGitWorktreeSnapshot and createNodeGitMutationAdapter, which the "real git through the
+// default seams" suite below depends on staying genuine. Declared before the mock factory purely
+// for readability; the factory's inner closure is only invoked later, from inside an `it()` body,
+// long after this module's own top-level code (including this declaration) has finished running
+// — mirrors the same importOriginal-plus-delegating-wrapper pattern
+// defaultPolicyPacks.test.ts already uses for this exact module graph.
+const readStagedPathsCalls: NodeGitWorktreeReaderDeps[] = [];
+const readStagedConflictMarkerFileCountCalls: NodeGitWorktreeReaderDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    readStagedPaths: (deps: NodeGitWorktreeReaderDeps): Promise<readonly string[]> => {
+      readStagedPathsCalls.push(deps);
+      return actual.readStagedPaths(deps);
+    },
+    readStagedConflictMarkerFileCount: (deps: NodeGitWorktreeReaderDeps): Promise<number> => {
+      readStagedConflictMarkerFileCountCalls.push(deps);
+      return actual.readStagedConflictMarkerFileCount(deps);
+    },
+  };
+});
+
 import {
   executeGovernedMutation,
+  gitDeliveryActivityCode,
+  gitDeliveryActivityErrorKind,
+  gitDeliveryActivityFailureKind,
   gitDeliveryMutationResponse,
+  gitDeliveryTerminationHandler,
+  GitDeliveryRootAuthorityRevokedError,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
+  logGitDeliveryUpstreamTrackingFailed,
+  readStagedConflictMarkerFileCountFor,
+  readStagedPathsFor,
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
+  executionFailureDetail,
+  logGitDeliveryMutation,
 } from "./execution.js";
+
+describe("git delivery activity failure classification", () => {
+  it("keeps rate limits distinct and bounds native failure fields", () => {
+    expect(gitDeliveryActivityErrorKind("rate-limited")).toBe("rate-limited");
+    expect(gitDeliveryActivityFailureKind(`E${"X".repeat(90)}`)).toBe("internal");
+    expect(gitDeliveryActivityCode(`E${"X".repeat(90)}`)).toBeUndefined();
+  });
+});
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "../task-workspace/naming.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 let root: string;
+let signingRoot: string;
 
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8" });
 }
 
+function configureSshCommitSigning(repoRoot: string, signingHome: string, email: string): void {
+  const keyPath = join(signingHome, "keiko-test-signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
+    cwd: signingHome,
+  });
+  const publicKeyPath = `${keyPath}.pub`;
+  const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+  const allowedSigners = join(signingHome, "keiko-test-allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
+  execFileSync("git", ["config", "gpg.format", "ssh"], { cwd: repoRoot });
+  execFileSync("git", ["config", "gpg.ssh.allowedSignersFile", allowedSigners], {
+    cwd: repoRoot,
+  });
+  execFileSync("git", ["config", "user.signingkey", publicKeyPath], { cwd: repoRoot });
+  execFileSync("git", ["config", "commit.gpgsign", "true"], { cwd: repoRoot });
+}
+
+function expectLastCommitSigned(): void {
+  expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("G");
+}
+
+function expectWorktreeReadFailureEvent(
+  activity: ReturnType<typeof captureActivityLog>,
+  bare: string,
+): void {
+  expect(activity.events).toHaveLength(1);
+  expect(activity.events[0]).toMatchObject({
+    level: "error",
+    category: "diagnostic",
+    op: "git.delivery.mutation.failed",
+    correlationId: "request-correlation-2",
+    errorKind: "internal",
+    extra: { actionKind: "branch-switch", phaseReached: "snapshot" },
+  });
+  expect(typeof activity.events[0]?.extra?.failureKind).toBe("string");
+  expect(JSON.stringify(activity.events)).not.toContain(bare);
+  const persisted = expectActivityLogProof(
+    "git.delivery.mutation.failed.emitted-line",
+    formatActivityLogProofLine(activity.events[0] ?? {}),
+  );
+  expect(persisted).toMatchObject({ actionKind: "branch-switch", phaseReached: "snapshot" });
+}
+
+function expectRestampFailure(
+  activity: ReturnType<typeof captureActivityLog>,
+  errorKind: "conflict" | "unavailable",
+  failureKind: "LOCK_CONTENTION" | "REPOSITORY_UNREACHABLE",
+  correlationId: string,
+): ServerLogEvent {
+  const failures = activity.events.filter((event) => event.op === "task-workspace.lifecycle");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toMatchObject({
+    errorKind,
+    correlationId,
+    extra: { operation: "verify-head", failureKind },
+  });
+  const [failure] = failures;
+  if (failure === undefined) throw new TypeError("Expected one task-workspace lifecycle failure");
+  return failure;
+}
+
+async function expectWorktreeReadFailure(): Promise<void> {
+  const bare = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-nonrepo-")));
+  const deps = { evidenceStore: captureStore().store, redactor: buildRedactor({}) };
+  const activity = captureActivityLog();
+  try {
+    await expect(
+      executeGovernedMutation(
+        { kind: "branch-switch", branchName: "main" },
+        { required: false },
+        workspaceInfo(bare),
+        deps,
+        { ...REAL_SEAMS, activityLog: activity.sink },
+        "request-correlation-2",
+      ),
+    ).rejects.toBeTruthy();
+    expectWorktreeReadFailureEvent(activity, bare);
+  } finally {
+    rmSync(bare, { recursive: true, force: true });
+  }
+}
+
 function workspaceInfo(rootPath: string): WorkspaceInfo {
   return {
     root: rootPath,
+    selectedRoot: rootPath,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -86,28 +230,80 @@ function captureStore(): { store: EvidenceStore; count: () => number } {
   };
 }
 
+function captureActivityLog(): {
+  readonly events: ServerLogEvent[];
+  readonly sink: { readonly write: (event: ServerLogEvent) => void };
+} {
+  const events: ServerLogEvent[] = [];
+  return {
+    events,
+    sink: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  };
+}
+
+function expectCompletedMutationEvent(event: ServerLogEvent | undefined): void {
+  expect(event).toBeDefined();
+  if (event === undefined) throw new Error("mutation activity event missing");
+  const extra = event.extra ?? {};
+  expect(event.category).toBe("diagnostic");
+  expect(event.op).toBe("git.delivery.mutation.completed");
+  expect(event.correlationId).toBe("request-correlation-1");
+  expect(extra.actionId).toMatch(/^gde-action-[a-f0-9]{24}$/u);
+  expect(extra.actionKind).toBe("branch-create");
+  expect(extra.status).toBe("succeeded");
+  expect(extra.phaseReached).toBe("result");
+  expect(extra.policyOutcome).toBe("constrained");
+  expect(extra.preflightFindingCount).toBe(0);
+  expect(extra.preflightBlockingCount).toBe(0);
+  expect(extra.requiredApproverCount).toBe(0);
+  const persisted = expectActivityLogProof(
+    "git.delivery.mutation.completed.emitted-line",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject({ actionKind: "branch-create", status: "succeeded" });
+}
+
 // Real adapter + real snapshot reader: only the trusted policy pack is supplied (no adapter/reader/now
 // seam), exercising the default-seam branches and the live read-only inspection + mutation boundary.
 const REAL_SEAMS: GitDeliveryExecutionSeams = { policyPacks: { repoPack: ALLOW_LOCAL } };
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-exec-")));
+  signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-signing-")));
+  // The real adapter intentionally reads the invoking human's identity lane. This suite exercises
+  // the default adapter but must not inherit a developer-machine ~/.gitconfig, so it installs a
+  // disposable SSH signing setup into this temporary repository.
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("USERPROFILE", root);
+  vi.stubEnv("XDG_CONFIG_HOME", root);
+  const globalGitConfig = join(root, "controlled-global.gitconfig");
+  writeFileSync(globalGitConfig, "", "utf8");
+  vi.stubEnv("GIT_CONFIG_GLOBAL", globalGitConfig);
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@keiko.example"]);
   git(["config", "user.name", "Keiko Test"]);
-  git(["config", "commit.gpgsign", "false"]);
+  configureSshCommitSigning(root, signingRoot, "test@keiko.example");
   writeFileSync(join(root, "a.txt"), "v1\n", "utf8");
   git(["add", "a.txt"]);
   git(["commit", "-q", "-m", "base"]);
+  expectLastCommitSigned();
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
+  rmSync(signingRoot, { recursive: true, force: true });
 });
 
 describe("executeGovernedMutation — real git through the default seams", () => {
   it("creates a branch and records evidence", async () => {
     const cap = captureStore();
+    const activity = captureActivityLog();
     const deps = { evidenceStore: cap.store, redactor: buildRedactor({}) };
     const result = await executeGovernedMutation(
       {
@@ -119,11 +315,14 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       { required: false },
       workspaceInfo(root),
       deps,
-      REAL_SEAMS,
+      { ...REAL_SEAMS, activityLog: activity.sink },
+      "request-correlation-1",
     );
     expect(result.outcome.status).toBe("succeeded");
     expect(git(["branch", "--list", "feature/x"])).toContain("feature/x");
     expect(cap.count()).toBe(1);
+    expectCompletedMutationEvent(activity.events[0]);
+    expect(JSON.stringify(activity.events)).not.toContain("feature/x");
   });
 
   it("switches branch, stages a file, and commits — all through the kernel", async () => {
@@ -138,6 +337,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       ws,
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(switched.outcome.status).toBe("succeeded");
     expect(git(["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature/y");
@@ -149,6 +349,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       ws,
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(staged.outcome.status).toBe("succeeded");
 
@@ -158,9 +359,11 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       ws,
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(committed.outcome.status).toBe("succeeded");
     expect(git(["log", "--oneline"])).toContain("feat: add b");
+    expectLastCommitSigned();
     expect(cap.count()).toBe(3);
   });
 
@@ -173,6 +376,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       workspaceInfo(root),
       deps,
       REAL_SEAMS,
+      undefined,
     );
     expect(result.outcome.status).toBe("blocked");
     expect(gitDeliveryMutationResponse(result).preflightFindingCodes).toContain(
@@ -195,27 +399,156 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       workspaceInfo(root),
       deps,
       {},
+      undefined,
     );
     expect(result.outcome.status).toBe("succeeded");
     expect(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK.defaultRule?.decision).toBe("constrained");
   });
 
-  it("surfaces a worktree read failure as a thrown error outside a git repository", async () => {
-    const bare = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-nonrepo-")));
-    const deps = { evidenceStore: captureStore().store, redactor: buildRedactor({}) };
-    try {
-      await expect(
-        executeGovernedMutation(
-          { kind: "branch-switch", branchName: "main" },
-          { required: false },
-          workspaceInfo(bare),
-          deps,
-          REAL_SEAMS,
-        ),
-      ).rejects.toBeTruthy();
-    } finally {
-      rmSync(bare, { recursive: true, force: true });
-    }
+  it("surfaces a worktree read failure as a thrown error outside a git repository", () =>
+    expectWorktreeReadFailure());
+});
+
+// ─── runCommand termination-evidence correlation (audit finding: readWorktreeSnapshotFor/adapterFor
+// dropped an already-in-scope correlationId in favour of UNKNOWN_CORRELATION_ID) ──────────────────
+
+describe("gitDeliveryTerminationHandler — correlation-id wiring for the runCommand evidence seam", () => {
+  it("carries the caller's own correlationId onto command.terminated instead of downgrading it", () => {
+    const activity = captureActivityLog();
+    const handler = gitDeliveryTerminationHandler(
+      { activityLog: activity.sink },
+      "request-correlation-7",
+    );
+    handler({ reason: "timeout", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("command.terminated");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-7");
+    expect(activity.events[0]?.extra?.childPid).toBe(4242);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
+    const activity = captureActivityLog();
+    const handler = gitDeliveryTerminationHandler({ activityLog: activity.sink }, undefined);
+    handler({ reason: "abort", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+});
+
+// #3394 review follow-up: the interactive pinned-push path's best-effort `--set-upstream-to`
+// follow-up (git-publish-node.ts's `applyUpstreamTrackingIfRequested`) has no branch/remote/error
+// payload to log — this proves the line it DOES write is a distinct, body-free, correctly-routed
+// diagnostic that never overloads `git.delivery.mutation.failed` (which would misreport a
+// successful push as failed).
+describe("logGitDeliveryUpstreamTrackingFailed — content-free diagnostic for the push follow-up", () => {
+  it("writes a distinct op, never git.delivery.mutation.failed, with the caller's correlationId", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryUpstreamTrackingFailed(activity.sink, "request-correlation-9");
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("git.delivery.push.upstream-tracking-failed");
+    expect(activity.events[0]?.op).not.toBe("git.delivery.mutation.failed");
+    expect(activity.events[0]?.category).toBe("diagnostic");
+    expect(activity.events[0]?.level).toBe("warn");
+    expect(activity.events[0]?.errorKind).toBe("unavailable");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-9");
+    const persisted = expectActivityLogProof(
+      "git.delivery.push.upstream-tracking-failed.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ op: "git.delivery.push.upstream-tracking-failed" });
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryUpstreamTrackingFailed(activity.sink, undefined);
+    expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+});
+
+// ─── F1: the sibling default readers (readStagedPathsFor / readStagedConflictMarkerFileCountFor)
+// — audit finding: unlike readWorktreeSnapshotFor/adapterFor above, these two receive NO
+// termination callback at all in their DEFAULT (no-seam) branch, so a request-scoped local
+// mutation whose staged-path or conflict-marker read times out or hits the output cap leaves NO
+// evidence line joinable to its git-delivery operation. ────────────────────────────────────────
+
+describe("readStagedPathsFor / readStagedConflictMarkerFileCountFor — default-reader termination wiring", () => {
+  beforeEach(() => {
+    readStagedPathsCalls.length = 0;
+    readStagedConflictMarkerFileCountCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default readStagedPaths call", async () => {
+    const activity = captureActivityLog();
+    const paths = await readStagedPathsFor(
+      workspaceInfo(root),
+      { activityLog: activity.sink },
+      () => 1_700_000_000_000,
+      "request-correlation-staged-paths",
+    );
+    expect(paths).toEqual([]); // beforeEach leaves a clean worktree — nothing staged
+    expect(readStagedPathsCalls).toHaveLength(1);
+    const onTerminated = readStagedPathsCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "timeout", childPid: 777, windowsTreeKill: "not-attempted" });
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("command.terminated");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-staged-paths");
+    expect(activity.events[0]?.extra?.childPid).toBe(777);
+  });
+
+  it("wires the caller's activityLog + correlationId into the default readStagedConflictMarkerFileCount call", async () => {
+    const activity = captureActivityLog();
+    const count = await readStagedConflictMarkerFileCountFor(
+      workspaceInfo(root),
+      { activityLog: activity.sink },
+      () => 1_700_000_000_000,
+      "request-correlation-conflict-count",
+    );
+    expect(count).toBe(0); // beforeEach leaves a clean worktree — nothing staged
+    expect(readStagedConflictMarkerFileCountCalls).toHaveLength(1);
+    const onTerminated = readStagedConflictMarkerFileCountCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "output-cap", childPid: 888, windowsTreeKill: "not-attempted" });
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("command.terminated");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-conflict-count");
+    expect(activity.events[0]?.extra?.childPid).toBe(888);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID for both readers when the caller has none in scope", async () => {
+    const activity = captureActivityLog();
+    const workspace = workspaceInfo(root);
+    await readStagedPathsFor(workspace, { activityLog: activity.sink }, () => 1);
+    await readStagedConflictMarkerFileCountFor(workspace, { activityLog: activity.sink }, () => 1);
+    readStagedPathsCalls[0]?.onTerminated?.({
+      reason: "abort",
+      childPid: 1,
+      windowsTreeKill: "not-attempted",
+    });
+    readStagedConflictMarkerFileCountCalls[0]?.onTerminated?.({
+      reason: "abort",
+      childPid: 2,
+      windowsTreeKill: "not-attempted",
+    });
+    expect(activity.events).toHaveLength(2);
+    expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(activity.events[1]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+
+  it("still defers to an injected stagedPathsReader/conflictMarkerReader seam untouched", async () => {
+    const seams: GitDeliveryExecutionSeams = {
+      stagedPathsReader: () => Promise.resolve(["a.txt"]),
+      conflictMarkerReader: () => Promise.resolve(3),
+    };
+    const workspace = workspaceInfo(root);
+    await expect(
+      readStagedPathsFor(workspace, seams, () => 1, "unused-correlation"),
+    ).resolves.toEqual(["a.txt"]);
+    await expect(
+      readStagedConflictMarkerFileCountFor(workspace, seams, () => 1, "unused-correlation"),
+    ).resolves.toBe(3);
+    // The seam path never reaches the default reader at all.
+    expect(readStagedPathsCalls).toHaveLength(0);
+    expect(readStagedConflictMarkerFileCountCalls).toHaveLength(0);
   });
 });
 
@@ -253,6 +586,86 @@ const exec = {
   durationMs: 1,
   errorCode: "internal-error" as const,
 };
+
+// #3390: a create that reached the provider yet could not be reported as a success used to leave
+// only `internal-error` in the log (rehearsal run-15: the pull request existed, nothing named why).
+// The adapter's closed failure words travel onto the mutation line; free text never does.
+describe("executionFailureDetail — closed provider failure words on the mutation log line", () => {
+  const failed = (
+    executionResult: GitDeliveryExecutionResult & Record<string, unknown>,
+  ): GitMutationLifecycleResult["outcome"] => ({
+    status: "failed",
+    category: "provider-failure",
+    executionResult,
+  });
+  const base = {
+    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+    outcome: "failed",
+    durationMs: 1272,
+    errorCode: "internal-error",
+  } as const;
+
+  it("carries the adapter's closed words and drops everything that is not one", () => {
+    expect(
+      executionFailureDetail(
+        failed({
+          ...base,
+          rejectionReason: "unknown",
+          failureClass: "identity-unparsable",
+          identityIssue: "shape-invalid",
+          stdout: "never logged",
+          note: "Not a closed word!",
+        }),
+      ),
+    ).toEqual({
+      rejectionReason: "unknown",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+    });
+    expect(executionFailureDetail(failed({ ...base, failureClass: "Free text here" }))).toEqual({});
+    expect(executionFailureDetail(failed({ ...base, failureClass: "plausible-token" }))).toEqual(
+      {},
+    );
+  });
+
+  it("admits the detail the PR path hands in beside the result's own words", () => {
+    const events: ServerLogEvent[] = [];
+    logGitDeliveryMutation(
+      { write: (event) => events.push(event) },
+      lifecycle(failed({ ...base })),
+      "corr-1",
+      {
+        failureClass: "identity-unparsable",
+        identityIssue: "shape-invalid",
+        stdoutBytes: 417,
+        stderrBytes: 0,
+        exitCode: 0,
+        note: "Not a closed word!",
+      },
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({
+      actionKind: "commit",
+      executionErrorCode: "internal-error",
+      failureClass: "identity-unparsable",
+      identityIssue: "shape-invalid",
+      stdoutBytes: 417,
+      stderrBytes: 0,
+      exitCode: 0,
+    });
+    expect(events[0]?.extra).not.toHaveProperty("note");
+  });
+
+  it("is empty for a success and for a failure without adapter detail", () => {
+    expect(
+      executionFailureDetail({
+        status: "succeeded",
+        executionResult: { ...base, outcome: "succeeded" },
+      }),
+    ).toEqual({});
+    expect(executionFailureDetail(failed({ ...base }))).toEqual({});
+  });
+});
 
 describe("gitDeliveryMutationResponse — content-free projection of every outcome", () => {
   it("succeeded", () => {
@@ -316,26 +729,76 @@ describe("resolveProjectWorkspace", () => {
 
   it("resolves a persisted managed task workspace root without legacy project registration", () => {
     const store = createInMemoryUiStore();
-    const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-root-")));
-    const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-repo-")));
-    const repositoryId = deriveRepositoryId(repoRoot);
-    const workspaceId = deriveWorkspaceId({ repositoryId, taskId: "task-443" });
-    const managedWorktreePath = deriveManagedWorktreePath({
-      managedRoot,
-      repositoryId,
-      workspaceId,
-    });
-    mkdirSync(managedWorktreePath, { recursive: true });
-    const instance: WorkspaceInstance = {
+    const fixture = createManagedWorktreeFixture("task-443");
+    try {
+      expect(
+        resolveProjectWorkspace(
+          { store, ...managedAccessDeps(fixture, () => fixture.instance) },
+          fixture.managedWorktreePath,
+        )?.root,
+      ).toBe(fixture.managedWorktreePath);
+    } finally {
+      store.close();
+      fixture.dispose();
+    }
+  });
+});
+
+// ─── #3347 owner P1: the managed-root proof must survive to the Git EFFECT ─────────────────────
+//
+// resolveProjectWorkspace admits a managed worktree through the strong prover and collapses it to a
+// path-only WorkspaceInfo. executeGovernedMutation then awaits a multi-command snapshot before it
+// builds the mutation adapter, so an archive or identity replacement during that await used to make
+// the mutation commands run against whatever now sits at the admitted path.
+
+interface ManagedWorktreeFixture {
+  readonly managedRoot: string;
+  readonly repoRoot: string;
+  readonly managedWorktreePath: string;
+  readonly workspaceId: string;
+  readonly instance: WorkspaceInstance;
+  readonly dispose: () => void;
+}
+
+// A GENUINE managed task worktree: an owned managed root, a real repository, and a real `git
+// worktree add` linkage whose gitdir identity matches the persisted instance. The #3347 prover
+// re-checks ownership, lifecycle state and gitdir identity on every call, so a plain mkdir cannot
+// stand in for this fixture.
+function createManagedWorktreeFixture(taskId: string): ManagedWorktreeFixture {
+  const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-root-")));
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-repo-")));
+  assertManagedRootOwned(managedRoot);
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repoRoot });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repoRoot });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repoRoot });
+  const repositoryId = deriveRepositoryId(repoRoot);
+  const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
+  const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  const taskBranch = deriveTaskBranchName({ taskId });
+  mkdirSync(dirname(managedWorktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, managedWorktreePath, "HEAD"], {
+    cwd: repoRoot,
+  });
+  const gitdirInspection = inspectManagedGitdirIdentity(managedWorktreePath, repoRoot);
+  if (gitdirInspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return {
+    managedRoot,
+    repoRoot,
+    managedWorktreePath,
+    workspaceId,
+    instance: {
       schemaVersion: "1",
       workspaceId,
-      taskId: "task-443",
+      taskId,
       repositoryId,
       repositoryRoot: repoRoot,
       baseBranch: "main",
-      taskBranch: deriveTaskBranchName({ taskId: "task-443" }),
+      taskBranch,
       managedWorktreePath,
-      gitdirIdentity: "gitdir-hash",
+      gitdirIdentity: gitdirInspection.identity,
       lifecycleState: "active",
       health: "healthy",
       lock: null,
@@ -344,26 +807,498 @@ describe("resolveProjectWorkspace", () => {
       driftMarkers: [],
       recoveryHints: [],
       auditCorrelationId: workspaceId,
-    };
-    try {
-      expect(
-        resolveProjectWorkspace(
-          {
-            store,
-            managedTaskWorkspaceRoot: managedRoot,
-            workspaceProvisioning: {
-              getInstance: (id: string) => (id === workspaceId ? instance : undefined),
-              provision: () => Promise.reject(new Error("not used")),
-              activate: () => Promise.reject(new Error("not used")),
-            },
-          },
-          managedWorktreePath,
-        )?.root,
-      ).toBe(managedWorktreePath);
-    } finally {
-      store.close();
+    },
+    dispose: (): void => {
       rmSync(repoRoot, { recursive: true, force: true });
       rmSync(managedRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+// The provisioning lookup reads `current()` on EVERY call, so a test can revoke the workspace
+// (archive it) between two re-proofs exactly as production lifecycle transitions do.
+function managedAccessDeps(
+  fixture: ManagedWorktreeFixture,
+  current: () => WorkspaceInstance | undefined,
+): {
+  readonly managedTaskWorkspaceRoot: string;
+  readonly workspaceProvisioning: {
+    readonly getInstance: (id: string) => WorkspaceInstance | undefined;
+    readonly provision: () => Promise<never>;
+    readonly activate: () => Promise<never>;
+  };
+} {
+  return {
+    managedTaskWorkspaceRoot: fixture.managedRoot,
+    workspaceProvisioning: {
+      getInstance: (id: string): WorkspaceInstance | undefined =>
+        id === fixture.workspaceId ? current() : undefined,
+      provision: (): Promise<never> => Promise.reject(new Error("not used")),
+      activate: (): Promise<never> => Promise.reject(new Error("not used")),
+    },
+  };
+}
+
+function recordingMutationAdapter(calls: string[]): GitLocalMutationAdapter {
+  const succeeded = (kind: string): Promise<GitDeliveryExecutionResult> => {
+    calls.push(kind);
+    return Promise.resolve({
+      schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+      outcome: "succeeded",
+      durationMs: 1,
+    });
+  };
+  return {
+    createBranch: () => succeeded("createBranch"),
+    switchBranch: () => succeeded("switchBranch"),
+    stage: () => succeeded("stage"),
+    unstage: () => succeeded("unstage"),
+    commit: () => succeeded("commit"),
+    abort: () => succeeded("abort"),
+    recover: () => succeeded("recover"),
+  };
+}
+
+const MANAGED_SNAPSHOT: GitWorktreeSnapshot = {
+  headDetached: false,
+  currentBranchName: "keiko/task-3347",
+  stagedFileCount: 0,
+  unstagedFileCount: 0,
+  untrackedFileCount: 0,
+  hasUpstream: false,
+  aheadCount: 0,
+  behindCount: 0,
+  existingLocalBranchNames: ["keiko/task-3347"],
+  remoteAliases: [],
+};
+
+const BRANCH_CREATE = {
+  kind: "branch-create",
+  branchName: "feature/after-revocation",
+  baseBranchName: "keiko/task-3347",
+  startPointRefHash: "HEAD",
+} as const;
+
+describe("executeGovernedMutation — managed-root re-proof at the spawn boundaries", () => {
+  it("starts no mutation when the root is archived while the snapshot read is in flight", async () => {
+    const fixture = createManagedWorktreeFixture("task-3347-deferred");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    const calls: string[] = [];
+    let instance: WorkspaceInstance | undefined = fixture.instance;
+    try {
+      const result = await executeGovernedMutation(
+        BRANCH_CREATE,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedAccessDeps(fixture, () => instance),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter(calls),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => {
+            // The revocation lands during the await the finding names: admission proved the root,
+            // the multi-command snapshot read is in flight, and the adapter has not been built yet.
+            instance = { ...fixture.instance, lifecycleState: "archived" };
+            return Promise.resolve(MANAGED_SNAPSHOT);
+          },
+        },
+        "request-correlation-revoked",
+      );
+
+      expect(calls).toEqual([]);
+      expect(result.outcome).toMatchObject({
+        status: "blocked",
+        category: "policy-block",
+        blockReason: "authority-denied",
+      });
+      const noSpawn = activity.events.find((e) => e.op === "git.delivery.dispatch.no-spawn");
+      expect(noSpawn?.correlationId).toBe("request-correlation-revoked");
+      expect(noSpawn?.errorKind).toBe("authority-denied");
+      expect(noSpawn?.extra?.operation).toBe("branch-create");
+      const noSpawnPersisted = expectActivityLogProof(
+        "git.delivery.dispatch.no-spawn.emitted-line",
+        formatActivityLogProofLine(noSpawn ?? {}),
+      );
+      expect(noSpawnPersisted).toMatchObject({ operation: "branch-create" });
+      expect(
+        activity.events.some(
+          (e) => e.op === "workspace.root.denied" && e.extra?.reason === "managed-root-lifecycle",
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+    } finally {
+      fixture.dispose();
     }
+  });
+
+  it("dispatches the same mutation while the managed root still re-proves (negative control)", async () => {
+    const fixture = createManagedWorktreeFixture("task-3347-live");
+    const cap = captureStore();
+    const calls: string[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        BRANCH_CREATE,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedAccessDeps(fixture, () => fixture.instance),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: () => recordingMutationAdapter(calls),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-live",
+      );
+
+      expect(calls).toEqual(["createBranch"]);
+      expect(result.outcome.status).toBe("succeeded");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("refuses before the snapshot read when the root was already revoked at entry", async () => {
+    const fixture = createManagedWorktreeFixture("task-3347-preflight");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    const calls: string[] = [];
+    let snapshotReads = 0;
+    try {
+      await expect(
+        executeGovernedMutation(
+          BRANCH_CREATE,
+          { required: false },
+          workspaceInfo(fixture.managedWorktreePath),
+          {
+            evidenceStore: cap.store,
+            redactor: buildRedactor({}),
+            ...managedAccessDeps(fixture, () => undefined),
+          },
+          {
+            policyPacks: { repoPack: ALLOW_LOCAL },
+            activityLog: activity.sink,
+            adapterFactory: () => recordingMutationAdapter(calls),
+            snapshotReader: (): Promise<GitWorktreeSnapshot> => {
+              snapshotReads += 1;
+              return Promise.resolve(MANAGED_SNAPSHOT);
+            },
+          },
+          "request-correlation-entry",
+        ),
+      ).rejects.toBeInstanceOf(GitDeliveryRootAuthorityRevokedError);
+
+      // Not one process: the snapshot read is itself a multi-command git spawn.
+      expect(snapshotReads).toBe(0);
+      expect(calls).toEqual([]);
+      expect(cap.count()).toBe(0);
+      expect(activity.events.some((e) => e.op === "git.delivery.dispatch.no-spawn")).toBe(true);
+    } finally {
+      fixture.dispose();
+    }
+  });
+});
+
+// ── #3382: a governed COMMIT restamps the managed workspace's verified head ─────────────────────
+//
+// `lastVerifiedHead` is the baseline `classifyWorkspaceReconciliation` measures `head-moved`
+// against, and until this restamp existed nothing wrote it outside a healthy reconciliation pass.
+// Every governed commit inside a managed task worktree therefore moved HEAD away from that
+// baseline, the next pass persisted `head-moved` — whose recovery was a strategy `repair.ts`
+// executes for no marker — and `productionRuntimeWorkspaceAuthority` refused the workspace for
+// every further run. The restamp is scoped to exactly what Keiko KNOWS it did: a commit, that
+// succeeded, inside a root the managed prover still admits.
+
+const COMMIT = { kind: "commit", message: "governed commit", allowEmpty: true } as const;
+
+interface RestampCall {
+  readonly managedWorktreePath: string;
+  readonly correlationId?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
+}
+
+function managedDepsWithRestamp(
+  fixture: ManagedWorktreeFixture,
+  calls: RestampCall[],
+): ReturnType<typeof managedAccessDeps> & {
+  readonly workspaceProvisioning: {
+    readonly recordVerifiedHead: (input: RestampCall) => Promise<boolean>;
+  };
+} {
+  const base = managedAccessDeps(fixture, () => fixture.instance);
+  return {
+    ...base,
+    workspaceProvisioning: {
+      ...base.workspaceProvisioning,
+      recordVerifiedHead: (input: RestampCall): Promise<boolean> => {
+        calls.push(input);
+        return Promise.resolve(true);
+      },
+    },
+  };
+}
+
+describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
+  it("records the managed workspace's verified head after a successful commit", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-commit");
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedDepsWithRestamp(fixture, calls),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-restamp",
+      );
+
+      expect(result.outcome.status).toBe("succeeded");
+      // Exactly one call, carrying the canonical worktree root and the request's own correlation id
+      // — matched field-by-field rather than by whole-object equality, so the deadline signal the
+      // input now also carries does not make this pin about the input's shape.
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        managedWorktreePath: fixture.managedWorktreePath,
+        correlationId: "request-correlation-restamp",
+      });
+      // The port is handed a LIVE deadline signal: the restamp completed inside its bound, so
+      // nothing abandoned it and the write it made was legitimate.
+      expect(calls[0]?.signal?.aborted).toBe(false);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("records nothing for a mutation that does not move HEAD", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-branch");
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        BRANCH_CREATE,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedDepsWithRestamp(fixture, calls),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-branch",
+      );
+
+      expect(result.outcome.status).toBe("succeeded");
+      expect(calls).toEqual([]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("records nothing when the commit did not succeed", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-failed");
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    try {
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...managedDepsWithRestamp(fixture, calls),
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          adapterFactory: (): GitLocalMutationAdapter => ({
+            ...recordingMutationAdapter([]),
+            commit: (): Promise<GitDeliveryExecutionResult> =>
+              Promise.resolve({
+                schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+                outcome: "failed",
+                durationMs: 1,
+                errorCode: "precondition-failed",
+              }),
+          }),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-failed-commit",
+      );
+
+      expect(result.outcome.status).not.toBe("succeeded");
+      expect(calls).toEqual([]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // An ordinary registered project is not a managed task worktree, so it has no row to restamp and
+  // the prover is never even consulted for it.
+  // CodeRabbit, PR #3381: the restamp is documented best-effort, but the `await` was unguarded, so a
+  // port that rejects turned a COMMITTED, already-evidenced mutation into a rejected call — the
+  // caller's route then answered 409 GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE for a commit that is in
+  // the operator's history. The rejection is contained at this seam and reported instead.
+  it("keeps a rejecting restamp port from failing a commit that already succeeded", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-restamp-rejects");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    try {
+      const base = managedAccessDeps(fixture, () => fixture.instance);
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...base,
+          workspaceProvisioning: {
+            ...base.workspaceProvisioning,
+            recordVerifiedHead: (): Promise<boolean> =>
+              Promise.reject(new Error("restamp port exploded")),
+          },
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+        },
+        "request-correlation-restamp-rejects",
+      );
+
+      // The commit's own result is untouched, and its evidence line still says `succeeded`.
+      expect(result.outcome.status).toBe("succeeded");
+      expect(
+        activity.events.find((e) => e.op === "git.delivery.mutation.completed")?.extra?.status,
+      ).toBe("succeeded");
+
+      // Exactly one classified line for the failed restamp — not silent, and body-free.
+      const failure = expectRestampFailure(
+        activity,
+        "unavailable",
+        "REPOSITORY_UNREACHABLE",
+        "request-correlation-restamp-rejects",
+      );
+      expect(failure.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // CodeRabbit, PR #3381: the previous guard caught a REJECTION but not a promise that never
+  // settles. The port serializes on the workspace's `ws:` key and that wait cannot be cancelled, so
+  // a wedged holder left this `await` pending forever — and it runs AFTER the commit and its
+  // lifecycle evidence are durable, so the client hung on a commit that had already succeeded. The
+  // deadline is injected in milliseconds here; in production it is
+  // VERIFIED_HEAD_RESTAMP_DEADLINE_MS.
+  it("completes a successful commit when the restamp port never settles", async () => {
+    const fixture = createManagedWorktreeFixture("task-3382-restamp-hangs");
+    const cap = captureStore();
+    const activity = captureActivityLog();
+    let observedSignal: AbortSignal | undefined;
+    try {
+      const base = managedAccessDeps(fixture, () => fixture.instance);
+      const result = await executeGovernedMutation(
+        COMMIT,
+        { required: false },
+        workspaceInfo(fixture.managedWorktreePath),
+        {
+          evidenceStore: cap.store,
+          redactor: buildRedactor({}),
+          ...base,
+          workspaceProvisioning: {
+            ...base.workspaceProvisioning,
+            // Never settles — exactly what a wedged `ws:` holder produces.
+            recordVerifiedHead: (input): Promise<boolean> => {
+              observedSignal = input.signal;
+              return new Promise<boolean>(() => undefined);
+            },
+          },
+        },
+        {
+          policyPacks: { repoPack: ALLOW_LOCAL },
+          activityLog: activity.sink,
+          adapterFactory: () => recordingMutationAdapter([]),
+          snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+          verifiedHeadRestampDeadlineMs: 5,
+        },
+        "request-correlation-restamp-hangs",
+      );
+
+      // The commit's own result is untouched and the call RETURNED — that is the whole finding.
+      expect(result.outcome.status).toBe("succeeded");
+      expect(
+        activity.events.find((e) => e.op === "git.delivery.mutation.completed")?.extra?.status,
+      ).toBe("succeeded");
+
+      // Exactly one classified line for the expiry, body-free, under this request's correlation id.
+      expectRestampFailure(
+        activity,
+        "conflict",
+        "LOCK_CONTENTION",
+        "request-correlation-restamp-hangs",
+      );
+      expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
+
+      // The port was handed the deadline's signal and it is aborted, so the abandoned attempt can
+      // never persist a head after the request it belonged to has been answered.
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("records nothing for an ordinary registered project", async () => {
+    const cap = captureStore();
+    const calls: RestampCall[] = [];
+    const result = await executeGovernedMutation(
+      COMMIT,
+      { required: false },
+      workspaceInfo(root),
+      {
+        evidenceStore: cap.store,
+        redactor: buildRedactor({}),
+        workspaceProvisioning: {
+          getInstance: (): undefined => undefined,
+          provision: (): Promise<never> => Promise.reject(new Error("not used")),
+          activate: (): Promise<never> => Promise.reject(new Error("not used")),
+          recordVerifiedHead: (input: RestampCall): Promise<boolean> => {
+            calls.push(input);
+            return Promise.resolve(true);
+          },
+        },
+      },
+      {
+        policyPacks: { repoPack: ALLOW_LOCAL },
+        adapterFactory: () => recordingMutationAdapter([]),
+        snapshotReader: (): Promise<GitWorktreeSnapshot> => Promise.resolve(MANAGED_SNAPSHOT),
+      },
+      "request-correlation-ordinary",
+    );
+
+    expect(result.outcome.status).toBe("succeeded");
+    expect(calls).toEqual([]);
   });
 });

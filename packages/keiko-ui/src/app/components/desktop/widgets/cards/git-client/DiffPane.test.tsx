@@ -7,8 +7,20 @@ import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitEditorDiffFile, GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import type { GitDiffScope } from "@/lib/types";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "@/lib/coding-app-session-client";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { GitClientSeam } from "./git-client-seam";
 import { DiffPane } from "./DiffPane";
+import selectableTextStyles from "../shared/selectableText.module.css";
+
+function selectableTextClass(name: keyof typeof selectableTextStyles): string {
+  const value = selectableTextStyles[name];
+  if (value === undefined) throw new Error(`missing selectableText CSS module class ${name}`);
+  return value;
+}
 
 function makeDiffFile(overrides: Partial<GitEditorDiffFile> = {}): GitEditorDiffFile {
   return {
@@ -73,13 +85,27 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     stage: vi.fn<GitClientSeam["stage"]>(async () => ok),
     unstage: vi.fn<GitClientSeam["unstage"]>(async () => ok),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
+    commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      source: "model",
+      suggestedMessage: "chore: update staged changes\n\nBody.",
+      summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+    })),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ok),
+    commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ok),
     syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
     syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ok),
+    pushPropose: vi.fn<GitClientSeam["pushPropose"]>(async () => ok),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+    prApprove: vi.fn<GitClientSeam["prApprove"]>(),
     prExecute: vi.fn<GitClientSeam["prExecute"]>(),
+    prDescriptionPreview: vi.fn<GitClientSeam["prDescriptionPreview"]>(),
+    prDescriptionApprove: vi.fn<GitClientSeam["prDescriptionApprove"]>(),
+    prDescriptionApply: vi.fn<GitClientSeam["prDescriptionApply"]>(),
+    prDescriptionStatus: vi.fn<GitClientSeam["prDescriptionStatus"]>(),
     mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
     mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(),
     mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),
@@ -87,7 +113,10 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   };
 }
 
-function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}) {
+function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}): {
+  readonly client: GitClientSeam;
+  readonly onScopeChange: ReturnType<typeof vi.fn<(scope: GitDiffScope) => void>>;
+} {
   const onScopeChange = vi.fn<(scope: GitDiffScope) => void>();
   const client = props.client ?? makeSeam();
   render(
@@ -189,6 +218,62 @@ describe("DiffPane — states", () => {
     const metaText = await screen.findByText("\\ No newline at end of file");
     expect(screen.getByText("Diff metadata")).toBeInTheDocument();
     expect(metaText.closest(".rv-line")?.querySelector(".rv-gutter")).toHaveTextContent("");
+  });
+
+  it("#3386: makes the shared diff viewport keyboard reachable without logging its content", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    renderPane({
+      client: makeSeam({
+        getStructuredDiff: vi.fn(async () => makeDiffResponse([makeDiffFile()])),
+      }),
+    });
+    const header = await screen.findByLabelText("Hunk header @@ -7,1 +7,1 @@");
+    const body = header.closest(".rv-code");
+    expect(body).toHaveAttribute("tabindex", "0");
+    if (body === null) throw new Error("Expected the diff viewport");
+    fireEvent.focus(body);
+    expect(warn).toHaveBeenCalledWith("[keiko] shared diff viewport focused");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("src/index.ts");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("const a =");
+  });
+
+  it("issue #2710 — makes the diff body selectable while gutters and sr-only labels opt back out", async () => {
+    renderPane({
+      client: makeSeam({
+        getStructuredDiff: vi.fn(async () => makeDiffResponse([makeDiffFile()])),
+      }),
+    });
+
+    const hunkHeader = await screen.findByLabelText("Hunk header @@ -7,1 +7,1 @@");
+    const diffBody = hunkHeader.closest(".rv-code");
+    expect(diffBody).not.toBeNull();
+    // The interaction guards' embedded-text-surface contract, same as the file
+    // preview and diff-view panes elsewhere (issue #2710).
+    expect(diffBody).toHaveAttribute("data-text-selectable", "true");
+    expect(diffBody).toHaveClass(selectableTextClass("cmp-selectable-text"));
+
+    // Review finding on #3305 — the hunk-header sr-only label sits directly in the
+    // selectable .rv-code body (same as the per-line sr-only label below), so a
+    // copied range must not be able to pull in its visually hidden "Hunk header"
+    // text either.
+    expect(hunkHeader.querySelector(".rv-sr-only")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
+
+    // A copied range must carry only the source text: line-number gutters, the
+    // +/- sign gutter, and the visually hidden per-line kind label all opt back
+    // out of selection so they cannot land inside a pasted diff line.
+    const line = (diffBody as HTMLElement).querySelector(".rv-add");
+    expect(line).not.toBeNull();
+    expect(line?.querySelector(".rv-num-new")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
+    expect(line?.querySelector(".rv-gutter")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
+    expect(line?.querySelector(".rv-sr-only")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
   });
 
   it("surfaces a truncated diff with a clear notice", async () => {
@@ -316,5 +401,33 @@ describe("DiffPane — structured navigation", () => {
     await screen.findByText("Binary file — no text diff to display.");
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_diff-re-pair",
+      issuedAtMs: 1,
+      claim: "d".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+// PR #3452 review: a diff of a managed task workspace is answered only for a paired browser, so the
+// selected change's diff is read again once a re-pair arrives without a page load.
+describe("DiffPane after a re-pair without a page load (F65)", () => {
+  it("reads the selected change's diff again", async () => {
+    const { client } = renderPane();
+    await waitFor(() => expect(client.getStructuredDiff).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(client.getStructuredDiff).toHaveBeenCalledTimes(2));
   });
 });

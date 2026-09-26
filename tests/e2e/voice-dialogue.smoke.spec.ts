@@ -7,19 +7,21 @@
 //      injected (no hardware, no provider; privacy contract preserved). The dialogue switch starts the
 //      Realtime session directly; the committed user transcript enters the canonical desktop-chat
 //      route, so persistence, retrieval, memory, and the visible assistant answer match typed chat.
-//   3. Full-realtime WITHOUT browser WebRTC media: no fluid dialogue switch is offered. Dictation and
-//      read-aloud remain separate helper surfaces.
+//   3. Without WebRTC media, deployments with both STT and TTS offer the batch dialogue path.
+//      Dictation remains a separate, editable-text surface.
 //
 // Scope note: the provider itself is faked at the WebRTC/control boundary. The executable unit and
 // integration suites cover parser, turn-manager, and BFF persistence behavior; this smoke proves the
 // user-facing surface is a single Realtime dialogue mode and the composer stays text-capable.
 
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chat, ChatMessage, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { evidenceScreenshotPath } from "./support/evidence.js";
+import { openChatComposer } from "./support/chat-composer.js";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
 const MEMORY_CAPTURE_TRANSCRIPT =
   "KEIKO_E2E_JOURNAL_CAPTURE: remember the deterministic release window.";
@@ -31,11 +33,25 @@ const PROVIDER_CANONICAL_TURN_ID_PATTERN = /^client-turn-[0-9a-f]{32}-[0-9a-f]{6
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const tempProjects: string[] = [];
 
+async function verifyChatModel(request: APIRequestContext): Promise<void> {
+  const response = await request.post("/api/gateway/readiness", {
+    headers: MUTATION_HEADERS,
+    data: { modelId: CHAT_MODEL_ID, options: { probes: ["chat"] } },
+  });
+  expect(response.ok(), await response.text().catch(() => "")).toBe(true);
+}
+
 declare global {
   interface Window {
     readonly __micStats?: Readonly<Record<string, number>>;
     readonly __providerNativeOutputEvents?: number;
     readonly __canonicalTtsPlays?: number;
+    readonly __canonicalTtsStops?: number;
+    readonly __holdBatchSpeech?: boolean;
+    readonly __releaseCanonicalTts?: () => void;
+    readonly __pcmSamples?: number;
+    readonly __silentVadSamples?: number;
+    readonly __silentRecorderStarts?: number;
   }
 }
 
@@ -82,6 +98,52 @@ const NO_VOICE_CAPABILITY = {
   },
 };
 
+const BATCH_VOICE_CAPABILITY = {
+  voice: {
+    available: true,
+    profile: "speech-output",
+    capabilities: { speechToText: true, speechOutput: true, realtimeVoice: false },
+    transport: { websocketControl: false, webrtcMedia: false },
+    availableVoicePersonas: ["neutral"],
+    providerLocality: "gateway-managed",
+  },
+};
+
+const BATCH_AUDIO_INIT = `${fakeDictationMediaInit("grant")}
+  window.__canonicalTtsPlays = 0;
+  window.__canonicalTtsStops = 0;
+  window.Audio = class {
+    constructor() { this.onplaying = null; this.onended = null; this.onerror = null; }
+    play() {
+      window.__canonicalTtsPlays += 1;
+      this.onplaying?.();
+      if (!window.__holdBatchSpeech) setTimeout(() => this.onended?.(), 0);
+      return Promise.resolve();
+    }
+    pause() { window.__canonicalTtsStops += 1; }
+  };
+`;
+
+const BATCH_OGG_AUDIO_INIT = `${BATCH_AUDIO_INIT}
+  window.__pcmSamples = 0;
+  Object.defineProperty(window, "AudioContext", { configurable: true, value: class {
+    constructor() { this.audioWorklet = { addModule: async () => {} }; this.destination = {}; }
+    resume() { return Promise.resolve(); }
+    close() { return Promise.resolve(); }
+  } });
+  Object.defineProperty(window, "AudioWorkletNode", { configurable: true, value: class {
+    constructor() {
+      this.port = {
+        onmessage: null,
+        postMessage(value) { if (value instanceof Int16Array) window.__pcmSamples += value.length; },
+        close() {},
+      };
+    }
+    connect() {}
+    disconnect() {}
+  } });
+`;
+
 // Issue #1563 — the two partial deployments that must NOT offer spoken dialogue (no full STT+TTS
 // conjunction): speech-to-text only (dictation, no spoken answer) and speech-output only (spoken
 // answer, no capture). Both carry personas, so the gate's persona check is not what hides the switch —
@@ -118,6 +180,7 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
     : "what is the deploy status";
   window.__providerNativeOutputEvents = 0;
   window.__canonicalTtsPlays = 0;
+  window.__releaseCanonicalTts = undefined;
   Object.defineProperty(window, "AudioWorkletNode", { configurable: true, value: undefined });
   window.Audio = class {
     constructor() {
@@ -130,7 +193,12 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
     play() {
       window.__canonicalTtsPlays++;
       if (this.onplaying) this.onplaying();
-      setTimeout(() => { if (this.onended) this.onended(); }, 0);
+      const finish = () => { if (this.onended) this.onended(); };
+      if (options.holdSpeech === true) {
+        window.__releaseCanonicalTts = finish;
+      } else {
+        setTimeout(finish, 0);
+      }
       return Promise.resolve();
     }
     pause() {}
@@ -262,10 +330,12 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
 
 function fakeRealtimeInit({
   emitTranscript = false,
+  holdSpeech = false,
   instrumentMic = false,
   transcript,
 }: {
   readonly emitTranscript?: boolean;
+  readonly holdSpeech?: boolean;
   readonly instrumentMic?: boolean;
   readonly transcript?: string;
 } = {}): string {
@@ -273,19 +343,13 @@ function fakeRealtimeInit({
     (() => {
       window.__keikoVoiceFakeOptions = {
         emitTranscript: ${JSON.stringify(emitTranscript)},
+        holdSpeech: ${JSON.stringify(holdSpeech)},
         instrumentMic: ${JSON.stringify(instrumentMic)},
         transcript: ${JSON.stringify(transcript)},
       };
       ${REALTIME_BROWSER_FAKE_SCRIPT}
     })();
   `;
-}
-
-async function openComposer(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat History", exact: true }).click();
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
 
 async function stubCapability(page: Page, body: unknown): Promise<void> {
@@ -389,6 +453,17 @@ test.afterEach(() => {
   }
 });
 
+async function composerCentreDelta(composer: Locator): Promise<number> {
+  return composer.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const cluster = element.querySelector(".cmp-bar-main-voice-dialog")?.getBoundingClientRect();
+    if (cluster === undefined) return Number.POSITIVE_INFINITY;
+    const x = cluster.x + cluster.width / 2 - (box.x + box.width / 2);
+    const y = cluster.y + cluster.height / 2 - (box.y + box.height / 2);
+    return Math.max(Math.abs(x), Math.abs(y));
+  });
+}
+
 async function expectActiveComposerSettled(page: Page): Promise<void> {
   const composer = page.locator(".cmp-box");
   const normalLayer = composer.locator('[data-composer-layer="normal"]');
@@ -397,25 +472,16 @@ async function expectActiveComposerSettled(page: Page): Promise<void> {
   await expect(voiceLayer).toHaveCSS("opacity", "1");
   await expect(normalLayer).toHaveAttribute("aria-hidden", "true");
   await expect(normalLayer).toHaveAttribute("inert", "");
-
-  const centreOffset = await composer.evaluate((element) => {
-    const box = element.getBoundingClientRect();
-    const cluster = element.querySelector(".cmp-bar-main-voice-dialog")?.getBoundingClientRect();
-    if (cluster === undefined) return undefined;
-    return {
-      x: cluster.x + cluster.width / 2 - (box.x + box.width / 2),
-      y: cluster.y + cluster.height / 2 - (box.y + box.height / 2),
-    };
-  });
-  expect(centreOffset).toBeDefined();
-  expect(Math.abs(centreOffset?.x ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
-  expect(Math.abs(centreOffset?.y ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
+  // Opacity settles before the longer transform transition. Poll the governed visual invariant
+  // itself so a fast WebKit runner cannot sample the final sub-pixel of an in-flight animation.
+  await expect.poll(() => composerCentreDelta(composer)).toBeLessThan(1);
 }
 
 interface VoiceChatSendCapture {
   readonly canonicalContents: () => readonly string[];
   readonly canonicalPaths: () => readonly string[];
   readonly canonicalPayloads: () => readonly Record<string, unknown>[];
+  readonly canonicalCorrelations: () => readonly (string | undefined)[];
   readonly legacyPaths: () => readonly string[];
 }
 
@@ -423,6 +489,7 @@ function captureVoiceChatSends(page: Page): VoiceChatSendCapture {
   const contents: string[] = [];
   const paths: string[] = [];
   const payloads: Record<string, unknown>[] = [];
+  const correlations: (string | undefined)[] = [];
   const legacyPaths: string[] = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -436,11 +503,13 @@ function captureVoiceChatSends(page: Page): VoiceChatSendCapture {
     contents.push(payload.content);
     paths.push(pathname);
     payloads.push(payload);
+    correlations.push(request.headers()["x-keiko-correlation-id"]);
   });
   return {
     canonicalContents: () => contents,
     canonicalPaths: () => paths,
     canonicalPayloads: () => payloads,
+    canonicalCorrelations: () => correlations,
     legacyPaths: () => legacyPaths,
   };
 }
@@ -714,8 +783,13 @@ async function persistedVoiceTurnCounts(
 async function persistedMemoryCaptureCount(
   request: APIRequestContext,
   since: number,
+  scope?: "user" | "project",
 ): Promise<number | string> {
-  const params = new URLSearchParams({ order: "desc", since: String(since) });
+  const params = new URLSearchParams({
+    order: "desc",
+    since: String(since),
+    ...(scope === undefined ? {} : { scope }),
+  });
   const response = await request.get(`/api/memory?${params.toString()}`);
   if (!response.ok()) return `HTTP ${String(response.status())}`;
   const body = (await response.json()) as {
@@ -728,6 +802,18 @@ async function persistedMemoryCaptureCount(
   return captures.filter(
     (capture) => capture.outcome !== "rejected" && typeof capture.memoryId === "string",
   ).length;
+}
+
+async function memoryRecordCountByScope(
+  request: APIRequestContext,
+  scope: "user" | "project",
+  query: string,
+): Promise<number | string> {
+  const params = new URLSearchParams({ scope, q: query });
+  const response = await request.get(`/api/memory?${params.toString()}`);
+  if (!response.ok()) return `HTTP ${String(response.status())}`;
+  const body = (await response.json()) as { readonly total?: unknown };
+  return typeof body.total === "number" ? body.total : "missing total";
 }
 
 // Reads a counter from the browser-side window.__micStats instrument (see fakeRealtimeInit), so
@@ -744,9 +830,13 @@ async function canonicalTtsPlays(page: Page): Promise<number | undefined> {
   return page.evaluate(() => window.__canonicalTtsPlays);
 }
 
+async function releaseCanonicalTts(page: Page): Promise<void> {
+  await page.evaluate(() => window.__releaseCanonicalTts?.());
+}
+
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -757,17 +847,25 @@ async function expectDialogueOnlyControls(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
+  // KEIKO-0217/#2894 keeps barge-in reachable while the fake provider's output is active.
+  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
+  await expect(interrupt).toBeVisible();
+  await expect(interrupt).toHaveAttribute("aria-disabled", "false");
+  await interrupt.click();
+  await releaseCanonicalTts(page);
+  await expect(interrupt).toHaveAttribute("aria-disabled", "true");
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 }
 
 async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise<void> {
-  await page.addInitScript(fakeRealtimeInit({ emitTranscript: true }));
+  // Hold fake playback open so the KEIKO-0217/#2894 reachability assertion observes an explicit
+  // provider-output state; releasing the fixture after Interrupt proves the settled state as well.
+  await page.addInitScript(fakeRealtimeInit({ emitTranscript: true, holdSpeech: true }));
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   const chatSends = captureVoiceChatSends(page);
   const synthesizedTexts = await captureSynthesizedTexts(page);
-  await openComposer(page);
+  await openChatComposer(page);
 
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
@@ -775,8 +873,15 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  await expectDialogueOnlyControls(page);
   await expectActiveComposerSettled(page);
+  // Interrupt is actionable while the assistant thinks as well as while it speaks, and a barge-in
+  // suppresses whatever the canonical turn has not produced yet. Clicking it as soon as it was enabled
+  // made the phase it hits depend on engine speed, which is how the WebKit smoke lost its canonical
+  // speech at random. Barge in once the answer is synthesized and its fake playback is held, the
+  // state the holdSpeech fixture exists for.
+  await expect.poll(() => synthesizedTexts.length).toBe(1);
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  await expectDialogueOnlyControls(page);
 
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/1560-dialogue-session.png"),
@@ -823,6 +928,7 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
 
 async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): Promise<void> {
   const since = Date.now() - 1_000;
+  await verifyChatModel(request);
   await page.addInitScript(
     fakeRealtimeInit({ emitTranscript: true, transcript: MEMORY_CAPTURE_TRANSCRIPT }),
   );
@@ -834,7 +940,13 @@ async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): P
       body: JSON.stringify({ audio: "AA==", mimeType: "audio/mpeg" }),
     }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
+  const chatWindow = page.locator('section.window[data-top="true"]');
+  const memoryControl = chatWindow.locator(".chat-memory-activation-toggle");
+  await expect(memoryControl).toHaveAccessibleName("Enable MemoriaViva for this chat");
+  await memoryControl.click();
+  await expect(memoryControl).toHaveAttribute("aria-pressed", "true");
+  await expect(memoryControl).toHaveAccessibleName("Disable MemoriaViva for this chat");
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await dialogSwitch.click();
@@ -1014,6 +1126,261 @@ test("voice dialogue @smoke — Realtime WebRTC uses canonical chat turns (AC1/A
   await dialogueTurnFlow(page, request);
 });
 
+test("voice dialogue @smoke — Whisper-style STT and TTS complete a browser dialogue turn", async ({
+  page,
+}) => {
+  const transcript = "how is the deploy status";
+  await page.addInitScript(BATCH_AUDIO_INIT);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  await page.route("**/api/voice/transcribe", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript, confidence: 0.9 }),
+    }),
+  );
+  const sends = captureVoiceChatSends(page);
+  const speeches = await captureSynthesizedTexts(page);
+  await openChatComposer(page);
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await expect(dialogSwitch).toBeVisible();
+  await dialogSwitch.click();
+  await expect(
+    page.locator('[data-composer-layer="voice"]').getByText("Listening to you.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Finish speaking" }).click();
+  const conversation = page.getByRole("log", { name: "Conversation" });
+  await expect(conversation.getByText(transcript, { exact: true })).toHaveCount(1);
+  await expect(conversation.getByText(/KEIKO_E2E_STREAM_OK/u)).toHaveCount(1);
+  await expect.poll(() => speeches.length).toBe(1);
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  await expect(page.getByRole("button", { name: "Finish speaking" })).toBeVisible();
+  expect(sends.canonicalContents()).toEqual([transcript]);
+  expect(sends.legacyPaths()).toEqual([]);
+  expect(sends.canonicalPayloads()[0]).toMatchObject({
+    content: transcript,
+    clientTurnId: expect.stringMatching(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u),
+  });
+  expect(sends.canonicalCorrelations()[0]).toMatch(
+    /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u,
+  );
+  expect(sends.canonicalCorrelations()[0]).not.toBe(sends.canonicalPayloads()[0]?.clientTurnId);
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+});
+
+test("voice dialogue @smoke — batch interrupt stops playback and retains the next turn", async ({
+  page,
+}) => {
+  await page.addInitScript(`${BATCH_AUDIO_INIT} window.__holdBatchSpeech = true;`);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  let transcriptions = 0;
+  await page.route("**/api/voice/transcribe", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        transcript: ++transcriptions === 1 ? "First test question" : "Thank you, that is enough.",
+      }),
+    }),
+  );
+  const sends = captureVoiceChatSends(page);
+  const speeches = await captureSynthesizedTexts(page);
+  await openChatComposer(page);
+  const mode = page.getByRole("switch", { name: "Voice dialogue mode" });
+  const finish = page.getByRole("button", { name: "Finish speaking" });
+  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
+  await mode.click();
+  await expect(finish).toBeVisible();
+  await expect(interrupt).toHaveCount(0);
+  await finish.click();
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  await expect(interrupt).toBeVisible();
+  await expect(finish).toHaveCount(0);
+  const stops = await page.evaluate(() => window.__canonicalTtsStops ?? 0);
+  await interrupt.click();
+  await expect
+    .poll(() => page.evaluate(() => window.__canonicalTtsStops ?? 0))
+    .toBeGreaterThan(stops);
+  await expect(interrupt).toHaveCount(0);
+  await expect(finish).toBeVisible();
+  await finish.click();
+  await expect
+    .poll(() => sends.canonicalContents())
+    .toEqual(["First test question", "Thank you, that is enough."]);
+  await expect.poll(() => speeches.length).toBe(2);
+  await mode.click();
+  await expect(mode).toHaveAttribute("aria-checked", "false");
+});
+
+test("voice dialogue @smoke — long silent playback keeps interruption capture armed", async ({
+  page,
+}) => {
+  await page.clock.install();
+  // Keep the real VAD sampling and capture-renewal code, but supply deterministic silent samples.
+  // A real AudioContext.resume() can remain pending on Linux Firefox without an output device.
+  await page.addInitScript(`${BATCH_AUDIO_INIT}
+    window.__holdBatchSpeech = true;
+    window.__silentVadSamples = 0;
+    window.__silentRecorderStarts = 0;
+    const Recorder = window.MediaRecorder;
+    window.MediaRecorder = class extends Recorder {
+      start() { window.__silentRecorderStarts += 1; super.start(); }
+    };
+    window.AudioContext = class {
+      constructor() { this.state = "running"; }
+      resume() { return Promise.resolve(); }
+      close() { this.state = "closed"; return Promise.resolve(); }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      createAnalyser() {
+        return { fftSize: 1024, getFloatTimeDomainData(samples) {
+          window.__silentVadSamples += 1;
+          samples.fill(0);
+        } };
+      }
+    };
+  `);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  let transcriptions = 0;
+  await page.route("**/api/voice/transcribe", (route) => {
+    transcriptions += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript: "A long test answer please" }),
+    });
+  });
+  await captureSynthesizedTexts(page);
+  await openChatComposer(page);
+  const mode = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await mode.click();
+  await page.getByRole("button", { name: "Finish speaking" }).click();
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
+  await expect(interrupt).toBeVisible();
+  for (let interval = 0; interval < 3; interval += 1) {
+    const starts = await page.evaluate(() => window.__silentRecorderStarts ?? 0);
+    await page.clock.fastForward(61_000);
+    await page.clock.runFor(600);
+    await expect
+      .poll(() => page.evaluate(() => window.__silentRecorderStarts ?? 0))
+      .toBeGreaterThan(starts);
+  }
+  expect(await page.evaluate(() => window.__silentVadSamples ?? 0)).toBeGreaterThan(0);
+  expect(transcriptions).toBe(1);
+  await expect(interrupt).toBeVisible();
+  await interrupt.click();
+  await expect(page.getByRole("button", { name: "Finish speaking" })).toBeVisible();
+  await mode.click();
+  await expect(mode).toHaveAttribute("aria-checked", "false");
+});
+
+async function startFailedBatchTurn(page: Page): Promise<void> {
+  await page.addInitScript(BATCH_AUDIO_INIT);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  await page.route("**/api/voice/transcribe", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript: "recover these words", confidence: 0.9 }),
+    }),
+  );
+  const failedChat = {
+    status: 400,
+    contentType: "application/json",
+    body: JSON.stringify({ error: { code: "BAD_REQUEST", message: "Invalid chat request" } }),
+  };
+  await page.route("**/api/desktop/chat/stream", (route) => route.fulfill(failedChat));
+  await page.route("**/api/desktop/chat", (route) =>
+    route.request().method() === "POST" ? route.fulfill(failedChat) : route.continue(),
+  );
+  await openChatComposer(page);
+  await page.getByRole("switch", { name: "Voice dialogue mode" }).click();
+  await page.getByRole("button", { name: "Finish speaking" }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "The spoken turn could not be completed" }),
+  ).toBeVisible();
+}
+
+test("voice dialogue @smoke — failed spoken delivery offers a visible retry", async ({ page }) => {
+  await startFailedBatchTurn(page);
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("button", { name: "Finish speaking" })).toBeVisible();
+});
+
+test("voice dialogue @smoke — failed spoken delivery can continue as editable text", async ({
+  page,
+}) => {
+  await startFailedBatchTurn(page);
+  await page.getByRole("button", { name: "Continue with this text" }).click();
+  await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveValue(
+    "recover these words",
+  );
+});
+
+test("voice dialogue @smoke — Ogg from an Azure-style stream falls back to browser audio", async ({
+  page,
+}) => {
+  await page.addInitScript(BATCH_OGG_AUDIO_INIT);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  await page.route("**/api/voice/transcribe", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript: "read the complete answer", confidence: 0.9 }),
+    }),
+  );
+  let streamRequests = 0;
+  await page.route("**/api/voice/speak/stream", (route) => {
+    streamRequests += 1;
+    return route.fulfill({
+      contentType: "audio/ogg",
+      body: Buffer.from([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02]),
+    });
+  });
+  const speeches = await captureSynthesizedTexts(page);
+  await openChatComposer(page);
+  await page.getByRole("switch", { name: "Voice dialogue mode" }).click();
+  await page.getByRole("button", { name: "Finish speaking" }).click();
+  await expect.poll(() => speeches.length).toBe(1);
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  expect(streamRequests).toBe(1);
+  expect(await page.evaluate(() => window.__pcmSamples)).toBe(0);
+  await expect(page.getByRole("button", { name: "Finish speaking" })).toBeVisible();
+});
+
+test("voice dialogue @smoke — turn-based identity memory stays in the private user scope", async ({
+  page,
+  request,
+}) => {
+  const transcript = "Hallo Keiko, ich bin Vinaq.";
+  await page.addInitScript(BATCH_AUDIO_INIT);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  await page.route("**/api/voice/transcribe", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript, confidence: 0.9 }),
+    }),
+  );
+  const sends = captureVoiceChatSends(page);
+  await captureSynthesizedTexts(page);
+  await openChatComposer(page);
+  const chatWindow = page.locator('section.window[data-top="true"]');
+  await chatWindow.getByRole("button", { name: "Enable MemoriaViva for this chat" }).click();
+  await expect(
+    chatWindow.getByRole("button", { name: "Disable MemoriaViva for this chat" }),
+  ).toBeVisible();
+  await page.getByRole("switch", { name: "Voice dialogue mode" }).click();
+  await page.getByRole("button", { name: "Finish speaking" }).click();
+  await expect.poll(() => memoryRecordCountByScope(request, "user", "Vinaq")).toBe(1);
+  expect(await memoryRecordCountByScope(request, "project", "Vinaq")).toBe(0);
+  expect(sends.canonicalContents()).toEqual([transcript]);
+  expect(sends.canonicalPayloads()[0]).toMatchObject({
+    memory: { enabled: true, surface: "voice" },
+  });
+});
+
 test("voice dialogue @smoke — canonical speech reaches Memoria Viva exactly once", async ({
   page,
   request,
@@ -1031,7 +1398,7 @@ test("voice dialogue @smoke — Composer and Voice preserve persisted grounding 
 async function micLifecycleFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit({ instrumentMic: true }));
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
@@ -1068,7 +1435,7 @@ test("voice dialogue @smoke — switch starts WebRTC microphone and leave releas
 // browser smoke now covers every configured capability profile (AC1).
 async function unavailableProfileFlow(page: Page, capability: unknown): Promise<void> {
   await stubCapability(page, capability);
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -1084,7 +1451,7 @@ async function unavailableProfileFlow(page: Page, capability: unknown): Promise<
 async function activeComposerControlsFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await dialogSwitch.click();
@@ -1127,10 +1494,22 @@ test("voice dialogue @smoke — speech-output-only deployment offers no dialogue
   await unavailableProfileFlow(page, SPEECH_OUTPUT_ONLY_CAPABILITY);
 });
 
-test("voice dialogue @smoke — full-realtime without WebRTC offers no dialogue switch (AC1)", async ({
+test("voice dialogue @smoke — full-realtime without WebRTC uses turn-based capture (AC1)", async ({
   page,
 }) => {
-  await unavailableProfileFlow(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
+  await page.addInitScript(BATCH_AUDIO_INIT);
+  await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
+  await openChatComposer(page);
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await expect(dialogSwitch).toBeVisible();
+  await dialogSwitch.click();
+  await expect(
+    page.locator('[data-composer-layer="voice"]').getByText("Listening to you.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
 });
 
 test("voice dialogue @smoke — Realtime without explicit TTS offers no spoken Twin", async ({
@@ -1150,7 +1529,7 @@ async function reducedMotionComposerFlow(page: Page): Promise<void> {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const composer = page.locator(".cmp-box");
   const normalLayer = composer.locator('[data-composer-layer="normal"]');
@@ -1197,7 +1576,7 @@ async function enterDialogue(page: Page): Promise<void> {
 async function personaStorageFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   await page.evaluate(() => {
     window.localStorage.setItem("keiko.voice.dialog.persona", "male");
   });

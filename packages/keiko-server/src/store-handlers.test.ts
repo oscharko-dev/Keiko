@@ -3,12 +3,31 @@
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runMigrations } from "./store/schema.js";
+import {
+  createRelationshipStorePort,
+  type RelationshipHandlerDeps,
+} from "./relationship-handlers.js";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -21,8 +40,9 @@ import {
 import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatGitChangeScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,
   handleDeleteChat,
@@ -44,6 +64,75 @@ import {
   type CreateCapsuleInput,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type ServerLogEvent,
+} from "./observability/index.js";
+import { resetServerLogFailureNotices } from "./observability/server-log.js";
+
+// One persisted assistant turn whose grounded answer carries an `indexLifecycle` block — the only
+// shape that makes the messages route open the local-knowledge store at all. Returns the assistant
+// message id so a caller can assert the turn was actually written.
+function seedGroundedLifecycleTurn(
+  uiStore: UiStore,
+  chatId: string,
+  capsuleId: KnowledgeCapsuleId,
+): string {
+  const blank = {
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+  const user = uiStore.createMessage({
+    chatId,
+    role: "user",
+    content: "what changed?",
+    timestamp: 1,
+    ...blank,
+  });
+  const assistant = uiStore.createMessage({
+    chatId,
+    role: "assistant",
+    content: "Answer [1].",
+    timestamp: 2,
+    ...blank,
+  });
+  const answer: GroundedAnswer = {
+    groundingKind: "local-knowledge",
+    userMessageId: user.id,
+    assistantMessageId: assistant.id,
+    content: "Answer [1].",
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 1,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: String(capsuleId),
+      scopeLabel: "Quarantined Capsule",
+      capsuleCount: 1,
+      sourceCount: 0,
+      citationCount: 0,
+      referenceBudget: 16,
+      referencesUsed: 0,
+      indexLifecycle: {
+        schemaVersion: "local-knowledge-index-lifecycle-v1",
+        capturedAt: 1,
+        capsules: [{ capsuleId, updatedAt: 1 }],
+        stale: false,
+      },
+    },
+  };
+  uiStore.attachGroundedAnswer(assistant.id, answer);
+  return assistant.id;
+}
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;
@@ -73,7 +162,13 @@ function directRouteContext(
   const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
   res.writableEnded = false;
   return {
-    ctx: { req, res, params: {}, url: new URL(`http://localhost${path}`) },
+    ctx: {
+      correlationId: undefined,
+      req,
+      res,
+      params: {},
+      url: new URL(`http://localhost${path}`),
+    },
     req,
     res,
   };
@@ -401,14 +496,28 @@ describe("POST /api/projects", () => {
       },
     });
 
-    const res = await fetch(url("/api/projects"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({ path: fallbackProject }),
-    });
+    const droppedBefore = activityLogLossCounters()["diagnostic-sink-failed"];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let res: Response;
+    let body: unknown;
+    let notices: string[];
+    try {
+      // The notice throttle is process-wide: start from a clean slate, and drop the reset's own
+      // flush of anything an earlier test suppressed, so only this request's notice is inspected.
+      resetServerLogFailureNotices();
+      stderrWrite.mockClear();
+      res = await fetch(url("/api/projects"), {
+        method: "POST",
+        headers: POST_HEADERS,
+        body: JSON.stringify({ path: fallbackProject }),
+      });
+      body = await res.json();
+      notices = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
+    } finally {
+      stderrWrite.mockRestore();
+    }
 
     expect(res.status).toBe(201);
-    const body: unknown = await res.json();
     expect(body).toMatchObject({
       project: { path: fallbackProject },
       warning: {
@@ -417,6 +526,24 @@ describe("POST /api/projects", () => {
     });
     expect(body).toHaveProperty("warning.correlationId", expect.any(String));
     expect(store.listProjects()).toContainEqual(expect.objectContaining({ path: fallbackProject }));
+    // The unavailable sink does not make the lost diagnostic silent: it is counted and announced
+    // once on stderr, body-free, under the correlation id the response carries.
+    const correlationId = (body as { warning: { correlationId: string } }).warning.correlationId;
+    expect(activityLogLossCounters()["diagnostic-sink-failed"]).toBe(droppedBefore + 1);
+    expect(notices).toHaveLength(1);
+    expect(JSON.parse(notices[0] ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "server.diagnostic.failure",
+      correlationId,
+      loss: "event-dropped",
+    });
+    for (const secret of [
+      "diagnostic sink unavailable",
+      "foreign manifest body",
+      fallbackProject,
+    ]) {
+      expect(notices[0]).not.toContain(secret);
+    }
   });
 
   it("does not report a restricted project when the trust grant committed before failing", async () => {
@@ -452,7 +579,11 @@ describe("POST /api/projects", () => {
 
   it("records the explicit folder selection as the exact root trust grant", async () => {
     writeFileSync(join(projDir, "package.json"), JSON.stringify({ name: "selected-root" }));
-    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const trustLines: ServerLogEvent[] = [];
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({
+      store,
+      activityLog: { write: (event: ServerLogEvent): void => void trustLines.push(event) },
+    });
     await restartWithDeps({ workspaceScriptTrust });
 
     const res = await fetch(url("/api/projects"), {
@@ -467,6 +598,12 @@ describe("POST /api/projects", () => {
       trust: "trusted",
       reason: "human-grant",
     });
+    // The most common grant path (adding a project through the UI) carries the request's own
+    // minted correlation id, never the fallback: its grant line joins the request that caused it.
+    const granted = trustLines.filter((line) => line.op === "workspace-script-trust.granted");
+    expect(granted).toHaveLength(1);
+    expect(granted[0]?.correlationId).not.toBe(UNKNOWN_CORRELATION_ID);
+    expect(granted[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
   it("creates a project, returns 201 with availability", async () => {
@@ -661,25 +798,87 @@ describe("PATCH /api/projects", () => {
 
   it("revalidates an existing project's current workspace membership with an empty patch", async () => {
     store.createProject(projDir, "existing");
-
-    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
-      method: "PATCH",
-      headers: PATCH_HEADERS,
-      body: "{}",
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      project: { path: string; available: boolean; workspaceAvailable: boolean };
+    const oldRoot = join(tmp, "replaced-project-root");
+    renameSync(projDir, oldRoot);
+    mkdirSync(projDir);
+    const before = await fetch(url("/api/projects"));
+    const beforeBody = (await before.json()) as {
+      projects: { path: string; workspaceAvailable: boolean }[];
     };
-    expect(body.project).toMatchObject({
-      path: projDir,
-      available: true,
-      workspaceAvailable: true,
-    });
+    expect(beforeBody.projects).toContainEqual(
+      expect.objectContaining({ path: projDir, workspaceAvailable: false }),
+    );
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: "{}",
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        project: { path: string; available: boolean; workspaceAvailable: boolean };
+      };
+      expect(body.project).toMatchObject({
+        path: projDir,
+        available: true,
+        workspaceAvailable: true,
+      });
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "setup",
+          op: "project.workspace.reconnect",
+          status: 200,
+          extra: { outcome: "available", completeness: "complete", loss: "none" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain(projDir);
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // Registry-linked executable proof (#3532): the same reconnect event above, read back through the
+  // real formatter/registry path so `project.workspace.reconnect.outcome` resolves against a
+  // production-computed event (this task's rule 1: no hand-built event or registration object).
+  it("persists project.workspace.reconnect as a registered Activity Log proof line", async () => {
+    store.createProject(projDir, "existing");
+    const oldRoot = join(tmp, "replaced-project-root-proof");
+    renameSync(projDir, oldRoot);
+    mkdirSync(projDir);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: "{}",
+      });
+      expect(res.status).toBe(200);
+
+      const event = sink.events.find((entry) => entry.op === "project.workspace.reconnect");
+      if (event === undefined) throw new Error("expected a reconnect event");
+      const line = formatActivityLogProofLine(event);
+      const persisted = expectActivityLogProof("project.workspace.reconnect.outcome", line);
+      expect(persisted).toMatchObject({
+        category: "setup",
+        status: 200,
+        outcome: "available",
+        completeness: "complete",
+        loss: "none",
+      });
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("does not register an unknown directory when reconnecting with an empty patch", async () => {
+    const diagnostic = vi.fn();
+    await restartWithDeps({ diagnostics: { record: diagnostic } });
     const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
       method: "PATCH",
       headers: PATCH_HEADERS,
@@ -691,6 +890,13 @@ describe("PATCH /api/projects", () => {
     expect(body.error.code).toBe("NOT_FOUND");
     expect(store.listProjects()).toHaveLength(0);
     expect(store.listWorkspaceManifestRecords()).toHaveLength(0);
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "project.workspace.reconnect",
+        source: "store-handlers",
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(projDir);
   });
 
   it("returns 404 for unknown project", async () => {
@@ -956,6 +1162,292 @@ describe("POST /api/chats", () => {
 
 // ─── Route 19: PATCH /api/chats ──────────────────────────────────────────────
 describe("PATCH /api/chats", () => {
+  it("persists clearing git-change scopes from the disconnect patch", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    store.updateChat(chat.id, {
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-disconnect",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/x",
+          baseRef: "main",
+          headRef: "feature/x",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ gitChangeScopes: null }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+  });
+
+  it("rejects malformed git-change scopes without changing the stored binding", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ gitChangeScopes: [{ kind: "git-change" }] }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+  });
+
+  // #3400-AC3 — a PATCH must be bound to a server-issued relationship, never a client-authored
+  // one: the browser must not be able to redirect a chat's connected comparison to an arbitrary
+  // relationship, snapshot, or (via a different chat's real relationship id) another chat's
+  // git-change scope by constructing the request body itself.
+  describe("gitChangeScopes relationship binding (#3400-AC3)", () => {
+    function gitChangeScopeFixture(
+      overrides: Partial<ChatGitChangeScope> = {},
+    ): ChatGitChangeScope {
+      return {
+        kind: "git-change",
+        relationshipId: "rel-bound",
+        remoteDigest: "d".repeat(64),
+        comparisonLabel: "main...feature/x",
+        baseRef: "main",
+        headRef: "feature/x",
+        baseSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+        mergeBaseSha: "c".repeat(40),
+        snapshotDigest: "e".repeat(64),
+        fileCount: 1,
+        totalFiles: 1,
+        omittedFiles: 0,
+        truncatedFiles: 0,
+        descriptionStatus: "current",
+        connectedAtMs: 10,
+        ...overrides,
+      };
+    }
+
+    function buildRelationshipDeps(workspaceId = "ws-1"): {
+      readonly relationship: RelationshipHandlerDeps;
+      readonly db: DatabaseSync;
+    } {
+      const db = new DatabaseSync(":memory:");
+      db.exec("PRAGMA foreign_keys = ON");
+      runMigrations(db);
+      let t = 1000;
+      let n = 0;
+      const relationshipStore = createRelationshipStorePort({
+        db,
+        redactString: (s: string): string => s,
+        now: () => ++t,
+        newId: () => `rel-${String(++n).padStart(8, "0")}`,
+      });
+      return {
+        relationship: {
+          scopeResolver: (): { readonly workspaceId: string } => ({ workspaceId }),
+          store: relationshipStore,
+        },
+        db,
+      };
+    }
+
+    function createActiveGitChangeRelationship(
+      relationship: RelationshipHandlerDeps,
+      workspaceId: string,
+      chatId: string,
+      snapshotDigest: string,
+    ): string {
+      const created = relationship.store.createRelationship(
+        {
+          workspaceId,
+          scope: { kind: "workspace", workspaceId },
+          type: "reads-context",
+          source: { kind: "chat", id: chatId },
+          target: { kind: "git-change", id: `gc_${snapshotDigest}` },
+          lifecycleState: "active",
+        },
+        (result) => ({
+          workspaceId,
+          kind: "relationship.created",
+          relationshipId: result.relationship.id,
+          actor: { surface: "chat", redactedActorId: "test-fixture" },
+          summary: "test-fixture relationship",
+          payload: {},
+        }),
+      );
+      return created.relationship.id;
+    }
+
+    it("rejects a gitChangeScopes entry with no matching relationship at all", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({ gitChangeScopes: [gitChangeScopeFixture()] }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+    });
+
+    it("rejects a gitChangeScopes entry whose relationship belongs to a different chat", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const otherChat = store.createChat(projDir, "t2", "m2");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        otherChat.id,
+        digest,
+      );
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+    });
+
+    it("rejects a gitChangeScopes entry whose relationship was archived (stale reuse)", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        chat.id,
+        digest,
+      );
+      const etag = relationship.store.getEtag("ws-1", relationshipId);
+      if (etag === undefined) throw new Error("expected an etag for the fixture relationship");
+      relationship.store.updateLifecycle(
+        { workspaceId: "ws-1", id: relationshipId, currentEtag: etag, to: "archived" },
+        (result) => ({
+          workspaceId: "ws-1",
+          kind: "relationship.updated",
+          relationshipId: result.relationship.id,
+          actor: { surface: "chat", redactedActorId: "test-fixture" },
+          summary: "test-fixture archive",
+          payload: {},
+        }),
+      );
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+    });
+
+    it("accepts a gitChangeScopes entry bound to this chat's own active relationship", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        chat.id,
+        digest,
+      );
+      // Mirrors production: `persistConnectedScope` (gitChangeRoutes.ts) writes the canonical
+      // scope to the chat's own `gitChangeScopes` in the same connect that creates the
+      // relationship — a relationship never exists without a matching canonical entry already
+      // persisted on the chat.
+      store.updateChat(chat.id, {
+        gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+      });
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toMatchObject([{ relationshipId }]);
+    });
+
+    // Reviewer 3941860533 [P2] — a PATCH that keeps the two fields the relationship binds
+    // (`relationshipId`, `snapshotDigest`) but changes every other identity field must be
+    // rejected in effect: the persisted entry must still be the server's own canonical record,
+    // never the browser's tampered values. Repro basis: reviewer extended the acceptance test
+    // with a second PATCH changing `pullRequestNumber` to 999 and `headSha` to another valid
+    // hash and observed the real (pre-fix) endpoint return 200 with the tampered values stored.
+    it("ignores tampered identity fields and persists the chat's own canonical scope", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        chat.id,
+        digest,
+      );
+      const canonical = gitChangeScopeFixture({ relationshipId, snapshotDigest: digest });
+      store.updateChat(chat.id, { gitChangeScopes: [canonical] });
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [
+            gitChangeScopeFixture({
+              relationshipId,
+              snapshotDigest: digest,
+              pullRequestNumber: 999,
+              headSha: "f".repeat(40),
+              remoteDigest: "9".repeat(64),
+            }),
+          ],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const persisted = store.findChatById(chat.id)?.gitChangeScopes;
+      expect(persisted).toMatchObject([{ relationshipId, headSha: "b".repeat(40) }]);
+      expect(persisted?.[0]).not.toHaveProperty("pullRequestNumber", 999);
+      expect(persisted?.[0]?.remoteDigest).toBe("d".repeat(64));
+    });
+  });
+
   it("cancels a queued status update when the request aborts", async () => {
     store.createProject(projDir);
     const chat = store.createChat(projDir, "t", "m");
@@ -1977,6 +2469,46 @@ describe("GET /api/chats/messages", () => {
     expect(answer.contextPack.indexLifecycle?.stale).toBe(false);
   });
 
+  // The projection opens the SAME knowledge database as the capsule handlers, so it can be the
+  // call that first meets a corrupt file. `openKnowledgeStore` then renames it aside and returns a
+  // fresh empty one — a correct fail-forward, and a DATA-LOSING one. Asserted through the line the
+  // STORE writes, so removing `logSink` from this call site fails the test.
+  it("records the knowledge-store quarantine the message projection triggers", async () => {
+    const runtimeDir = join(tmp, "quarantine-runtime");
+    mkdirSync(runtimeDir);
+    await restartWithDeps({ uiDbPath: join(runtimeDir, "keiko-ui.db") });
+    const capsuleId = "cap-quarantine" as KnowledgeCapsuleId;
+    const knowledgeDbPath = resolveKnowledgeStorePath({ runtimeStateDir: runtimeDir });
+    mkdirSync(dirname(knowledgeDbPath), { recursive: true });
+    writeFileSync(knowledgeDbPath, "not a sqlite database - a truncated copy");
+
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const assistantId = seedGroundedLifecycleTurn(store, c.id, capsuleId);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const res = await fetch(
+        url(
+          `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}`,
+        ),
+      );
+
+      expect(res.status).toBe(200);
+      expect(assistantId).not.toBe("");
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          category: "diagnostic",
+          op: "knowledge.store.quarantined",
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
   it("filters legacy empty-response placeholders from persisted chat history", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
@@ -2333,89 +2865,15 @@ describe("POST /api/chats/messages", () => {
   });
 });
 
-// ─── Route 23: POST /api/chats/messages/run-summary-pair (issue #66) ────────
-describe("POST /api/chats/messages/run-summary-pair", () => {
-  it("atomically creates exactly one user message and one system run summary", async () => {
+// ─── Retired route: POST /api/chats/messages/run-summary-pair (KEIKO-0566, #3314) ──────────
+// The route, its handler (`handleCreateRunSummaryPair`/`buildRunSummaryPair`), and the client
+// wrapper were unreachable in production — no UI component called it — and it accepted
+// caller-supplied timestamps with no relative-ordering check. Deleted rather than wired to a
+// speculative new caller; see the accepted decision on issue #3314.
+describe("POST /api/chats/messages/run-summary-pair (retired)", () => {
+  it("is no longer exposed", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({
-        chatId: c.id,
-        projectPath: projDir,
-        user: { content: "Verify requested.", timestamp: 1 },
-        summary: {
-          content: "Verify started",
-          timestamp: 2,
-          runId: "run-pair",
-          taskType: "verify",
-          workflowStatus: "running",
-        },
-      }),
-    });
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as {
-      messages: { role: string; runId?: string; taskType?: string }[];
-    };
-    expect(body.messages.map((m) => m.role)).toEqual(["user", "system"]);
-    expect(body.messages[1]?.runId).toBe("run-pair");
-    expect(body.messages[1]?.taskType).toBe("verify");
-    expect(store.listMessages(c.id)).toHaveLength(2);
-  });
-
-  it("rolls back the user message when the summary row is invalid", async () => {
-    store.createProject(projDir);
-    const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({
-        chatId: c.id,
-        projectPath: projDir,
-        user: { content: "Verify requested.", timestamp: 1 },
-        summary: {
-          content: "Verify started",
-          timestamp: 2,
-          taskType: "verify",
-          workflowStatus: "running",
-        },
-      }),
-    });
-    expect(res.status).toBe(400);
-    expect(store.listMessages(c.id)).toHaveLength(0);
-  });
-
-  it("returns 400 when the summary has both workflowId and taskType", async () => {
-    store.createProject(projDir);
-    const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({
-        chatId: c.id,
-        projectPath: projDir,
-        user: { content: "Tests requested.", timestamp: 1 },
-        summary: {
-          content: "Tests started",
-          timestamp: 2,
-          runId: "run-pair",
-          workflowId: "unit-test-generation",
-          taskType: "verify",
-          workflowStatus: "running",
-        },
-      }),
-    });
-    expect(res.status).toBe(400);
-    expect(store.listMessages(c.id)).toHaveLength(0);
-  });
-
-  it("returns 404 when the chat belongs to another project", async () => {
-    store.createProject(projDir);
-    const otherDir = join(tmp, "other-pair");
-    mkdirSync(otherDir);
-    store.createProject(otherDir);
-    const c = store.createChat(otherDir, "t", "m");
     const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
       method: "POST",
       headers: POST_HEADERS,

@@ -33,12 +33,19 @@ import type {
   GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isGitObjectId,
+  isSafeGitRefName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
-  GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryPolicyTargetBranchName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
+  GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import { classifyGitRemoteFailure } from "@oscharko-dev/keiko-git";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -47,6 +54,7 @@ import type {
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
+import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
 import type { CommandRule } from "./types.js";
 
 // ─── Push command + remote adapter port (no generic exec) ───────────────────────────────────
@@ -56,6 +64,14 @@ import type { CommandRule } from "./types.js";
 
 export interface GitPushCommand {
   readonly kind: "push";
+  /**
+   * Server-approved immutable source, mandatory (#3394 review, finding 1). Every governed push is
+   * now pinned to the exact commit its preview/approval was minted against — there is no more
+   * unpinned, branch-name-only push. Tracking updates are a separate, best-effort local action (see
+   * `applyUpstreamTrackingIfRequested` in git-publish-node.ts) run only after a successful pinned
+   * push, never folded into the push argv itself.
+   */
+  readonly verifiedCommitSha: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -69,6 +85,7 @@ export interface GitPushCommand {
 // The operands handed to the executor. forcePush is intentionally ABSENT: the adapter can never force
 // push because no force operand reaches it.
 export interface GitPublishExecRequest {
+  readonly verifiedCommitSha: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -118,62 +135,78 @@ export function isGitPublishRejectionReason(value: unknown): value is GitPublish
   );
 }
 
-// Ordered phrase table. The first reason whose any-phrase appears in the (lower-cased, secret-redacted)
-// git output wins, so specific causes are matched before generic ones. Phrases are SPECIFIC: the generic
-// "failed to push some refs" / "could not read from remote repository" lines git prints for many failures
-// are deliberately NOT used as discriminators — only the cause-bearing hint lines are.
-const REJECTION_PHRASES: readonly (readonly [GitPublishRejectionReason, readonly string[]])[] = [
-  ["non-fast-forward", ["non-fast-forward", "tip of your current branch is behind"]],
-  ["fetch-first", ["fetch first", "remote contains work that you do"]],
+// Publish-only phrase table. Ordered by specificity: the first reason whose any-phrase appears in
+// the (lower-cased, secret-redacted) git output wins. Phrases are SPECIFIC: the generic
+// "failed to push some refs" / "could not read from remote repository" lines git prints for many
+// failures are deliberately NOT used as discriminators — only the cause-bearing hint lines are.
+//
+// KEIKO-0215: the remote-unavailable / auth-failed / permission-denied / repository-not-found /
+// untrusted-host-key / unsafe-repository phrases used to live here too, in a 5-phrase local copy
+// that had drifted out of sync with keiko-git's authoritative 10-phrase table (network is
+// unreachable, no route to host, temporary failure in name resolution were missing). The remote
+// classifier is now delegated to classifyGitRemoteFailure below so one phrase set governs both
+// clone/fetch/pull and push; the reasons the git classifier owns must not be duplicated here.
+const PUBLISH_LOCAL_PHRASES: readonly (readonly [GitPublishRejectionReason, readonly string[]])[] =
   [
-    "protected-ref",
-    ["protected branch", "pre-receive hook declined", "refusing to update", "gh006"],
-  ],
-  // Auth markers are checked BEFORE the generic "permission denied": an SSH "Permission denied
-  // (publickey)" is an AUTHENTICATION failure, whereas "remote: Permission to repo denied to user" is
-  // an authorization failure caught just below.
-  // Auth includes smart-HTTP 401 ("returned error: 401"), which some hosts emit without a remote: line.
-  [
-    "auth-failed",
+    ["non-fast-forward", ["non-fast-forward", "tip of your current branch is behind"]],
+    ["fetch-first", ["fetch first", "remote contains work that you do"]],
     [
-      "authentication failed",
-      "could not read username",
-      "publickey",
-      "invalid username",
-      "error: 401",
+      "protected-ref",
+      ["protected branch", "pre-receive hook declined", "refusing to update", "gh006"],
     ],
-  ],
-  // Permission includes smart-HTTP 403 ("returned error: 403"): git prints `unable to access ... returned
-  // error: 403` with NO literal "forbidden", and some hosts/proxies omit the `remote: Permission` line, so
-  // the bare 403 token must classify as an authorization denial (user-fixable) rather than falling through
-  // to remote-unavailable (retryable).
-  [
-    "permission-denied",
-    ["permission denied", "permission to", "error: 403", "403 forbidden", "access denied"],
-  ],
-  ["no-upstream", ["has no upstream branch", "no upstream configured", "set-upstream"]],
-  [
-    "remote-unavailable",
-    [
-      "could not resolve host",
-      "could not read from remote",
-      "connection refused",
-      "timed out",
-      "unable to access",
-    ],
-  ],
-] as const;
+    ["no-upstream", ["has no upstream branch", "no upstream configured", "set-upstream"]],
+  ] as const;
 
-// Pure classifier. Deterministic: same output text always yields the same reason. Matches lower-cased
-// so capitalisation differences across git versions do not change the classification.
+// Mapping from the keiko-git shared classifier's reasons onto the publish reason vocabulary.
+// Publish deliberately carries fewer members (no timeout/output-truncated/git-missing here —
+// those are process-level failures the publish executor either never surfaces or handles
+// differently). A shared reason that has no publish member falls through to "unknown", not to
+// a silently mismatched publish reason. Total Record: a new remote reason is a compile error.
+import type { GitRemoteFailureReason } from "@oscharko-dev/keiko-git";
+const REMOTE_TO_PUBLISH_REASON: Readonly<
+  Record<GitRemoteFailureReason, GitPublishRejectionReason | undefined>
+> = {
+  none: undefined,
+  "git-missing": undefined,
+  timeout: undefined,
+  cancelled: undefined,
+  "output-truncated": undefined,
+  "unsafe-repository": undefined,
+  "untrusted-host-key": "auth-failed",
+  "auth-failed": "auth-failed",
+  "permission-denied": "permission-denied",
+  "repository-not-found": "remote-unavailable",
+  "remote-unavailable": "remote-unavailable",
+  "not-a-repository": undefined,
+  "git-error": undefined,
+};
+
+// Pure classifier. Deterministic: same output text always yields the same reason. Matches
+// lower-cased so capitalisation differences across git versions do not change the classification.
+// Publish-specific phrases (non-fast-forward/fetch-first/protected-ref/no-upstream) are checked
+// FIRST — the remote-vocabulary phrases from keiko-git are broader and would otherwise steal a
+// publish-specific verdict (e.g. a "permission denied" clause on a protected-branch pre-receive
+// hook must stay classified as protected-ref).
 export function classifyGitPublishRejection(output: string): GitPublishRejectionReason {
   const haystack = output.toLowerCase();
-  for (const [reason, phrases] of REJECTION_PHRASES) {
+  for (const [reason, phrases] of PUBLISH_LOCAL_PHRASES) {
     if (phrases.some((phrase) => haystack.includes(phrase))) {
       return reason;
     }
   }
-  return "unknown";
+  // Delegate remote-shape phrases (unreachable host / auth / permission / repo-not-found / SSH
+  // host-key trust) to the single shared phrase table in keiko-git. Synthesize a minimal
+  // GitProcessResult: only stderr is examined by the classifier, and the exit code is set to a
+  // non-zero non-127 so the git-missing early-out does not fire.
+  const remote = classifyGitRemoteFailure({
+    exitCode: 1,
+    signal: null,
+    stdout: "",
+    stderr: output,
+    truncated: false,
+    timedOut: false,
+  });
+  return REMOTE_TO_PUBLISH_REASON[remote] ?? "unknown";
 }
 
 // ─── Reason → contract error code + recovery (reuses #471/#473/#474 vocabularies) ───────────
@@ -245,11 +278,17 @@ export function gitPublishRejectionFor(reason: GitPublishRejectionReason): GitPu
 }
 
 // ─── Dedicated push allowlist + pure argv builder (force refused) ────────────────────────────
-// A closed allowlist permitting ONLY `push`. Structurally separate from the local mutation rules and
-// the read-only inspection rules. Mirrors their defence-in-depth flag denials so a smuggled global flag
-// is rejected before spawn even though argv is built only from typed operands.
+// A closed allowlist permitting `push` and, as of #3394, the single local-only `branch
+// --set-upstream-to=…` bookkeeping step the pinned-push follow-up runs (Decision Point A): it is a
+// config-only, no-object-write, no-network invocation, run through this SAME sandboxed executor
+// immediately after a successful pinned push, so it belongs to this allowlist rather than either the
+// read-only inspection rules or the local mutation rules (a push must never flow through the local
+// write adapter — Force 1, ADR-0085 — but this is not a push). Structurally separate from both those
+// rule sets. Mirrors their defence-in-depth flag denials so a smuggled global flag is rejected before
+// spawn even though argv is built only from typed operands; `-d`/`--delete` stays denied so `branch`
+// can never be used for anything but the one `--set-upstream-to` shape this file builds.
 
-export const GIT_PUBLISH_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze(["push"]);
+export const GIT_PUBLISH_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze(["push", "branch"]);
 
 export const GIT_PUBLISH_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
@@ -265,7 +304,6 @@ export const GIT_PUBLISH_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
     ]),
     denyFlags: Object.freeze([
       "-C",
-      "-c",
       "--config-env",
       "--git-dir",
       "--work-tree",
@@ -320,22 +358,55 @@ function assertRef(value: string, label: string): string {
   return value;
 }
 
-// Builds the single governed push argv. An explicit `src:dst` refspec is always used so the push target
-// is never inferred from ambient `push.default` config. AC4: a force push is REFUSED here — there is no
-// branch in this builder that can emit a force flag.
+// Builds the single governed push argv. `verifiedCommitSha` is mandatory (#3394 review, finding 1),
+// so every push now pins an explicit `<sha>:refs/heads/<target>` refspec — the plain branch-name
+// `src:dst` shape is unreachable by construction and no longer built here. AC4: a force push is
+// REFUSED here — there is no branch in this builder that can emit a force flag.
 export function buildPushArgv(command: GitPushCommand): readonly string[] {
   if (command.forcePush) {
     throw new GitPublishArgvError("force push is not permitted (AC4 — blocked by default)");
   }
   const remote = assertRef(command.remoteAlias, "remoteAlias");
-  const source = assertRef(command.sourceBranchName, "sourceBranchName");
   const target = assertRef(command.remoteBranchName, "remoteBranchName");
-  const argv = ["push"];
-  if (command.setUpstreamTracking) {
-    argv.push("--set-upstream");
+  return verifiedPushArgv(command, remote, target);
+}
+
+// `setUpstreamTracking` is no longer refused here: `-u` silently no-ops on a raw-SHA source (a raw
+// commit is not "a branch" from `--set-upstream`'s point of view), so the refusal used to exist only
+// to stop a combination that would otherwise silently fail to track. The Node adapter now runs the
+// local-only `git branch --set-upstream-to=…` follow-up explicitly after a successful pinned push
+// (see `applyUpstreamTrackingIfRequested`, git-publish-node.ts), so the combination is handled rather
+// than refused.
+function verifiedPushArgv(
+  command: GitPushCommand,
+  remote: string,
+  target: string,
+): readonly string[] {
+  if (
+    !isGitObjectId(command.verifiedCommitSha) ||
+    !isSafeGitRefName(target) ||
+    target.startsWith("refs/")
+  ) {
+    throw new GitPublishArgvError("verified push requires an immutable commit and a branch target");
   }
-  argv.push(remote, `${source}:${target}`);
-  return argv;
+  return ["push", remote, `${command.verifiedCommitSha}:refs/heads/${target}`];
+}
+
+// The local-only, no-network follow-up that establishes upstream tracking after a pinned-SHA push
+// (§0.1 / Decision Point A): a raw commit source cannot be tracked via `push --set-upstream`, so
+// tracking is configured as a separate, ordinary `git branch --set-upstream-to=<remote>/<target>
+// <source>` once the pinned push has already succeeded. Pure argv builder — the Node adapter runs it
+// through the SAME sandboxed publish executor as the push itself, best-effort (a failure here never
+// undoes or fails the push, which already succeeded).
+export function buildSetUpstreamToArgv(
+  remoteAlias: string,
+  remoteBranchName: string,
+  sourceBranchName: string,
+): readonly string[] {
+  const remote = assertRef(remoteAlias, "remoteAlias");
+  const target = assertRef(remoteBranchName, "remoteBranchName");
+  const source = assertRef(sourceBranchName, "sourceBranchName");
+  return ["branch", `--set-upstream-to=${remote}/${target}`, source];
 }
 
 // ─── Lifecycle orchestration ─────────────────────────────────────────────────────────────────
@@ -366,6 +437,7 @@ export interface GitPublishLifecycleResult {
 function pushResolvedInputs(command: GitPushCommand): GitDeliveryPushInputs {
   return {
     kind: "push",
+    verifiedCommitSha: command.verifiedCommitSha,
     sourceBranchName: command.sourceBranchName,
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,
@@ -423,19 +495,6 @@ type PublishGate =
       readonly reason: GitDeliveryBlockReason;
     };
 
-function approvalState(
-  approval: GitDeliveryApprovalRequirement,
-  now: number,
-): "valid" | "absent" | "expired" {
-  if (!approval.required) {
-    return "absent";
-  }
-  if (approval.expiresAtMs !== undefined && approval.expiresAtMs <= now) {
-    return "expired";
-  }
-  return "valid";
-}
-
 // The EFFECTIVE policy outcome for a specific push target, evaluating a `constrained` decision's
 // constraints against the target (which `evaluateGitPolicy` deliberately leaves to the caller). The
 // read-only preview reuses this so it predicts the execute outcome exactly: a constrained-but-passing
@@ -456,6 +515,10 @@ export function evaluateGitPublishEffectivePolicy(
   });
 }
 
+// KEIKO-0535: delegates the approval-gated branch to the one shared resolver
+// (git-approval-gate.ts) instead of re-deriving valid/expired/absent + KEIKO-0147's identity check
+// locally, then maps the canonical result onto this file's own PublishGate shape — the same shape
+// every existing caller already consumes, so behavior is unchanged.
 function resolvePublishGate(
   decision: GitDeliveryPolicyDecision,
   approval: GitDeliveryApprovalRequirement,
@@ -471,16 +534,14 @@ function resolvePublishGate(
   if (effective.outcome === "blocked") {
     return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
-  const state = approvalState(approval, now);
-  if (state === "valid") return { proceed: true };
-  if (state === "expired") {
-    return { proceed: false, status: "policy-block", reason: "approval-expired" };
+  const gate = resolveGitDeliveryApprovalGate(decision, approval, now);
+  if (gate.proceed) {
+    return { proceed: true };
   }
-  return {
-    proceed: false,
-    status: "approval-required",
-    approvers: decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
-  };
+  if (gate.status === "approval-required") {
+    return { proceed: false, status: "approval-required", approvers: gate.approvers };
+  }
+  return { proceed: false, status: "policy-block", reason: gate.blockReason };
 }
 
 // ─── Execution outcome mapping (reuses the taxonomy) ─────────────────────────────────────────
@@ -558,6 +619,7 @@ async function runPublishAdapter(
     // Build the argv eagerly so a force-push refusal (AC4) is a structured failure, never a spawn.
     buildPushArgv(command);
     return await adapter.publish({
+      verifiedCommitSha: command.verifiedCommitSha,
       sourceBranchName: command.sourceBranchName,
       remoteAlias: command.remoteAlias,
       remoteBranchName: command.remoteBranchName,

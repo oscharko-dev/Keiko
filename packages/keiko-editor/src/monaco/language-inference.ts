@@ -26,7 +26,7 @@
 import {
   EDITOR_LANGUAGE_MODE_BY_EXTENSION,
   EDITOR_LANGUAGE_MODE_IDS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
 
 /**
  * A Monaco built-in language id the Keiko Editor can render (monaco-editor 0.55.1).
@@ -85,7 +85,7 @@ export const MONACO_LANGUAGE_BY_EXTENSION: Readonly<Record<string, MonacoLanguag
  */
 function basename(pathOrName: string): string {
   const segments = pathOrName.split(/[/\\]/);
-  return segments[segments.length - 1] ?? pathOrName;
+  return segments.at(-1) ?? pathOrName;
 }
 
 /**

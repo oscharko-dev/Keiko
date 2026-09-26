@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -111,6 +111,7 @@ function makeRequest(content: string): {
 
 function makeRouteContext(path: string, payload: unknown, id?: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(JSON.stringify(payload))]) as unknown as IncomingMessage,
     res: { socket: new Socket() } as unknown as RouteContext["res"],
     params: id === undefined ? {} : { id },
@@ -121,7 +122,7 @@ function makeRouteContext(path: string, payload: unknown, id?: string): RouteCon
 function makeVault(
   evidenceStore: ReturnType<typeof createInMemoryEvidenceStore>,
 ): MemoryVaultStore {
-  const memoryDir = mkdtempSync(join(tmpdir(), "keiko-capture-projection-"));
+  const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-capture-projection-"));
   temporaryDirectories.push(memoryDir);
   const redactString = (value: string): string => value;
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
@@ -203,14 +204,14 @@ describe("recent memory capture journey", () => {
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("We reviewed the release cadence."),
+      makeRequest("The release train follows a two-week cadence."),
       ctx,
       "gpt-test",
       "ok",
     );
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("We reviewed deployment scheduling."),
+      makeRequest("The platform team uses deterministic deployment windows."),
       ctx,
       "gpt-test",
       "ok",
@@ -271,7 +272,7 @@ describe("recent memory capture journey", () => {
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("We reviewed the release notes."),
+      makeRequest("The user reviews release notes every Friday."),
       ctx,
       "gpt-test",
       "ok",
@@ -328,7 +329,7 @@ describe("voice-passive-capture journey", () => {
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("Let's keep doing morning stand-ups."),
+      makeRequest("The user prefers stand-ups at 9am."),
       ctx,
       "gpt-test",
       "ok",
@@ -336,7 +337,7 @@ describe("voice-passive-capture journey", () => {
     );
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("I'm on UTC+1 this week."),
+      makeRequest("The user's timezone is UTC+1."),
       ctx,
       "gpt-test",
       "ok",
@@ -366,7 +367,7 @@ describe("voice-passive-capture journey", () => {
     // autonomous-delivery fact does not double.
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("I'm on UTC+1 this week."),
+      makeRequest("The user's timezone is UTC+1."),
       ctx,
       "gpt-test",
       "ok",

@@ -302,6 +302,7 @@ const TASK_CLASS_RULES: readonly TaskClassRule[] = [
       "based on the provided",
       "according to the document",
       "from the attached",
+      "using the attached",
       "using the document",
       "in the provided text",
       "basierend auf der datei",
@@ -367,6 +368,10 @@ const TASK_CLASS_RULES: readonly TaskClassRule[] = [
       "soll ich",
       "vor- und nachteile",
       "hilf mir entscheiden",
+      "entscheidung treffen",
+      "entscheidung vorbereiten",
+      "bereite eine belastbare entscheidung uber",
+      "entscheide zwischen",
       "plan a trip",
       "plane eine reise",
       "plane einen urlaub",
@@ -855,6 +860,8 @@ const OUTPUT_HINT_RULES: readonly OutputHintRule[] = [
   { hint: "explicit-markdown", format: "markdown", keywords: ["in markdown", "as markdown"] },
 ];
 
+const OUTPUT_SCHEMA_CUES: readonly string[] = ["schema", "the fields", "format:"];
+
 const DEFAULT_FORMAT_BY_CLASS: Readonly<Partial<Record<PromptTaskClass, OutputFormat>>> = {
   "code-generation": "code",
   "code-debugging": "code",
@@ -867,7 +874,14 @@ const DEFAULT_FORMAT_BY_CLASS: Readonly<Partial<Record<PromptTaskClass, OutputFo
   "decision-support": "markdown",
 };
 
-const STRUCTURED_FORMATS: ReadonlySet<OutputFormat> = new Set(["json", "yaml", "csv", "table"]);
+// KEIKO-0624: exported so prompt-enhancer-validation.ts's validateOutputSchema can consume the
+// single source of truth instead of maintaining a hand-mirrored ReadonlySet<string>.
+export const STRUCTURED_FORMATS: ReadonlySet<OutputFormat> = new Set([
+  "json",
+  "yaml",
+  "csv",
+  "table",
+]);
 
 function detectOutputSchema(lower: string, taskClass: PromptTaskClass): OutputSchemaDescriptor {
   const hints: OutputFormatHint[] = [];
@@ -878,7 +892,7 @@ function detectOutputSchema(lower: string, taskClass: PromptTaskClass): OutputSc
       format ??= rule.format;
     }
   }
-  if (containsAny(lower, ["schema", "the fields", "format:"])) hints.push("schema-keyword");
+  if (containsAny(lower, OUTPUT_SCHEMA_CUES)) hints.push("schema-keyword");
   const resolved: OutputFormat = format ?? DEFAULT_FORMAT_BY_CLASS[taskClass] ?? "unspecified";
   return {
     format: resolved,
@@ -920,6 +934,35 @@ const CRITERIA_CUES: readonly string[] = [
   "prioritize",
   "based on",
 ];
+
+const PROMPT_ANALYZER_CUE_GROUPS = Object.freeze({
+  taskClass: TASK_CLASS_RULES.flatMap((rule) => [...rule.strong, ...rule.weak]),
+  domain: DOMAIN_RULES.flatMap((rule) => rule.keywords),
+  advice: ADVICE_CUES,
+  instructionOverride: INSTRUCTION_OVERRIDE_CUES,
+  toolAuthority: TOOL_AUTHORITY_CUES,
+  egress: EGRESS_CUES,
+  temporalRecency: TEMPORAL_RECENCY_CUES,
+  namedCurrent: NAMED_CURRENT_CUES,
+  marketPrice: MARKET_PRICE_CUES,
+  suppliedContext: SUPPLIED_CONTEXT_CUES,
+  retrieval: RETRIEVAL_CUES,
+  outputHint: OUTPUT_HINT_RULES.flatMap((rule) => rule.keywords),
+  outputSchema: OUTPUT_SCHEMA_CUES,
+  scopeReference: SCOPE_REFERENCE_CUES,
+  audience: AUDIENCE_CUES,
+  constraint: CONSTRAINT_CUES,
+  criteria: CRITERIA_CUES,
+});
+
+// Content-free diagnostic used by the permanent benchmark fixture proof. It deliberately consumes
+// the analyzer's production cue arrays, so the proof cannot drift by restating their literals.
+export function detectPromptAnalyzerCueGroups(text: string): readonly string[] {
+  const lower = foldForSearch(normalizePromptDraft(text));
+  return Object.entries(PROMPT_ANALYZER_CUE_GROUPS)
+    .filter(([, cues]) => containsAny(lower, cues))
+    .map(([group]) => group);
+}
 const FORMAT_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
   "structured-extraction",
   "data-analysis",
@@ -936,10 +979,55 @@ const CRITERIA_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
   "decision-support",
   "research",
 ]);
+const SCOPE_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set(["code-architecture"]);
+const ARCHITECTURE_SCOPE_PREFIX_PATTERN = /\b(?:for|within|supporting|targeting)\s+/u;
+const ARCHITECTURE_SCOPE_DETERMINERS: ReadonlySet<string> = new Set(["a", "an", "the"]);
+const ARCHITECTURE_SCOPE_TARGETS: ReadonlySet<string> = new Set([
+  "application",
+  "applications",
+  "service",
+  "services",
+  "platform",
+  "platforms",
+  "workspace",
+  "workspaces",
+  "repository",
+  "repositories",
+  "product",
+  "products",
+  "system",
+  "systems",
+]);
+const ARCHITECTURE_SCOPE_BOUNDARY_PATTERN = /[.!?;,:]/u;
+const ARCHITECTURE_SCOPE_WORD_SEPARATOR_PATTERN = /[^\p{L}\p{N}-]/u;
 const MAX_MISSING_TOPICS = 4;
 
 const lacksSubject = (view: AnalysisView): boolean =>
   view.normalizedLength < 12 || view.meaningfulTokenCount < 3;
+
+function hasArchitectureScope(lower: string): boolean {
+  const prefix = ARCHITECTURE_SCOPE_PREFIX_PATTERN.exec(lower);
+  if (prefix === null) return false;
+
+  const scopePhrase =
+    lower.slice(prefix.index + prefix[0].length).split(ARCHITECTURE_SCOPE_BOUNDARY_PATTERN, 1)[0] ??
+    "";
+  const scopeWords = scopePhrase.split(/\s+/u);
+  const firstWord = scopeWords[0] ?? "";
+  const firstModifierIndex = ARCHITECTURE_SCOPE_DETERMINERS.has(firstWord) ? 1 : 0;
+  if (ARCHITECTURE_SCOPE_DETERMINERS.has(scopeWords[firstModifierIndex] ?? "")) return false;
+
+  return scopeWords
+    .slice(firstModifierIndex + 1, firstModifierIndex + 7)
+    .some((word) =>
+      ARCHITECTURE_SCOPE_TARGETS.has(
+        word.split(ARCHITECTURE_SCOPE_WORD_SEPARATOR_PATTERN, 1)[0] ?? "",
+      ),
+    );
+}
+
+const lacksScope = (view: AnalysisView, taskClass: PromptTaskClass): boolean =>
+  SCOPE_SENSITIVE_CLASSES.has(taskClass) && !hasArchitectureScope(view.lower);
 
 const lacksDataSource = (view: AnalysisView): boolean =>
   containsAny(view.lower, SCOPE_REFERENCE_CUES) && !view.hasConnectedContext;
@@ -971,6 +1059,7 @@ function detectMissingTopics(
   const cls = classification.taskClass;
   const topics: MissingContextTopic[] = [];
   if (lacksSubject(view)) topics.push("subject");
+  if (lacksScope(view, cls)) topics.push("scope");
   if (lacksDataSource(view)) topics.push("data-source");
   if (lacksOutputFormat(cls, outputSchema)) topics.push("output-format");
   if (lacksAudience(view, cls)) topics.push("audience");
@@ -979,7 +1068,10 @@ function detectMissingTopics(
   return topics.slice(0, MAX_MISSING_TOPICS);
 }
 
-const CLARIFICATION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
+// Exported so the validator checks against the SAME strings the analyzer emits. A second copy in
+// prompt-enhancer-validation.ts meant the two could drift and the validator would then reject the
+// analyzer's own output — the copy could not detect that, since both sides would have to be edited.
+export const CLARIFICATION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
   subject: "What specific subject or task should this prompt address?",
   scope: "Which part of the work should the task focus on?",
   audience: "Who is the intended audience for the output?",
@@ -989,7 +1081,7 @@ const CLARIFICATION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
   "success-criteria": "What defines a successful outcome for this task?",
 };
 
-const ASSUMPTION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
+export const ASSUMPTION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
   subject: "Assuming the broadest reasonable interpretation of the requested subject.",
   scope: "Assuming the task applies to the most relevant available scope.",
   audience: "Assuming a general professional audience.",

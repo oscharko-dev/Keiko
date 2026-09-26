@@ -140,6 +140,27 @@ function posixBasename(path: string): string {
 //   - anything that cannot be turned into a contained root-relative file (no root, a `..`-escaping
 //     relative path, a bare filename with no root) yields null so the caller renders a clear
 //     non-blocking state (AC3/AC4) instead of sending an unusable path to the BFF.
+// KEIKO-0750: extract the outside-root branch into its own helper so the top-level switch
+// stays under the complexity cap of 10.
+function selectOutsideRootTarget(offending: string): WorkspaceFileTarget | null {
+  // isAbsoluteLike admits tilde-prefixed paths (`~`, `~/notes/a.ts`) — an unexpanded shell alias,
+  // not a real machine path. Returning `{ root: "~", file: ... }` to the BFF would send an
+  // unresolvable root back over the wire. Reject a tilde offending path AND reject a bare `/`
+  // (containingRoot would be an empty POSIX root) so both fall into the same null-target branch
+  // as the other unresolvable cases.
+  if (!isAbsoluteLike(offending) || offending.startsWith("~")) return null;
+  const containingRoot = posixDirname(offending);
+  const file = posixBasename(offending);
+  if (
+    containingRoot.length === 0 ||
+    containingRoot === "/" ||
+    !isRootRelativeFileIdentifier(file)
+  ) {
+    return null;
+  }
+  return { root: containingRoot, file };
+}
+
 export function selectWorkspaceFileTarget(
   root: string,
   candidate: string | undefined,
@@ -152,13 +173,7 @@ export function selectWorkspaceFileTarget(
     case "root":
     case "empty":
       return normalizedRoot.length > 0 ? { root: normalizedRoot, file: "" } : null;
-    case "outside-root": {
-      const offending = resolution.candidate;
-      if (!isAbsoluteLike(offending)) return null;
-      const containingRoot = posixDirname(offending);
-      const file = posixBasename(offending);
-      if (containingRoot.length === 0 || !isRootRelativeFileIdentifier(file)) return null;
-      return { root: containingRoot, file };
-    }
+    case "outside-root":
+      return selectOutsideRootTarget(resolution.candidate);
   }
 }

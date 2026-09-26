@@ -3,19 +3,25 @@ import { createHash } from "node:crypto";
 import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { ToolCatalogError, captureCatalogJson } from "@oscharko-dev/keiko-tool-catalog";
 
 import {
   parseCodingSidecarEventLine,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
-import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type {
+  OpenCodeCompactionActivity,
+  OpenCodeProviderTokenUsage,
+  OpenCodeReconciliationEvent,
+} from "./opencodeReconciler.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
 } from "./opencodeToolSchemas.js";
 
-/** The only OpenCode HTTP surface admitted by the v1.17.17 adapter. */
+/** The only OpenCode HTTP surface admitted by the v1.18.30 adapter. */
 export const OPENCODE_APPROVED_ENDPOINTS = Object.freeze([
   "GET /global/health",
   "GET /global/event",
@@ -65,6 +71,34 @@ interface NormalizedSseData extends Record<string, unknown> {
 const MAX_FRAME_BYTES = 64 * 1024;
 const MAX_HISTORY_INFO_BYTES = 64 * 1024;
 const MAX_HISTORY_INFO_DEPTH = 8;
+/**
+ * A durable tool part records the governed call's arguments twice: parsed as `state.input` (every
+ * status) and as the provider's raw text `state.raw` (pending). Both were admitted upstream under
+ * the catalog ceilings (ADR-0175 D4, `TOOL_CATALOG_LIMITS`), so the same ceilings -- not the
+ * 4096-character metadata bound -- re-bound them here, and this is the largest part one call can
+ * therefore leave: the metadata budget plus two argument bodies. Run 2026-09-10: a 19 KiB
+ * `keiko_changeset_edit` patch, inside the 64 KiB patch contract, failed the metadata bound, the
+ * whole `POST /sync/history` pull threw, and the run ended `runtime-failed` on its first edit.
+ */
+export const OPENCODE_HISTORY_TOOL_PART_MAX_BYTES =
+  MAX_HISTORY_INFO_BYTES + 2 * TOOL_CATALOG_LIMITS.maxArgumentBytes;
+// One governed call leaves at most three argument-bearing rows (pending, running, settled): the
+// pending row carries both bodies, the other two carry `state.input` once each.
+const HISTORY_TOOL_CALL_ROWS_MAX_BYTES =
+  3 * MAX_HISTORY_INFO_BYTES + 4 * TOOL_CATALOG_LIMITS.maxArgumentBytes;
+/** Argument-bearing calls one catch-up pull is budgeted for after a stream reconnect. */
+export const OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS = 8;
+// The per-pull budget every non-argument row shared before tool bodies were admitted at all.
+const HISTORY_METADATA_ROWS_MAX_BYTES = 1024 * 1024;
+/**
+ * `POST /sync/history` returns every durable row after the checkpoints, so one pull after a stream
+ * reconnect can carry a whole turn. The response budget therefore covers the ordinary metadata rows
+ * plus the argument-bearing rows of OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS calls; a pull above it
+ * still fails closed (`opencode-history-oversized`) and is recorded by its closed reason.
+ */
+export const OPENCODE_HISTORY_RESPONSE_MAX_BYTES =
+  HISTORY_METADATA_ROWS_MAX_BYTES +
+  OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS * HISTORY_TOOL_CALL_ROWS_MAX_BYTES;
 const MAX_JSON_DEPTH = 64;
 const ID = /^(?:evt_|ses_|per|que)[A-Za-z0-9_-]+$/u;
 const PERMISSION_ID = /^per_[A-Za-z0-9_-]+$/u;
@@ -79,9 +113,43 @@ const REVIEWED_FINISH_REASONS = new Set([
   "unknown",
 ]);
 const FAILED_TERMINAL_FINISH_REASONS = new Set(["length", "content-filter", "error", "unknown"]);
+const MESSAGE_ONLY_ASSISTANT_ERRORS = new Set(["MessageAbortedError", "ContentFilterError"]);
+const ASSISTANT_MESSAGE_REQUIRED_FIELDS = [
+  "id",
+  "sessionID",
+  "role",
+  "time",
+  "parentID",
+  "modelID",
+  "providerID",
+  "mode",
+  "agent",
+  "path",
+  "cost",
+  "tokens",
+] as const;
+const ASSISTANT_MESSAGE_FIELDS = [
+  ...ASSISTANT_MESSAGE_REQUIRED_FIELDS,
+  "finish",
+  "summary",
+  "error",
+  "structured",
+  "variant",
+] as const;
 const APPROVED_PRODUCTIVE_TOOLS = new Set<string>(
   OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => name),
 );
+
+/**
+ * True for a tool the Keiko facade dispatches and settles itself (`keiko_*`, per
+ * `OPENCODE_TOOL_SOURCE_DEFINITIONS`). The single source of truth for "does something else
+ * already own this tool's terminal state" (#3390) -- callers must not restate the productive-tool
+ * list.
+ */
+export function isOpenCodeFacadeDispatchedTool(tool: string): boolean {
+  return APPROVED_PRODUCTIVE_TOOLS.has(tool);
+}
+
 const APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS = new Set<string>([
   "question",
   // #2480: plan carrier only — its admitted parts feed the governed plan projection and it
@@ -233,6 +301,10 @@ const GOVERNED_VERIFICATION_METADATA_KEYS = [
   "approvalId",
   "approvalDigest",
 ] as const;
+const GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS = [
+  ...GOVERNED_VERIFICATION_METADATA_KEYS,
+  "targetPathHash",
+] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
 // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
 // `file.txt:stream` names an NTFS alternate data stream — neither is a workspace-relative path.
@@ -300,8 +372,12 @@ function projectGovernedPermissionByKind(
   if (metadata.actionKind === "file-edit") {
     return projectGovernedEditPermission(properties, metadata);
   }
-  if (metadata.actionKind === "verification-command") {
-    return projectGovernedVerificationPermission(properties, metadata);
+  if (
+    metadata.actionKind === "verification-command" ||
+    metadata.actionKind === "ci-observe" ||
+    metadata.actionKind === "connector-read"
+  ) {
+    return projectGovernedCommandPermission(properties, metadata);
   }
   return undefined;
 }
@@ -337,20 +413,26 @@ function projectGovernedEditPermission(
   };
 }
 
-function projectGovernedVerificationPermission(
+function projectGovernedCommandPermission(
   properties: Record<string, unknown>,
   metadata: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
+  const actionKind = metadata.actionKind;
+  const metadataKeys =
+    actionKind === "verification-command" && metadata.commandLabel === "targeted-test"
+      ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
+      : GOVERNED_VERIFICATION_METADATA_KEYS;
   if (
-    !exactRecord(metadata, GOVERNED_VERIFICATION_METADATA_KEYS) ||
+    !exactRecord(metadata, metadataKeys) ||
+    typeof actionKind !== "string" ||
     !fixedPermissionMetadata(
       metadata,
       "command-execution",
       "command-execution",
-      "verification-command",
+      actionKind,
       "low",
     ) ||
-    !validVerificationApproval(properties, metadata)
+    !validCommandApproval(properties, metadata)
   ) {
     return undefined;
   }
@@ -360,20 +442,30 @@ function projectGovernedVerificationPermission(
     : { type: "permission-request", requestId, ...metadata };
 }
 
-function validVerificationApproval(
+function validCommandApproval(
   properties: Record<string, unknown>,
   metadata: Record<string, unknown>,
 ): boolean {
   const commandLabel = metadata.commandLabel;
   const approvalDigest = metadata.approvalDigest;
+  const targetPathHash = metadata.targetPathHash;
   return (
     typeof commandLabel === "string" &&
-    GOVERNED_VERIFIERS.has(commandLabel) &&
+    validGovernedCommandTarget(metadata.actionKind, commandLabel) &&
     validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
+    (commandLabel === "targeted-test"
+      ? typeof targetPathHash === "string" && /^[0-9a-f]{64}$/u.test(targetPathHash)
+      : targetPathHash === undefined) &&
     sameStrings(properties.patterns, [commandLabel])
   );
+}
+
+function validGovernedCommandTarget(actionKind: unknown, commandLabel: string): boolean {
+  if (actionKind === "verification-command") return GOVERNED_VERIFIERS.has(commandLabel);
+  if (actionKind === "ci-observe") return commandLabel === "ci";
+  return actionKind === "connector-read" && boundedApprovalIdentity(commandLabel);
 }
 
 function validApprovalIdentities(metadata: Record<string, unknown>): boolean {
@@ -501,7 +593,7 @@ function normalizedGlobalEvent(
 }
 
 /**
- * OpenCode 1.17.17's custom-tool `context.ask` emits the reviewed legacy permission event without
+ * OpenCode 1.18.30's custom-tool `context.ask` emits the reviewed legacy permission event without
  * the newer outer event id. The permission request itself still carries the stable `per…` id.
  * Admit only that exact legacy shape and derive a content-free transport identity from it; every
  * other id-less live event remains rejected.
@@ -608,9 +700,105 @@ export function parseOpenCodeHistory(
       sequence,
       kind,
       digest: historyDigest(id, aggregateId, sequence, type, data),
+      ...compactionProjection(type, data),
+      ...providerTokenUsageProjection(type, data),
     });
   }
   return { ok: true, value: result };
+}
+
+function providerTokenUsageProjection(
+  type: string,
+  data: Record<string, unknown>,
+): { readonly providerTokenUsage: OpenCodeProviderTokenUsage } | Record<string, never> {
+  if (type !== "message.updated.1" || !isRecord(data.info)) return {};
+  const { info } = data;
+  if (
+    info.role !== "assistant" ||
+    !isRecord(info.time) ||
+    !nonNegativeNumber(info.time.completed) ||
+    !isRecord(info.tokens) ||
+    !Number.isSafeInteger(info.tokens.input) ||
+    Number(info.tokens.input) < 0
+  ) {
+    return {};
+  }
+  return { providerTokenUsage: { inputTokens: Number(info.tokens.input) } };
+}
+
+function compactionProjection(
+  type: string,
+  data: Record<string, unknown>,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (type === "message.part.updated.1") return compactionPartProjection(data.part);
+  return type === "message.updated.1" ? compactionSummaryProjection(data.info) : {};
+}
+
+function compactionPartProjection(
+  value: unknown,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (!isRecord(value) || value.type !== "compaction" || typeof value.messageID !== "string") {
+    return {};
+  }
+  const common = {
+    compactionIdSha256: structuralDigest(value.messageID),
+    auto: value.auto === true,
+    overflow: value.overflow === true,
+  };
+  return typeof value.tail_start_id === "string"
+    ? {
+        compaction: {
+          event: "tail-retained",
+          ...common,
+          retainedTail: true,
+          tailStartIdSha256: structuralDigest(value.tail_start_id),
+        },
+      }
+    : { compaction: { event: "started", ...common, retainedTail: false } };
+}
+
+function compactionSummaryProjection(
+  value: unknown,
+): { readonly compaction: OpenCodeCompactionActivity } | Record<string, never> {
+  if (!isRecord(value) || !settledCompactionSummary(value)) return {};
+  const info = value;
+  const compactionIdSha256 = structuralDigest(String(info.parentID));
+  if (info.error === undefined && info.finish === "stop") {
+    return { compaction: { event: "completed", compactionIdSha256 } };
+  }
+  const statedFinishReason = String(info.finish);
+  const failedFinishReason = FAILED_TERMINAL_FINISH_REASONS.has(statedFinishReason);
+  if (info.error === undefined && !failedFinishReason) return {};
+  const errorKind =
+    isRecord(info.error) && typeof info.error.name === "string"
+      ? info.error.name
+      : "OpenCodeCompactionFailure";
+  return {
+    compaction: {
+      event: "failed",
+      compactionIdSha256,
+      errorKind,
+      finishReason: failedFinishReason ? statedFinishReason : "error",
+    },
+  };
+}
+
+function settledCompactionSummary(info: Record<string, unknown>): boolean {
+  if (
+    info.role !== "assistant" ||
+    info.summary !== true ||
+    info.mode !== "compaction" ||
+    info.agent !== "compaction" ||
+    typeof info.parentID !== "string" ||
+    !isRecord(info.time) ||
+    !nonNegativeNumber(info.time.completed)
+  )
+    return false;
+  return true;
+}
+
+function structuralDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** The closed allowlist is a security control, not a dispatch extension point. */
@@ -743,7 +931,7 @@ function sessionUpdated(data: Record<string, unknown>, aggregateId: string): boo
     info.id === aggregateId &&
     id(info.id, "ses_") &&
     [info.slug, info.projectID, info.directory, info.title, info.version].every(nonEmpty) &&
-    // The pinned 1.17.17 child reports `path: ""` when the session's working directory is the
+    // The pinned 1.18.30 child reports `path: ""` when the session's working directory is the
     // project root — every git-worktree task workspace. Present-but-empty is the real contract;
     // absence stays rejected (#2475).
     boundedString(info.path) &&
@@ -771,6 +959,9 @@ function messageUpdated(
     return undefined;
   if (data.info.role === "user") return userMessage(data.info) ? "observation" : undefined;
   if (!assistantMessage(data.info)) return undefined;
+  if (isRecord(data.info.error) && data.info.error.name === "MessageAbortedError")
+    return "terminal";
+  if (data.info.error !== undefined) return "terminal-failure";
   const completed = isRecord(data.info.time) && nonNegativeNumber(data.info.time.completed);
   if (!completed) return "observation";
   if (data.info.finish === "stop") return "terminal";
@@ -794,36 +985,8 @@ function userMessage(info: Record<string, unknown>): boolean {
 // eslint-disable-next-line complexity -- every required assistant completion field is checked explicitly.
 function assistantMessage(info: Record<string, unknown>): boolean {
   if (
-    !allowedRecord(info, [
-      "id",
-      "sessionID",
-      "role",
-      "time",
-      "parentID",
-      "modelID",
-      "providerID",
-      "mode",
-      "agent",
-      "path",
-      "cost",
-      "tokens",
-      "finish",
-      "summary",
-    ]) ||
-    ![
-      "id",
-      "sessionID",
-      "role",
-      "time",
-      "parentID",
-      "modelID",
-      "providerID",
-      "mode",
-      "agent",
-      "path",
-      "cost",
-      "tokens",
-    ].every((key) => Object.hasOwn(info, key))
+    !allowedRecord(info, ASSISTANT_MESSAGE_FIELDS) ||
+    !ASSISTANT_MESSAGE_REQUIRED_FIELDS.every((key) => Object.hasOwn(info, key))
   )
     return false;
   return (
@@ -838,84 +1001,272 @@ function assistantMessage(info: Record<string, unknown>): boolean {
     (info.finish === undefined ||
       (nonEmpty(info.finish) && REVIEWED_FINISH_REASONS.has(info.finish))) &&
     (info.summary === undefined || typeof info.summary === "boolean") &&
+    (info.error === undefined || assistantError(info.error)) &&
+    (info.structured === undefined || boundedLifecycle(info.structured)) &&
+    (info.variant === undefined || boundedString(info.variant)) &&
     boundedLifecycle(info)
   );
 }
 
-// eslint-disable-next-line complexity, max-lines-per-function -- reviewed part variants remain a closed allowlist.
-function messagePartUpdated(data: Record<string, unknown>, aggregateId: string): boolean {
-  if (
-    !exactRecord(data, ["sessionID", "part", "time"]) ||
-    data.sessionID !== aggregateId ||
-    !isRecord(data.part) ||
-    !nonNegativeNumber(data.time) ||
-    data.part.sessionID !== aggregateId ||
-    !PART_ID.test(String(data.part.id)) ||
-    !MESSAGE_ID.test(String(data.part.messageID)) ||
-    !boundedPartLifecycle(data.part)
-  )
+function assistantError(value: unknown): boolean {
+  if (!exactRecord(value, ["name", "data"]) || !nonEmpty(value.name) || !isRecord(value.data))
     return false;
-  const part = data.part;
-  if (part.type === "text") {
-    return (
-      allowedRecord(part, [
-        "id",
-        "sessionID",
-        "messageID",
-        "type",
-        "text",
-        "synthetic",
-        "ignored",
-        "time",
-        "metadata",
-      ]) &&
-      typeof part.text === "string" &&
-      (part.synthetic === undefined || typeof part.synthetic === "boolean") &&
-      (part.ignored === undefined || typeof part.ignored === "boolean")
-    );
-  }
+  const validator = assistantErrorDataValidator(value.name);
+  return validator?.(value.data) ?? false;
+}
+
+type AssistantErrorDataValidator = (data: Record<string, unknown>) => boolean;
+
+function assistantErrorDataValidator(name: string): AssistantErrorDataValidator | undefined {
+  if (MESSAGE_ONLY_ASSISTANT_ERRORS.has(name)) return messageOnlyErrorData;
+  return ASSISTANT_ERROR_DATA_VALIDATORS.get(name);
+}
+
+function messageOnlyErrorData(data: Record<string, unknown>): boolean {
+  return exactRecord(data, ["message"]) && boundedString(data.message);
+}
+
+function providerAuthErrorData(data: Record<string, unknown>): boolean {
+  return (
+    exactRecord(data, ["providerID", "message"]) &&
+    boundedString(data.providerID) &&
+    boundedString(data.message)
+  );
+}
+
+function unknownErrorData(data: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(data, ["message", "ref"]) &&
+    Object.hasOwn(data, "message") &&
+    boundedString(data.message) &&
+    (data.ref === undefined || boundedString(data.ref))
+  );
+}
+
+function structuredOutputErrorData(data: Record<string, unknown>): boolean {
+  return (
+    exactRecord(data, ["message", "retries"]) &&
+    boundedString(data.message) &&
+    nonNegativeSafeInteger(data.retries)
+  );
+}
+
+function contextOverflowErrorData(data: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(data, ["message", "responseBody"]) &&
+    Object.hasOwn(data, "message") &&
+    boundedString(data.message) &&
+    (data.responseBody === undefined || boundedString(data.responseBody))
+  );
+}
+
+function apiErrorData(data: Record<string, unknown>): boolean {
+  if (!apiErrorShape(data)) return false;
+  if (!boundedString(data.message) || typeof data.isRetryable !== "boolean") return false;
+  if (!optionalValue(data.statusCode, nonNegativeSafeInteger)) return false;
+  if (!optionalValue(data.responseHeaders, stringRecord)) return false;
+  if (!optionalValue(data.responseBody, boundedString)) return false;
+  return optionalValue(data.metadata, stringRecord);
+}
+
+function stringRecord(value: unknown): boolean {
+  return isRecord(value) && Object.values(value).every(boundedString);
+}
+
+function optionalValue(value: unknown, validate: (candidate: unknown) => boolean): boolean {
+  return value === undefined || validate(value);
+}
+
+function apiErrorShape(data: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(data, [
+      "message",
+      "statusCode",
+      "isRetryable",
+      "responseHeaders",
+      "responseBody",
+      "metadata",
+    ]) &&
+    Object.hasOwn(data, "message") &&
+    Object.hasOwn(data, "isRetryable")
+  );
+}
+
+const ASSISTANT_ERROR_DATA_VALIDATORS: ReadonlyMap<string, AssistantErrorDataValidator> = new Map([
+  ["ProviderAuthError", providerAuthErrorData],
+  ["UnknownError", unknownErrorData],
+  ["MessageOutputLengthError", (data): boolean => exactRecord(data, [])],
+  ["StructuredOutputError", structuredOutputErrorData],
+  ["ContextOverflowError", contextOverflowErrorData],
+  ["APIError", apiErrorData],
+]);
+
+export type OpenCodeHistoryPartGate =
+  | "envelope"
+  | "metadata-bound"
+  | "argument-bound"
+  | "output-bound"
+  | "shape"
+  | "tool-unapproved"
+  | "tool-state"
+  | "part-type";
+
+/** Body-free account of a refused `message.part.updated.1` row: closed labels and one byte count. */
+export interface OpenCodeHistoryPartRejection {
+  readonly partType: string;
+  readonly tool: string;
+  readonly status: string;
+  readonly partBytes: number;
+  readonly gate: OpenCodeHistoryPartGate;
+}
+
+const PART_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "step-start",
+  "step-finish",
+  "compaction",
+  "tool",
+]);
+const TOOL_STATUSES: ReadonlySet<string> = new Set(["pending", "running", "completed", "error"]);
+
+/**
+ * Names the gate that refused a part row, for the reconciliation diagnostic (AGENTS.md §8). It runs
+ * the very predicates `parseOpenCodeHistory` applies, in the same order, so the log and the gate
+ * cannot drift apart. Every label comes from a closed set: an unreviewed tool name or status is
+ * reported as such, never echoed, and the only number is the part's serialized size.
+ */
+export function describeRejectedOpenCodeHistoryPart(
+  row: unknown,
+): OpenCodeHistoryPartRejection | undefined {
+  if (
+    !isRecord(row) ||
+    row.type !== "message.part.updated.1" ||
+    !isRecord(row.data) ||
+    typeof row.aggregate_id !== "string"
+  )
+    return undefined;
+  const gate = messagePartGate(row.data, row.aggregate_id);
+  if (gate === undefined) return undefined;
+  const part = isRecord(row.data.part) ? row.data.part : {};
+  const state = isRecord(part.state) ? part.state : {};
+  return {
+    partType: closedLabel(part.type, PART_TYPES),
+    tool: approvedToolLabel(part.tool),
+    status: closedLabel(state.status, TOOL_STATUSES),
+    partBytes: bytes(JSON.stringify(part)),
+    gate,
+  };
+}
+
+function closedLabel(value: unknown, labels: ReadonlySet<string>): string {
+  if (value === undefined) return "none";
+  return typeof value === "string" && labels.has(value) ? value : "other";
+}
+
+function approvedToolLabel(value: unknown): string {
+  if (value === undefined) return "none";
+  return typeof value === "string" && APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(value)
+    ? value
+    : "unapproved";
+}
+
+function messagePartUpdated(data: Record<string, unknown>, aggregateId: string): boolean {
+  return messagePartGate(data, aggregateId) === undefined;
+}
+
+function messagePartGate(
+  data: Record<string, unknown>,
+  aggregateId: string,
+): OpenCodeHistoryPartGate | undefined {
+  if (!partEnvelopeAdmitted(data, aggregateId) || !isRecord(data.part)) return "envelope";
+  return partBodyGate(data.part) ?? partShapeGate(data.part);
+}
+
+function partEnvelopeAdmitted(data: Record<string, unknown>, aggregateId: string): boolean {
+  return (
+    exactRecord(data, ["sessionID", "part", "time"]) &&
+    data.sessionID === aggregateId &&
+    isRecord(data.part) &&
+    nonNegativeNumber(data.time) &&
+    data.part.sessionID === aggregateId &&
+    PART_ID.test(String(data.part.id)) &&
+    MESSAGE_ID.test(String(data.part.messageID))
+  );
+}
+
+/** Reviewed part variants remain a closed allowlist; anything else is `part-type`. */
+function partShapeGate(part: Record<string, unknown>): OpenCodeHistoryPartGate | undefined {
+  if (part.type === "tool") return toolPartGate(part);
+  if (typeof part.type !== "string" || !PART_TYPES.has(part.type)) return "part-type";
+  return typedPartShape(part) ? undefined : "shape";
+}
+
+function typedPartShape(part: Record<string, unknown>): boolean {
+  if (part.type === "text") return textPartShape(part);
   if (part.type === "step-start") {
     return allowedRecord(part, ["id", "sessionID", "messageID", "type", "snapshot"]);
   }
-  if (part.type === "step-finish") {
-    return (
-      allowedRecord(part, [
-        "id",
-        "sessionID",
-        "messageID",
-        "type",
-        "reason",
-        "snapshot",
-        "cost",
-        "tokens",
-      ]) &&
-      nonEmpty(part.reason) &&
-      REVIEWED_FINISH_REASONS.has(part.reason) &&
-      finite(part.cost) &&
-      tokenCounts(part.tokens)
-    );
-  }
-  if (part.type === "compaction") {
-    return (
-      allowedRecord(part, [
-        "id",
-        "sessionID",
-        "messageID",
-        "type",
-        "auto",
-        "overflow",
-        "tail_start_id",
-      ]) &&
-      typeof part.auto === "boolean" &&
-      typeof part.overflow === "boolean" &&
-      (part.tail_start_id === undefined ||
-        (typeof part.tail_start_id === "string" && MESSAGE_ID.test(part.tail_start_id)))
-    );
-  }
-  return part.type === "tool" && toolPart(part);
+  if (part.type === "step-finish") return stepFinishPartShape(part);
+  return compactionPartShape(part);
 }
 
-function toolPart(part: Record<string, unknown>): boolean {
+function textPartShape(part: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(part, [
+      "id",
+      "sessionID",
+      "messageID",
+      "type",
+      "text",
+      "synthetic",
+      "ignored",
+      "time",
+      "metadata",
+    ]) &&
+    typeof part.text === "string" &&
+    (part.synthetic === undefined || typeof part.synthetic === "boolean") &&
+    (part.ignored === undefined || typeof part.ignored === "boolean")
+  );
+}
+
+function stepFinishPartShape(part: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(part, [
+      "id",
+      "sessionID",
+      "messageID",
+      "type",
+      "reason",
+      "snapshot",
+      "cost",
+      "tokens",
+    ]) &&
+    nonEmpty(part.reason) &&
+    REVIEWED_FINISH_REASONS.has(part.reason) &&
+    finite(part.cost) &&
+    tokenCounts(part.tokens)
+  );
+}
+
+function compactionPartShape(part: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(part, [
+      "id",
+      "sessionID",
+      "messageID",
+      "type",
+      "auto",
+      "overflow",
+      "tail_start_id",
+    ]) &&
+    typeof part.auto === "boolean" &&
+    typeof part.overflow === "boolean" &&
+    (part.tail_start_id === undefined ||
+      (typeof part.tail_start_id === "string" && MESSAGE_ID.test(part.tail_start_id)))
+  );
+}
+
+function toolPartGate(part: Record<string, unknown>): OpenCodeHistoryPartGate | undefined {
   if (
     !allowedRecord(part, [
       "id",
@@ -928,13 +1279,14 @@ function toolPart(part: Record<string, unknown>): boolean {
       "metadata",
     ]) ||
     !nonEmpty(part.callID) ||
-    !nonEmpty(part.tool) ||
-    !APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(part.tool) ||
-    (part.metadata !== undefined && !isRecord(part.metadata)) ||
-    !isRecord(part.state)
+    !nonEmpty(part.tool)
   )
-    return false;
-  return toolState(part.state);
+    return "shape";
+  if (!APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(part.tool)) return "tool-unapproved";
+  if ((part.metadata !== undefined && !isRecord(part.metadata)) || !isRecord(part.state)) {
+    return "shape";
+  }
+  return toolState(part.state) ? undefined : "tool-state";
 }
 
 // eslint-disable-next-line complexity -- each pinned tool-state shape fails closed independently.
@@ -968,9 +1320,10 @@ function toolState(state: Record<string, unknown>): boolean {
   }
   if (state.status === "error") {
     return (
-      exactRecord(state, ["status", "input", "error", "time"]) &&
+      allowedRecord(state, ["status", "input", "error", "metadata", "time"]) &&
       isRecord(state.input) &&
       nonEmpty(state.error) &&
+      (state.metadata === undefined || isRecord(state.metadata)) &&
       exactStartEndTime(state.time)
     );
   }
@@ -1001,20 +1354,75 @@ function boundedLifecycle(value: unknown): boolean {
  * projection never carries the admitted body. Non-body fields and all other variants stay bounded
  * exactly as before.
  *
- * A part this size only ever arrives through the `POST /sync/history` HTTP body (which shares this
- * 64 KiB row budget), never as a single live SSE frame: the live path yields content-free pull
- * triggers only, so the independent `MAX_FRAME_BYTES` SSE limit is not a cross-budget constraint.
+ * A part this size only ever arrives through the `POST /sync/history` HTTP body (which shares the
+ * history response budget), never as a single live SSE frame: the live path yields content-free
+ * pull triggers only, so the independent `MAX_FRAME_BYTES` SSE limit is not a cross-budget
+ * constraint.
  */
-function boundedPartLifecycle(part: Record<string, unknown>): boolean {
-  if (part.type === "text") return boundedPartBody(part, "text", "", part.text);
-  const state = isRecord(part.state) ? part.state : undefined;
-  if (part.type !== "tool" || state?.status !== "completed") return boundedLifecycle(part);
-  return boundedPartBody(part, "state", { ...state, output: "" }, state.output);
+function partBodyGate(part: Record<string, unknown>): OpenCodeHistoryPartGate | undefined {
+  if (part.type === "text") {
+    return boundedPartBody(part, "text", "", part.text) ? undefined : "metadata-bound";
+  }
+  if (part.type === "tool" && isRecord(part.state)) return toolPartBodyGate(part, part.state);
+  return boundedLifecycle(part) ? undefined : "metadata-bound";
+}
+
+/**
+ * A tool part carries the governed call's arguments as `state.input` (every status) and, while
+ * pending, as the provider's raw text `state.raw`. Both re-enter under the catalog ceilings that
+ * admitted them at the gateway (`TOOL_CATALOG_LIMITS`, see OPENCODE_HISTORY_TOOL_PART_MAX_BYTES);
+ * the completed `state.output` keeps its 64 KiB body budget; everything else -- title, error,
+ * metadata, times, ids -- keeps the metadata bound. The admitted bodies never reach the projection.
+ */
+function toolPartBodyGate(
+  part: Record<string, unknown>,
+  state: Record<string, unknown>,
+): OpenCodeHistoryPartGate | undefined {
+  if (!boundedToolArguments(state.input) || !boundedRawToolArguments(state.raw)) {
+    return "argument-bound";
+  }
+  const bodiless = { ...part, state: { ...state, ...blankedToolArguments(state) } };
+  const metadataOnly =
+    state.output === undefined
+      ? bodiless
+      : { ...bodiless, state: { ...bodiless.state, output: "" } };
+  if (!boundedLifecycle(metadataOnly)) return "metadata-bound";
+  if (state.output === undefined) return undefined;
+  return typeof state.output === "string" &&
+    bytes(JSON.stringify(bodiless)) <= MAX_HISTORY_INFO_BYTES
+    ? undefined
+    : "output-bound";
+}
+
+// A non-record is left to the tool-state gate, which refuses it under its own name; a record is
+// validated exactly as the gateway validated it (byte, string-byte, depth, key and item ceilings).
+function boundedToolArguments(input: unknown): boolean {
+  if (!isRecord(input)) return true;
+  try {
+    captureCatalogJson(input);
+    return true;
+  } catch (error) {
+    if (error instanceof ToolCatalogError) return false;
+    throw error;
+  }
+}
+
+// The raw text is the canonical argument JSON the gateway handed the runtime, so it can never
+// legitimately exceed the argument ceiling; a non-string is again the tool-state gate's refusal.
+function boundedRawToolArguments(raw: unknown): boolean {
+  return typeof raw !== "string" || bytes(raw) <= TOOL_CATALOG_LIMITS.maxArgumentBytes;
+}
+
+function blankedToolArguments(state: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...(state.input === undefined ? {} : { input: {} }),
+    ...(state.raw === undefined ? {} : { raw: "" }),
+  };
 }
 
 function boundedPartBody(
   part: Record<string, unknown>,
-  key: "text" | "state",
+  key: "text",
   boundedValue: unknown,
   body: unknown = boundedValue,
 ): boolean {

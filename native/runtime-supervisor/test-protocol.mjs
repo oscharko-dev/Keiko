@@ -3,53 +3,62 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+
+import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
+// KEIKO-0304: the codec and process helpers below used to live in a per-platform copy alongside a
+// second copy under `macos/test-protocol.mjs` that had drifted in six observable ways. Both now
+// import them from `./protocol-harness.mjs`, which reconciled each divergence deliberately (see
+// its header). Windows still owns its platform-specific bits: MSVC compile, hermetic env, the
+// two harness functions that carry the lifecycle guard, and the source contract.
+import {
+  explained,
+  fileURLToPath,
+  header,
+  installControlPipeErrorGuard,
+  launchPacket as sharedLaunchPacket,
+  raiseControlPipeErrorIfIncomplete,
+  readBytes,
+  response,
+  streamReader,
+  waitForExit,
+} from "./protocol-harness.mjs";
+// Codex 3793795571 on #3202: the Windows source-contract assertions used to run against the
+// raw file text, so a control retained only inside `/* ... */`, a diagnostic `"..."`, or a
+// compiler-dead `#if 0` branch still satisfied the pin — the source-only lane runs on non-
+// Windows hosts where behavioural qualification is skipped, so those pins were the only
+// defence. Route through the shared scanner: `prepareCSource` for the negative shell-launch
+// check (needs to see actual string bytes so `"cmd.exe"` inside a diagnostic string doesn't
+// evade it) and `stripStringLiteralBodies(prepareCSource(...))` for positive identifier /
+// call pins (blanks string bodies so a diagnostic `"CREATE_SUSPENDED"` cannot satisfy an
+// assertion on the identifier).
+import {
+  prepareCSource,
+  prepareCSourcePreservingLiterals,
+  stripStringLiteralBodies,
+} from "../lib/c-source-scanner.mjs";
 
 const source = fileURLToPath(new URL("./windows/keiko_runtime_supervisor.c", import.meta.url));
 const fixtureSource = fileURLToPath(new URL("./windows/qualification_fixture.c", import.meta.url));
 const DEADLINE_MS = 10_000;
 
-function header(magic, kind, payloadLength) {
-  const bytes = Buffer.alloc(12);
-  bytes.write(magic, 0, "ascii");
-  bytes.writeUInt16LE(1, 4);
-  bytes.writeUInt16LE(kind, 6);
-  bytes.writeUInt32LE(payloadLength, 8);
-  return bytes;
-}
-
+// Windows-specific env pairs (the supervised child needs SystemRoot for Win32/CRT plumbing).
 function launchPacket(executable, cwd) {
-  const args = ["--qualified", "second-argument"];
-  const environment = [
-    ["KEIKO_ALPHA", "one"],
-    ["KEIKO_BETA", "two"],
-    // Win32/CRT plumbing in the supervised child needs SystemRoot; nothing else leaks through.
-    ["SystemRoot", process.env.SystemRoot ?? String.raw`C:\Windows`],
-  ];
-  const strings = [
-    "0123456789abcdef0123456789abcdef",
+  return sharedLaunchPacket(
     executable,
     cwd,
-    ...args,
-    ...environment.flat(),
-  ];
-  const prefix = Buffer.alloc(4);
-  prefix.writeUInt16LE(args.length, 0);
-  prefix.writeUInt16LE(environment.length, 2);
-  const parts = [prefix];
-  for (const value of strings) {
-    const bytes = Buffer.from(value, "utf8");
-    const length = Buffer.alloc(4);
-    length.writeUInt32LE(bytes.length);
-    parts.push(length, bytes, Buffer.alloc(1));
-  }
-  const payload = Buffer.concat(parts);
-  return Buffer.concat([header("KRP1", 1, payload.length), payload]);
+    [
+      ["KEIKO_ALPHA", "one"],
+      ["KEIKO_BETA", "two"],
+      ["SystemRoot", process.env.SystemRoot ?? String.raw`C:\Windows`],
+    ],
+    ["--qualified", "second-argument"],
+  );
 }
 
 async function compile(sourcePath, output) {
   const objectPath = join(dirname(output), `${basename(output)}.obj`);
-  const result = await runProcess("cl", [
+  const compileEnv = resolveWindowsMsvcEnv(process.env);
+  const result = await runProcess(windowsToolFromPath(compileEnv.PATH, "cl.exe"), compileEnv, [
     "/nologo",
     "/std:c11",
     "/W4",
@@ -62,93 +71,48 @@ async function compile(sourcePath, output) {
     `/Fo:${objectPath}`,
     sourcePath,
   ]);
-  assert.equal(result.code, 0, `native compile failed: ${result.stderr.toString("utf8")}`);
+  assert.equal(
+    result.code,
+    0,
+    `native compile failed:\n  ${boundedDiagnostic("stdout", result.stdout)}\n  ${boundedDiagnostic(
+      "stderr",
+      result.stderr,
+    )}`,
+  );
 }
 
-function runProcess(command, args) {
+function runProcess(command, env, args) {
   return new Promise((resolveResult, reject) => {
-    const child = spawn(command, args, { env: process.env, stdio: ["ignore", "ignore", "pipe"] });
+    // KEIKO-0802: MSVC's `cl.exe` writes `error C####` diagnostics to STDOUT, not stderr, so the
+    // pre-fix stdio: ["ignore", "ignore", "pipe"] tuple threw them away and every compile failure
+    // reported an empty `${result.stderr.toString("utf8")}` — a "native compile failed:" with no
+    // clue what failed. Capture both streams and hand both back for the assertion message.
+    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = [];
     const stderr = [];
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.once("error", reject);
-    child.once("close", (code) => resolveResult({ code, stderr: Buffer.concat(stderr) }));
+    child.once("close", (code) =>
+      resolveResult({ code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) }),
+    );
   });
 }
 
-/* Persistent per-stream accumulator: listeners attach once at spawn time, so bytes arriving
- * between protocol reads are buffered instead of being dropped by a flowing, listener-less
- * stream (the swap-listener pattern loses exactly the final pre-exit write on Windows). */
-function streamReader(stream) {
-  const reader = { buffered: [], size: 0, waiter: null, ended: false };
-  stream.on("data", (chunk) => {
-    reader.buffered.push(chunk);
-    reader.size += chunk.length;
-    reader.waiter?.();
-  });
-  stream.once("end", () => {
-    reader.ended = true;
-    reader.waiter?.();
-  });
-  return reader;
-}
-
-function readBytes(reader, length) {
-  return new Promise((resolveBytes, reject) => {
-    const check = () => {
-      if (reader.size >= length) {
-        reader.waiter = null;
-        const bytes = Buffer.concat(reader.buffered);
-        reader.buffered = [bytes.subarray(length)];
-        reader.size = bytes.length - length;
-        resolveBytes(bytes.subarray(0, length));
-        return;
-      }
-      if (reader.ended) {
-        reader.waiter = null;
-        reject(
-          new Error(
-            `native helper ended before producing bounded response (buffered=${String(reader.size)})`,
-          ),
-        );
-      }
-    };
-    reader.waiter = check;
-    check();
-  });
-}
-
-async function response(reader) {
-  const responseHeader = await readBytes(reader, 12);
-  assert.equal(responseHeader.subarray(0, 4).toString("ascii"), "KRS1");
-  assert.equal(responseHeader.readUInt16LE(4), 1);
-  const length = responseHeader.readUInt32LE(8);
-  assert.ok(length <= 64);
-  return {
-    kind: responseHeader.readUInt16LE(6),
-    payload: length === 0 ? Buffer.alloc(0) : await readBytes(reader, length),
-  };
+// Bounded diagnostic slice for the compile-failed assertion message. cl.exe can produce many KB
+// of `error C####` output on a bad file; the whole thing hitting the exception message is
+// unhelpful noise, and a bare truncation drops the leading errors that actually name the fault.
+// Take the first 4 KB and mark the truncation, so the assertion carries the FIRST diagnostics.
+function boundedDiagnostic(label, buffer) {
+  const cap = 4096;
+  const text = buffer.toString("utf8");
+  if (text.length <= cap) return text.length === 0 ? "" : `${label}=${text}`;
+  return `${label}=${text.slice(0, cap)}<truncated, ${String(text.length - cap)} more bytes>`;
 }
 
 /* Windows children need SystemRoot for Win32/CRT plumbing; everything else stays withheld. */
 function hermeticWindowsEnv() {
   return { SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows` };
-}
-
-/* Re-throw a stream failure with the child's exit code so CI logs pinpoint the stage. */
-async function explained(stage, pending, exited, stderr) {
-  try {
-    return await pending;
-  } catch (error) {
-    const settled = await Promise.race([
-      exited,
-      new Promise((resolveLate) => setTimeout(resolveLate, 2_000, "still-running")),
-    ]);
-    throw new Error(
-      `${stage}: ${error instanceof Error ? error.message : String(error)} ` +
-        `(exit=${String(settled)} stderrBytes=${String(Buffer.concat(stderr).length)})`,
-      { cause: error },
-    );
-  }
 }
 
 async function qualifyWindows(helper, runtime, root) {
@@ -164,35 +128,71 @@ async function qualifyWindows(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const responses = streamReader(child.stdio[4]);
   const output = streamReader(child.stdout);
+  const controlPipeErrorState = installControlPipeErrorGuard(child);
+  // KEIKO-0278: the same lifecycle guard the macOS `qualify` carries; DEADLINE_MS's bare
+  // `child.kill()` only bounds the hang otherwise.
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
-  child.stdio[3].write(launchPacket(runtime, root));
-  const acknowledgement = await explained(
-    "launch acknowledgement",
-    response(responses),
-    exited,
-    stderr,
-  );
-  assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
-  const observation = await explained("fixture observation", readBytes(output, 12), exited, stderr);
-  assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
-  const rootProcess = processHandle(observation.readUInt32LE(4));
-  const descendant = processHandle(observation.readUInt32LE(8));
-  const control = header("KRC1", 3, 0);
-  child.stdio[3].write(control.subarray(0, 5));
-  await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-  child.stdio[3].write(control.subarray(5));
-  const reap = await explained("reap response", response(responses), exited, stderr);
-  assert.equal(reap.kind, 2);
-  assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
-  await Promise.all([waitForExit(rootProcess), waitForExit(descendant)]);
-  const exitCode = await exited;
-  clearTimeout(deadline);
-  assert.equal(exitCode, 0);
-  assert.equal(Buffer.concat(stderr).length, 0, "helper diagnostics must remain content-free");
+  let completed = false;
+  try {
+    child.stdio[3].write(launchPacket(runtime, root));
+    const acknowledgement = await explained(
+      "launch acknowledgement",
+      response(responses),
+      exited,
+      stderr,
+    );
+    assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
+    const observation = await explained(
+      "fixture observation",
+      readBytes(output, 12),
+      exited,
+      stderr,
+    );
+    assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
+    const [rootProcess, descendant] = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+    await writeSplitControlFrame(child.stdio[3]);
+    const reap = await explained("reap response", response(responses), exited, stderr);
+    assert.equal(reap.kind, 2);
+    assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
+    await Promise.all([waitForExit(rootProcess), waitForExit(descendant)]);
+    assert.equal(await exited, 0);
+    assert.equal(Buffer.concat(stderr).length, 0, "helper diagnostics must remain content-free");
+    completed = true;
+  } finally {
+    clearTimeout(deadline);
+    if (!completed) child.kill("SIGKILL");
+    await exited.catch(() => undefined);
+  }
+  raiseControlPipeErrorIfIncomplete("qualifyWindows", controlPipeErrorState, completed);
 }
 
-function processHandle(pid) {
-  return pid;
+/** Writes a control frame in two chunks, so the supervisor's reader has to reassemble a header it
+ * received split across reads rather than one that happened to arrive whole. */
+async function writeSplitControlFrame(control) {
+  const frameBytes = header("KRC1", 3, 0);
+  control.write(frameBytes.subarray(0, 5));
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  control.write(frameBytes.subarray(5));
+}
+
+// KEIKO-0730: after the control-EOF closure has been observed and the supervised pids have
+// exited, assert the Windows fail-closed contract — wmain returns 1 after
+// send_error(ERROR_JOB_OBSERVE) on the PeekNamedPipe failure branch (windows/keiko_runtime_
+// supervisor.c:389-392, 494-496, 502-508), and stderr stays empty because the error is
+// reported through the KRS1 error frame, never through a stderr write. The pre-fix bare
+// `await exited` observed both but asserted neither.
+async function assertControlEofFinalization(exited, stderr) {
+  const eofExitCode = await exited;
+  assert.equal(
+    eofExitCode,
+    1,
+    "supervisor must exit with 1 on control EOF (send_error(ERROR_JOB_OBSERVE))",
+  );
+  assert.equal(
+    Buffer.concat(stderr).length,
+    0,
+    "supervisor must not leak stderr diagnostics on the EOF fail-closed path",
+  );
 }
 
 async function assertControlEofFailsClosed(helper, runtime, root) {
@@ -208,61 +208,155 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const responses = streamReader(child.stdio[4]);
   const output = streamReader(child.stdout);
-  child.stdio[3].write(launchPacket(runtime, root));
-  const acknowledgement = await explained(
-    "eof-probe acknowledgement",
-    response(responses),
-    exited,
-    stderr,
-  );
-  assert.equal(acknowledgement.kind, 1);
-  const observation = await explained(
-    "eof-probe observation",
-    readBytes(output, 12),
-    exited,
-    stderr,
-  );
-  const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
-  child.stdio[3].end();
-  const closure = await explained("eof-probe closure", response(responses), exited, stderr);
-  assert.equal(closure.kind, 3);
-  await Promise.all(pids.map(waitForExit));
-  // The supervisor must have fully exited before cleanup unlinks its executable (Windows lock).
-  await exited;
-}
-
-async function waitForExit(pid) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (error?.code === "ESRCH") return;
-      throw error;
-    }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+  const controlPipeErrorState = installControlPipeErrorGuard(child);
+  // KEIKO-0278: this probe had NO watchdog at all.
+  const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
+  let completed = false;
+  try {
+    child.stdio[3].write(launchPacket(runtime, root));
+    const acknowledgement = await explained(
+      "eof-probe acknowledgement",
+      response(responses),
+      exited,
+      stderr,
+    );
+    assert.equal(acknowledgement.kind, 1);
+    const observation = await explained(
+      "eof-probe observation",
+      readBytes(output, 12),
+      exited,
+      stderr,
+    );
+    const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+    child.stdio[3].end();
+    const closure = await explained("eof-probe closure", response(responses), exited, stderr);
+    assert.equal(closure.kind, 3);
+    await Promise.all(pids.map(waitForExit));
+    await assertControlEofFinalization(exited, stderr);
+    completed = true;
+  } finally {
+    clearTimeout(deadline);
+    if (!completed) child.kill("SIGKILL");
+    await exited.catch(() => undefined);
   }
-  throw new Error("qualified process remained active after Job Object reap proof");
+  raiseControlPipeErrorIfIncomplete(
+    "assertControlEofFailsClosed",
+    controlPipeErrorState,
+    completed,
+  );
 }
 
 async function assertSourceContract() {
-  const text = await readFile(source, "utf8");
-  assert.match(text, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/u);
-  assert.match(text, /CREATE_SUSPENDED/u);
-  assert.match(text, /AssignProcessToJobObject\(job, process->hProcess\)/u);
-  assert.match(text, /ResumeThread\(process->hThread\)/u);
-  assert.match(text, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
-  assert.match(text, /accounting\.ActiveProcesses == 0/u);
-  assert.match(text, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
-  assert.doesNotMatch(text, /system\(|ShellExecute|cmd\.exe|powershell/iu);
+  const rawSource = await readFile(source, "utf8");
+  runSourceContractOn(rawSource);
+  assertMutationRejected(rawSource);
+}
+
+function runSourceContractOn(rawSource) {
+  // Two composition modes over the shared scanner (codex 3793795571 on #3202): positive
+  // identifier / call pins consume the string-blanked scan (so a diagnostic `"CREATE_SUSPENDED"`
+  // cannot satisfy an assertion on the identifier); the negative shell-launch pin consumes
+  // the literal-preserving scan (so a real `system("cmd.exe")` still trips it).
+  const preparedText = prepareCSource(rawSource);
+  const literalPreservingText = prepareCSourcePreservingLiterals(rawSource);
+  const codeText = stripStringLiteralBodies(preparedText);
+  assert.match(codeText, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/u);
+  assert.match(codeText, /CREATE_SUSPENDED/u);
+  assert.match(codeText, /AssignProcessToJobObject\(job, process->hProcess\)/u);
+  assert.match(codeText, /ResumeThread\(process->hThread\)/u);
+  assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
+  assert.match(codeText, /accounting\.ActiveProcesses == 0/u);
+  assert.match(codeText, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
+  assert.match(
+    literalPreservingText,
+    /int wmain\([^)]*\)\s*\{[\s\S]*?if\s*\(\s*!SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)\s*\|\|\s*!SetDllDirectoryW\(L""\)\s*\)\s*return\s+1\s*;/u,
+  );
+  // Coderabbit 3793899396 on #3202: the negative shell-launch regex must accept `system` /
+  // `ShellExecute` calls with OPTIONAL whitespace before the opening parenthesis (`system
+  // ("cmd")` and `ShellExecute (…)` both compile identically). Word boundary on `system`
+  // avoids matching identifiers that merely CONTAIN "system" (`filesystem`, `MyShellExecute
+  // Handler`).
+  assert.doesNotMatch(preparedText, /\bsystem\s*\(|\bShellExecute\w*\s*\(|cmd\.exe|powershell/iu);
+}
+
+// Codex 3793905525 on #3202: fail-before-fix proof for the shared-scanner wiring. Move a
+// required control (`CREATE_SUSPENDED`) into a `/* ... */` comment, then verify that
+// `runSourceContractOn` rejects the mutated source. Without the scanner wiring the mutated
+// source would still satisfy the raw-text match, so this test is what pins the trust-boundary
+// remediation instead of hoping the future author remembers to run through the shared code.
+function assertMutationRejected(rawSource) {
+  const commentedOut = rawSource.replace(/CREATE_SUSPENDED/gu, "/* CREATE_SUSPENDED */ (void)0");
+  assert.notEqual(commentedOut, rawSource, "mutation must have changed the source");
+  assert.throws(
+    () => runSourceContractOn(commentedOut),
+    /CREATE_SUSPENDED/,
+    "assertSourceContract must reject a mutation that hides CREATE_SUSPENDED in a comment " +
+      "— pins that the shared scanner strips comments before running the identifier pin",
+  );
+  // Coderabbit 3794185693 on #3202: use global regexes so EVERY occurrence is mutated. If
+  // `CREATE_SUSPENDED` appears twice, a non-global replace leaves the second occurrence
+  // satisfying the pin and `assert.throws` sees no error — meta-test would pass against a
+  // correct implementation.
+  const diagnosticSource = rawSource.replace(/CREATE_SUSPENDED/gu, '(void)"CREATE_SUSPENDED"');
+  assert.throws(
+    () => runSourceContractOn(diagnosticSource),
+    /CREATE_SUSPENDED/,
+    "assertSourceContract must reject a mutation that hides CREATE_SUSPENDED inside a " +
+      "diagnostic string — pins that `stripStringLiteralBodies` runs on the identifier pin",
+  );
+  const withoutLoaderHardening = rawSource.replace(
+    "SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)",
+    "0",
+  );
+  assert.notEqual(
+    withoutLoaderHardening,
+    rawSource,
+    "loader-hardening mutation must change source",
+  );
+  assert.throws(
+    () => runSourceContractOn(withoutLoaderHardening),
+    /SetDefaultDllDirectories/,
+    "assertSourceContract must reject a source that drops its runtime DLL search-path hardening",
+  );
+  const unsafeDllDirectory = rawSource.replace(
+    /SetDllDirectoryW\(L""\)/gu,
+    'SetDllDirectoryW(L"not-empty")',
+  );
+  assert.notEqual(unsafeDllDirectory, rawSource, "DLL-directory mutation must change source");
+  assert.throws(
+    () => runSourceContractOn(unsafeDllDirectory),
+    /SetDllDirectoryW/u,
+    "assertSourceContract must reject a non-empty DLL directory in the fail-closed startup guard",
+  );
 }
 
 await assertSourceContract();
+// Codex on #3202: validate the ENTIRE argv on Windows too — parallel to the macOS harness's
+// KNOWN_FLAGS check. A typo like `--helpr <path>` or a bare `--helper` (no value) previously
+// slid past silently and compiled the repo source instead of qualifying the staged binary,
+// so a release invocation could report success against the wrong artifact.
+const WINDOWS_KNOWN_FLAGS = new Set(["--helper"]);
+for (let i = 2; i < process.argv.length; i += 1) {
+  const arg = process.argv[i];
+  if (!WINDOWS_KNOWN_FLAGS.has(arg)) {
+    throw new Error(
+      `unknown Windows qualification flag: ${JSON.stringify(arg)}. Supported: --helper <path>`,
+    );
+  }
+  if (arg === "--helper") i += 1; // consume path value; validity checked below.
+}
 if (process.platform === "win32") {
   const root = await mkdtemp(join(tmpdir(), "keiko-runtime-supervisor-"));
   try {
     const helperArgumentIndex = process.argv.indexOf("--helper");
     const suppliedHelper =
       helperArgumentIndex === -1 ? undefined : process.argv[helperArgumentIndex + 1];
+    if (
+      helperArgumentIndex !== -1 &&
+      (suppliedHelper === undefined || suppliedHelper.length === 0)
+    ) {
+      throw new Error("--helper requires a non-empty path to the staged supervisor binary");
+    }
     const helper = suppliedHelper ?? join(root, "keiko-runtime-supervisor.exe");
     const runtime = join(root, "qualification-fixture.exe");
     if (suppliedHelper === undefined) await compile(source, helper);

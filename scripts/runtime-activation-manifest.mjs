@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export const RUNTIME_ACTIVATION_RELATIVE_PATH = ".portable/runtime-activation.json";
 export const RUNTIME_QUALIFICATION_SUITE = "runtime-tree-qualification-v1";
@@ -29,6 +29,7 @@ export function runtimeActivationManifest(manifest) {
     },
     security,
     nativeHelpers: clone(manifest.nativeHelpers),
+    nativeAddons: clone(manifest.nativeAddons ?? []),
     sidecarRuntimes: clone(manifest.sidecarRuntimes ?? []),
     releaseImpact: {
       reviewedBinding: {
@@ -43,6 +44,7 @@ export function runtimeActivationManifest(manifest) {
         notarizationVerified: security.notarizationVerified,
         verificationChecks: clone(security.verificationChecks),
         nativeHelpers: clone(manifest.nativeHelpers),
+        nativeAddons: clone(manifest.nativeAddons ?? []),
       },
     },
   };
@@ -50,6 +52,7 @@ export function runtimeActivationManifest(manifest) {
 
 export function writeRuntimeActivationManifest(resourceRoot, manifest) {
   const path = join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/"));
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(runtimeActivationManifest(manifest), null, 2)}\n`, {
     mode: 0o644,
   });
@@ -58,7 +61,19 @@ export function writeRuntimeActivationManifest(resourceRoot, manifest) {
     schemaVersion: 1,
     path: RUNTIME_ACTIVATION_RELATIVE_PATH,
     sha256,
-    trustAnchor: "unverified-staging",
+    trustAnchor: stageTrustAnchor(manifest),
   };
   return { path, sha256 };
+}
+
+/**
+ * The pre-signing trust anchor is derived from the lane the manifest declares, never assumed. The
+ * production anchors are stamped later by the platform signing scripts; an evaluation bundle
+ * carries no platform seal at all and must say `evaluation-unqualified` rather than borrow the
+ * staging anchor (ADR-0163 D9).
+ */
+function stageTrustAnchor(manifest) {
+  return manifest.security?.verificationPolicy === "evaluation"
+    ? "evaluation-unqualified"
+    : "unverified-staging";
 }

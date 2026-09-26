@@ -1,4 +1,10 @@
 import type { Readable, Writable } from "node:stream";
+import type {
+  LongLivedRuntimeArchitecture,
+  LongLivedRuntimeBackend,
+  LongLivedRuntimePlatform,
+  LongLivedRuntimeQualification,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   planLongLivedRuntimeSandbox,
@@ -7,10 +13,6 @@ import {
   verifyLongLivedRuntimeSandboxAttestation,
   type ClosedRuntimeLaunchProfile,
   type LongLivedRuntimeEgressPolicy,
-  type LongLivedRuntimeArchitecture,
-  type LongLivedRuntimeBackend,
-  type LongLivedRuntimePlatform,
-  type LongLivedRuntimeQualification,
   type LongLivedRuntimeSandboxAttestation,
   type LongLivedRuntimeSandboxDecision,
   type LongLivedRuntimeSandboxRequest,
@@ -64,7 +66,7 @@ export interface RuntimeProcessBackend {
   readonly identity: Pick<RuntimeQualificationIdentity, "platform" | "arch" | "backend">;
   spawnOwnedTree(
     request: RuntimeSupervisorLaunchRequest,
-    sandbox: PreparedRuntimeSandboxLaunch,
+    sandbox?: PreparedRuntimeSandboxLaunch,
   ): RuntimeProcessTree;
   signalTree(tree: RuntimeProcessTree, signal: RuntimeTreeSignal): void;
   waitForCompleteTreeExit(tree: RuntimeProcessTree, timeoutMs: number): Promise<boolean>;

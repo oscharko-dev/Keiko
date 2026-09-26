@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,7 +49,7 @@ function createEvidenceStore(): EvidenceStore {
 }
 
 function createVault(): { dir: string; vault: MemoryVaultStore } {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-workflow-memory-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-workflow-memory-"));
   return {
     dir,
     vault: createMemoryVault({ memoryDir: dir, redactString: (value) => value }),

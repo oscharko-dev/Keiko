@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -17,6 +16,7 @@ import {
   PORTABLE_PAYLOAD_MAX_FILES as MAX_FILES,
   portablePayloadRelativePath as portablePath,
 } from "./portable-runtime.mjs";
+import { sha256File } from "./lib/digest.mjs";
 
 const TARGETS = new Set(["macos-arm64", "macos-x64"]);
 const MAX_CODE_OBJECTS = 4_096;
@@ -45,10 +45,6 @@ function isSafePortablePath(path) {
     !hasUnsafeText(path) &&
     !path.split("/").some((part) => part === "." || part === "..")
   );
-}
-
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function isMachO(path) {
@@ -94,7 +90,8 @@ function inspectFile(root, path, name, entry, state) {
   const macho = isMachO(path);
   if (/\.(?:dylib|node)$/iu.test(name) && !macho)
     boundedMacSigningFail("native-named payload file is not Mach-O");
-  if (macho) state.code.push({ relativePath, role: roleFor(relativePath), sha256: sha256(path) });
+  if (macho)
+    state.code.push({ relativePath, role: roleFor(relativePath), sha256: sha256File(path) });
 }
 
 function walk(root, current, depth, state) {

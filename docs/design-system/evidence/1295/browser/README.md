@@ -21,10 +21,12 @@ paths all resolve.
   [`equivalence-harness.mjs`](../equivalence-harness.mjs) — which renders the real component markup with
   the real `globals.css` and asserts **2324 probes × 7 modes = 0 differences** (Category A/B) plus the
   Category-C Light-adaptation proof.
-- The `/launch`, `/local-knowledge`, `/memoriaviva` sub-routes need client data that does not hydrate in
-  the backend-less static export, so they are not captured here. Deep, data-populated, interactive
-  workflow visual-regression against the live route is the explicit charter of **#1300** (the reuse-map's
-  visual-regression automation child).
+- The `/launch` and `/local-knowledge` sub-routes need client data that does not hydrate in the
+  backend-less static export, so they are not captured here. The former top-level `/memoriaviva`
+  route stub was deleted in #2894 (KEIKO-0129); the surviving surface is the in-desktop `memoria`
+  window opened from the `/` shell — see [`capture.mjs`](capture.mjs) for the current route set.
+  Deep, data-populated, interactive workflow visual-regression against the live route is the
+  explicit charter of **#1300** (the reuse-map's visual-regression automation child).
 
 ## Reproduce
 

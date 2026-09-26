@@ -36,7 +36,7 @@
 }
 
 .cmpBadge[data-trust="restricted"] {
-  border-color: color-mix(in oklch, var(--warning, #d88919) 55%, var(--line));
+  border-color: color-mix(in oklch, var(--warn, #d88919) 55%, var(--line));
 }
 
 .cmpBadge[data-trust="unavailable"] {
@@ -61,10 +61,10 @@
   gap: 12px;
   min-width: 0;
   padding: 9px 12px;
-  border: 1px solid color-mix(in oklch, var(--warning, #d88919) 55%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--warn, #d88919) 55%, var(--line));
   border-radius: var(--radius-control, 8px);
   color: var(--fg);
-  background: color-mix(in oklch, var(--warning, #d88919) 12%, var(--card));
+  background: color-mix(in oklch, var(--warn, #d88919) 12%, var(--card));
 }
 
 .cmpEditorBanner {
@@ -131,7 +131,7 @@
 
 .cmpPrimary {
   border-color: var(--accent);
-  color: var(--accent-contrast, #fff);
+  color: var(--accent-solid-ink, #fff);
   background: var(--accent);
 }
 
@@ -178,7 +178,7 @@
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card, 10px);
+  border-radius: var(--radius-lg, 10px);
   background: var(--card);
 }
 
@@ -227,9 +227,9 @@
   overflow: auto;
   padding: 20px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card, 12px);
+  border-radius: var(--radius-floating, 12px);
   background: var(--card);
-  box-shadow: var(--shadow-popover, 0 18px 45px rgb(0 0 0 / 35%));
+  box-shadow: var(--shadow-pop, 0 18px 45px rgb(0 0 0 / 35%));
 }
 
 .cmpDialogActions {

@@ -188,6 +188,9 @@ const DENIED_REASON: Partial<Record<AtlassianConnectorActivityReasonCode, Messag
   "authority-invalid": "atlassianConnectors.denied.reason.authority-invalid",
   "authority-expired": "atlassianConnectors.denied.reason.authority-expired",
   "authority-budget-exceeded": "atlassianConnectors.denied.reason.authority-budget-exceeded",
+  // KEIKO-0547: distinct message for a mid-flight-revoked envelope rather than falling back to
+  // the generic policy-denied line.
+  "authority-revoked": "atlassianConnectors.denied.reason.authority-revoked",
   "connector-access-denied": "atlassianConnectors.denied.reason.connector-access-denied",
   "connector-write-denied": "atlassianConnectors.denied.reason.connector-write-denied",
 };

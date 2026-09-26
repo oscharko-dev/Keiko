@@ -14,29 +14,34 @@
 // Content-free: every value produced here is a count, flag, branch name, or typed/closed-vocabulary
 // code. Never diff content, file paths, secrets, command strings, or raw subprocess output.
 
+import type {
+  GitDeliveryActionKind,
+  GitDeliveryActionSheet,
+  GitDeliveryApprovalRequirement,
+  GitDeliveryBranchProtection,
+  GitDeliveryChecksState,
+  GitDeliveryExpectedBlocker,
+  GitDeliveryMergeReadiness,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryPolicyDecision,
+  GitDeliveryProviderCapability,
+  GitDeliveryPullRequestState,
+  GitDeliveryRecoveryActionHint,
+  GitDeliveryRecoveryHint,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts";
 import {
   buildGitDeliveryActionSheet,
   gitDeliverySuggestedRecoveryStrategy,
-  type GitDeliveryActionKind,
-  type GitDeliveryActionSheet,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryBranchProtection,
-  type GitDeliveryChecksState,
-  type GitDeliveryExpectedBlocker,
-  type GitDeliveryMergeReadiness,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryPolicyDecision,
-  type GitDeliveryProviderCapability,
-  type GitDeliveryPullRequestState,
-  type GitDeliveryRecoveryActionHint,
-  type GitDeliveryRecoveryHint,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryResolvedInputs,
+  GIT_PREFLIGHT_RECOVERY_ACTION_HINT,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
   gitDeliveryPolicyTargetBranchName,
-  gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { gitDeliveryRiskClassForInputs } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   evaluateGitPreflight,
   type GitPreflightFinding,
@@ -100,8 +105,11 @@ function effectivePolicyDecision(
   inputs: GitDeliveryResolvedInputs,
   packs: GitDeliveryTrustedPolicyPacks,
   capabilities: readonly GitDeliveryProviderCapability[],
+  currentBranchName: string | undefined,
 ): GitDeliveryPolicyDecision {
-  const targetBranchName = gitDeliveryPolicyTargetBranchName(inputs);
+  const targetBranchName = gitDeliveryPolicyTargetBranchName(inputs, {
+    commitBranchName: currentBranchName,
+  });
   const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
     actionKind: inputs.kind,
     targetBranchName,
@@ -193,35 +201,18 @@ function collectExpectedBlockers(
 }
 
 // ─── Recovery-hint mapping (AC4 — common failure classes, same surface) ─────────────
-// A deterministic, exhaustive table from each preflight finding code to a recovery action hint. The
-// "recover-via-strategy" hints are produced separately so they can carry a suggestedRecoveryStrategy.
+// The recovery hint per preflight finding code is the ONE shared table in keiko-contracts
+// (GIT_PREFLIGHT_RECOVERY_ACTION_HINT); the "recover-via-strategy" hints below are produced separately
+// so they can carry a suggestedRecoveryStrategy.
 
+// Every code the shared table maps to "recover-via-strategy" belongs here, so that hint always
+// carries the concrete strategy the kernel would execute (the contract: present iff the hint is
+// recover-via-strategy). A detached head is re-attached by a governed recovery onto its target.
 const STRATEGY_RECOVERY_CODES: ReadonlySet<GitPreflightFindingCode> = new Set([
+  "detached-head",
   "dirty-worktree-impacts-recovery",
   "recovery-target-unset",
 ]);
-
-const FINDING_RECOVERY_HINT: Readonly<
-  Record<GitPreflightFindingCode, GitDeliveryRecoveryActionHint>
-> = {
-  "detached-head": "configure-upstream",
-  "branch-already-exists": "adjust-policy-target",
-  "base-branch-missing": "adjust-policy-target",
-  "switch-target-missing": "adjust-policy-target",
-  "no-changes-to-stage": "stage-changes",
-  "nothing-staged-to-unstage": "stage-changes",
-  "nothing-staged-to-commit": "stage-changes",
-  "untracked-files-impacted": "stage-changes",
-  "no-upstream-configured": "configure-upstream",
-  "nothing-to-push": "retry",
-  "non-fast-forward": "resolve-conflicts",
-  "remote-alias-missing": "configure-upstream",
-  "remote-unreachable": "retry",
-  "operation-in-progress": "abort-in-progress-operation",
-  "no-operation-to-abort": "retry",
-  "recovery-target-unset": "recover-via-strategy",
-  "dirty-worktree-impacts-recovery": "recover-via-strategy",
-};
 
 function worktreeIsDirty(snapshot: GitWorktreeSnapshot): boolean {
   return (
@@ -246,7 +237,10 @@ function recoveryHintForFinding(
       ),
     };
   }
-  return { actionHint: FINDING_RECOVERY_HINT[finding.code], remediation: finding.remediation };
+  return {
+    actionHint: GIT_PREFLIGHT_RECOVERY_ACTION_HINT[finding.code],
+    remediation: finding.remediation,
+  };
 }
 
 function policyRecoveryHint(
@@ -329,6 +323,7 @@ export function buildActionSheetFromFacts(facts: BuildActionSheetFacts): GitDeli
     resolvedInputs,
     facts.policyPacks,
     facts.activeProviderCapabilities,
+    worktreeSnapshot.currentBranchName,
   );
   const expectedBlockers = collectExpectedBlockers(
     preflight.findings,

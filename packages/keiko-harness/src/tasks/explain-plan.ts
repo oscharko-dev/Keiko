@@ -13,7 +13,9 @@ const SYSTEM_PROMPT =
   "read-only explanation task.";
 
 function contextBlock(input: ExplainPlanInput): string {
-  return input.context === undefined
+  // An empty string is treated the same as an absent field (KEIKO-0550): a caller-supplied
+  // context: "" must not render a labeled-but-empty "File excerpt:" section.
+  return input.context === undefined || input.context.length === 0
     ? "\n\nFile excerpt: not available. State that limitation before answering."
     : `\n\nFile excerpt:\n${input.context}`;
 }

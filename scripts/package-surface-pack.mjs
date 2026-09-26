@@ -103,6 +103,7 @@ function assertPackResult(result, maxBuffer) {
 }
 
 export function packFiles({
+  packageDir = process.cwd(),
   spawnSyncImpl = spawnSync,
   platform = process.platform,
   processEnv = process.env,
@@ -118,6 +119,7 @@ export function packFiles({
     shellCommandForTrustedExecutableImpl,
   });
   const result = spawnSyncImpl(command, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: packageDir,
     encoding: "utf8",
     env,
     maxBuffer,

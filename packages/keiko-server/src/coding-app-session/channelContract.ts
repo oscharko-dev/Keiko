@@ -15,7 +15,7 @@ export {
   contentFreeCodingAppSessionChannelSnapshot,
   validateCodingAppSessionChannelContent,
   validateCodingAppSessionChannelSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 export type {
   CodingAppSessionAcknowledgement,
   CodingAppSessionChannelContent,

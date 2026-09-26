@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "./config.js";
 import { COST_RANK, isConversationEligibleModel } from "./capabilities.js";
 import {
   assertConfiguredModel,
@@ -8,6 +9,19 @@ import {
   selectConfiguredModel,
 } from "./model-selection.js";
 import type { GatewayConfig, ModelCapability, ModelProviderConfig } from "./types.js";
+
+function verifiedToolCallingProof(): NonNullable<ModelCapability["toolCallingVerification"]> {
+  return {
+    status: "verified",
+    checkedAt: new Date().toISOString(),
+    probe: "gateway-tool-calling-v1",
+    configurationFingerprint: "0".repeat(64),
+  };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function provider(modelId: string): ModelProviderConfig {
   return {
@@ -41,6 +55,12 @@ function codingSidecarCapability(
     contextWindow: 128_000,
     maxOutputTokens: 4_096,
     toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "test-fingerprint",
+    },
     structuredOutput: true,
     streaming: true,
     supportsImageInput: false,
@@ -78,6 +98,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 0,
             maxOutputTokens: 0,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: true,
             streaming: true,
             supportsImageInput: false,
@@ -95,6 +116,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 0,
             maxOutputTokens: 0,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: true,
             streaming: true,
             supportsImageInput: false,
@@ -124,6 +146,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 0,
             maxOutputTokens: 0,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: false,
             streaming: true,
             supportsImageInput: false,
@@ -157,6 +180,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 64_000,
             maxOutputTokens: 4_096,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: true,
             streaming: true,
             supportsImageInput: false,
@@ -173,6 +197,44 @@ describe("selectConfiguredModel", () => {
       { kind: "chat", toolCalling: true, structuredOutput: true },
     );
     expect(selected).toBe("example-private-chat");
+  });
+
+  it("fails closed when a tool-calling proof expires while the process is running", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T12:00:00.000Z"));
+    const selected = selectConfiguredModel(
+      config(
+        ["expired-proof"],
+        [
+          {
+            id: "expired-proof",
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            toolCallingVerification: {
+              ...verifiedToolCallingProof(),
+              checkedAt: new Date(
+                Date.parse("2026-08-28T12:00:00.000Z") - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 1,
+              ).toISOString(),
+            },
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: ["Test"],
+            knownLimitations: [],
+          },
+        ],
+      ),
+      { kind: "chat", toolCalling: true },
+    );
+
+    expect(selected).toBeUndefined();
   });
 });
 
@@ -420,6 +482,37 @@ describe("COST_RANK single source of truth (GEN-DUP-EXACT-002)", () => {
 });
 
 describe("resolveCodingSafeSidecarGatewayProfile", () => {
+  it("honours the concrete coding model selected for the run", () => {
+    const configValue = sidecarConfig(
+      [
+        {
+          modelId: "gpt-5.4",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+        {
+          modelId: "qwen-coder",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      [codingSidecarCapability("gpt-5.4"), codingSidecarCapability("qwen-coder")],
+    );
+
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(configValue, { modelId: "qwen-coder" }),
+    ).toMatchObject({
+      status: "available",
+      modelAlias: "qwen-coder",
+    });
+  });
+
   it("selects a configured coding-capable model and omits provider endpoint and credential details", () => {
     const configValue = sidecarConfig(
       [
@@ -447,6 +540,12 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       localEndpointPath: "/api/coding-sidecar/gateway",
       supportsStreaming: false,
       supportsToolCalling: true,
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      },
     });
     expect(JSON.stringify(result)).not.toContain("baseUrl");
     expect(JSON.stringify(result)).not.toContain("apiKey");
@@ -508,7 +607,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         },
       ],
       [
-        codingSidecarCapability("chat-with-tools", { workflowEligible: false }),
+        codingSidecarCapability("chat-with-tools"),
         {
           ...codingSidecarCapability("text-embedding", { toolCalling: false }),
           kind: "embedding",
@@ -516,13 +615,20 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       ],
     );
 
-    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toEqual({
+    // Selecting the embedding model is the one way this config is unavailable; the reason must
+    // name the selected model's unsuitability, never a tool-calling gap the chat model lacks.
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(configValue, { modelId: "text-embedding" }),
+    ).toEqual({
       status: "unavailable",
-      reason: "non-workflow-eligible",
+      reason: "non-coding-capable",
     });
   });
 
-  it("fails closed when a chat tool-calling workflow-eligible model is not coding-capable", () => {
+  // Owner decision for 1.1.1: neither a coding use-case label nor the manual workflow flag gates
+  // the Workbench. A gateway-discovered model carries neither, and a customer whose models had all
+  // passed the live forced tool-call probe was offered none.
+  it("admits a verified tool-calling chat model without a coding label or workflow flag", () => {
     const configValue = sidecarConfig(
       [
         {
@@ -537,13 +643,14 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       [
         codingSidecarCapability("chat-only-sidecar", {
           preferredUseCases: ["Chat"],
+          workflowEligible: false,
         }),
       ],
     );
 
-    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toEqual({
-      status: "unavailable",
-      reason: "non-coding-capable",
+    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toMatchObject({
+      status: "available",
+      modelAlias: "chat-only-sidecar",
     });
   });
 
@@ -602,26 +709,16 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
             retryBaseDelayMs: 500,
           },
         ],
-        [codingSidecarCapability("no-tools", { toolCalling: false })],
+        // Disabled means refuted by the forced probe: a demoted verified proof is one to renew
+        // instead (config.test.ts, "leaves a lapsed or moved proof renewable").
+        [
+          codingSidecarCapability("no-tools", {
+            toolCalling: false,
+            toolCallingVerification: { ...verifiedToolCallingProof(), status: "unsupported" },
+          }),
+        ],
       ),
       reason: "no-tool-calling" as const,
-    },
-    {
-      label: "workflow disabled",
-      config: sidecarConfig(
-        [
-          {
-            modelId: "no-workflow",
-            baseUrl: "https://provider.example/v1",
-            apiKey: "secret",
-            timeoutMs: 30_000,
-            maxRetries: 3,
-            retryBaseDelayMs: 500,
-          },
-        ],
-        [codingSidecarCapability("no-workflow", { workflowEligible: false })],
-      ),
-      reason: "non-workflow-eligible" as const,
     },
     {
       label: "missing credentials",
@@ -645,5 +742,72 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       status: "unavailable",
       reason,
     });
+  });
+});
+
+// Coding run 24 (2026-09-11, F73): admitted while gpt-5.4's forced tool-call proof was 3.5 min short
+// of 24 h; from the first call after the proof aged out, every call was refused as
+// "non-coding-capable" and the run could not recover.
+describe("resolveCodingSafeSidecarGatewayProfile — tool-calling proof age", () => {
+  const checkedAt = Date.parse("2026-09-10T04:30:32.744Z");
+  const agedOutAt = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 3_732;
+  const admittedAt = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 210_000;
+  const proof = {
+    status: "verified" as const,
+    checkedAt: new Date(checkedAt).toISOString(),
+    probe: "gateway-tool-calling-v1" as const,
+    configurationFingerprint: "0".repeat(64),
+  };
+  function provider54(modelId: string): ModelProviderConfig {
+    return {
+      modelId,
+      baseUrl: "https://provider.example/v1",
+      apiKey: "secret",
+      timeoutMs: 30_000,
+      maxRetries: 3,
+      retryBaseDelayMs: 500,
+    };
+  }
+  function laneConfig(): GatewayConfig {
+    return sidecarConfig(
+      [provider54("gpt-5.4"), provider54("mistral-large")],
+      [
+        codingSidecarCapability("gpt-5.4", { toolCallingVerification: proof }),
+        codingSidecarCapability("mistral-large", {
+          toolCalling: false,
+          toolCallingVerification: { ...proof, status: "unsupported" },
+          workflowEligible: false,
+          preferredUseCases: ["Chat"],
+        }),
+      ],
+    );
+  }
+
+  it("serves the model a run was admitted with after the proof ages out", () => {
+    vi.useFakeTimers({ now: agedOutAt });
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(laneConfig(), {
+        modelId: "gpt-5.4",
+        verificationAtMs: admittedAt,
+      }),
+    ).toMatchObject({ status: "available", modelAlias: "gpt-5.4" });
+  });
+
+  it("names a stale proof instead of calling a coding model non-coding-capable", () => {
+    vi.useFakeTimers({ now: agedOutAt });
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(laneConfig(), { modelId: "gpt-5.4" }),
+    ).toMatchObject({ status: "unavailable", reason: "tool-calling-unverified" });
+    expect(resolveCodingSafeSidecarGatewayProfile(laneConfig())).toMatchObject({
+      status: "unavailable",
+      reason: "tool-calling-unverified",
+    });
+  });
+
+  it("still calls a selected model without a coding use case non-coding-capable", () => {
+    vi.useFakeTimers({ now: admittedAt });
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(laneConfig(), { modelId: "mistral-large" }),
+    ).toMatchObject({ status: "unavailable", reason: "non-coding-capable" });
   });
 });

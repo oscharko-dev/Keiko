@@ -31,6 +31,14 @@ import {
   ensureMonacoLanguages,
   ensureMonacoRuntime,
 } from "./editorMonacoRuntime";
+import { clientErrorSummary } from "@/lib/client-error-summary";
+
+// F29: a code-owned runtime notice. The activity log admits exactly this shape, so it names how many
+// languages the diff needed and the error's class name, never the error's message.
+export function diffLanguageLoadNotice(languageCount: number, error: unknown): string {
+  const errorClass = clientErrorSummary(error);
+  return `diff-language-load-failed (count=${String(languageCount)}, error=${errorClass})`; // i18n-exempt: console-only operator diagnostic, never rendered to the end user
+}
 
 export type EditorDiffSurfaceProps = Omit<KeikoDiffEditorProps, "loadState"> & {
   readonly loadState: KeikoEditorLoadState;
@@ -71,7 +79,13 @@ export function buildWorkspaceReplacePatchModel(
     ...model,
     omittedFileCount,
     totalFileCount: model.totalFileCount + response.omittedFileCount,
-    truncated: model.truncated || omittedFileCount > 0,
+    // #2906 round-3 review: response.truncated is the union of every upstream search
+    // incompleteness cause (see WorkspaceReplacePreviewResponse.searchTruncationReasons's doc
+    // comment) -- not only omittedFileCount, which counts solely the files this preview's own
+    // maxFiles cap dropped. A response can be truncated (e.g. "match-cap" mid-file) with
+    // omittedFileCount === 0; without folding response.truncated in here too, that read as a
+    // complete preview and could be applied without warning even though a match may be missing.
+    truncated: model.truncated || omittedFileCount > 0 || response.truncated,
   };
 }
 
@@ -118,8 +132,7 @@ export default function EditorDiffSurface(props: EditorDiffSurfaceProps): ReactE
     setLanguagesReady(false);
     void ensureMonacoLanguages(languages)
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        onRuntimeError?.(`Failed to load Monaco diff language: ${message}`);
+        onRuntimeError?.(diffLanguageLoadNotice(languages.length, error));
       })
       .finally(() => {
         if (!cancelled) {

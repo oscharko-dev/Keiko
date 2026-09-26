@@ -5,6 +5,12 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  LEGACY_PORTABLE_TARGETS,
+  PORTABLE_RELEASE_IMPACT_CONTRACT,
+  PORTABLE_TARGET_NAMES,
+} from "../portable-runtime.mjs";
+
+import {
   validateReleaseImpactCatalog,
   validateReleaseImpactRoot,
 } from "../check-release-impact.mjs";
@@ -36,6 +42,13 @@ function entry(overrides = {}) {
     oneClickEligible: true,
     packageName: "@oscharko-dev/keiko",
     packageVersion: "0.2.11",
+    // The reviewed staging contract, derived from the producer: a current primary entry without one
+    // cannot be staged by a tagged release.
+    portableRuntimeArtifactContract: {
+      ...PORTABLE_RELEASE_IMPACT_CONTRACT,
+      signingScope: "evaluation",
+      targets: [...PORTABLE_TARGET_NAMES],
+    },
     publishGates: [
       "version-consistency",
       "publish-manifests",
@@ -43,6 +56,7 @@ function entry(overrides = {}) {
       "workspace-supply-chain",
       "package-surface",
       "qi-supply-chain",
+      "install-smoke",
     ],
     registry: "https://registry.npmjs.org/",
     releaseNoteBullets: ["Release-impact metadata now governs stable package publication."],
@@ -111,6 +125,85 @@ function withEnv(name, value, callback) {
     }
   }
 }
+
+describe("release-impact portable staging contract", () => {
+  // The contract a tagged run stages from, derived from the producer rather than restated.
+  const stagingContract = (targets, overrides = {}) => ({
+    ...PORTABLE_RELEASE_IMPACT_CONTRACT,
+    signingScope: "evaluation",
+    targets,
+    ...overrides,
+  });
+
+  it("refuses a current entry whose staging contract omits a portable target", () => {
+    // The v1.0.0 state before #3475: linux-x64 had joined the targets, the contract had not, both
+    // release-impact gates passed, and staging refused it three steps into the tagged release.
+    const result = validateReleaseImpactCatalog(
+      catalog([
+        entry({ portableRuntimeArtifactContract: stagingContract([...LEGACY_PORTABLE_TARGETS]) }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).toContain(
+      "portableRuntimeArtifactContract does not cover linux-x64, so a tagged release would refuse to stage it.",
+    );
+  });
+
+  it("refuses a current primary entry without a staging contract", () => {
+    // check-release-impact passed such an entry while reviewedStagingEntryMatches refused it, so
+    // the gap surfaced only inside the tagged release.
+    const result = validateReleaseImpactCatalog(
+      catalog([entry({ portableRuntimeArtifactContract: undefined })]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).toContain(
+      "portableRuntimeArtifactContract is missing, so a tagged release would refuse to stage it.",
+    );
+  });
+
+  it("accepts a current entry whose staging contract covers every portable target", () => {
+    const result = validateReleaseImpactCatalog(
+      catalog([
+        entry({ portableRuntimeArtifactContract: stagingContract([...PORTABLE_TARGET_NAMES]) }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).not.toContain("portableRuntimeArtifactContract");
+  });
+
+  it("refuses every target when the contract is not the reviewed staging contract", () => {
+    const result = validateReleaseImpactCatalog(
+      catalog([
+        entry({
+          portableRuntimeArtifactContract: stagingContract([...PORTABLE_TARGET_NAMES], {
+            issue: PORTABLE_RELEASE_IMPACT_CONTRACT.issue + 1,
+          }),
+        }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).toContain(
+      `portableRuntimeArtifactContract does not cover ${PORTABLE_TARGET_NAMES.join(", ")}`,
+    );
+  });
+
+  it("leaves the staging contract of a historical entry alone", () => {
+    const historical = entry({
+      id: "2026-06-29-keiko-0.2.10-previous-release",
+      packageVersion: "0.2.10",
+      releaseTag: "v0.2.10",
+      portableRuntimeArtifactContract: stagingContract([...LEGACY_PORTABLE_TARGETS]),
+    });
+
+    const result = validateReleaseImpactCatalog(catalog([historical, entry()]), rootManifest());
+
+    expect(messages(result)).not.toContain("portableRuntimeArtifactContract");
+  });
+});
 
 describe("release-impact governance", () => {
   let tempRoot;
@@ -195,6 +288,48 @@ describe("release-impact governance", () => {
     expect(messages(result)).toContain("@oscharko-dev/keiko@0.2.12 has no latest catalog entry");
   });
 
+  // #3565. An entry written ahead of the version it describes left the version bump to a second,
+  // purely mechanical pull request, and every release paid a second full required matrix for it.
+  // The pull request that declares a release now moves the version too, so its own matrix proves the
+  // exact tree that will be tagged.
+  describe("an entry ahead of package.json", () => {
+    const ahead = (overrides = {}) =>
+      entry({
+        id: "2026-07-05-keiko-0.2.12-next",
+        packageVersion: "0.2.12",
+        releaseNoteBullets: ["The next release."],
+        releaseTag: "v0.2.12",
+        ...overrides,
+      });
+
+    it("refuses a release entry newer than the package version", () => {
+      const result = validateReleaseImpactCatalog(catalog([entry(), ahead()]), rootManifest());
+      expect(result.ok).toBe(false);
+      expect(result.failures).toContain(
+        "release-impact: entry 2026-07-05-keiko-0.2.12-next describes 0.2.12, ahead " +
+          "of package.json 0.2.11. The pull request that adds a release's entry also moves the " +
+          "version: npm run set-version -- 0.2.12",
+      );
+    });
+
+    it("accepts the same entry once package.json carries its version", () => {
+      const result = validateReleaseImpactCatalog(
+        catalog([entry(), ahead()]),
+        rootManifest({ version: "0.2.12" }),
+      );
+      expect(result.failures).toStrictEqual([]);
+    });
+
+    it("leaves older entries and another package's entries alone", () => {
+      const foreign = ahead({ id: "other-package-9.9.9", packageName: "@oscharko-dev/other" });
+      const result = validateReleaseImpactCatalog(
+        catalog([oldEntry(), entry(), foreign]),
+        rootManifest(),
+      );
+      expect(result.failures.filter((message) => message.includes("ahead of"))).toStrictEqual([]);
+    });
+  });
+
   it("blocks duplicated default patch-note bullets", () => {
     const duplicate = entry({
       id: "2026-06-30-keiko-0.2.10-duplicate-note",
@@ -214,6 +349,8 @@ describe("release-impact governance", () => {
       correctionRationale: "Clarifies the release-note bullet without mutating the original entry.",
       defaultPatchNotes: false,
       id: "2026-06-30-keiko-0.2.11-governed-release-impact-baseline-correction-1",
+      // A correction is a non-staging record and needs no staging contract of its own.
+      portableRuntimeArtifactContract: undefined,
       releaseNoteBullets: ["Correction: release-impact metadata is source-controlled."],
     });
 
@@ -289,6 +426,49 @@ describe("release-impact governance", () => {
     expect(messages(deleted)).toContain(
       "published entry 2026-05-01-keiko-0.2.10-baseline must remain",
     );
+  });
+
+  // Negative coverage for the `withoutApprovalReference` exception introduced when the manual
+  // approval-comment enforcement was retired: every other `review.*` field is still load-bearing
+  // and mutating it must still fail append-only, so the exception can never widen silently.
+  it.each([
+    ["reviewer", "some-other-owner"],
+    ["reviewedAt", "2020-01-01"],
+    ["rationale", "Rewritten after publication."],
+    ["humanApproved", false],
+    ["status", "pending"],
+  ])("still rejects an in-place change to review.%s on a published entry", (field, replacement) => {
+    const previousCatalog = catalog([oldEntry()]);
+    const mutated = oldEntry({ review: { ...oldEntry().review, [field]: replacement } });
+
+    const result = validateReleaseImpactCatalog(catalog([entry(), mutated]), rootManifest(), {
+      previousCatalog,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain(
+      "published entry 2026-05-01-keiko-0.2.10-baseline changed in place",
+    );
+  });
+
+  // Positive coverage for the same exception: a corrected `approvalReference` is legitimate audit
+  // metadata (the field is no longer format-enforced or GitHub-verified), so the append-only check
+  // must accept it as the sole allowed delta on a published entry.
+  it("accepts an in-place correction to review.approvalReference alone", () => {
+    const previousCatalog = catalog([oldEntry()]);
+    const corrected = oldEntry({
+      review: {
+        ...oldEntry().review,
+        approvalReference: "github-issue-comment:oscharko-dev/Keiko#1690#4242",
+      },
+    });
+
+    const result = validateReleaseImpactCatalog(catalog([entry(), corrected]), rootManifest(), {
+      previousCatalog,
+    });
+
+    expect(messages(result)).not.toContain("changed in place");
+    expect(result.ok).toBe(true);
   });
 
   it("requires baseline supported-from coverage", () => {
@@ -373,42 +553,6 @@ describe("release-impact governance", () => {
     expect(result.ok).toBe(false);
     expect(messages(result)).toContain("review.reviewer must be a trusted release owner");
     expect(messages(result)).toContain("must record publish gate version-consistency");
-  });
-
-  it("requires external approval references on the publish path", () => {
-    const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
-      validateReleaseImpactCatalog(catalog([entry()]), rootManifest()),
-    );
-
-    expect(result.ok).toBe(false);
-    expect(messages(result)).toContain(
-      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
-    );
-  });
-
-  it("rejects publish approval references outside the current repository", () => {
-    const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
-      validateReleaseImpactCatalog(
-        catalog([
-          entry({
-            review: {
-              approvalReference: "github-pr-review:fake-owner/fake-repo#999999#888888",
-              humanApproved: true,
-              rationale: "Fake approval must not satisfy publish trust.",
-              reviewedAt: "2026-06-30",
-              reviewer: "release-owner",
-              status: "reviewed",
-            },
-          }),
-        ]),
-        rootManifest(),
-      ),
-    );
-
-    expect(result.ok).toBe(false);
-    expect(messages(result)).toContain(
-      "approvalReference must reference the current GitHub repository",
-    );
   });
 
   it("requires exception metadata for critical or manual-review one-click updates", () => {

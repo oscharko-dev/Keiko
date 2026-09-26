@@ -133,6 +133,25 @@ describe("JQL composition", () => {
     );
   });
 
+  it("rejects user JQL that can close the injected project group", () => {
+    // The narrowing guarantee rests on `AND (<jql>)` staying one group. A clause that closes it
+    // early re-associates the query into `(scope AND ...) OR (...)` and reads unapproved
+    // projects (KEIKO-0026). A whitespace-only clause instead composes a malformed query that
+    // Jira rejects, permanently failing every sync using that scope.
+    for (const jql of [
+      "1=1) OR (project = SECRET",
+      "status = Done)",
+      "(status = Done",
+      'text ~ "x',
+      "   ",
+    ]) {
+      expect(() => composeJiraScopeJql(["APPROVED"], jql)).toThrow(AtlassianCredentialCustodyError);
+    }
+    expect(composeJiraScopeJql(["APPROVED"], "status = Done")).toBe(
+      "project IN (APPROVED) AND (status = Done)",
+    );
+  });
+
   it("transports the composed JQL in the search request URL", async () => {
     const harness = sourceFor([project("PLAT", [fixtureIssue(1)])], { jql: "labels = auth" });
     await harness.source.enumerate(harness.context);
@@ -293,7 +312,7 @@ describe("enumerate — full id-set walk with token pagination", () => {
     expect(outcome).toStrictEqual({ ok: true, refs: [], complete: true });
   });
 
-  it("terminates a never-ending token chain at the request ceiling as malformed-payload", async () => {
+  it("fails closed on a never-ending token chain as malformed-payload", async () => {
     const body = JSON.stringify({ issues: [], nextPageToken: "again" });
     const source = createJiraSyncSource({
       baseUrl: BASE_URL,
@@ -312,6 +331,36 @@ describe("enumerate — full id-set walk with token pagination", () => {
       ),
     );
     expect(outcome).toStrictEqual({ ok: false, reason: "malformed-payload" });
+  });
+
+  it("fails closed on a self-referential nextPageToken chain after two requests, not the request ceiling", async () => {
+    // Regression for KEIKO-0598: a `nextPageToken` that repeats a previously-seen exact value
+    // (here, every page hands back the same token) indicates a self-referential loop rather than
+    // legitimate large pagination, mirroring the Confluence walk's seen-URL guard
+    // (confluence-sync-adapter.ts's walkPaginatedList). The repeated-token guard must fire on the
+    // second repeat rather than spinning to the 500-request MAX_SEARCH_REQUESTS ceiling.
+    const requests: AtlassianHttpBodyRequest[] = [];
+    const body = JSON.stringify({ issues: [], nextPageToken: "loop-token" });
+    const http: AtlassianHttpBodyPort = (request) => {
+      requests.push(request);
+      return Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText: body,
+        bodyBytes: body.length,
+        truncated: false,
+      });
+    };
+    const source = createJiraSyncSource({
+      baseUrl: BASE_URL,
+      connectorId: "cred-test",
+      projectKeys: ["PLAT"],
+    });
+    const outcome = await source.enumerate(contextFor(http));
+    expect(outcome).toStrictEqual({ ok: false, reason: "malformed-payload" });
+    // A generous cap (< 10) captures the regression without pinning the exact request count to an
+    // internal implementation detail — the point is "long before the 500-request ceiling".
+    expect(requests.length).toBeLessThan(10);
   });
 
   it("fails enumeration with timeout once the run deadline is exceeded", async () => {
@@ -420,6 +469,53 @@ describe("incremental partition — updated-watermark narrowing", () => {
     expect(laterJiraProviderTimestamp(WATERMARK, "garbage")).toBe(WATERMARK);
     expect(laterJiraProviderTimestamp("garbage", WATERMARK)).toBe(WATERMARK);
     expect(laterJiraProviderTimestamp(undefined, undefined)).toBeUndefined();
+  });
+
+  // KEIKO-0435: an `updated` value far in the future (hostile or bulk-imported) must not fold
+  // into the enumeration watermark. Otherwise it poisons the persisted providerWatermark and the
+  // next incremental run silently stops observing content changes while still reporting
+  // completed.
+  it("clamps a far-future updated timestamp out of the enumeration watermark", async () => {
+    const NOW_MS = parseJiraProviderTimestampMs(WATERMARK) ?? 0;
+    const POISONED = "9999-01-01T00:00:00.000+0000";
+    const REALISTIC = WATERMARK;
+    const issues = [
+      fixtureIssue(1, { updated: POISONED }),
+      fixtureIssue(2, { updated: REALISTIC }),
+    ];
+    const snapshots: JiraSyncEnumerationSnapshot[] = [];
+    const harness = sourceFor([project("PLAT", issues)], {
+      onEnumerated: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+      now: () => NOW_MS,
+    });
+    const outcome = await harness.source.enumerate(harness.context);
+    if (!outcome.ok) throw new Error("expected ok enumeration");
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.providerWatermark).toBe(REALISTIC);
+  });
+
+  // KEIKO-0435: a persisted providerWatermark that itself lies in the far future (poisoned from a
+  // previous run) must be treated as unusable — force a full re-fetch rather than carry every
+  // subsequent entry forward and freeze content updates in perpetuity.
+  it("forces a full re-fetch when the persisted watermark itself is in the far future", async () => {
+    const NOW_MS = parseJiraProviderTimestampMs(WATERMARK) ?? 0;
+    const POISONED_WATERMARK = "9999-01-01T00:00:00.000+0000";
+    const issues = [
+      fixtureIssue(1, { updated: BEFORE_OVERLAP }),
+      fixtureIssue(2, { updated: BEFORE_OVERLAP }),
+    ];
+    const harness = sourceFor([project("PLAT", issues)], {
+      incremental: {
+        providerWatermark: POISONED_WATERMARK,
+        knownItemKeys: ["jira:cred-test:10001", "jira:cred-test:10002"],
+      },
+      now: () => NOW_MS,
+    });
+    const outcome = await harness.source.enumerate(harness.context);
+    if (!outcome.ok) throw new Error("expected ok enumeration");
+    expect(outcome.refs.map((ref) => ref.issueId)).toStrictEqual(["10001", "10002"]);
   });
 });
 
@@ -590,6 +686,50 @@ describe("fetchItem — issue documents, metadata, and the failure matrix", () =
     expect(item.contentHtml).not.toContain("data-connector-comments");
   });
 
+  // KEIKO-0295: a hostile comment listing whose length exceeds Node's argument-count limit
+  // must never crash the lane through a `push(...comments)` RangeError. The lane's fail-closed
+  // contract requires every provider condition to classify to an outcome.
+  it("does not throw when a comment page carries more entries than the argument-count limit (KEIKO-0295)", async () => {
+    const issue = fixtureIssue(11, {
+      comments: [{ author: "A", created: "t", bodyAdf: adf("c") }],
+    });
+    // A page-count of `n` triggers `push(...comments)` with `n` positional arguments once the
+    // buffer flushes. 200 000 exceeds every observed V8 argument-count cap by a safe margin
+    // (empirically the ceiling sits between 65 535 and 131 071 depending on stack size); the
+    // pre-fix code raises `RangeError: too many arguments` here and the exception escapes the
+    // lane.
+    const hostileCommentPageBody = JSON.stringify({
+      startAt: 0,
+      maxResults: 100,
+      total: 200_000,
+      comments: Array.from({ length: 200_000 }, (_, index) => ({
+        id: `hostile-${String(index)}`,
+        author: { displayName: "X" },
+        created: "2026-05-01T10:00:00.000+0000",
+        body: adf(`c${String(index)}`),
+      })),
+    });
+    const harness = sourceFor(
+      [project("PLAT", [issue])],
+      {},
+      {
+        override: (request) =>
+          request.url.includes("/comment")
+            ? {
+                kind: "response",
+                status: 200,
+                bodyText: hostileCommentPageBody,
+                bodyBytes: hostileCommentPageBody.length,
+                truncated: false,
+              }
+            : undefined,
+      },
+    );
+    // The fetch must resolve (never reject) — regardless of whether the composed item includes
+    // comments or not, the classification contract is preserved.
+    await expect(fetchedItemOutcome(harness, issue.issueId)).resolves.toBeDefined();
+  });
+
   it("skips an issue whose payload carries an unsafe key as malformed-payload", async () => {
     const issue = fixtureIssue(9, { key: "not a key!" });
     const harness = sourceFor([project("PLAT", [issue])]);
@@ -616,6 +756,35 @@ describe("fetchItem — issue documents, metadata, and the failure matrix", () =
     const harness = sourceFor([project("PLAT", [issue])]);
     const item = await fetchedItem(harness, issue.issueId);
     expect(item.contentHtml).toContain("[Content truncated: conversion limits reached]");
+  });
+});
+
+// Recursively counts every object carrying a `type` property, mirroring how the fixture's own
+// header describes its contents ("a deterministic >= totalNodes-node ADF document").
+function countAdfTypedNodes(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.reduce((sum: number, entry) => sum + countAdfTypedNodes(entry), 0);
+  }
+  if (typeof value !== "object" || value === null) return 0;
+  const record = value as Record<string, unknown>;
+  let count = "type" in record ? 1 : 0;
+  for (const key of Object.keys(record)) {
+    count += countAdfTypedNodes(record[key]);
+  }
+  return count;
+}
+
+describe("buildHostileJiraAdfDocument — node-count floor", () => {
+  it("returns at least the requested node count for the hostile ADF document (KEIKO-0723)", () => {
+    // Regression for KEIKO-0723: the header claims ">= totalNodes nodes"; the former 120-node
+    // reservation for the 102-node depth chain, combined with floor-rounding the breadth-pair
+    // remainder, produced 17 fewer nodes than requested for every input (e.g. exactly 9,983 for
+    // totalNodes=10,000, verified against the pre-fix formula) — silently failing the very
+    // "10k-node hostile document" acceptance criterion this fixture exists to satisfy.
+    for (const totalNodes of [1_000, 10_000, 20_000]) {
+      const count = countAdfTypedNodes(buildHostileJiraAdfDocument(totalNodes));
+      expect(count).toBeGreaterThanOrEqual(totalNodes);
+    }
   });
 });
 

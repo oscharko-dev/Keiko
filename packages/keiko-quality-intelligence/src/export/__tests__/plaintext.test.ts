@@ -3,7 +3,7 @@
 // Determinism is load-bearing: identical input -> byte-identical output (stable integrity hash).
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,

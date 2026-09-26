@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   NO_FIGMA_KEYCHAIN,
   createFigmaTokenStore,
+  keyFromKeychain,
   resolveFigmaVaultKey,
 } from "../figmaTokenStore.js";
 import { FigmaConnectorError } from "../figmaConnectorErrors.js";
@@ -25,6 +27,7 @@ const KEY = Buffer.alloc(32, 7);
 const REAL_TMPDIR = realpathSync(tmpdir());
 
 let dir: string;
+const keychainFakes: string[] = [];
 
 beforeEach(() => {
   dir = mkdtempSync(join(REAL_TMPDIR, "figma-vault-test-"));
@@ -32,6 +35,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+  for (const fake of keychainFakes.splice(0)) rmSync(fake, { recursive: true, force: true });
 });
 
 const storeAt = (): ReturnType<typeof createFigmaTokenStore> =>
@@ -172,6 +176,86 @@ describe("resolveFigmaVaultKey precedence", () => {
     const resolved = resolveFigmaVaultKey({}, dir, () => fromKeychain);
     expect(resolved.source).toBe("keychain");
     expect(resolved.key.equals(fromKeychain)).toBe(true);
+  });
+
+  it("falls through to the keyfile when the keychain never answers", () => {
+    // Proves this surface really is wired to the bounded shared owner, not just that the owner is
+    // bounded: a `security` that returns nothing until a human acts must not stall the caller.
+    const fakeDir = mkdtempSync(join(REAL_TMPDIR, "keiko-figma-keychain-"));
+    try {
+      const hangs = join(fakeDir, "security");
+      writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+      chmodSync(hangs, 0o700);
+
+      const started = process.hrtime.bigint();
+      const resolved = resolveFigmaVaultKey({}, dir, () =>
+        keyFromKeychain({ executable: hangs, timeoutMs: 250, platform: "darwin" }),
+      );
+
+      // Against the previous unbounded spawn this blocks and fails on the suite timeout. The 20x
+      // margin between the 250ms bound and this 5s ceiling keeps it insensitive to scheduling.
+      expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
+      expect(resolved.source).toBe("keyfile");
+      expect(resolved.key).toHaveLength(32);
+    } finally {
+      rmSync(fakeDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  // A stand-in for `/usr/bin/security` covering both subcommands the tier uses. `find` answers with
+  // `found`, or exits 44 (errSecItemNotFound, measured against the shipped binary) when `found` is
+  // empty; `add` consumes the piped secret and reports the given status.
+  function fakeSecurity(found: string, addStatus = 0): string {
+    const scriptDir = mkdtempSync(join(REAL_TMPDIR, "keiko-figma-tier-"));
+    keychainFakes.push(scriptDir);
+    const path = join(scriptDir, "security");
+    writeFileSync(
+      path,
+      [
+        "#!/bin/sh",
+        'case "$1" in',
+        found.length > 0
+          ? `find-generic-password) printf %s '${found}' ;;`
+          : "find-generic-password) exit 44 ;;",
+        `add-generic-password) cat > /dev/null; exit ${String(addStatus)} ;;`,
+        "esac",
+      ].join("\n"),
+    );
+    chmodSync(path, 0o700);
+    return path;
+  }
+
+  it("uses a stored keychain key in preference to a keyfile", () => {
+    const stored = Buffer.alloc(32, 3);
+    const resolved = resolveFigmaVaultKey({}, dir, () =>
+      keyFromKeychain({ executable: fakeSecurity(stored.toString("base64")), platform: "darwin" }),
+    );
+    expect(resolved.source).toBe("keychain");
+    expect(resolved.key.equals(stored)).toBe(true);
+  });
+
+  it("replaces a stored value that does not decode to 32 bytes", () => {
+    const resolved = resolveFigmaVaultKey({}, dir, () =>
+      keyFromKeychain({ executable: fakeSecurity("not-a-32-byte-key"), platform: "darwin" }),
+    );
+    expect(resolved.source).toBe("keychain");
+    expect(resolved.key).toHaveLength(32);
+  });
+
+  it("generates and stores a key when the keychain has none", () => {
+    const resolved = resolveFigmaVaultKey({}, dir, () =>
+      keyFromKeychain({ executable: fakeSecurity(""), platform: "darwin" }),
+    );
+    expect(resolved.source).toBe("keychain");
+    expect(resolved.key).toHaveLength(32);
+  });
+
+  it("falls through to the keyfile when the keychain has none and will not store one", () => {
+    const resolved = resolveFigmaVaultKey({}, dir, () =>
+      keyFromKeychain({ executable: fakeSecurity("", 1), platform: "darwin" }),
+    );
+    expect(resolved.source).toBe("keyfile");
+    expect(resolved.key).toHaveLength(32);
   });
 
   it("prefers the env key over the keychain tier when both are present", () => {

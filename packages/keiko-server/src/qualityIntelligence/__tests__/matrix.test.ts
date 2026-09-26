@@ -8,7 +8,7 @@
 //      only when actually applied.
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import {

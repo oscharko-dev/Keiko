@@ -1,3 +1,4 @@
+import { logChatResponseMessage } from "./chat-activity.js";
 // BFF route POST /api/chats/messages/grounded (Issue #185 / Epic #177). Composes the
 // orchestrator's pure pipeline with the UiStore so a single HTTP round trip persists both
 // the user question and the assistant answer alongside a redacted citation projection.
@@ -5,7 +6,7 @@
 // inputs (chatId + content) and enforces that the chat carries a connected scope.
 
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import { basename } from "node:path";
 import {
   CancelledError,
@@ -24,10 +25,14 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  PathDeniedError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
+  WorkspaceNotFoundError,
+  type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -49,11 +54,11 @@ import {
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
   maxUtf8BytesForTokenBudget,
-  type ContextProfile,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -80,7 +85,6 @@ import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
 import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
-import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
   buildConnectedScopes,
@@ -94,10 +98,19 @@ import {
   buildLocalKnowledgeScopes,
   runHybridGroundedAsk,
   type ConnectorRetrieve,
+  type EntailmentStageFactory,
   type FolderRetriever,
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import {
+  recordWorkspaceRootDenial,
+  resolveRecordedWorkspaceRoot,
+} from "./workspace-root-denial-log.js";
+import {
+  uncitedMemoryContextMarker,
+  type NumericEntailmentEvidence,
+} from "./grounded-faithfulness.js";
 import {
   commitGroundedTurn,
   discardGroundedTurn,
@@ -124,6 +137,13 @@ import {
 } from "./chat-turn-identity.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./task-workspace/workspace-root-access.js";
 import {
   readBoundedRequestBody,
   RequestBodyCancelledError,
@@ -134,11 +154,9 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
-import {
-  contentFreeErrorClass,
-  evidenceRetentionDiagnosticObserver,
-  emitServerDiagnostic,
-} from "./diagnostics-log.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
+import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
   buildAnswerCitations as projectAnswerCitations,
   buildPackCitations,
@@ -146,6 +164,14 @@ import {
 } from "./grounded-citation-projection.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
+import {
+  captureConversationReadinessAdmission,
+  mappedConversationReadinessError,
+  validateConversationReadinessAdmission,
+  withConversationReadinessAdmission,
+  type ConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 
 export { persistGroundedExchange } from "./grounded-message-persistence.js";
 
@@ -192,20 +218,54 @@ export function gatewayErrorStatus(error: GatewayError): number {
   return 502;
 }
 
-function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
+// ADR-0173 D5 g25/g27 — mirrors the buffered desktop chat path (`chat-handlers.ts`): a GatewayError
+// mapped straight to an HTTP response used to leave no trace in the operator diagnostic sink, unlike
+// the SSE chat path, which already routed the same error class through it. A cancellation is the
+// caller's own choice, not a failure, so it is excluded — matching the buffered path's convention
+// of never diagnosing an intentional cancel.
+function gatewayErrorResult(
+  error: GatewayError,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult {
   if (error instanceof CancelledError) {
     return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
   }
+  emitGatewayErrorDiagnostic(
+    deps,
+    error,
+    correlationId,
+    "POST /api/chats/messages/grounded",
+    "grounded.qa",
+  );
   const status = gatewayErrorStatus(error);
   const message = redact(error.message, currentRedactionSecrets(deps));
   return { status, body: errorBody(error.code, message) };
 }
 
-export function mappedGatewayError(error: unknown, deps: UiHandlerDeps): RouteResult | undefined {
-  return error instanceof GatewayError ? gatewayErrorResult(error, deps) : undefined;
+export function mappedGatewayError(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): RouteResult | undefined {
+  return (
+    mappedConversationReadinessError(error) ??
+    (error instanceof GatewayError ? gatewayErrorResult(error, deps, correlationId) : undefined)
+  );
+}
+
+function pathDeniedResult(error: PathDeniedError): RouteResult {
+  return {
+    status: 400,
+    body: errorBody(error.code, "The workspace path is denied by policy."),
+  };
 }
 
 export function mappedWorkspaceError(error: unknown): RouteResult | undefined {
+  if (error instanceof PathDeniedError) return pathDeniedResult(error);
+  if (error instanceof WorkspaceNotFoundError) {
+    return badRequest("Connected scope root is not accessible.");
+  }
   if (
     error instanceof RepoSearchInvalidQueryError ||
     error instanceof RepoSearchInvalidRangeError ||
@@ -379,24 +439,85 @@ function buildSelectedScope(chat: Chat): SelectedScope | undefined {
   return buildSelectedScopeFrom(chat, cs, deriveScopeId(chat));
 }
 
-function canonicalGroundedRoot(rootInput: string, deps: UiHandlerDeps): string | RouteResult {
-  if (pathIsDenied(rootInput)) {
-    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
+const GROUNDED_SCOPE_ACCESS: unique symbol = Symbol("grounded-scope-access");
+
+interface GroundedScopeAccessCarrier {
+  readonly [GROUNDED_SCOPE_ACCESS]: WorkspaceRootAccess;
+}
+
+function scopeWithWorkspaceAccess(
+  scope: ChatConnectedScope,
+  access: WorkspaceRootAccess,
+): ChatConnectedScope {
+  const canonical: ChatConnectedScope & Partial<GroundedScopeAccessCarrier> = {
+    ...scope,
+    root: access.canonicalRoot,
+  };
+  Object.defineProperty(canonical, GROUNDED_SCOPE_ACCESS, { value: access });
+  return canonical;
+}
+
+/** Returns only authority minted during this grounded operation; persisted scopes cannot forge it. */
+export function groundedScopeWorkspaceFs(scope: ChatConnectedScope): WorkspaceFs | undefined {
+  const access = (scope as Partial<GroundedScopeAccessCarrier>)[GROUNDED_SCOPE_ACCESS];
+  return access !== undefined && access.canonicalRoot === scope.root ? access.fs : undefined;
+}
+
+function managedGroundedRootAccess(
+  rootInput: string,
+  deps: UiHandlerDeps,
+  request: IncomingMessage | undefined,
+  correlationId: string | undefined,
+): WorkspaceRootAccess | undefined {
+  if (request === undefined || resolveAppSessionReadAuthority(deps, request) === undefined) {
+    return undefined;
   }
+  return resolveManagedWorkspaceRootAccess(deps, rootInput, { correlationId });
+}
+
+function deniedManagedGroundedRoot(correlationId: string | undefined): RouteResult {
+  const error = new PathDeniedError(
+    "managed workspace authority is required",
+    "[managed-task-workspace]",
+  );
+  recordWorkspaceRootDenial(error, { correlationId });
+  return pathDeniedResult(error);
+}
+
+function canonicalGroundedRoot(
+  rootInput: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): string | RouteResult {
   let realRoot: string;
   try {
-    realRoot = realpathSync(rootInput);
-  } catch {
+    realRoot = resolveRecordedWorkspaceRoot(nodeWorkspaceFs, rootInput, { correlationId });
+  } catch (error) {
+    if (error instanceof PathDeniedError) {
+      return pathDeniedResult(error);
+    }
     return badRequest("Connected scope root is not accessible.");
-  }
-  if (pathIsDenied(realRoot)) {
-    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
   const redacted = deps.redactor(realRoot);
   if (typeof redacted === "string" && redacted !== realRoot) {
     return badRequest("Connected scope root contains credential-shaped metadata.");
   }
   return realRoot;
+}
+
+function groundedRootAccess(
+  rootInput: string,
+  deps: UiHandlerDeps,
+  request: IncomingMessage | undefined,
+  correlationId: string | undefined,
+): WorkspaceRootAccess | RouteResult {
+  const managed = managedGroundedRootAccess(rootInput, deps, request, correlationId);
+  if (managed !== undefined) return managed;
+  if (requiresConfiguredManagedWorkspaceAuthority(deps, rootInput)) {
+    return deniedManagedGroundedRoot(correlationId);
+  }
+  const canonical = canonicalGroundedRoot(rootInput, deps, correlationId);
+  return typeof canonical === "string" ? createOrdinaryWorkspaceRootAccess(canonical) : canonical;
 }
 
 // A scope that failed canonicalization. `reason` is the original RouteResult (preserved verbatim
@@ -423,24 +544,29 @@ function canonicalizeGroundedFolderScopes(
   chat: Chat,
   deps: UiHandlerDeps,
   scopes: readonly ChatConnectedScope[],
+  request: IncomingMessage | undefined,
+  correlationId: string | undefined,
 ): CanonicalizedFolderScopes {
   const canonical: ChatConnectedScope[] = [];
   const skipped: SkippedFolderScope[] = [];
   for (const scope of scopes) {
     const rootInput = scope.root ?? chat.projectPath;
-    const realRoot = canonicalGroundedRoot(rootInput, deps);
-    if (typeof realRoot !== "string") {
+    const access = groundedRootAccess(rootInput, deps, request, correlationId);
+    if ("status" in access) {
       const label = scope.root !== undefined ? basename(scope.root) : "project";
-      skipped.push({ label, message: skippedFolderMessage(realRoot), reason: realRoot });
+      skipped.push({ label, message: skippedFolderMessage(access), reason: access });
       continue;
     }
-    canonical.push({ ...scope, root: realRoot });
+    canonical.push(scopeWithWorkspaceAccess(scope, access));
   }
   return { canonical, skipped };
 }
 
+// The canonical list is authoritative even when it is EMPTY. With every folder denied or
+// inaccessible, returning the original chat would let its legacy single `connectedScope` resurface
+// through `buildConnectedScopes` on the hybrid path (2+ connectors) and be retrieved without the
+// authority canonicalization withheld (#3376 review P1).
 function withCanonicalFolderScopes(chat: Chat, scopes: readonly ChatConnectedScope[]): Chat {
-  if (scopes.length === 0) return chat;
   return { ...chat, connectedScopes: scopes, connectedScope: scopes[0] };
 }
 
@@ -560,10 +686,12 @@ export function groundedPromptInputTokensForCapability(
   capability: ModelCapability | undefined,
 ): number | undefined {
   if (capability?.kind !== "chat") return undefined;
-  const contextWindow = positiveInteger(capability.contextWindow);
-  if (contextWindow === undefined) return undefined;
-  const outputReserve = positiveInteger(capability.maxOutputTokens) ?? 0;
-  return outputReserve < contextWindow ? contextWindow - outputReserve : contextWindow;
+  // Reuse the shared capability→profile fallback (context-engineering.ts) so a
+  // placeholder capability (contextWindow=0 / maxOutputTokens=0) yields the same
+  // DEFAULT_CONTEXT_PROFILE-scaled budget the exploration phase already uses,
+  // instead of returning undefined and silently inheriting a second, independently
+  // derived default.
+  return deriveContextProfileFromCapability(capability).effectiveInputBudget;
 }
 
 export interface GroundedGatewayPromptOptions {
@@ -850,6 +978,7 @@ function createGatewayAnswerer(
   redactor: Redactor,
   signal: AbortSignal,
   modelInputTokensMax: number | undefined,
+  correlationId: string | undefined,
 ): GroundedAnswerer {
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
@@ -860,6 +989,7 @@ function createGatewayAnswerer(
           modelId,
           messages: buildGroundedGatewayMessages(question, pack, redactor, promptOptions),
           stream: false,
+          logContext: { correlationId },
         },
         signal,
       );
@@ -879,16 +1009,88 @@ function createGatewayAnswerer(
   };
 }
 
+function resolveGroundedAnswerModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
+): ModelPort | RouteResult {
+  const resolvedModel = deps.modelPortFactory(modelId);
+  if (resolvedModel === undefined) {
+    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+  }
+  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
+}
+
+interface DefaultRunnerContext {
+  readonly deps: UiHandlerDeps;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
+  readonly model: ModelPort;
+  readonly modelInputTokensMax: number | undefined;
+  readonly entailmentStage: EntailmentStage | undefined;
+  readonly correlationId: string | undefined;
+}
+
+// Split out of defaultRunner to keep it within the line budget: the actual GroundedRunner closure
+// invoked once per exploration input.
+function runDefaultGroundedExploration(
+  runnerCtx: DefaultRunnerContext,
+  input: OrchestratorInput,
+): Promise<OrchestratorOutput> {
+  const { deps, modelId, signal, contextProfile, model, modelInputTokensMax, entailmentStage } =
+    runnerCtx;
+  const nowMs = Date.now;
+  const budgetedInput =
+    input.budget === undefined
+      ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
+      : input;
+  const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
+  const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
+    deps,
+    signal,
+    budgetedInput.workspaceRoot,
+  );
+  return runGroundedExploration(budgetedInput, {
+    answerer: createGatewayAnswerer(
+      model,
+      modelId,
+      deps.redactor,
+      signal,
+      modelInputTokensMax,
+      runnerCtx.correlationId,
+    ),
+    nowMs,
+    signal,
+    // ADR-0173 D5: the same id the Gateway answerer above already carries, so a git-history read
+    // that failed during THIS ask is joinable to it in `server.log`.
+    correlationId: runnerCtx.correlationId,
+    microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
+    workspaceIndexForRoot: deps.workspaceIndexForRoot,
+    ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
+    ...(semanticLease.provider === undefined
+      ? {}
+      : { repoSemanticSearchProvider: semanticLease.provider }),
+    ...(entailmentStage === undefined ? {} : { entailmentStage }),
+    // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
+    // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
+    // the legacy no-profile path stays byte-identical (observer guard never sees a key).
+    ...(contextProfile === undefined ? {} : { contextProfile }),
+  }).finally(() => {
+    semanticLease.close();
+  });
+}
+
 function defaultRunner(
   deps: UiHandlerDeps,
   modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   contextProfile: UiHandlerDeps["contextProfile"],
+  correlationId: string | undefined,
 ): GroundedRunner | RouteResult {
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
-    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
-  }
+  const model = resolveGroundedAnswerModel(deps, modelId, readinessAdmission);
+  if ("status" in model) return model;
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   // Knowledge M1.2 (#2563): the folder grounded-ask has no knowledge capsule, so entailment is
   // governed only by whether a compatible judge model is configured (empty capsules ⇒ no policy to
@@ -900,37 +1102,18 @@ function defaultRunner(
     { diagnostics: deps.diagnostics },
     signal,
   );
-  return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
-    const nowMs = Date.now;
-    const budgetedInput =
-      input.budget === undefined
-        ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
-        : input;
-    const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
-    const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
-      deps,
-      signal,
-      budgetedInput.workspaceRoot,
-    );
-    return runGroundedExploration(budgetedInput, {
-      answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
-      nowMs,
-      signal,
-      microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
-      workspaceIndexForRoot: deps.workspaceIndexForRoot,
-      ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
-      ...(semanticLease.provider === undefined
-        ? {}
-        : { repoSemanticSearchProvider: semanticLease.provider }),
-      ...(entailmentStage === undefined ? {} : { entailmentStage }),
-      // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
-      // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
-      // the legacy no-profile path stays byte-identical (observer guard never sees a key).
-      ...(contextProfile === undefined ? {} : { contextProfile }),
-    }).finally(() => {
-      semanticLease.close();
-    });
+  const runnerCtx: DefaultRunnerContext = {
+    deps,
+    modelId,
+    signal,
+    contextProfile,
+    model,
+    modelInputTokensMax,
+    entailmentStage,
+    correlationId,
   };
+  return (input: OrchestratorInput): Promise<OrchestratorOutput> =>
+    runDefaultGroundedExploration(runnerCtx, input);
 }
 
 // ─── Citation projection ──────────────────────────────────────────────────────
@@ -995,12 +1178,35 @@ export async function appendGroundedAnswerEntailment<
   return { ...answer, uncertainty: [...answer.uncertainty, ...projected] };
 }
 
+/** Append shared-Judge results for exact prompt-selected numeric connector citations. */
+export async function appendGroundedAnswerNumericEntailment<
+  A extends { readonly uncertainty: readonly GroundedUncertainty[] },
+>(
+  answer: A,
+  stage: EntailmentStage,
+  answerContent: string,
+  selectedEvidence: readonly NumericEntailmentEvidence[],
+  redactor: Redactor,
+): Promise<A> {
+  const markers = await stage.evaluateNumeric(answerContent, selectedEvidence, Date.now());
+  if (markers.length === 0) return answer;
+  const projected: readonly GroundedUncertainty[] = markers.map((marker) => ({
+    kind: marker.kind,
+    claim: redactString(redactor, marker.claim),
+  }));
+  return { ...answer, uncertainty: [...answer.uncertainty, ...projected] };
+}
+
 // ─── Composition seam (test injection) ────────────────────────────────────────
 
 // The seam lets the route's tests substitute a deterministic orchestrator runner without
 // having to spin up a real workspace fixture for every wire-shape assertion. Production
 // callers omit this seam and use the Model Gateway-backed default runner.
 export type GroundedRunner = (input: OrchestratorInput) => Promise<OrchestratorOutput>;
+
+function optionalWorkspaceFs(fs: WorkspaceFs | undefined): Pick<OrchestratorInput, "workspaceFs"> {
+  return fs === undefined ? {} : { workspaceFs: fs };
+}
 
 // ─── Lookup helpers ───────────────────────────────────────────────────────────
 
@@ -1027,19 +1233,30 @@ interface AskWorkerCtx {
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly runner: GroundedRunner;
+  readonly workspaceFs?: WorkspaceFs | undefined;
   readonly signal: AbortSignal;
+  // ADR-0173 D5 — carried from PreparedGroundedAsk.correlationId so a GatewayError surfacing from
+  // the runner (or a late cancellation) reaches its operator diagnostic joined to the request.
+  readonly correlationId: string | undefined;
 }
 
 interface PreparedGroundedAsk {
   readonly chat: Chat;
   readonly input: AskInput;
   readonly signal: AbortSignal;
+  readonly request?: IncomingMessage | undefined;
   readonly commitTurnId?: string | undefined;
   readonly scopeIdentity?: string | undefined;
   readonly turnIdentityContent?: string | undefined;
   readonly memoryContext?: ConversationMemoryRuntimeContext | undefined;
   readonly userMessage?: ChatMessage | undefined;
   readonly memory?: GroundedMemoryPreparation | undefined;
+  readonly modelId?: string | undefined;
+  readonly readinessAdmission?: ConversationReadinessAdmission | undefined;
+  // ADR-0173 D5: the request-scoped correlation id (RouteContext.correlationId), carried through
+  // every `{ ...prepared, ... }` preparation stage so the model call at the bottom of the
+  // orchestrator pipeline can stamp it into GatewayCallRequest.logContext.
+  readonly correlationId?: string | undefined;
 }
 
 interface GroundedMemoryPreparation {
@@ -1064,6 +1281,20 @@ function groundedCommitTurnId(prepared: PreparedGroundedAsk): string {
     throw new Error("grounded ask was dispatched before its turn commit was admitted");
   }
   return prepared.commitTurnId;
+}
+
+function groundedReadinessAdmission(prepared: PreparedGroundedAsk): ConversationReadinessAdmission {
+  if (prepared.readinessAdmission === undefined) {
+    throw new Error("grounded ask was dispatched before model readiness admission");
+  }
+  return prepared.readinessAdmission;
+}
+
+function groundedModelId(prepared: PreparedGroundedAsk): string {
+  if (prepared.modelId === undefined) {
+    throw new Error("grounded ask was dispatched before model admission");
+  }
+  return prepared.modelId;
 }
 
 function groundedTurnIdentityContent(
@@ -1231,10 +1462,7 @@ function persistGroundedAuditEvidence(
       // persister. `deps.redactionSecrets` is the startup snapshot frozen by buildUiHandlerDeps.
       additionalSecrets: currentRedactionSecrets(workerCtx.deps),
       costClassResolver: resolveCostClass,
-      onRetentionDeleted: evidenceRetentionDiagnosticObserver(
-        workerCtx.deps.diagnostics,
-        "grounded-qa",
-      ),
+      onRetentionDeleted: evidenceRetentionObserver("grounded-qa"),
     },
   );
   return runId;
@@ -1248,7 +1476,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   if (!isValidGroundedPack(output.pack)) {
     return internalError("Grounded answer context pack failed validation.");
   }
-  const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps);
+  const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps, workerCtx.correlationId);
   if (cancelResult !== undefined) return cancelResult;
   return finalizeGroundedAnswer(workerCtx, output);
 }
@@ -1327,12 +1555,13 @@ function isRouteResult(value: unknown): value is RouteResult {
 function ensureRouteNotCancelled(
   signal: AbortSignal,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): RouteResult | undefined {
   try {
     ensureNotCancelled(signal);
     return undefined;
   } catch (error) {
-    const gatewayResult = mappedGatewayError(error, deps);
+    const gatewayResult = mappedGatewayError(error, deps, correlationId);
     if (gatewayResult !== undefined) return gatewayResult;
     throw error;
   }
@@ -1354,6 +1583,7 @@ async function runGroundedRunner(
       answerQuestion: answerContent,
       answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
       workspaceRoot: scope.workspaceRoot,
+      ...optionalWorkspaceFs(workerCtx.workspaceFs),
     });
     ensureNotCancelled(workerCtx.signal);
     return output;
@@ -1363,7 +1593,7 @@ async function runGroundedRunner(
     }
     const workspaceResult = mappedWorkspaceError(error);
     if (workspaceResult !== undefined) return workspaceResult;
-    const gatewayResult = mappedGatewayError(error, workerCtx.deps);
+    const gatewayResult = mappedGatewayError(error, workerCtx.deps, workerCtx.correlationId);
     if (gatewayResult !== undefined) return gatewayResult;
     throw error;
   }
@@ -1376,7 +1606,7 @@ async function prepareGroundedAsk(
 ): Promise<PreparedGroundedAsk | RouteResult> {
   let raw: string;
   try {
-    raw = await readBoundedRequestBody(ctx.req, MAX_BODY_BYTES, signal);
+    raw = await readBoundedRequestBody(ctx.req, MAX_BODY_BYTES, signal, ctx.correlationId);
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) return payloadTooLarge();
     if (error instanceof RequestBodyCancelledError) return groundedCancelledResult();
@@ -1387,15 +1617,16 @@ async function prepareGroundedAsk(
   if (parsed.kind === "err") return parsed.result;
   const chat = findChatById(deps, parsed.value.chatId);
   if (chat === undefined) return notFound("Chat not found.");
-  return { chat, input: parsed.value, signal };
+  return { chat, input: parsed.value, signal, request: ctx.req, correlationId: ctx.correlationId };
 }
 
 function resolveGroundedRunner(
   deps: UiHandlerDeps,
-  chat: Chat,
-  requestedModelId: string | undefined,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   runner: GroundedRunner | undefined,
+  correlationId: string | undefined,
 ):
   | {
       readonly modelId: string;
@@ -1404,19 +1635,23 @@ function resolveGroundedRunner(
     }
   | RouteResult {
   if (runner !== undefined) {
-    const modelId = requestedModelId ?? chat.selectedModel;
     return {
       modelId,
       contextProfile: currentContextProfileForModel(deps, modelId),
       runner,
     };
   }
-  const resolvedModelId = resolveGroundedModelId(deps, chat, requestedModelId);
-  if (typeof resolvedModelId !== "string") return resolvedModelId;
-  const contextProfile = currentContextProfileForModel(deps, resolvedModelId);
-  const builtRunner = defaultRunner(deps, resolvedModelId, signal, contextProfile);
+  const contextProfile = currentContextProfileForModel(deps, modelId);
+  const builtRunner = defaultRunner(
+    deps,
+    modelId,
+    readinessAdmission,
+    signal,
+    contextProfile,
+    correlationId,
+  );
   if (typeof builtRunner !== "function") return builtRunner;
-  return { modelId: resolvedModelId, contextProfile, runner: builtRunner };
+  return { modelId, contextProfile, runner: builtRunner };
 }
 
 // ─── Multi-source seam (test injection) ───────────────────────────────────────
@@ -1426,22 +1661,32 @@ function resolveGroundedRunner(
 export interface MultiSourceSeam {
   readonly retriever: GroundedRetriever;
   readonly answerer: MultiSourceAnswerer;
+  /** Test-only: hand the entailment stage in instead of building one from `deps` (KEIKO-0237). */
+  readonly entailmentStageFactory?: EntailmentStageFactory;
 }
 
 function resolveMultiSourceSeam(
   deps: UiHandlerDeps,
   modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   override: MultiSourceSeam | undefined,
+  correlationId: string | undefined,
 ): MultiSourceSeam | RouteResult {
   if (override !== undefined) return override;
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
+  const resolvedModel = deps.modelPortFactory(modelId);
+  if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  const model = withConversationReadinessAdmission(
+    resolvedModel,
+    modelId,
+    readinessAdmission,
+    deps,
+  );
   return {
-    retriever: defaultRetriever(signal, deps),
-    answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal),
+    retriever: defaultRetriever(signal, deps, correlationId),
+    answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal, correlationId),
   };
 }
 
@@ -1456,12 +1701,15 @@ async function dispatchMultiSourceAsk(
   // An injected seam (tests) bypasses model-capability resolution exactly as the single-source path
   // does for an injected runner: there is no real model port to validate against. Production (no
   // override) resolves the chat-model guardrails once, shared with the single path.
-  const modelId =
-    seamOverride !== undefined
-      ? (input.modelId ?? chat.selectedModel)
-      : resolveGroundedModelId(deps, chat, input.modelId);
-  if (typeof modelId !== "string") return modelId;
-  const seam = resolveMultiSourceSeam(deps, modelId, signal, seamOverride);
+  const modelId = groundedModelId(args);
+  const seam = resolveMultiSourceSeam(
+    deps,
+    modelId,
+    groundedReadinessAdmission(args),
+    signal,
+    seamOverride,
+    args.correlationId,
+  );
   if ("status" in seam) return seam;
   return runMultiSourceAsk({
     chat,
@@ -1478,6 +1726,9 @@ async function dispatchMultiSourceAsk(
     retriever: seam.retriever,
     answerer: seam.answerer,
     signal,
+    ...(seam.entailmentStageFactory !== undefined
+      ? { entailmentStageFactory: seam.entailmentStageFactory }
+      : {}),
     preSkipped: skippedFolders.map((s) => ({ label: s.label, message: s.message })),
   });
 }
@@ -1492,6 +1743,13 @@ function singleScopeFromList(
   const cs = scopes[0];
   if (cs === undefined) return undefined;
   return buildSelectedScopeFrom(chat, cs, deriveScopeIdFrom(chat, cs, 0));
+}
+
+function firstScopeWorkspaceFs(
+  scopes: ReturnType<typeof buildConnectedScopes>,
+): WorkspaceFs | undefined {
+  const first = scopes[0];
+  return first === undefined ? undefined : groundedScopeWorkspaceFs(first);
 }
 
 // Epic #532 — the folder-only branch (0 handled by caller; 1 → single-source runner unless
@@ -1538,16 +1796,16 @@ async function dispatchFolderAsk(
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
   }
-  // Epic #177 audit (GAP-B) — mirror the PATCH-route deny-list check for the grounded-ask hot
-  // path. The PATCH route validates via validateFallbackProjectRoot before persisting a scope;
-  // a chat whose projectPath was created before the deny-list was added (or via the test store)
-  // could otherwise reach the orchestrator with a credential-dir workspaceRoot. Reject before
-  // calling the runner so no filesystem access occurs against a denied path.
-  if (pathIsDenied(scope.workspaceRoot)) {
-    return badRequest("Connected scope is excluded from Keiko's safe read surface.");
-  }
-  const resolved = resolveGroundedRunner(deps, chat, input.modelId, signal, runner);
+  const resolved = resolveGroundedRunner(
+    deps,
+    groundedModelId(prepared),
+    groundedReadinessAdmission(prepared),
+    signal,
+    runner,
+    prepared.correlationId,
+  );
   if ("status" in resolved) return resolved;
+  const workspaceFs = firstScopeWorkspaceFs(scopes);
   return runAsk({
     chat,
     scope,
@@ -1561,7 +1819,9 @@ async function dispatchFolderAsk(
     contextProfile: resolved.contextProfile,
     deps,
     runner: resolved.runner,
+    ...optionalWorkspaceFs(workspaceFs),
     signal,
+    correlationId: prepared.correlationId,
   });
 }
 
@@ -1573,18 +1833,24 @@ export interface HybridSeam {
   readonly folderRetriever?: FolderRetriever;
   readonly connectorRetrieve?: ConnectorRetrieve;
   readonly answer?: HybridAnswerer;
+  /** Test-only: hand the entailment stage in instead of building one from `deps` (KEIKO-0237). */
+  readonly entailmentStageFactory?: EntailmentStageFactory;
 }
 
 function hybridSeamFields(seam: HybridSeam | undefined): Partial<{
   folderRetriever: FolderRetriever;
   connectorRetrieve: ConnectorRetrieve;
   answer: HybridAnswerer;
+  entailmentStageFactory: EntailmentStageFactory;
 }> {
   if (seam === undefined) return {};
   return {
     ...(seam.folderRetriever !== undefined ? { folderRetriever: seam.folderRetriever } : {}),
     ...(seam.connectorRetrieve !== undefined ? { connectorRetrieve: seam.connectorRetrieve } : {}),
     ...(seam.answer !== undefined ? { answer: seam.answer } : {}),
+    ...(seam.entailmentStageFactory !== undefined
+      ? { entailmentStageFactory: seam.entailmentStageFactory }
+      : {}),
   };
 }
 
@@ -1597,11 +1863,7 @@ async function dispatchHybridAsk(
   const { chat, input, signal } = prepared;
   // An injected answerer (tests) bypasses model-capability resolution exactly as the multi-source
   // path does: there is no real model port to validate. Production resolves the guardrails once.
-  const modelId =
-    seam?.answer !== undefined
-      ? (input.modelId ?? chat.selectedModel)
-      : resolveGroundedModelId(deps, chat, input.modelId);
-  if (typeof modelId !== "string") return modelId;
+  const modelId = groundedModelId(prepared);
   return runHybridGroundedAsk({
     chat,
     content: input.content,
@@ -1613,6 +1875,8 @@ async function dispatchHybridAsk(
     contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
     signal,
+    correlationId: prepared.correlationId,
+    readinessAdmission: groundedReadinessAdmission(prepared),
     preSkippedFolders: skippedFolders.map((s) => ({
       label: s.label,
       reason: "not-accessible",
@@ -1623,6 +1887,19 @@ async function dispatchHybridAsk(
 }
 
 // ─── Public handler ───────────────────────────────────────────────────────────
+
+function canonicalizePreparedFolderScopes(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): CanonicalizedFolderScopes {
+  return canonicalizeGroundedFolderScopes(
+    prepared.chat,
+    deps,
+    buildConnectedScopes(prepared.chat),
+    prepared.request,
+    prepared.correlationId,
+  );
+}
 
 async function dispatchPreparedGroundedAsk(
   prepared: PreparedGroundedAsk,
@@ -1639,9 +1916,8 @@ async function dispatchPreparedGroundedAsk(
   // Fail-soft: inaccessible/denied folders are skipped; only effective (canonical) counts drive
   // dispatch. A chat with ONLY denied/inaccessible sources still returns the original 400 so the
   // user sees a clear rejection (security preserved).
-  const folderScopes = buildConnectedScopes(chat);
   const { canonical: canonicalFolderScopes, skipped: skippedFolders } =
-    canonicalizeGroundedFolderScopes(chat, deps, folderScopes);
+    canonicalizePreparedFolderScopes(prepared, deps);
   const preparedWithCanonicalFolders: PreparedGroundedAsk = {
     ...prepared,
     chat: withCanonicalFolderScopes(chat, canonicalFolderScopes),
@@ -1672,6 +1948,8 @@ async function dispatchPreparedGroundedAsk(
       },
       deps,
       prepared.signal,
+      groundedReadinessAdmission(prepared),
+      prepared.correlationId,
     );
   }
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
@@ -1708,6 +1986,39 @@ function admitGroundedUser(
   return groundedTurnConflict(
     admission.kind === "in-progress" ? "CHAT_TURN_IN_PROGRESS" : "CHAT_TURN_IDEMPOTENCY_CONFLICT",
   );
+}
+
+async function admitGroundedModel(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  allowInjectedModelSeam: boolean,
+): Promise<PreparedGroundedAsk | RouteResult> {
+  const requestedModelId = prepared.input.modelId ?? prepared.chat.selectedModel;
+  const resolvedModelId = resolveGroundedModelId(deps, prepared.chat, prepared.input.modelId);
+  if (typeof resolvedModelId !== "string") {
+    if (!allowInjectedModelSeam) return resolvedModelId;
+    // Deterministic injected answer ports do not perform provider egress. Preserve those test
+    // seams without weakening production model validation.
+    return {
+      ...prepared,
+      modelId: requestedModelId,
+      readinessAdmission: { modelId: requestedModelId },
+    };
+  }
+  const modelId = resolvedModelId;
+  // Restart gap (customer field incident, 0.3.11): grounded asks were the only conversation
+  // entry point WITHOUT the on-demand readiness ensure. The observation store is process-local
+  // by design, so after every restart the first pod question answered 400 "not ready" until an
+  // ungrounded send or a manual settings probe happened to record an observation. Probe on
+  // demand exactly like the create/send paths; injected deterministic answer ports skip the
+  // probe as they skip the wire.
+  if (!allowInjectedModelSeam) {
+    await ensureOnDemandConversationReadiness(deps, modelId, prepared.correlationId);
+  }
+  const readinessAdmission = captureConversationReadinessAdmission(deps, modelId);
+  return "status" in readinessAdmission
+    ? readinessAdmission
+    : { ...prepared, modelId, readinessAdmission };
 }
 
 function groundedTurnConflict(
@@ -1841,6 +2152,14 @@ async function runAdmittedGroundedAsk(
     if (isRouteResult(memoryPrepared)) {
       return settleGroundedChatTurn(admitted, deps, memoryPrepared);
     }
+    const staleReadiness = validateConversationReadinessAdmission(
+      deps,
+      groundedReadinessAdmission(memoryPrepared),
+      groundedModelId(memoryPrepared),
+    );
+    if (staleReadiness !== undefined) {
+      return settleGroundedChatTurn(memoryPrepared, deps, staleReadiness);
+    }
     const result = await dispatchPreparedGroundedAsk(
       memoryPrepared,
       deps,
@@ -1870,7 +2189,13 @@ async function executeGroundedAskInTurn(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
-  const admitted = admitGroundedUser(prepared, deps);
+  const modelAdmitted = await admitGroundedModel(
+    prepared,
+    deps,
+    runner !== undefined || multiSource !== undefined || hybrid?.answer !== undefined,
+  );
+  if (isRouteResult(modelAdmitted)) return modelAdmitted;
+  const admitted = admitGroundedUser(modelAdmitted, deps);
   if (isRouteResult(admitted)) return admitted;
   const scopeFailure = admittedGroundingScopeFailure(admitted, deps);
   return scopeFailure ?? runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
@@ -1939,7 +2264,7 @@ function settleGroundedChatTurn(
       ),
     };
   }
-  if (result.body.memory !== undefined) {
+  if (result.body.memory !== undefined || hasAnswerOnlyContext(prepared)) {
     deps.store.attachGroundedAnswer(result.body.assistantMessageId, result.body);
   }
   let completion;
@@ -2058,6 +2383,10 @@ async function attachGroundedMemory(
   }
   const memoryPreparation = prepared.memory;
   if (memoryPreparation === undefined) return result;
+  const body = hasAnswerOnlyContext(prepared)
+    ? groundedAnswerWithMemoryUncertainty(result.body, deps)
+    : result.body;
+  const markedResult: RouteResult = body === result.body ? result : { ...result, body };
   const chat = deps.store.findChatById(prepared.chat.id) ?? prepared.chat;
   try {
     const memory = await buildCanonicalTurnMemoryResult(
@@ -2072,11 +2401,25 @@ async function attachGroundedMemory(
         precomputedMemory: memoryPreparation.result,
       },
     );
-    return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
+    return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };
   } catch (error) {
     recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
-    return result;
+    return markedResult;
   }
+}
+
+function groundedAnswerWithMemoryUncertainty(
+  body: GroundedAnswer,
+  deps: UiHandlerDeps,
+): GroundedAnswer {
+  const marker = uncitedMemoryContextMarker(Date.now());
+  return {
+    ...body,
+    uncertainty: [
+      ...body.uncertainty,
+      { kind: marker.kind, claim: redactString(deps.redactor, marker.claim) },
+    ],
+  };
 }
 
 export async function handleGroundedAsk(
@@ -2091,7 +2434,11 @@ export async function handleGroundedAsk(
     const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return groundedCancelledResult();
     if ("status" in prepared) return prepared;
-    return await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+    const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+    if (result.status === 200 && groundedAnswerBody(result.body)) {
+      logChatResponseMessage(result.body.assistantMessageId, ctx.correlationId);
+    }
+    return result;
   } finally {
     cancellation.dispose();
   }

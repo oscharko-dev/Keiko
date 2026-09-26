@@ -3,9 +3,15 @@
 // realpath resolution.
 
 import type { IncomingMessage } from "node:http";
+import { createWorkspaceMutexRegistry, fileWriteKeys } from "./task-workspace/mutex.js";
+import { recordManagedRootRequestDenial } from "./workspace-root-denial-log.js";
+
+// One registry per server process: same-process turn order for the verify→write region below
+// (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
+const fileWriteMutex = createWorkspaceMutexRegistry();
 import type { Dirent, Stats } from "node:fs";
-import { constants, createReadStream } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { TextDecoder } from "node:util";
 import {
   cp,
@@ -13,7 +19,6 @@ import {
   mkdir,
   opendir,
   open,
-  readFile,
   realpath,
   rename,
   rm,
@@ -30,29 +35,43 @@ import {
   relative,
   resolve,
 } from "node:path";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
+import type { EditorDocumentSession, EditorDocumentVersion } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_SESSION_SCHEMA_VERSION,
   parseEditorDocumentVersion,
-  type EditorDocumentSession,
-  type EditorDocumentVersion,
-} from "@oscharko-dev/keiko-contracts";
-import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-session";
+import type {
+  FilesContentResponse as FilesContentWireResponse,
+  FilesEntryKind,
+  FilesSymlinkTargetKind,
+  FilesTreeEntry,
+  FilesTreeResponse,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
-import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
-import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
-  STREAMING,
-  errorBody,
-  type HandlerOutcome,
-  type RouteContext,
-  type RouteResult,
-} from "./routes.js";
+  captureEditorLocalHistorySafely,
+  reKeyEditorLocalHistorySafely,
+} from "./editor/localHistory/localHistoryCapture.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
+import { errorBody } from "./route-error.js";
+import { STREAMING } from "./route-outcome.js";
+import type { HandlerOutcome, RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
-import { resolveManagedTaskWorkspaceRoot } from "./task-workspace/authorization.js";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  requiresConfiguredManagedWorkspaceAuthority,
+  resolveManagedWorkspaceRootAccess,
+  workspaceRootAccessOrUndefined,
+  type WorkspaceRootAccess,
+} from "./task-workspace/workspace-root-access.js";
+export { requiresManagedRootAuthority } from "./task-workspace/workspace-root-access.js";
 
 const MAX_DIRECTORY_ENTRIES = 1_000;
 const DEFAULT_FILE_SEARCH_LIMIT = 24;
@@ -71,25 +90,12 @@ type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
   typeof value === "string" ? redact(value) : value;
 
-export type FilesEntryKind = "directory" | "file" | "symlink";
-
-export interface FilesTreeEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly kind: FilesEntryKind;
-  readonly sizeBytes: number;
-  readonly modifiedAt: number;
-  readonly extension: string | null;
-  readonly symlink: boolean;
-  readonly readable: boolean;
-}
-
-export interface FilesTreeResponse {
-  readonly root: string;
-  readonly path: string;
-  readonly entries: readonly FilesTreeEntry[];
-  readonly truncated: boolean;
-}
+// #2906 review (comment 3863185718): FilesEntryKind / FilesTreeEntry / FilesTreeResponse used to
+// be redeclared here as a second, independently-drifting copy of the SAME shared wire contract
+// (@oscharko-dev/keiko-contracts/bff-wire owns the canonical one, consumed directly by keiko-ui).
+// Re-exported (not just imported) so every existing `from "./files.js"` import site — including
+// the package barrel (index.ts) — keeps working unchanged.
+export type { FilesEntryKind, FilesSymlinkTargetKind, FilesTreeEntry, FilesTreeResponse };
 
 export interface FilesSearchResult {
   readonly root: string;
@@ -177,6 +183,25 @@ interface ResolvedTarget {
   readonly path: string;
   readonly stats: Stats;
   readonly symlink: boolean;
+  // The resolved root's WorkspaceFs, plus the WorkspaceStat captured at THIS admission -- carried
+  // alongside the plain path so a later content read can bind itself to the exact file that was
+  // admitted (see readContainedBytes) instead of trusting a bare path string that a
+  // parent-directory swap could redirect after admission.
+  //
+  // The snapshot is FULL, not device+inode alone. `WorkspaceFs.readFileBytes` re-derives it from
+  // the opened descriptor and compares fileIdentity AND size, mtime, ctime and link count
+  // (expectedDescriptorSnapshotMatches, keiko-workspace/src/fs.ts). ANY change to the file fails
+  // that read -- an in-place edit that keeps the inode exactly as much as an inode swap. A caught
+  // WorkspaceDescriptorReadError therefore means "the admitted revision is gone", which is a stale
+  // session and not a retryable condition: every further attempt against the same snapshot fails
+  // identically, and re-deriving the snapshot from the live path instead would accept whatever
+  // inode now sits there -- the hole readContainedBytes exists to close.
+  //
+  // The mutation guards do NOT reuse this full snapshot: they re-prove `fileIdentity` and the
+  // canonical pathname only (assertAdmittedIdentityCurrent), so a legitimate in-place edit before a
+  // delete or a rename stays a delete and not a spurious 409.
+  readonly fs: WorkspaceFs;
+  readonly identity: WorkspaceStat;
 }
 
 // Exported for reuse by the editor language-service route (#1198): the same realpath +
@@ -195,6 +220,7 @@ export interface ContainedEditorFilePath {
 export interface ResolvedProjectRoot {
   readonly root: string;
   readonly realRoot: string;
+  readonly access: WorkspaceRootAccess;
 }
 
 export interface ResolveRequestRootOptions {
@@ -205,38 +231,15 @@ export interface ResolveRequestRootOptions {
   readonly managedRootAuthority?: "authorize" | "defer-to-caller";
 }
 
-/**
- * Decides whether a candidate root may only be served under managed-workspace authority. Exported
- * so Git classifies identically to Files: two copies of this rule drifted once already (#2473), and
- * the divergence made the operator's own repository look unavailable while Files served it.
- */
-export function requiresManagedRootAuthority(managedRoot: string, candidateRoot: string): boolean {
-  if (containsPath(managedRoot, candidateRoot)) return true;
-  if (!containsPath(candidateRoot, managedRoot)) return false;
-  // Production state may live below the selected workspace only inside its already-denied `.keiko`
-  // subtree. Keep that ancestor browsable while the Files deny layer excludes the complete managed
-  // subtree from tree/search and rejects every direct target or mutation before filesystem access.
-  return !pathIsDenied(rootRelativePosixPath(candidateRoot, managedRoot));
-}
-
-function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): boolean {
-  const managedRoot = deps.managedTaskWorkspaceRoot;
-  if (managedRoot === undefined || rootInput === null || !isAbsolute(rootInput)) return false;
-  return requiresManagedRootAuthority(resolve(managedRoot), resolve(rootInput));
-}
-
-async function resolvesInsideManagedRoot(deps: UiHandlerDeps, realRoot: string): Promise<boolean> {
-  const managedRoot = deps.managedTaskWorkspaceRoot;
-  if (managedRoot === undefined) return false;
-  try {
-    const realManagedRoot = await realpath(managedRoot);
-    return requiresManagedRootAuthority(realManagedRoot, realRoot);
-  } catch {
-    // This check separates ordinary roots from Keiko-owned managed worktrees. An unreadable or
-    // missing managed root is therefore an unknown authorization state, never proof that the
-    // candidate is outside it.
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
+// The requested root when it names a path under Keiko's private managed-task-workspace root, or
+// `undefined`. Returns the value rather than a boolean so the one place that decides "this is a
+// managed-root request" is also the place that proves the root is present: the caller used to
+// re-test `rootInput === null` afterwards purely to narrow the type, and that second test could
+// never be true — every unspecified root has already returned through `resolveRoot` — so the
+// content-free denial it recorded was unreachable (PR #3381 review).
+function requestedManagedRoot(deps: UiHandlerDeps, rootInput: string | null): string | undefined {
+  if (rootInput === null) return undefined;
+  return requiresConfiguredManagedWorkspaceAuthority(deps, rootInput) ? rootInput : undefined;
 }
 
 /**
@@ -252,33 +255,74 @@ export async function resolveRequestRoot(
   options: ResolveRequestRootOptions = {},
 ): Promise<ResolvedProjectRoot> {
   const deferManagedAuthority = options.managedRootAuthority === "defer-to-caller";
-  if (!requestedManagedRoot(deps, rootInput)) {
-    const root = await resolveRoot(deps.store, rootInput, deps.redactor);
-    if (!(await resolvesInsideManagedRoot(deps, root.realRoot))) return root;
-    if (deferManagedAuthority) return root;
-    // An external symlink or registered-project alias must not turn a managed worktree into an
-    // ordinary root. Only the canonical derived path can be re-proven against persisted identity.
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
-  if (deferManagedAuthority) {
-    const root = await resolveRoot(deps.store, rootInput, deps.redactor);
-    if (!(await resolvesInsideManagedRoot(deps, root.realRoot))) {
-      throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-    }
-    return root;
+  const managedRootInput = requestedManagedRoot(deps, rootInput);
+  if (managedRootInput === undefined || deferManagedAuthority) {
+    return resolveRoot(deps.store, rootInput, deps.redactor);
   }
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    recordManagedRootRequestDenial("managed-root-session-authority-missing", {
+      correlationId: ctx.correlationId,
+    });
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  const workspace =
-    rootInput === null ? undefined : resolveManagedTaskWorkspaceRoot(deps, rootInput);
-  if (workspace === undefined) {
+  // A root that names the managed root ITSELF, or any path under it that no workspace record
+  // claims, is refused here — the resolver records its own classified denial for that.
+  const access = resolveManagedWorkspaceRootAccess(deps, managedRootInput, {
+    correlationId: ctx.correlationId,
+  });
+  if (access === undefined) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  assertMetadataSafe(workspace.root, deps.redactor);
-  const realRoot = await resolveDirectory(workspace.root);
-  assertMetadataSafe(realRoot, deps.redactor);
-  return { root: workspace.root, realRoot };
+  assertMetadataSafe(managedRootInput, deps.redactor);
+  assertMetadataSafe(access.canonicalRoot, deps.redactor);
+  return { root: managedRootInput, realRoot: access.canonicalRoot, access };
+}
+
+/**
+ * Binds request/session admission to an operation-scoped authority resolver. Production reaches
+ * the central resolver composed in deps.ts; the fallback keeps isolated route tests on the same
+ * owning access functions. Every invocation verifies the exact admitted kind and canonical root.
+ */
+export function requestRootAccessResolver(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  expected: ResolvedProjectRoot,
+): () => WorkspaceRootAccess | undefined {
+  return (): WorkspaceRootAccess | undefined => {
+    try {
+      if (
+        expected.access.kind === "managed-task" &&
+        resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+      ) {
+        return undefined;
+      }
+      // This surface answers every refusal the same way (no access), so the resolver's
+      // denied-vs-unresolved decision is collapsed here, explicitly, at the consumer (#3347). The
+      // fallback still runs only when NO central resolver is composed: a composed resolver that
+      // refuses returns a non-nullish outcome, and fallbackRequestRootAccess refuses on its own.
+      const resolved =
+        workspaceRootAccessOrUndefined(
+          deps.workspaceRootAccessResolver?.(expected.access.canonicalRoot),
+        ) ?? fallbackRequestRootAccess(deps, expected, ctx.correlationId);
+      return resolved?.kind === expected.access.kind &&
+        resolved.canonicalRoot === expected.access.canonicalRoot
+        ? resolved
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+function fallbackRequestRootAccess(
+  deps: UiHandlerDeps,
+  expected: ResolvedProjectRoot,
+  correlationId: string | undefined,
+): WorkspaceRootAccess | undefined {
+  if (deps.workspaceRootAccessResolver !== undefined) return undefined;
+  return expected.access.kind === "managed-task"
+    ? resolveManagedWorkspaceRootAccess(deps, expected.access.canonicalRoot, { correlationId })
+    : expected.access;
 }
 
 function filesErrorResult(error: FilesError): RouteResult {
@@ -354,7 +398,11 @@ async function resolveRegisteredRoot(
   if (rootPathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return { root: project.path, realRoot };
+  return {
+    root: project.path,
+    realRoot,
+    access: createOrdinaryWorkspaceRootAccess(realRoot),
+  };
 }
 
 // Epic #532 — Keiko is a workspace for EVERYONE, not only devs: a Files window may browse ANY folder
@@ -380,7 +428,7 @@ async function resolveArbitraryRoot(
   if (pathIsDenied(realRoot)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return { root: rootInput, realRoot };
+  return { root: rootInput, realRoot, access: createOrdinaryWorkspaceRootAccess(realRoot) };
 }
 
 export async function resolveRoot(
@@ -397,8 +445,12 @@ export async function resolveRoot(
     : resolveRegisteredRoot(project, redactor);
 }
 
-export function normalizeRelativePath(pathInput: string | null): string {
-  const raw = pathInput ?? "";
+export function normalizeRelativePath(pathInput: unknown): string {
+  if (pathInput === null) return "";
+  if (typeof pathInput !== "string") {
+    throw new FilesError(400, "BAD_PATH", "The path must be a string or null.");
+  }
+  const raw = pathInput;
   if (raw.includes("\0") || isAbsolute(raw)) {
     throw new FilesError(400, "BAD_PATH", "The path must be relative to the selected root.");
   }
@@ -435,6 +487,66 @@ function stalePathError(): FilesError {
   return new FilesError(409, "STALE_PATH", "The file changed before the operation could complete.");
 }
 
+// The three things every guard needs to re-prove an admission, structurally satisfied by both
+// ResolvedTarget (an existing entry) and ResolvedCreationTarget's parent (a destination directory).
+interface AdmittedPath {
+  readonly realRoot: string;
+  readonly path: string;
+  readonly fs: WorkspaceFs;
+}
+
+// #3347 owner P1. `isContained(realRoot, path)` is a STRING comparison over a pathname that has not
+// moved, so it keeps answering "contained" after the root it names has been replaced by a symlink
+// pointing outside -- every filesystem call on that pathname then lands out of the workspace while
+// the check that is supposed to notice reports nothing. Containment only means something when the
+// pathname is re-canonicalized, and it must be re-canonicalized through the ADMITTED capability,
+// not a bare node:fs realpath, so the answer comes from the same authority the request was
+// admitted under. Mirrors isWorkspacePathSnapshotCurrent's pathname-plus-identity shape from
+// keiko-workspace; it is not a second containment model.
+function assertAdmittedPathCurrent(admitted: AdmittedPath, escapeMessage: string): void {
+  let canonical: string;
+  try {
+    canonical = admitted.fs.realPath(admitted.path);
+  } catch {
+    throw stalePathError();
+  }
+  if (!sameNativePath(canonical, admitted.path) || !isContained(admitted.realRoot, canonical)) {
+    throw new FilesError(403, "PATH_ESCAPE", escapeMessage);
+  }
+  const relativeCanonical = rootRelativePosixPath(admitted.realRoot, canonical);
+  if (relativeCanonical.length > 0 && pathIsDenied(relativeCanonical)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+}
+
+// Re-proves an admitted ENTRY: the object sitting at the pathname is still the one admission bound
+// to, and the pathname still canonicalizes to itself inside the root. Device+inode and the entry
+// kind only -- deliberately NOT ResolvedTarget.identity's full snapshot, which readFileBytes owns:
+// a mutation must still reject a replaced inode, but a file legitimately edited in place between
+// the browse and the delete is still the same file and must still be deletable.
+//
+// Order matters. The identity/symlink question is asked FIRST so an entry replaced in place by a
+// link keeps reporting the 409 STALE_PATH it always has; the canonical-pathname question is what
+// catches the case identity alone cannot see, where the replacement happened ABOVE the entry (a
+// swapped root or parent) and the identity re-read therefore observes the substitute on both sides.
+function assertAdmittedIdentityCurrent(target: ResolvedTarget): void {
+  let current: WorkspaceStat;
+  try {
+    current = target.fs.stat(target.path);
+  } catch {
+    throw stalePathError();
+  }
+  if (
+    current.isSymbolicLink ||
+    current.isDirectory !== target.identity.isDirectory ||
+    target.identity.fileIdentity === undefined ||
+    current.fileIdentity !== target.identity.fileIdentity
+  ) {
+    throw stalePathError();
+  }
+  assertAdmittedPathCurrent(target, "The requested path is outside the selected root.");
+}
+
 async function resolveInsideRoot(
   store: UiStore,
   rootInput: string | null,
@@ -454,7 +566,10 @@ async function resolveInsideRoot(
   const candidate = nativePath(root.realRoot, relativePath);
   let target: string;
   try {
-    target = await realpath(candidate);
+    // ADR-0005 D2 / #3347: admission for this specific candidate goes through the owner-supplied
+    // access.fs, the same unforgeable capability every other IO call in this function now uses --
+    // not a bare Node realpath -- so the whole request, not just the content read, is bound to it.
+    target = root.access.fs.realPath(candidate);
   } catch {
     throw new FilesError(404, "NOT_FOUND", "The requested path was not found.");
   }
@@ -466,16 +581,31 @@ async function resolveInsideRoot(
   if (pathIsDenied(targetRelativePath)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  const linkStats = await lstat(candidate);
+  // candidate's own lstat (pre-realpath, may itself be a symlink) drives the UI-facing `symlink`
+  // indicator; target's lstat (post-realpath, the file identity content reads bind to) drives
+  // `identity`. Collapsing these into one call would either always report symlink:false (lstat on
+  // an already-resolved path never sees a link) or bind identity to the unresolved alias.
+  const linkStat = root.access.fs.stat(candidate);
+  const identity = root.access.fs.stat(target);
   const targetStats = await stat(target);
-  return {
+  const resolved: ResolvedTarget = {
     root: root.root,
     realRoot: root.realRoot,
     relativePath,
     path: target,
     stats: targetStats,
-    symlink: linkStats.isSymbolicLink(),
+    symlink: linkStat.isSymbolicLink,
+    fs: root.access.fs,
+    identity,
   };
+  // #3347 owner P1: `stats` above is the one node:fs call left in this function, and until this
+  // re-proof it was unbound -- a root swapped to a symlink between realPath() and it produced a
+  // ResolvedTarget whose `stats` (and `identity`) described a file OUTSIDE the workspace, self
+  // consistently, so every later guard that compares them agreed and the mutation went through.
+  // Re-canonicalizing through the admitted capability here is what makes the returned snapshot
+  // provably about the admitted path.
+  assertAdmittedIdentityCurrent(resolved);
+  return resolved;
 }
 
 function extensionOf(name: string): string | null {
@@ -486,23 +616,105 @@ function extensionOf(name: string): string | null {
   return ext.length > 0 ? ext : null;
 }
 
-type FilesTreeEntryBase = Omit<FilesTreeEntry, "kind" | "readable">;
+// Metadata a stat'd (non-directory-dirent) entry always carries -- the common fields both the
+// "file" and "symlink" FilesTreeEntry variants share, still missing only the discriminant `kind`
+// and the containment-derived `readable`. No `symlink` field: PR #3289 review (comment
+// 3865167775) removed it from the wire type entirely -- `kind` alone is the discriminant now, so
+// there is nothing left for a local `symlink` boolean to contradict.
+interface FilesTreeEntryMetadata {
+  readonly name: string;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly extension: string | null;
+}
+
+function metadataFreeDirectoryEntry(
+  meta: Pick<FilesTreeEntryMetadata, "name" | "path" | "extension">,
+  readable: boolean,
+): FilesTreeEntry {
+  // KEIKO-0633: a real directory deliberately does NOT carry sizeBytes/modifiedAt on the wire --
+  // the readdir walk skips per-entry stat to avoid one syscall per directory, and emitting a `0`
+  // sentinel would masquerade as a real measurement to any downstream consumer. The discriminated
+  // union (#2906 review, comment 3863185718) now enforces this at the type level too: this is the
+  // ONLY shape a "directory"-kind entry may take.
+  return {
+    name: meta.name,
+    path: meta.path,
+    kind: "directory",
+    extension: meta.extension,
+    readable,
+  };
+}
+
+// Sonar S3358: nested-ternary avoidance for the target-kind classification below.
+function classifySymlinkTargetKind(targetStats: {
+  readonly isDirectory: () => boolean;
+  readonly isFile: () => boolean;
+}): FilesSymlinkTargetKind {
+  if (targetStats.isDirectory()) return "directory";
+  if (targetStats.isFile()) return "file";
+  return "unknown";
+}
+
+// #2906 review (comment 3863185718) / PR #3289 review (comment 3865167775): a symlink whose target
+// is a directory used to be reported as `kind: "directory"` WITH the symlink's own lstat metadata
+// attached, contradicting the "a directory entry is metadata-free" invariant
+// metadataFreeDirectoryEntry encodes above. A symlink whose target is a FILE had the mirror-image
+// bug: it collapsed to `kind: "file"` while STILL carrying `symlinkTargetKind: "file"`, a field the
+// type now declares only on the "symlink" variant. Both are `kind: "symlink"` uniformly -- never
+// collapsed into whatever the target happens to be -- with `symlinkTargetKind` naming what the walk
+// resolved the target to, so a consumer that wants target-aware treatment can opt in explicitly
+// instead of the server silently asserting it.
+// KEIKO-0873 follow-up (#3348 audit, P3): an unreadable symlink must disclose neither its target's
+// KIND nor its target-path LENGTH. On POSIX, `lstat().size` for a symbolic link is the exact byte
+// length of the target path string, so spreading the link's own lstat metadata left a weaker but
+// real enumeration oracle over precisely the paths the workspace boundary hides entirely -- it
+// distinguishes a link to `/etc/passwd` (11) from one to a long secrets path (58). The redactor
+// never caught it because it only runs over string paths (assertMetadataSafe).
+//
+// The wire type requires `sizeBytes`/`modifiedAt` on the "symlink" variant (unlike "directory",
+// where both are `?: undefined`), so they are ZEROED rather than omitted. That is a deliberate
+// trade: a `0` sentinel is less honest than an absent field, but changing the shared wire variant
+// would ripple into every consumer, and a uniform zeroed shape makes every unreadable symlink
+// one-decision-proof -- no caller can tell two hidden targets apart by any field.
+function unreadableSymlinkEntry(meta: FilesTreeEntryMetadata): FilesTreeEntry {
+  return {
+    name: meta.name,
+    path: meta.path,
+    kind: "symlink",
+    sizeBytes: 0,
+    modifiedAt: 0,
+    extension: meta.extension,
+    readable: false,
+    symlinkTargetKind: "unknown",
+  };
+}
 
 async function classifySymlinkEntry(
   root: string,
   entryPath: string,
-  base: FilesTreeEntryBase,
+  meta: FilesTreeEntryMetadata,
 ): Promise<FilesTreeEntry> {
   try {
     const target = await realpath(entryPath);
     const targetStats = await stat(target);
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
-    const leafKind: FilesEntryKind = targetStats.isFile() ? "file" : "symlink";
-    const kind: FilesEntryKind = targetStats.isDirectory() ? "directory" : leafKind;
-    return { ...base, kind, readable: contained && !denied };
+    // KEIKO-0873 (#3331, hardened in final review): an unreadable target's real kind (file vs
+    // directory) must never be disclosed -- it is a one-bit filesystem-enumeration oracle for
+    // paths the workspace boundary is otherwise supposed to hide entirely, whether the target is
+    // out-of-root or an in-root but deny-listed path (e.g. a symlink aliasing .env or .git/HEAD).
+    // Gate on `readable`, not just `contained`, so both cases collapse the same way.
+    if (!contained || denied) return unreadableSymlinkEntry(meta);
+    return {
+      ...meta,
+      kind: "symlink",
+      symlinkTargetKind: classifySymlinkTargetKind(targetStats),
+      readable: true,
+    };
   } catch {
-    return { ...base, kind: "symlink", readable: false };
+    return unreadableSymlinkEntry(meta);
   }
 }
 
@@ -518,32 +730,27 @@ async function classifyEntry(
   assertMetadataSafe(childRelativePath, redactor);
   const entryPath = join(parentNativePath, entry.name);
   if (entry.isDirectory() && !entry.isSymbolicLink()) {
-    return {
-      name: entry.name,
-      path: childRelativePath,
-      kind: "directory",
-      sizeBytes: 0,
-      modifiedAt: 0,
-      extension: extensionOf(entry.name),
-      symlink: false,
-      readable: true,
-    };
+    return metadataFreeDirectoryEntry(
+      { name: entry.name, path: childRelativePath, extension: extensionOf(entry.name) },
+      true,
+    );
   }
   const linkStats = await lstat(entryPath);
-  const symlink = linkStats.isSymbolicLink();
-  const base = {
+  const meta: FilesTreeEntryMetadata = {
     name: entry.name,
     path: childRelativePath,
     sizeBytes: linkStats.size,
     modifiedAt: linkStats.mtimeMs,
     extension: extensionOf(entry.name),
-    symlink,
   };
-  if (!symlink) {
-    const kind: FilesEntryKind = linkStats.isDirectory() ? "directory" : "file";
-    return { ...base, kind, readable: true };
+  if (linkStats.isSymbolicLink()) return classifySymlinkEntry(root, entryPath, meta);
+  if (linkStats.isDirectory()) {
+    // TOCTOU fallback: the dirent's own type (read at readdir time) disagreed with this FRESH
+    // lstat (rare -- e.g. the entry was replaced between the readdir call and here). A real
+    // directory stays metadata-free regardless of which check noticed it was one.
+    return metadataFreeDirectoryEntry(meta, true);
   }
-  return classifySymlinkEntry(root, entryPath, base);
+  return { ...meta, kind: "file", readable: true };
 }
 
 function entryRank(entry: FilesTreeEntry): number {
@@ -1317,6 +1524,58 @@ async function readPrefix(
   }
 }
 
+// #3347 consumer-boundary hardening. Every read of an admitted file's BYTES in this module routes
+// through this helper -- the text preview, the editable-content reads, the search/classification
+// prefixes and, since the #3367 owner P1 repair in readAdmittedImageBytes, the image preview route,
+// which until then wrote its headers and only then opened `target.path` with a bare
+// createReadStream (an import this module no longer carries).
+//
+// The two opens that do NOT come through here, named rather than covered by a blanket claim:
+// `readPrefix` immediately above, taken when the resolved root's WorkspaceFs exposes no
+// `readFileBytes` at all -- it is an ordinary unbound open(), reachable only from an in-memory fake,
+// since the production `nodeWorkspaceFs` always implements the bounded reader; and the
+// O_WRONLY/O_RDONLY handles in the write and directory-fsync paths, which read no file content.
+//
+// `identity` is the WorkspaceStat captured at ADMISSION time
+// (ResolvedTarget.identity) -- not re-derived here -- so the open is bound to the exact file that
+// was admitted: if a path segment was swapped anywhere between admission and this call, the opened
+// descriptor's snapshot will not match `identity` and the read is rejected, even when the
+// substitute happens to share the original's size and mtime (which the older stat-after-read
+// comparison this module otherwise relies on cannot detect). The comparison is the FULL snapshot,
+// not device+inode alone, so a legitimate in-place edit rejects the read too: callers must map a
+// WorkspaceDescriptorReadError to "reload before editing" at once and must never retry it against
+// the same admission-time snapshot. Hard links are allowed (not rejected): unlike the privileged
+// metadata readers elsewhere in the codebase, this is an interactive human browsing a root they
+// selected, so a hard-linked file the human already has plain read access to must keep working.
+async function readContainedBytes(
+  targetPath: string,
+  fs: WorkspaceFs,
+  identity: WorkspaceStat,
+  maxBytes: number,
+): Promise<{ readonly buffer: Buffer; readonly truncated: boolean }> {
+  const boundedRead = fs.readFileBytes;
+  if (boundedRead === undefined) return readPrefix(targetPath, maxBytes);
+  const bytes = await boundedRead.call(fs, targetPath, maxBytes, "allow", identity);
+  return { buffer: Buffer.from(bytes), truncated: identity.size > maxBytes };
+}
+
+// Same-shape convenience for the (majority) call sites that have no retry loop of their own: a
+// caught identity mismatch becomes the same STALE_SESSION rejection those sites already use for
+// "content changed under us", rather than a raw error surfacing as an opaque 500.
+async function readContainedPrefixOrStale(
+  targetPath: string,
+  fs: WorkspaceFs,
+  identity: WorkspaceStat,
+  maxBytes: number,
+): Promise<{ readonly buffer: Buffer; readonly truncated: boolean }> {
+  try {
+    return await readContainedBytes(targetPath, fs, identity, maxBytes);
+  } catch (error) {
+    if (error instanceof WorkspaceDescriptorReadError) throw stalePathError();
+    throw error;
+  }
+}
+
 async function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
   return new Promise<string>((resolveBody, reject) => {
     const chunks: Buffer[] = [];
@@ -1411,7 +1670,12 @@ async function textPreview(
   base: FilesPreviewBase,
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
-  const prefix = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
+  const prefix = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    MAX_TEXT_PREVIEW_BYTES,
+  );
   const content = decodeUtf8(prefix.buffer);
   if (content === null || prefix.buffer.includes(0)) {
     return { ...base, kind: "binary", reason: "unsupported" };
@@ -1428,10 +1692,6 @@ async function textPreview(
 
 // Issue #1197: content-free document version. The hash is a one-way SHA-256 of the editable
 // UTF-8 content — it never echoes the content itself.
-function sha256Hex(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
-
 function documentVersion(content: string, stats: Stats): EditorDocumentVersion {
   return { sizeBytes: stats.size, modifiedAt: stats.mtimeMs, contentHash: sha256Hex(content) };
 }
@@ -1450,6 +1710,32 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function staleSessionOpenError(): FilesError {
+  return new FilesError(
+    409,
+    "STALE_SESSION",
+    "This file changed while it was being opened. Reload it before editing.",
+  );
+}
+
+// A descriptor-read failure is TERMINAL here, never an attempt the loop below may spend budget on.
+// `target.identity` is the FULL admission-time snapshot (see ResolvedTarget.identity) and
+// readFileBytes compares all of it, so a plain in-place edit between admission and this read fails
+// the descriptor check and would fail it identically on every retry -- the earlier retry path could
+// not recover, it only burned the budget and two 25ms sleeps before reporting the same
+// STALE_SESSION. Refreshing the snapshot from the live path to make the retry "work" is the one
+// repair that must never be made: it would re-admit whatever inode now sits at the path.
+async function readAdmittedEditableBytes(target: ResolvedTarget): Promise<Buffer> {
+  try {
+    return (
+      await readContainedBytes(target.path, target.fs, target.identity, MAX_TEXT_PREVIEW_BYTES)
+    ).buffer;
+  } catch (error) {
+    if (error instanceof WorkspaceDescriptorReadError) throw staleSessionOpenError();
+    throw error;
+  }
+}
+
 async function readStableEditableContent(
   target: ResolvedTarget,
 ): Promise<{ readonly content: string; readonly stats: Stats }> {
@@ -1462,7 +1748,7 @@ async function readStableEditableContent(
         `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
       );
     }
-    const buffer = await readFile(target.path);
+    const buffer = await readAdmittedEditableBytes(target);
     const content = decodeUtf8(buffer);
     if (content === null || buffer.includes(0)) {
       throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
@@ -1474,10 +1760,34 @@ async function readStableEditableContent(
       await sleep(STABLE_CONTENT_RETRY_DELAY_MS);
     }
   }
-  throw new FilesError(
-    409,
-    "STALE_SESSION",
-    "This file changed while it was being opened. Reload it before editing.",
+  throw staleSessionOpenError();
+}
+
+// Bounded re-read (mirrors the content-classification read): if the file grew past the editable
+// limit between the stat and this read, treat the truncated result as a mismatch. A caught
+// identity mismatch (readContainedBytes) is the same "changed under us" signal -- it folds into a
+// false return exactly like a hash difference would, rather than a distinct error.
+async function currentContentMatchesHash(
+  target: ResolvedTarget,
+  contentHash: string,
+): Promise<boolean> {
+  let current: { readonly buffer: Buffer; readonly truncated: boolean } | undefined;
+  try {
+    current = await readContainedBytes(
+      target.path,
+      target.fs,
+      target.identity,
+      MAX_TEXT_PREVIEW_BYTES,
+    );
+  } catch (error) {
+    if (!(error instanceof WorkspaceDescriptorReadError)) throw error;
+  }
+  if (current === undefined || current.truncated) return false;
+  const currentContent = decodeUtf8(current.buffer);
+  return (
+    currentContent !== null &&
+    !current.buffer.includes(0) &&
+    sha256Hex(currentContent) === contentHash
   );
 }
 
@@ -1490,18 +1800,11 @@ async function assertSessionNotStale(
 ): Promise<void> {
   const sizeMatches = target.stats.size === baseVersion.sizeBytes;
   const mtimeMatches = Math.abs(target.stats.mtimeMs - baseVersion.modifiedAt) <= 1;
-  let hashMatches = false;
-  if (sizeMatches && mtimeMatches && target.stats.size <= MAX_TEXT_PREVIEW_BYTES) {
-    // Bounded re-read (mirrors the content-classification read): if the file grew past the editable
-    // limit between the stat and this read, treat the truncated result as a mismatch.
-    const current = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
-    const currentContent = decodeUtf8(current.buffer);
-    hashMatches =
-      !current.truncated &&
-      currentContent !== null &&
-      !current.buffer.includes(0) &&
-      sha256Hex(currentContent) === baseVersion.contentHash;
-  }
+  const hashMatches =
+    sizeMatches &&
+    mtimeMatches &&
+    target.stats.size <= MAX_TEXT_PREVIEW_BYTES &&
+    (await currentContentMatchesHash(target, baseVersion.contentHash));
   if (!sizeMatches || !mtimeMatches || !hashMatches) {
     throw new FilesError(
       409,
@@ -1555,7 +1858,12 @@ export async function readFilesContent(
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
   const base = basePreview(target);
-  const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
+  const prefix = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    Math.min(target.stats.size, 4096),
+  );
   if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
@@ -1584,8 +1892,12 @@ export async function resolveContainedEditorFilePath(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+  // KEIKO-0927: optional pre-resolved root -- callers that already resolved the root for a
+  // different check (e.g. rootScope() derivation) can pass it here to avoid the second
+  // resolveRoot syscall for the same rootInput within one request.
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ContainedEditorFilePath> {
-  const root = await resolveRoot(store, rootInput, redactor);
+  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   if (relativePath.length === 0) {
@@ -1652,8 +1964,85 @@ async function resolvedIfPresent(path: string): Promise<string | undefined> {
   }
 }
 
+// Only DISAPPEARANCE is staleness. A revoked permission (EACCES/EPERM) or an I/O failure is not a
+// concurrent rename, and collapsing it into 409 STALE_PATH would hide a 403 DENIED or 500 IO_ERROR
+// behind a retryable-looking status for both the client and diagnostics. Exported so the mapping is
+// testable directly rather than by provoking a platform-specific errno.
+export function classifyInLockRefreshFailure(error: unknown): FilesError {
+  const code =
+    typeof error === "object" && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR" ? stalePathError() : mapNodeFsError(error);
+}
+
+/**
+ * Per-operation test hooks for the KEIKO-0495 critical section. Passed with the save it belongs to,
+ * never held in module state: a module-level slot survives a failed or timed-out test and can then
+ * stall or misroute an unrelated save in the same worker.
+ *
+ * `onQueued` fires immediately before the writer queues on its key; `afterConflictCheck` is awaited
+ * right after the conflict check and before the write, which is where a concurrency test needs to
+ * hold a writer. Both are undefined in production.
+ */
+export interface FileWriteTestControl {
+  readonly onQueued?: (() => void) | undefined;
+  readonly afterConflictCheck?: (() => Promise<void> | void) | undefined;
+}
+
+// The serialized verify->write critical section (KEIKO-0495). Extracted so
+// writeResolvedFilesContent stays within its function-length bound.
+async function verifyThenWrite(args: {
+  readonly target: ResolvedTarget;
+  readonly content: string;
+  readonly expectedModifiedAt?: number | undefined;
+  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly beforeWrite?:
+    | ((content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]>)
+    | undefined;
+  readonly testControl?: FileWriteTestControl | undefined;
+}): Promise<{
+  readonly localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
+  readonly updatedStats: Stats;
+}> {
+  // Re-stat INSIDE the lock. `args.target.stats` was captured before queuing, so a queued
+  // request would otherwise re-run the conflict check against its own pre-lock snapshot and
+  // never see the winner's write — surfacing an unrelated STALE_PATH from the rename guard
+  // instead of the STALE_SESSION / WRITE_CONFLICT this check exists to report.
+  // A delete or rename between resolveInsideRoot() and this in-lock stat rejects with a raw
+  // ENOENT. runFilesHandler only translates FilesError, so without this it would surface as an
+  // opaque 500 instead of the 409 STALE_PATH that writeExistingResolvedFile already produces
+  // for exactly this race.
+  let refreshedStats;
+  try {
+    refreshedStats = await stat(args.target.path);
+  } catch (error) {
+    throw classifyInLockRefreshFailure(error);
+  }
+  const refreshed: ResolvedTarget = { ...args.target, stats: refreshedStats };
+  // The refreshed stats feed the CONFLICT CHECK only. The write deliberately keeps guarding
+  // against the ORIGINAL resolved identity: assertResolvedTargetStillCurrent compares against
+  // `target.stats`, so handing it the refreshed snapshot would make it accept whatever inode now
+  // sits at the path — including a file an unrelated actor created there after a delete or rename,
+  // which this mutex does not cover — and a tokenless save would silently overwrite it.
+  // The cost is that the second of two chained forced saves fails with STALE_PATH. Fail-closed is
+  // the right side of that trade: a recoverable STALE_PATH beats a silent clobber. Telling
+  // "replaced by a previous holder of this key" apart from "replaced by a stranger" needs per-key
+  // identity tracking; tracked as follow-up on #2901.
+  await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
+  await args.testControl?.afterConflictCheck?.();
+  let protection: FilesContentWireResponse["localHistoryProtection"];
+  if (args.beforeWrite !== undefined) {
+    const current = await readStableEditableContent(args.target);
+    protection = args.beforeWrite(current.content);
+  }
+  return {
+    localHistoryProtection: protection,
+    updatedStats: await writeExistingResolvedFile(args.target, args.content),
+  };
+}
+
 async function writeResolvedFilesContent(args: {
   readonly target: ResolvedTarget;
+  readonly testControl?: FileWriteTestControl | undefined;
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
   readonly baseVersion?: EditorDocumentVersion | undefined;
@@ -1665,11 +2054,15 @@ async function writeResolvedFilesContent(args: {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
   const base = basePreview(args.target);
-  const prefix = await readPrefix(args.target.path, Math.min(args.target.stats.size, 4096));
+  const prefix = await readContainedPrefixOrStale(
+    args.target.path,
+    args.target.fs,
+    args.target.identity,
+    Math.min(args.target.stats.size, 4096),
+  );
   if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
-  await assertNoWriteConflict(args.target, args.baseVersion, args.expectedModifiedAt);
   if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
     throw new FilesError(
       413,
@@ -1677,12 +2070,17 @@ async function writeResolvedFilesContent(args: {
       `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
     );
   }
-  let localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
-  if (args.beforeWrite !== undefined) {
-    const current = await readStableEditableContent(args.target);
-    localHistoryProtection = args.beforeWrite(current.content);
-  }
-  const updatedStats = await writeExistingResolvedFile(args.target, args.content);
+  // KEIKO-0495: verify-then-write is a check-then-act. Two saves carrying the same baseVersion
+  // could both clear assertNoWriteConflict and the second would silently overwrite the first, with
+  // no STALE_SESSION for the loser. Serialising the whole verify→write region per file makes the
+  // loser re-verify against the winner's result and fail closed as it should. This REUSES the
+  // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
+  // conflict checks are untouched and still do the deciding.
+  args.testControl?.onQueued?.();
+  const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
+    fileWriteKeys(args.target.path),
+    () => verifyThenWrite(args),
+  );
   return {
     ...base,
     sizeBytes: updatedStats.size,
@@ -1696,6 +2094,7 @@ async function writeResolvedFilesContent(args: {
 
 export async function writeFilesContent(args: {
   readonly store: UiStore;
+  readonly testControl?: FileWriteTestControl | undefined;
   readonly rootInput: string | null;
   readonly pathInput: string | null;
   readonly content: string;
@@ -1716,6 +2115,7 @@ export async function writeFilesContent(args: {
     content: args.content,
     expectedModifiedAt: args.expectedModifiedAt,
     baseVersion: args.baseVersion,
+    testControl: args.testControl,
   });
 }
 
@@ -1798,6 +2198,11 @@ interface ResolvedCreationTarget {
   readonly realRoot: string;
   readonly relativePath: string;
   readonly path: string;
+  // #3347 owner P1: a destination has no admitted identity yet (nothing is there), so the thing a
+  // create/rename/copy effect re-proves is its PARENT. That re-proof has to run on the admitted
+  // capability, exactly like an existing entry's, or the same swapped-root pathname walks straight
+  // out of the workspace through a bare node:fs realpath.
+  readonly fs: WorkspaceFs;
 }
 
 // Resolve a path that should NOT exist yet (a create destination, or a rename target). The PARENT
@@ -1814,18 +2219,19 @@ function assertSafeLeafName(name: string): void {
 
 // Resolve the directory a new entry will be created in: it must already exist, be a directory,
 // resolve (through symlinks) to a path inside the root, and not be deny-listed.
-async function resolveContainedParentDir(
+function resolveContainedParentDir(
+  fs: WorkspaceFs,
   realRoot: string,
   parentRelative: string,
-): Promise<string> {
+): string {
   const parentNative = nativePath(realRoot, parentRelative === "." ? "" : parentRelative);
   let realParent: string;
   try {
-    realParent = await realpath(parentNative);
+    realParent = fs.realPath(parentNative);
   } catch {
     throw new FilesError(404, "PARENT_NOT_FOUND", "The destination folder does not exist.");
   }
-  if (!(await stat(realParent)).isDirectory()) {
+  if (!fs.stat(realParent).isDirectory) {
     throw new FilesError(400, "NOT_DIRECTORY", "The destination is not a folder.");
   }
   if (!isContained(realRoot, realParent)) {
@@ -1857,10 +2263,8 @@ async function resolveCreationTarget(
   }
   const name = pathPosix.basename(relativePath);
   assertSafeLeafName(name);
-  const realParent = await resolveContainedParentDir(
-    root.realRoot,
-    pathPosix.dirname(relativePath),
-  );
+  const fs = root.access.fs;
+  const realParent = resolveContainedParentDir(fs, root.realRoot, pathPosix.dirname(relativePath));
   const targetNative = join(realParent, name);
   if (!isContained(root.realRoot, targetNative)) {
     throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
@@ -1870,27 +2274,28 @@ async function resolveCreationTarget(
   if (pathIsDenied(targetRel)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  return { root: root.root, realRoot: root.realRoot, relativePath: targetRel, path: targetNative };
+  return {
+    root: root.root,
+    realRoot: root.realRoot,
+    relativePath: targetRel,
+    path: targetNative,
+    fs,
+  };
 }
 
-async function assertCreationParentStillContained(target: ResolvedCreationTarget): Promise<void> {
-  const parent = dirname(target.path);
-  let realParent: string;
-  try {
-    realParent = await realpath(parent);
-  } catch {
-    throw stalePathError();
-  }
-  if (!sameNativePath(realParent, parent) || !isContained(target.realRoot, realParent)) {
-    throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
-  }
-  const relativeParent = rootRelativePosixPath(target.realRoot, realParent);
-  if (relativeParent.length > 0 && pathIsDenied(relativeParent)) {
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
+function assertCreationParentStillContained(target: ResolvedCreationTarget): void {
+  assertAdmittedPathCurrent(
+    { realRoot: target.realRoot, path: dirname(target.path), fs: target.fs },
+    "The destination is outside the selected root.",
+  );
 }
 
+// The single mutation-boundary guard: every mutating effect on an admitted entry (delete, rename,
+// copy source, and both halves of the atomic write) calls this IMMEDIATELY before it acts, so the
+// admitted identity is re-proved through the admitted capability rather than assumed to have held
+// since resolveInsideRoot returned (#3347 owner P1).
 async function assertResolvedTargetStillCurrent(target: ResolvedTarget): Promise<Stats> {
+  assertAdmittedIdentityCurrent(target);
   let current: Stats;
   try {
     current = await lstat(target.path);
@@ -1900,27 +2305,32 @@ async function assertResolvedTargetStillCurrent(target: ResolvedTarget): Promise
   if (current.isSymbolicLink() || !sameFileIdentity(target.stats, current)) {
     throw stalePathError();
   }
-  if (!isContained(target.realRoot, target.path)) {
-    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
-  }
   return current;
 }
 
-function assertCreatedEntryKind(current: Stats, kind: FilesEntryKind): void {
-  if (current.isSymbolicLink()) {
+function assertCreatedEntryKind(current: WorkspaceStat, kind: FilesEntryKind): void {
+  if (current.isSymbolicLink) {
     throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be created here.");
   }
-  if (kind === "file" && !current.isFile()) {
+  if (kind === "file" && !current.isFile) {
     throw new FilesError(400, "BAD_REQUEST", "The mutation did not create a file.");
   }
-  if (kind === "directory" && !current.isDirectory()) {
+  if (kind === "directory" && !current.isDirectory) {
     throw new FilesError(400, "BAD_REQUEST", "The mutation did not create a directory.");
   }
 }
 
-async function realpathOrStale(path: string): Promise<string> {
+function realpathOrStale(fs: WorkspaceFs, path: string): string {
   try {
-    return await realpath(path);
+    return fs.realPath(path);
+  } catch {
+    throw stalePathError();
+  }
+}
+
+function lstatOrStale(fs: WorkspaceFs, path: string): WorkspaceStat {
+  try {
+    return fs.stat(path);
   } catch {
     throw stalePathError();
   }
@@ -1936,29 +2346,21 @@ function assertMutationRealPathContained(target: ResolvedCreationTarget, realTar
   }
 }
 
-async function assertMutationEffectContained(
-  target: ResolvedCreationTarget,
-  kind: FilesEntryKind,
-): Promise<void> {
-  let current: Stats;
-  try {
-    current = await lstat(target.path);
-  } catch {
-    throw stalePathError();
-  }
-  assertCreatedEntryKind(current, kind);
-  assertMutationRealPathContained(target, await realpathOrStale(target.path));
+function assertMutationEffectContained(target: ResolvedCreationTarget, kind: FilesEntryKind): void {
+  assertCreatedEntryKind(lstatOrStale(target.fs, target.path), kind);
+  assertMutationRealPathContained(target, realpathOrStale(target.fs, target.path));
 }
 
 async function assertCopiedTreeContainsNoSymlinks(
+  fs: WorkspaceFs,
   realRoot: string,
   absolutePath: string,
 ): Promise<void> {
-  const current = await lstat(absolutePath);
-  if (current.isSymbolicLink()) {
+  const current = lstatOrStale(fs, absolutePath);
+  if (current.isSymbolicLink) {
     throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be copied here.");
   }
-  const realCurrent = await realpath(absolutePath);
+  const realCurrent = realpathOrStale(fs, absolutePath);
   if (!isContained(realRoot, realCurrent)) {
     throw new FilesError(403, "PATH_ESCAPE", "The copied entry escaped the selected root.");
   }
@@ -1966,10 +2368,10 @@ async function assertCopiedTreeContainsNoSymlinks(
   if (relativeReal.length > 0 && pathIsDenied(relativeReal)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  if (!current.isDirectory()) return;
+  if (!current.isDirectory) return;
   const dir = await opendir(absolutePath);
   for await (const entry of dir) {
-    await assertCopiedTreeContainsNoSymlinks(realRoot, join(absolutePath, entry.name));
+    await assertCopiedTreeContainsNoSymlinks(fs, realRoot, join(absolutePath, entry.name));
   }
 }
 
@@ -2039,7 +2441,7 @@ export async function createFilesEntry(args: {
     args.redactor ?? staticFilesMetadataRedactor,
     args.resolvedRoot,
   );
-  await assertCreationParentStillContained(target);
+  assertCreationParentStillContained(target);
   try {
     if (args.kind === "directory") {
       // Non-recursive: the parent was already verified, and EEXIST surfaces as a clean 409.
@@ -2052,6 +2454,7 @@ export async function createFilesEntry(args: {
   } catch (error) {
     throw mapNodeFsError(error);
   }
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return { root: target.root, path: target.relativePath, kind: args.kind };
 }
 
@@ -2135,7 +2538,7 @@ async function resolveRenameFilesPlan(args: RenameFilesEntryArgs): Promise<Renam
   assertRenameRelativePathAllowed(source.relativePath, target.relativePath);
   await assertRenameDestinationFree(target.path, source.path);
   await assertResolvedTargetStillCurrent(source);
-  await assertCreationParentStillContained(target);
+  assertCreationParentStillContained(target);
   return { source, target, kind };
 }
 
@@ -2147,7 +2550,7 @@ async function executeContainedRename(
   try {
     await rename(source.path, target.path);
     try {
-      await assertMutationEffectContained(target, kind);
+      assertMutationEffectContained(target, kind);
     } catch (error) {
       await rename(target.path, source.path).catch(() => undefined);
       throw error;
@@ -2161,6 +2564,9 @@ async function executeContainedRename(
 export async function renameFilesEntry(args: RenameFilesEntryArgs): Promise<FilesMutationResponse> {
   const { source, target, kind } = await resolveRenameFilesPlan(args);
   await executeContainedRename(source, target, kind);
+  // LSP spec pair for a rename: the old path is Deleted, the new path is Created.
+  notifyHostLspWorkspaceFileChanged(source.realRoot, source.path, 3);
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return {
     root: target.root,
     path: target.relativePath,
@@ -2205,6 +2611,7 @@ export async function deleteFilesEntry(args: {
   } catch (error) {
     throw mapNodeFsError(error);
   }
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 3);
   return { root: target.root, path: target.relativePath, kind };
 }
 
@@ -2248,7 +2655,7 @@ export async function copyFilesEntry(args: {
     throw new FilesError(400, "BAD_PATH", "A folder cannot be copied into itself.");
   }
   await assertResolvedTargetStillCurrent(source);
-  await assertCreationParentStillContained(target);
+  assertCreationParentStillContained(target);
   try {
     // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` copies symlinks as
     // links (never follows one out of the root). Contents stay inside the root throughout.
@@ -2259,8 +2666,8 @@ export async function copyFilesEntry(args: {
       dereference: false,
     });
     try {
-      await assertMutationEffectContained(target, kind);
-      await assertCopiedTreeContainsNoSymlinks(target.realRoot, target.path);
+      assertMutationEffectContained(target, kind);
+      await assertCopiedTreeContainsNoSymlinks(target.fs, target.realRoot, target.path);
     } catch (error) {
       await rm(target.path, { recursive: true, force: true }).catch(() => undefined);
       throw error;
@@ -2269,6 +2676,9 @@ export async function copyFilesEntry(args: {
     if (error instanceof FilesError) throw error;
     throw mapNodeFsError(error);
   }
+  // The copy created a new watched file at the destination; the source is untouched and needs no
+  // event (mirrors renameFilesEntry's Deleted+Created pair, minus the Deleted half a copy never has).
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return {
     root: target.root,
     path: target.relativePath,
@@ -2290,7 +2700,12 @@ export async function readFilesPreview(
   }
   const base = basePreview(target);
   if (isImageExtension(base.extension)) return imagePreview(target, base);
-  const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
+  const prefix = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    Math.min(target.stats.size, 4096),
+  );
   if (isEditableUtf8File(base.extension, prefix.buffer)) {
     return textPreview(target, base, redactor);
   }
@@ -2358,6 +2773,32 @@ export async function handleFilesPreview(
   });
 }
 
+// #3367 owner P1: the image route used to write the 200 headers from the admission-time size and
+// only then open `target.path` with a bare createReadStream. A root or parent replaced in that gap
+// redirected the open to a different inode -- possibly one outside the admitted root -- and the
+// Content-Length already on the wire described a file the client never received. Previews are
+// capped at MAX_IMAGE_PREVIEW_BYTES (3 MB), so the whole body is affordable to prove up front:
+// the identity-bound read happens BEFORE any header is written, and the caller then sizes the
+// response from the buffer it is about to send.
+//
+// The caller's `target.stats.size` test stays as the cheap early rejection; the `truncated` test
+// here is the one taken against a size that has been proven, since readFileBytes only returns after
+// the opened descriptor's snapshot matched `identity` in full. They can disagree: `stats` and
+// `identity` are two separate stat calls made at admission, so a file that grew between them
+// reaches this point with an over-cap identity. Refused, rather than short-sent as a valid image.
+async function readAdmittedImageBytes(target: ResolvedTarget): Promise<Buffer> {
+  const read = await readContainedPrefixOrStale(
+    target.path,
+    target.fs,
+    target.identity,
+    MAX_IMAGE_PREVIEW_BYTES,
+  );
+  if (read.truncated) {
+    throw new FilesError(413, "PAYLOAD_TOO_LARGE", "The image exceeds the preview size limit.");
+  }
+  return read.buffer;
+}
+
 export async function handleFilesPreviewImage(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2382,16 +2823,13 @@ export async function handleFilesPreviewImage(
     if (target.stats.size > MAX_IMAGE_PREVIEW_BYTES) {
       throw new FilesError(413, "PAYLOAD_TOO_LARGE", "The image exceeds the preview size limit.");
     }
+    const bytes = await readAdmittedImageBytes(target);
     ctx.res.writeHead(200, {
       "Content-Type": base.mime,
-      "Content-Length": String(target.stats.size),
+      "Content-Length": String(bytes.byteLength),
       "Cache-Control": "private, max-age=60",
     });
-    const stream = createReadStream(target.path);
-    stream.on("error", () => {
-      ctx.res.destroy();
-    });
-    stream.pipe(ctx.res);
+    ctx.res.end(bytes);
     return STREAMING;
   } catch (error) {
     if (error instanceof FilesError) return filesErrorResult(error);
@@ -2440,6 +2878,7 @@ async function readFilesContentRoute(ctx: RouteContext, deps: UiHandlerDeps): Pr
 function createPreRestoreCapture(
   deps: UiHandlerDeps,
   target: ResolvedTarget,
+  correlationId: string | undefined,
 ): (content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]> {
   return (content) =>
     captureEditorLocalHistorySafely({
@@ -2449,6 +2888,7 @@ function createPreRestoreCapture(
       absolutePath: target.path,
       content,
       origin: "pre-restore",
+      correlationId,
     });
 }
 
@@ -2456,6 +2896,7 @@ function captureNormalFileSave(
   deps: UiHandlerDeps,
   target: ResolvedTarget,
   fields: FilesWriteFields,
+  correlationId: string | undefined,
 ): FilesContentWireResponse["localHistoryProtection"] {
   if (fields.historyOrigin !== undefined) return undefined;
   return captureEditorLocalHistorySafely({
@@ -2465,7 +2906,61 @@ function captureNormalFileSave(
     absolutePath: target.path,
     content: fields.content,
     origin: "user-save",
+    correlationId,
   });
+}
+
+type WriteFilesContentBodyFields =
+  | {
+      readonly ok: true;
+      readonly baseVersion: EditorDocumentVersion | undefined;
+      readonly expectedModifiedAt: number | undefined;
+    }
+  | { readonly ok: false; readonly result: RouteResult };
+
+/**
+ * Validates the optional baseVersion and expectedModifiedAt fields of a file-save request body.
+ * KEIKO-0799: fails closed if either is present-but-malformed rather than silently coercing it
+ * away, which would drop the caller's concurrency check without them knowing. Non-finite numbers
+ * (NaN / +/-Infinity) for expectedModifiedAt are also rejected -- `typeof NaN === "number"` would
+ * pass a typeof-only check while still skipping the downstream `Math.abs(...) > 1` gate in
+ * assertNoWriteConflict.
+ */
+function parseWriteFilesContentBodyFields(
+  body: Record<string, unknown>,
+): WriteFilesContentBodyFields {
+  let baseVersion: EditorDocumentVersion | undefined;
+  if (body.baseVersion !== undefined) {
+    const parsed = parseEditorDocumentVersion(body.baseVersion);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        result: {
+          status: 400,
+          body: errorBody("BAD_REQUEST", "baseVersion is not a valid version."),
+        },
+      };
+    }
+    baseVersion = parsed.value;
+  }
+  if (
+    body.expectedModifiedAt !== undefined &&
+    (typeof body.expectedModifiedAt !== "number" || !Number.isFinite(body.expectedModifiedAt))
+  ) {
+    return {
+      ok: false,
+      result: {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "expectedModifiedAt is not a valid number."),
+      },
+    };
+  }
+  return {
+    ok: true,
+    baseVersion,
+    expectedModifiedAt:
+      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
+  };
 }
 
 async function writeFilesContentRoute(
@@ -2479,6 +2974,9 @@ async function writeFilesContentRoute(
     const message = "root, path, and content are required for a file save request.";
     return { status: 400, body: errorBody("BAD_REQUEST", message) };
   }
+  // Path-denial precedence: resolveInsideRoot must run (and, for a denied path, throw the
+  // FilesError that runFilesHandler turns into 403 DENIED) before any body-field validation below
+  // can return its own 4xx, so a denied path is reported as denied rather than as a bad request.
   const resolvedRoot = await resolveRequestRoot(ctx, deps, fields.rootInput);
   const target = await resolveInsideRoot(
     deps.store,
@@ -2487,25 +2985,20 @@ async function writeFilesContentRoute(
     deps.redactor,
     resolvedRoot,
   );
-  let baseVersion: EditorDocumentVersion | undefined;
-  if (body.baseVersion !== undefined) {
-    const parsed = parseEditorDocumentVersion(body.baseVersion);
-    if (!parsed.ok) {
-      return { status: 400, body: errorBody("BAD_REQUEST", "baseVersion is not a valid version.") };
-    }
-    baseVersion = parsed.value;
-  }
+  const bodyFields = parseWriteFilesContentBodyFields(body);
+  if (!bodyFields.ok) return bodyFields.result;
   const response = await writeResolvedFilesContent({
     target,
     content: fields.content,
-    expectedModifiedAt:
-      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
-    baseVersion,
+    expectedModifiedAt: bodyFields.expectedModifiedAt,
+    baseVersion: bodyFields.baseVersion,
     beforeWrite:
-      fields.historyOrigin === "pre-restore" ? createPreRestoreCapture(deps, target) : undefined,
+      fields.historyOrigin === "pre-restore"
+        ? createPreRestoreCapture(deps, target, ctx.correlationId)
+        : undefined,
   });
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
-  const localHistoryProtection = captureNormalFileSave(deps, target, fields);
+  const localHistoryProtection = captureNormalFileSave(deps, target, fields, ctx.correlationId);
   return {
     status: 200,
     body: localHistoryProtection === undefined ? response : { ...response, localHistoryProtection },
@@ -2573,6 +3066,85 @@ function parseOptionalBaseVersion(
   return { version: parsed.value };
 }
 
+// KEIKO-0179: maps one renamed breakpoint fileId (the exact source path, or a path inside a renamed
+// directory) to its post-rename fileId. `undefined` means this fileId is unaffected by the rename.
+function renamedBreakpointFileId(
+  fileId: string,
+  previousPath: string,
+  nextPath: string,
+): string | undefined {
+  if (fileId === previousPath) return nextPath;
+  if (fileId.startsWith(`${previousPath}/`))
+    return `${nextPath}${fileId.slice(previousPath.length)}`;
+  return undefined;
+}
+
+type DapDebugService = NonNullable<UiHandlerDeps["dapDebug"]>;
+
+// KEIKO-0179: computes the affected-fileId pairs for a successful rename -- one entry per distinct
+// fileId currently filed under the old path (the exact source path, or a path inside a renamed
+// directory), never a blind string-prefix rewrite, so each destination fileId is validated on its
+// own by whatever consumes the list.
+function affectedRenamedFileIds(
+  snapshot: Extract<ReturnType<DapDebugService["breakpoints"]["snapshot"]>, { readonly ok: true }>,
+  previousPath: string,
+  nextPath: string,
+): readonly { readonly previousFileId: string; readonly nextFileId: string }[] {
+  const seen = new Set<string>();
+  const renames: { readonly previousFileId: string; readonly nextFileId: string }[] = [];
+  for (const entry of snapshot.snapshot.breakpoints) {
+    if (seen.has(entry.fileId)) continue;
+    const nextFileId = renamedBreakpointFileId(entry.fileId, previousPath, nextPath);
+    if (nextFileId === undefined) continue;
+    seen.add(entry.fileId);
+    renames.push({ previousFileId: entry.fileId, nextFileId });
+  }
+  return renames;
+}
+
+// KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): fans out a successful rename to the DAP
+// breakpoint store AND, when a debug session is live, the adapter itself -- both now live in
+// dapDebugRoutes.ts's DapDebugRouteService.renameInstrumentation, the layer that already owns the
+// reconciliation helpers a normal breakpoint mutation runs through. files.ts only computes which
+// fileIds are affected and delegates once; it never re-keys the store or touches the adapter
+// directly. Deliberately best-effort end to end: the filesystem rename already succeeded, so a
+// store or adapter failure downstream must not turn a completed rename into an error response.
+async function reKeyRenamedBreakpoints(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  previousPath: string,
+  nextPath: string,
+  requestCorrelationId: string | undefined,
+): Promise<void> {
+  const service = deps.dapDebug;
+  if (service === undefined) return;
+  const snapshot = service.breakpoints.snapshot(realRoot);
+  if (!snapshot.ok) {
+    // Codex review round 6 on PR #3141: an unavailable snapshot (corrupt record, transient
+    // identity-inspection failure) used to skip the whole migration silently, bypassing the
+    // service-side rejection diagnostic entirely. The rename still must not fail — but the skipped
+    // migration has to be observable, mirroring the service's own redacted, body-free convention.
+    // This runs detached from the rename response (never awaited by the caller), so it mints its
+    // own id rather than reusing the request's — but `parentCorrelationId` (ADR-0173 D5 / g12)
+    // still joins it back to the request that spawned it when that id is known.
+    emitServerDiagnostic(service.diagnosticSink, {
+      ...serverDiagnosticFromError({
+        correlationId: `files-rename-${randomUUID()}`,
+        operation: "files.rename.breakpoint-migration-skipped",
+        source: "files.rename",
+        error: new Error("BREAKPOINT_SNAPSHOT_UNAVAILABLE"),
+        redact: () =>
+          "Breakpoint migration for a rename was skipped: the instrumentation snapshot is " +
+          "unavailable; breakpoints remain under the old path.",
+      }),
+      ...(requestCorrelationId === undefined ? {} : { parentCorrelationId: requestCorrelationId }),
+    });
+    return;
+  }
+  const renames = affectedRenamedFileIds(snapshot, previousPath, nextPath);
+  if (renames.length > 0) await service.renameInstrumentation(realRoot, renames);
+}
+
 export async function handleFilesRename(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2592,18 +3164,49 @@ export async function handleFilesRename(
     const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     const baseVersion = parseOptionalBaseVersion(body);
     if (isRouteResult(baseVersion)) return baseVersion;
-    return {
-      status: 200,
-      body: await renameFilesEntry({
-        store: deps.store,
-        rootInput,
-        pathInput,
-        newPathInput,
-        baseVersion: baseVersion.version,
-        redactor: deps.redactor,
-        resolvedRoot,
-      }),
-    };
+    const result = await renameFilesEntry({
+      store: deps.store,
+      rootInput,
+      pathInput,
+      newPathInput,
+      baseVersion: baseVersion.version,
+      redactor: deps.redactor,
+      resolvedRoot,
+    });
+    if (result.previousPath !== undefined) {
+      // Deliberately NOT awaited (Codex P1 on PR #3141): the synchronous prefix — computing the
+      // affected fileIds, the store re-key commits, rejection diagnostics, and the sessionless
+      // browser publish — runs to completion before this expression yields, so the response body
+      // and any immediately-following instrumentation read already see the migrated store. Only the
+      // per-file adapter round-trips (3s deadline each) continue in the background; awaiting them
+      // could hold this response for minutes on a directory rename against an unavailable adapter,
+      // turning a long-completed filesystem rename into a UI timeout. renameInstrumentation's
+      // contract is that it never rejects (failures degrade to redacted diagnostics), so nothing is
+      // silently lost by detaching.
+      void reKeyRenamedBreakpoints(
+        deps,
+        resolvedRoot.realRoot,
+        result.previousPath,
+        result.path,
+        ctx.correlationId,
+      );
+      // KEIKO-0675: Local History reKey so a renamed file's history surfaces under the new name
+      // instead of silently disappearing. Fail-safe: reKeyEditorLocalHistorySafely never rejects
+      // (a failure downgrades to a body-free diagnostic and 0 rewritten entries). The rewritten
+      // count is not re-captured here (#2906 review, comment 3863185711): reKeyEditorLocalHistorySafely
+      // is the only caller that knows whether the store call actually threw, so it OWNS emitting the
+      // body-free activity-log line (outcome + rewrittenCount, correlated to this request) itself —
+      // capturing the return value again here would either duplicate that line or, worse, be unable
+      // to tell "nothing to rewrite" apart from "the reKey failed and was swallowed" (both return 0).
+      reKeyEditorLocalHistorySafely({
+        deps,
+        realRoot: resolvedRoot.realRoot,
+        previousRelativePath: result.previousPath,
+        nextRelativePath: result.path,
+        correlationId: ctx.correlationId,
+      });
+    }
+    return { status: 200, body: result };
   });
 }
 

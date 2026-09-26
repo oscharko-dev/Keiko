@@ -7,6 +7,7 @@ import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
 import { localizedWindowTitle, registerWindowRender, WIN_TYPES } from "./WindowsRegistry";
 import { translate, type I18nTranslate } from "@/lib/i18n";
+import { workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
 
 const originalPlatform = window.navigator.platform;
 
@@ -55,51 +56,7 @@ function figmaViewWindow(patch: Partial<AppWindow> = {}): AppWindow {
   });
 }
 
-function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
-  return {
-    add: vi.fn(() => null),
-    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
-    toggleTool: vi.fn(),
-    focus: vi.fn(),
-    currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
-    replaceSelection: vi.fn(),
-    toggleWindowSelection: vi.fn(),
-    clearSelection: vi.fn(),
-    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => false),
-    pasteCopiedWindows: vi.fn(() => false),
-    close: vi.fn(),
-    minimize: vi.fn(),
-    restore: vi.fn(),
-    maximize: vi.fn(),
-    update: vi.fn(),
-    setSnap: vi.fn(),
-    commitSnap: vi.fn(),
-    tileAll: vi.fn(),
-    splitFront: vi.fn(),
-    cascade: vi.fn(),
-    startConnect: vi.fn(),
-    confirmConnect: vi.fn(),
-    cancelConnect: vi.fn(),
-    removeConn: vi.fn(),
-    updateConnBoundScope: vi.fn(),
-    connect: vi.fn(),
-    linkedFilesRoot: vi.fn(() => null),
-    linkedAllFilesRoots: vi.fn(() => []),
-    linkedConnectorCapsuleIds: vi.fn(() => []),
-    linkedConnectorCapsuleSetIds: vi.fn(() => []),
-    linkedFigmaSnapshotRunIds: vi.fn(() => []),
-    linkedFilesContext: vi.fn(() => null),
-    currentFilesContext: vi.fn(() => null),
-    zoomTo: vi.fn(),
-    fitView: vi.fn(),
-    resetView: vi.fn(),
-    panBy: vi.fn(),
-    rect: vi.fn(() => null),
-    currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
-    ...patch,
-  };
-}
+const api = workspaceApiFixture;
 
 // The expected labels are DERIVED from the production producers (the shared catalog plus
 // `localizedWindowTitle`), never restated here: a fixture that re-spelled "Minimize X window" would
@@ -457,25 +414,31 @@ describe("WindowFrame content zoom controls", () => {
     expect(contentZoom).toHaveStyle({ width: "604px", transform: "scale(0.5)" });
   });
 
-  it("keeps chat scrolling inside the chat log instead of the outer window body", () => {
-    registerWindowRender("chat", () => <div data-testid="chat-body" />);
-    const { container } = render(
-      <WindowFrame
-        win={appWindow({ type: "chat", w: 720, h: 560 })}
-        top
-        connState={null}
-        linkRevision={0}
-        api={api()}
-        wsRef={createRef<HTMLElement>()}
-      />,
-    );
+  it.each([
+    ["chat", "chat-body"],
+    ["governedGit", "git-body"],
+  ] as const)(
+    "keeps %s scrolling inside its working regions instead of the outer window body",
+    (type, testId) => {
+      registerWindowRender(type, () => <div data-testid={testId} />);
+      const { container } = render(
+        <WindowFrame
+          win={appWindow({ type, w: 720, h: 560 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api()}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
 
-    const body = container.querySelector<HTMLElement>(".win-body");
+      const body = container.querySelector<HTMLElement>(".win-body");
 
-    expect(body).not.toBeNull();
-    expect(body?.style.overflow).toBe("hidden");
-    expect(screen.getByTestId("chat-body").closest(".win-body")).toBe(body);
-  });
+      expect(body).not.toBeNull();
+      expect(body?.style.overflow).toBe("hidden");
+      expect(screen.getByTestId(testId).closest(".win-body")).toBe(body);
+    },
+  );
 
   it("requests connected Files context for Prompt Enhancer windows", () => {
     const linkedFilesRoot = vi.fn(() => "/repo");
@@ -508,6 +471,149 @@ describe("WindowFrame content zoom controls", () => {
     expect(linkedAllFilesRoots).toHaveBeenCalledWith("prompt-enhancer-1");
   });
 
+  // A window whose own content takes focus while it initializes must not raise itself over the
+  // window the user moved to. Observed in CI as a "Close Files window" click that could never land:
+  // the editor window's content (Monaco, the workspace-trust banner) grabbed focus after the user
+  // had raised the Files window, and every focus grab put the editor back on top. Audit C061 /
+  // WCAG 2.4.11 covers TABBING into a lower window, which the shell records as
+  // `inputModality="keyboard"`; content autofocus is neither a Tab nor a pointer press.
+  it("does not raise a background window when its own content steals focus from another window", () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.inputModality = "pointer";
+    const focus = vi.fn();
+    const other = document.createElement("section");
+    other.className = "window";
+    const otherControl = document.createElement("button");
+    other.append(otherControl);
+    document.body.append(other);
+
+    render(
+      <WindowFrame
+        win={appWindow({ id: "editor-1", type: "editor" })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const frame = screen.getByRole("region");
+    fireEvent.focus(frame, { relatedTarget: otherControl });
+    vi.advanceTimersByTime(50);
+
+    expect(focus).not.toHaveBeenCalled();
+    other.remove();
+    delete document.documentElement.dataset.inputModality;
+    vi.useRealTimers();
+  });
+
+  // The accessibility behaviour the handler exists for still holds: tabbing into a lower window
+  // raises it, so the focused control cannot stay hidden behind the top window.
+  it("raises a background window when the user tabs into it from another window", () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.inputModality = "keyboard";
+    const focus = vi.fn();
+    const other = document.createElement("section");
+    other.className = "window";
+    const otherControl = document.createElement("button");
+    other.append(otherControl);
+    document.body.append(other);
+
+    render(
+      <WindowFrame
+        win={appWindow({ id: "editor-1", type: "editor" })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    fireEvent.focus(screen.getByRole("region"), { relatedTarget: otherControl });
+    vi.advanceTimersByTime(1);
+
+    expect(focus).toHaveBeenCalledWith("editor-1");
+    other.remove();
+    delete document.documentElement.dataset.inputModality;
+    vi.useRealTimers();
+  });
+
+  it("routes an open-area pointer activation through the atomic workspace operation", () => {
+    const activateWindow = vi.fn();
+    const focus = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ activateWindow, focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const body = container.querySelector<HTMLElement>(".win-body");
+    expect(body).not.toBeNull();
+    fireEvent.pointerDown(body as HTMLElement, { button: 0 });
+
+    expect(activateWindow).toHaveBeenCalledExactlyOnceWith("agents-1");
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { max: false, action: "maximize" },
+    { max: true, action: "restore" },
+  ])("activates the window before the $action traffic action", async ({ max }) => {
+    const calls: string[] = [];
+    const activateWindow = vi.fn((id: string): void => {
+      calls.push(`activate:${id}`);
+    });
+    const maximize = vi.fn((id: string): void => {
+      calls.push(`maximize:${id}`);
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow({ max })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ activateWindow, maximize })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const button = container.querySelector<HTMLElement>(".win-traffic-maximize");
+    expect(button).not.toBeNull();
+    await user.click(button as HTMLElement);
+
+    expect(calls).toEqual(["activate:agents-1", "maximize:agents-1"]);
+  });
+
+  it("raises on a secondary open-area click without replacing the window selection", () => {
+    const activateWindow = vi.fn();
+    const focus = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ activateWindow, focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const body = container.querySelector<HTMLElement>(".win-body");
+    expect(body).not.toBeNull();
+    fireEvent.pointerDown(body as HTMLElement, { button: 2 });
+
+    expect(focus).toHaveBeenCalledExactlyOnceWith("agents-1");
+    expect(activateWindow).not.toHaveBeenCalled();
+  });
+
   it("defers focus long enough for selectable text drags to start", () => {
     vi.useFakeTimers();
     registerWindowRender("promptEnhancer", () => (
@@ -538,6 +644,210 @@ describe("WindowFrame content zoom controls", () => {
     expect(focus).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(focus).toHaveBeenCalledWith("prompt-enhancer-1");
+    vi.useRealTimers();
+  });
+
+  it("does not let delayed text-entry focus raise a window after focus moves elsewhere", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const focus = vi.fn();
+
+    render(
+      <>
+        <button type="button">Settings</button>
+        <WindowFrame
+          win={appWindow({
+            id: "prompt-enhancer-1",
+            type: "promptEnhancer",
+            w: 860,
+            h: 680,
+          })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api({ focus })}
+          wsRef={createRef<HTMLElement>()}
+        />
+      </>,
+    );
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    fireEvent.pointerDown(prompt, { button: 0 });
+    screen.getByRole("button", { name: "Settings" }).focus();
+    vi.advanceTimersByTime(180);
+
+    expect(focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("cancels delayed text-entry focus when a later interaction raises another window", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const focus = vi.fn();
+    const sharedApi = api({ focus });
+
+    const { container } = render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "prompt-enhancer-1", type: "promptEnhancer", w: 860, h: 680 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+        <WindowFrame
+          win={appWindow({ id: "agents-1", type: "agents" })}
+          top={false}
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+      </>,
+    );
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    fireEvent.pointerDown(prompt, { button: 0 });
+
+    // Within the 180ms delay, mousedown on the OTHER window's header: the header's
+    // preventDefault() keeps DOM focus in the prompt while the interaction raises agents-1.
+    const agentsHeader = container
+      .querySelector<HTMLElement>('[data-window-id="agents-1"]')
+      ?.querySelector<HTMLElement>(".win-head");
+    expect(agentsHeader).not.toBeNull();
+    fireEvent.pointerDown(agentsHeader as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
+    fireEvent.pointerUp(window);
+
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(document.activeElement).toBe(prompt);
+
+    vi.advanceTimersByTime(180);
+
+    // The stale timer must NOT raise prompt-enhancer-1 back over the newly raised window.
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus.mock.calls).toEqual([["agents-1"]]);
+    vi.useRealTimers();
+  });
+
+  it("cancels delayed text-entry focus when a resize grab raises another window", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const focus = vi.fn();
+    const sharedApi = api({ focus });
+
+    const { container } = render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "prompt-enhancer-1", type: "promptEnhancer", w: 860, h: 680 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+        <WindowFrame
+          win={appWindow({ id: "agents-1", type: "agents" })}
+          top={false}
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+      </>,
+    );
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    fireEvent.pointerDown(prompt, { button: 0 });
+
+    // Within the 180ms delay, grab the OTHER window's resize handle: startResize raises
+    // agents-1 through api.focus directly — it never passes focusWindowForTarget, and its
+    // preventDefault() keeps DOM focus inside the prompt, so only the interaction counter
+    // can stop the pending delayed raise.
+    const agentsResizeHandle = container
+      .querySelector<HTMLElement>('[data-window-id="agents-1"]')
+      ?.querySelector<HTMLElement>(".wz-se");
+    expect(agentsResizeHandle).not.toBeNull();
+    fireEvent.pointerDown(agentsResizeHandle as HTMLElement, {
+      button: 0,
+      clientX: 100,
+      clientY: 90,
+    });
+    fireEvent.pointerUp(window);
+
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(document.activeElement).toBe(prompt);
+
+    vi.advanceTimersByTime(180);
+
+    // The stale timer must NOT re-raise prompt-enhancer-1 over the window being resized.
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus.mock.calls).toEqual([["agents-1"]]);
+    vi.useRealTimers();
+  });
+
+  it("invalidates delayed text-entry focus when the maximize control is pressed and held", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const activateWindow = vi.fn();
+    const focus = vi.fn();
+    const maximize = vi.fn();
+    const sharedApi = api({ activateWindow, focus, maximize });
+
+    const { container } = render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "prompt-enhancer-1", type: "promptEnhancer", w: 860, h: 680 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+        <WindowFrame
+          win={appWindow({ id: "agents-1", type: "agents" })}
+          top={false}
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+      </>,
+    );
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    fireEvent.pointerDown(prompt, { button: 0 });
+
+    // Within the 180ms delay, PRESS — and hold, no click yet — the OTHER window's maximize
+    // control: its pointerdown stops propagation before focusWindowForTarget can count the
+    // interaction, so only a press-time token advance keeps the stale timer from raising
+    // prompt-enhancer-1 mid-hold (which could even retarget the pointer release).
+    const maximizeButton = container.querySelector<HTMLElement>(
+      '[data-window-id="agents-1"] .win-traffic-maximize',
+    );
+    expect(maximizeButton).not.toBeNull();
+    fireEvent.pointerDown(maximizeButton as HTMLElement, { button: 0 });
+
+    vi.advanceTimersByTime(180);
+
+    // The stale timer must NOT re-raise the text-entry window while the button is held.
+    expect(focus).not.toHaveBeenCalled();
+    expect(maximize).not.toHaveBeenCalled();
+
+    // The release still activates and maximizes the intended target. Activation is deliberate here:
+    // after maximize/restore, the clicked window must own selection and gesture routing.
+    fireEvent.click(maximizeButton as HTMLElement);
+    expect(activateWindow).toHaveBeenCalledTimes(1);
+    expect(activateWindow).toHaveBeenCalledWith("agents-1");
+    expect(maximize).toHaveBeenCalledTimes(1);
+    expect(maximize).toHaveBeenCalledWith("agents-1");
+    expect(focus).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -1643,6 +1953,96 @@ function FocusRestoreHarness({
     </div>
   );
 }
+
+// #3390: a button inside a window may open ANOTHER window. The opener's deferred raise (one tick
+// after a click on an interactive control) then put the opener back over the window it had just
+// opened, every time -- the Coding Workbench covered the Pull Request window its own "Review exact
+// draft" had opened, and nothing in that window could be clicked. Two things hold now: an opened
+// window receives focus, and a deferred raise yields to wherever focus has moved.
+describe("WindowFrame windows opened from inside a window (#3390)", () => {
+  it("does not let the deferred raise cover a window that took focus in the meantime", () => {
+    vi.useFakeTimers();
+    registerWindowRender("coding", () => <button type="button">Review exact draft</button>);
+    const focus = vi.fn();
+    render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "coding-1", type: "coding", w: 900, h: 700 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api({ focus })}
+          wsRef={createRef<HTMLElement>()}
+        />
+        {/* A stand-in for the opened window: any focusable element carrying the window's id. */}
+        <button type="button" className="window" data-window-id="pr-1">
+          Pull Request
+        </button>
+      </>,
+    );
+    const review = screen.getByRole("button", { name: "Review exact draft" });
+    review.focus();
+    fireEvent.pointerDown(review, { button: 0 });
+    // The click's own handler opened another window, which took focus.
+    screen.getByRole("button", { name: "Pull Request" }).focus();
+    vi.advanceTimersByTime(1);
+    expect(focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("still raises the window one tick after a click on a control that kept focus inside it", () => {
+    vi.useFakeTimers();
+    registerWindowRender("coding", () => <button type="button">Refresh</button>);
+    const focus = vi.fn();
+    render(
+      <WindowFrame
+        win={appWindow({ id: "coding-1", type: "coding", w: 900, h: 700 })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    refresh.focus();
+    fireEvent.pointerDown(refresh, { button: 0 });
+    vi.advanceTimersByTime(1);
+    expect(focus).toHaveBeenCalledWith("coding-1");
+    vi.useRealTimers();
+  });
+
+  it("moves focus into a window opened through the render context", () => {
+    vi.useFakeTimers();
+    registerWindowRender("coding", (_cfg, ctx) => (
+      <button type="button" onClick={() => ctx.openWindow("governedPullRequest")}>
+        Review exact draft
+      </button>
+    ));
+    const add = vi.fn(() => "pr-1");
+    render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "coding-1", type: "coding", w: 900, h: 700 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api({ add })}
+          wsRef={createRef<HTMLElement>()}
+        />
+        {/* A stand-in for the opened window: any focusable element carrying the window's id. */}
+        <button type="button" className="window" data-window-id="pr-1">
+          Pull Request
+        </button>
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    expect(add).toHaveBeenCalledWith("governedPullRequest", undefined);
+    vi.advanceTimersByTime(20);
+    expect(document.activeElement).toHaveAttribute("data-window-id", "pr-1");
+    vi.useRealTimers();
+  });
+});
 
 describe("WindowFrame close/minimize focus restore (GEN-UI-FOCUS-012)", () => {
   it("moves focus to the new top window after closing the top window — never <body>", async () => {

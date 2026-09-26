@@ -24,10 +24,17 @@ export type {
   StaleFlag,
   StaleReason,
 } from "./types.js";
-export { runConsolidation } from "./consolidate.js";
+export { runConsolidation, type SummaryFallbackReason } from "./consolidate.js";
 export {
   buildConsolidationJob,
   ConsolidationJobError,
   transitionJob,
   type ConsolidationJobErrorCode,
 } from "./job.js";
+export {
+  nullConsolidationLogSink,
+  type ConsolidationLogCategory,
+  type ConsolidationLogEvent,
+  type ConsolidationLogLevel,
+  type ConsolidationLogSink,
+} from "./log-port.js";

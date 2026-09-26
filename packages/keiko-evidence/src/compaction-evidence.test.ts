@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type {
+  ContextAssemblyDiagnostics,
+  ContextBudget,
+  ContextCompactionRecord,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
   validateContextAssemblyDiagnostics,
   validateContextBudget,
-  type ContextAssemblyDiagnostics,
-  type ContextBudget,
-  type ContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 import {
   createInMemoryEvidenceStore,
   loadEvidence,
@@ -267,6 +271,28 @@ describe("compaction evidence (ADR-0056 W2)", () => {
     expect(serialized).toContain("[REDACTED]");
   });
 
+  it("returns the deep-redacted manifest, not only the persisted JSON", () => {
+    // `modelId` is carried through to manifest.model verbatim by the builder (no Layer 1 rule
+    // covers it), so it is the vehicle that distinguishes returning the pre-deep-redact manifest
+    // from returning the deep-redacted one — the invariant every sibling persist* upholds
+    // (KEIKO-1031).
+    const store = createInMemoryEvidenceStore();
+    const result = persistCompactionEvidence(
+      {
+        runId: "compaction-run-safe-manifest",
+        modelId: `model-${SK_FAKE}`,
+        workspaceRoot: ABS_PATH,
+        records: [compactionRecord()],
+        startedAt: NOW,
+        finishedAt: NOW + 5,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE] },
+    );
+    expect(result.manifest.model.modelId).toBeDefined();
+    expect(result.manifest.model.modelId).not.toContain(SK_FAKE);
+    expect(store.get("compaction-run-safe-manifest") ?? "").not.toContain(SK_FAKE);
+  });
+
   it("Gate 4b — no raw absolute path appears in the stored manifest JSON", () => {
     const store = createInMemoryEvidenceStore();
     persistCompactionEvidence(
@@ -424,6 +450,47 @@ describe("compaction evidence (ADR-0056 W2)", () => {
     }
     expect(store.list()).toHaveLength(2);
     expect(store.list()).toEqual(["compaction-retain-2", "compaction-retain-3"]);
+  });
+
+  // KEIKO-0328: ContextRehydrationHandle carries an optional `artifactId` (the persisted
+  // tool-artifact id) that the `kind: "tool-result"` branch depends on to find the excerpt. The
+  // pre-fix redactRehydration dropped this field entirely — a tool-result record advertised itself
+  // as rehydratable while the audit manifest contained no pointer to the artifact. This pin fails
+  // if a future edit drops the artifactId spread again.
+  it("preserves rehydration.artifactId for a tool-result handle (KEIKO-0328)", () => {
+    const store = createInMemoryEvidenceStore();
+    const ARTIFACT_ID = "f".repeat(64);
+    const record: ContextCompactionRecord = {
+      ...compactionRecord(),
+      laneId: "tool-observations",
+      rehydration: {
+        schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+        laneId: "tool-observations",
+        handleId: "handle-tool-1",
+        itemCount: 1,
+        approxTokens: 32,
+        kind: "tool-result",
+        artifactId: ARTIFACT_ID,
+      },
+    };
+    const result = persistCompactionEvidence(
+      {
+        runId: "compaction-run-artifact",
+        modelId: "example-model",
+        records: [record],
+        startedAt: NOW,
+        finishedAt: NOW + 1,
+      },
+      { store, env: {} },
+    );
+    const rehydration = requireFirstCompaction(result.manifest).rehydration;
+    expect(rehydration?.kind).toBe("tool-result");
+    // artifactId is a hash-like opaque id (body-free): safe to keep in the manifest, and load-
+    // bearing for the rehydration path. Regression pin: a fix that "cleans up" redactRehydration
+    // and drops this spread would leave the audit pointing at a missing artifact again.
+    expect(rehydration?.artifactId).toBe(ARTIFACT_ID);
+    // Serialized JSON must also carry the id so the audit trail is complete on disk.
+    expect(store.get("compaction-run-artifact") ?? "").toContain(ARTIFACT_ID);
   });
 });
 

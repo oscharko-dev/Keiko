@@ -73,6 +73,12 @@ on them without introducing graph edges.
   legal/medical/finance/security domain.
 - **Analyzer result** — `PromptTaskAnalysis`: `taskClass`, `domain`, `criticality`, `groundingNeed`,
   `outputSchema`, `missingContext`, `riskFlags`, `recommendedProfile`, content-light `signals`.
+  `criticality` (`PromptCriticality` = `low` | `standard` | `elevated` | `critical`, from
+  `packages/keiko-contracts/src/prompt-enhancer.ts`) is **derived, not requested**: `deriveCriticality()`
+  in `prompt-enhancer-analyzer.ts` returns `critical` for the `safety-critical` task class, `elevated`
+  for a safety-critical domain (legal/medical/finance/security), `agentic-tool-use`, or any risk flag,
+  and `standard` otherwise. A new task class does not need to set `criticality` directly; it inherits
+  this precedence unless it also changes domain classification.
 - **Enhanced Prompt** — `EnhancedPrompt`: `role`, `goal`, `context`, `input`, `taskDecomposition`,
   `constraints`, `groundingRules`, `groundingPlan`, `outputSchema`, `qualityCriteria`,
   `uncertaintyHandling`, `safetyRules`.

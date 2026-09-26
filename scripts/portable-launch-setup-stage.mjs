@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 import {
   PORTABLE_TARGETS,
+  portableManifestValidationFailuresForDeclaredLane,
   validatePortableCandidateManifest,
-  validatePortableStagingManifest,
 } from "./portable-runtime.mjs";
 
 function fail(message) {
@@ -29,6 +29,15 @@ function payloadLayout(target, payloadRoot) {
       runtimeNode: join(payloadRoot, "runtime", "node", "node.exe"),
       setupManifest: join(payloadRoot, ".portable", "setup-manifest.json"),
       supportLauncher: join(payloadRoot, "support", "keiko-support.cmd"),
+    };
+  }
+  if (target.nodePlatform === "linux") {
+    return {
+      packageJson: join(payloadRoot, "app", "package.json"),
+      primaryLauncher: join(payloadRoot, "Keiko"),
+      runtimeNode: join(payloadRoot, "runtime", "node", "bin", "node"),
+      setupManifest: join(payloadRoot, ".portable", "setup-manifest.json"),
+      supportLauncher: join(payloadRoot, "support", "keiko-support.sh"),
     };
   }
   const resources = join(payloadRoot, "Keiko.app", "Contents", "Resources");
@@ -64,10 +73,12 @@ function validateTargetRoot(targetRoot, target, options) {
   for (const [label, path] of Object.entries(layout))
     assertFile(path, `${target.platformTarget} ${label}`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  // An explicit candidate request stays pinned to the production validator; only the pre-release
+  // stage lanes ask the manifest which lifecycle lane it declares (staging or evaluation).
   const failures =
     options.context === "candidate"
       ? validatePortableCandidateManifest(manifest)
-      : validatePortableStagingManifest(manifest);
+      : portableManifestValidationFailuresForDeclaredLane(manifest);
   if (failures.length > 0)
     fail(`${target.platformTarget} manifest invalid:\n  - ${failures.join("\n  - ")}`);
   validateSetupManifest(layout.setupManifest, target);

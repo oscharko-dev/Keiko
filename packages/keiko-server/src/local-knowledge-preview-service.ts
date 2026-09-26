@@ -10,7 +10,7 @@ import type {
   StoredPdfCitationPreviewCitation,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { pdfCitationPreviewFailureState } from "@oscharko-dev/keiko-contracts";
+import { pdfCitationPreviewFailureState } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
 import type {
   GroundedAnswer,
   LocalKnowledgeEvidenceCitation,

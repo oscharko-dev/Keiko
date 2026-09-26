@@ -18,6 +18,11 @@ function baseOptions(overrides) {
     targetSpecifier: "@oscharko-dev/keiko-harness",
     expectedRule: "adr-0019-direction-2-security-only-contracts",
     expectedResolved: "packages/keiko-harness/dist/index.js",
+    // Stubbed rather than left at the real default: the real resolver reads
+    // `/repo/node_modules/dependency-cruiser/package.json`, which does not exist under this fake
+    // repoRoot, and every test below cares about `runDepcruise`'s injected behaviour, not entry-
+    // point resolution (that seam is pinned separately in dependency-cruiser-cli.test.mjs).
+    resolveEntrypoint: () => "/repo/node_modules/dependency-cruiser/bin/dependency-cruiser.mjs",
     ...overrides,
   };
 }
@@ -55,6 +60,28 @@ describe("runBareSpecifierVisibilityProbe", () => {
     expect(args).toContain("--validate");
     expect(args).toContain(".dependency-cruiser.cjs");
     expect(args).toContain(PROBE_PATH);
+  });
+
+  // #3607: the CLI entry point is resolved rather than hardcoded, so the invocation must use
+  // whatever `resolveEntrypoint` returns — and must pass it repoRoot, not some other path — so a
+  // future dependency-cruiser rename is absorbed by the resolver instead of going dark again.
+  it("invokes dep-cruiser with the resolved entry point as argv[0]", () => {
+    const resolveEntrypoint = vi.fn(() => "/repo/node_modules/dependency-cruiser/bin/custom.mjs");
+    const runDepcruise = vi.fn(() => ({ status: 1, stdout: "", stderr: "" }));
+
+    runBareSpecifierVisibilityProbe(
+      baseOptions({
+        runDepcruise,
+        resolveEntrypoint,
+        writeProbeFile: () => undefined,
+        removeProbeFile: () => undefined,
+      }),
+    );
+
+    expect(resolveEntrypoint).toHaveBeenCalledWith("/repo");
+    const [command, args] = runDepcruise.mock.calls[0];
+    expect(command).toBe(process.execPath);
+    expect(args[0]).toBe("/repo/node_modules/dependency-cruiser/bin/custom.mjs");
   });
 
   it("returns spawn-failed when the subprocess could not start", () => {

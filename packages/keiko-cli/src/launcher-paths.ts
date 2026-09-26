@@ -15,16 +15,19 @@
 // / `assertTargetNotSymlink` in `launcher.ts` are leaf-only defense-in-depth (see header
 // comments there).
 
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { LauncherError } from "./launcher-platforms.js";
 
 function realpathOrResolve(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return resolve(p);
-  }
+  // PR-review follow-up (Codex thread 3771387240 + 3771468992): every errno from realpath
+  // propagates. The caller only calls realpathOrResolve on an ALREADY-EXISTING segment
+  // (segmentExists ran first in resolveWithExistingAncestor), so ENOENT here means
+  // realpathSync could not resolve the path — the segment exists (per lstat) but its
+  // symlink target is missing. That is a dangling symlink pointing outside the validated
+  // boundary; approving the unresolved textual path would let a later mkdir-then-open
+  // follow the symlink outside home. Fail loud instead.
+  return realpathSync(p);
 }
 
 // Walks up `p`'s ancestry until it finds an existing one; returns the realpath of that
@@ -37,7 +40,13 @@ function resolveWithExistingAncestor(p: string): string {
   const tail: string[] = [];
   let current = absolute;
   for (let i = 0; i < 64; i += 1) {
-    if (existsSync(current)) {
+    // PR-review follow-up (Codex thread 3771128753): use lstatSync directly so an
+    // EACCES/EIO on the current segment propagates instead of being collapsed to
+    // "absent" by existsSync — the latter would treat an inaccessible symlinked
+    // ancestor as a still-textual tail and reconstruct the path without resolving
+    // through the symlink, defeating the containment check.
+    const existsHere = segmentExists(current);
+    if (existsHere) {
       if (tail.length === 0) return realpathOrResolve(current);
       tail.reverse();
       return join(realpathOrResolve(current), ...tail);
@@ -47,7 +56,25 @@ function resolveWithExistingAncestor(p: string): string {
     if (parent === current) return absolute;
     current = parent;
   }
-  return absolute;
+  // PR-review follow-up (Codex thread 3771684329): fail closed when we exhaust the 64-hop
+  // bound without finding an existing ancestor. Returning the unresolved textual path let
+  // a deep chain of non-existent segments below a symlinked ancestor pass containment,
+  // and lifecycle's later mkdir/open would then follow the symlink outside home.
+  throw new LauncherError(
+    "PATH_ESCAPE",
+    "keiko launcher: refusing to resolve a path deeper than 64 uncreated components; " +
+      "no ancestor resolved within the bound.",
+  );
+}
+
+function segmentExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 // Asserts that `target` is contained within `approvedDir` AFTER both have been resolved

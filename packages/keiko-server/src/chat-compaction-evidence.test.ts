@@ -22,15 +22,19 @@ import {
   loadEvidence,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import {
-  DEFAULT_CONTEXT_PROFILE,
-  validateContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
+import {
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/server-logger.js";
 import type { RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -81,7 +85,13 @@ function captureRes(): { res: ServerResponse; writes: string[] } {
 }
 
 function routeContext(req: IncomingMessage, res: ServerResponse): RouteContext {
-  return { req, res, params: {}, url: new URL("http://127.0.0.1/api/desktop/chat") };
+  return {
+    correlationId: undefined,
+    req,
+    res,
+    params: {},
+    url: new URL("http://127.0.0.1/api/desktop/chat"),
+  };
 }
 
 function normalizedResponse(content: string): NormalizedResponse {
@@ -425,6 +435,13 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
       expect(records[0]?.message).toBe("Audit or evidence persistence failed.");
       expect(records[0]?.errorClass).toMatch(/^[A-Z][A-Za-z0-9]*$/);
       expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      // ADR-0173 D5 / g12: the failure's correlationId is THIS attempt's own runId (same
+      // derivation the successful-persist tests above pin), not a disconnected `randomUUID()` —
+      // an operator can join the failure back to the compaction attempt it belongs to. Before the
+      // fix this was a random UUID (with dashes) and never matched the runId shape below.
+      expect(records[0]?.correlationId).toBe(
+        `chat-${sha256Hex("chat-compaction-diagnostic").slice(0, 16)}-t4`,
+      );
       expect(JSON.stringify(records)).not.toContain(SECRET);
       expect(consoleWarn).not.toHaveBeenCalled();
     } finally {
@@ -432,7 +449,7 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
     }
   });
 
-  it("reports a redacted occurrence count when retention deletes evidence", () => {
+  it("reports a retention deletion as a body-free activity line, never as a diagnostic (F82)", () => {
     const records: ServerDiagnosticRecord[] = [];
     const evidenceStore = createInMemoryEvidenceStore();
     for (let index = 0; index < 50; index += 1) {
@@ -446,35 +463,47 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
     }
     const base = deps(bufferedModel("answer"), evidenceStore, true);
 
-    persistChatCompactionEvidence(
-      { ...base, diagnostics: { record: (record) => records.push(record) } },
-      {
-        compaction: {
-          schemaVersion: "1",
-          laneId: "history-summary",
-          reason: "budget",
-          itemsBefore: 6,
-          itemsAfter: 4,
-          tokensBefore: 520,
-          tokensAfter: 400,
+    const lines: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({
+        sink: {
+          write: (event): void => {
+            lines.push(event);
+          },
         },
-        chatId: "retention-diagnostic-chat",
-        modelId: CHAT_MODEL,
-        messageCount: 4,
-        startedAt: 1_700_000_000_000,
-        finishedAt: 1_700_000_000_100,
-      },
+        level: "debug",
+      }),
     );
+    try {
+      persistChatCompactionEvidence(
+        { ...base, diagnostics: { record: (record) => records.push(record) } },
+        {
+          compaction: {
+            schemaVersion: "1",
+            laneId: "history-summary",
+            reason: "budget",
+            itemsBefore: 6,
+            itemsAfter: 4,
+            tokensBefore: 520,
+            tokensAfter: 400,
+          },
+          chatId: "retention-diagnostic-chat",
+          modelId: CHAT_MODEL,
+          messageCount: 4,
+          startedAt: 1_700_000_000_000,
+          finishedAt: 1_700_000_000_100,
+        },
+      );
+    } finally {
+      resetServerLogger();
+    }
 
-    expect(records).toMatchObject([
-      {
-        operation: "evidence.retention",
-        source: "chat-compaction-evidence",
-        errorClass: "EvidenceRetention",
-        occurrenceCount: 1,
-      },
+    // A designed deletion is not a fault: nothing reaches the error-level diagnostic channel.
+    expect(records).toEqual([]);
+    expect(lines.filter((line) => line.op === "evidence.retention")).toMatchObject([
+      { category: "process", extra: { source: "chat-compaction-evidence", deletedCount: 1 } },
     ]);
-    expect(JSON.stringify(records)).not.toContain("retention-diagnostic-chat");
+    expect(JSON.stringify(lines)).not.toContain("retention-diagnostic-chat");
   });
 
   it("later turns resurface persisted pinned facts from prior compaction evidence", async () => {

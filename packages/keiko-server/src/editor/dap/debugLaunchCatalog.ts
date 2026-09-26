@@ -6,6 +6,7 @@ import {
   resolveWithinWorkspace,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import { sha256Json } from "./debugIdentityDigest.js";
 import {
   isSafeDebugScriptName,
   isSupportedNodeDebugExtension,
@@ -65,10 +66,6 @@ function trustedTask(task: CommandTask | undefined): {
   return { task, scriptName };
 }
 
-function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
 function readCatalogManifest(deps: DebugLaunchCatalogDeps): {
   readonly stat: ReturnType<WorkspaceFs["stat"]>;
   readonly content: string;
@@ -120,7 +117,7 @@ export function deriveCatalogDebugTarget(
     kind: "catalog",
     targetId: task.id,
     scriptName,
-    targetIdentityDigest: digest([catalog.projectId, task, catalogManifestIdentity(deps)]),
+    targetIdentityDigest: sha256Json([catalog.projectId, task, catalogManifestIdentity(deps)]),
   });
 }
 
@@ -162,7 +159,7 @@ function buildFileTarget(
     fileId,
     hostPath,
     capsulePath: `/keiko-execution-root/${rel.split(sep).join("/")}`,
-    targetIdentityDigest: digest([
+    targetIdentityDigest: sha256Json([
       hostPath,
       stat.size,
       stat.mtimeMs,

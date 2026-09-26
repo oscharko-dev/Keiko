@@ -17,12 +17,20 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  activityLogSegmentFileName,
+  formatActivityLogSegmentId,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { runRepairCli, type RepairCliDeps } from "./repair.js";
 import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
 import { runLauncherCli } from "./launcher.js";
 import { loadState } from "./launcher-state.js";
 import { runPortableCli } from "./portable.js";
 import type { CliIo } from "./runner.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 
 // Seeds the encrypted credential vault index next to a config so apiKeySecretRef references are not
 // flagged as orphaned. The repair check reads only the non-secret reference keys (no decryption), so
@@ -226,7 +234,7 @@ async function installPortableWindows(
   const source = join(root, "portable-bootstrap");
   const env = windowsPortableEnv(home);
   const managedRoot = options.managedRoot ?? join(env.LOCALAPPDATA, "Programs", "Keiko");
-  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
+  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
   writePortableWindowsFixture(source);
   const c = makeIo();
   const code = await runPortableCli(
@@ -573,6 +581,39 @@ describe("runRepairCli — install layout", () => {
     // No local layout seeded — the install-layout check must resolve via the env var.
     expect(runRepairCli([], c.io, { KEIKO_UI_STATIC_ROOT: staticRoot }, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("UI static export present");
+  });
+
+  it("records normalized layout evidence before inspecting the install", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const events: unknown[] = [];
+    const c = makeIo();
+    const env: NodeJS.ProcessEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+
+    expect(
+      runRepairCli([], c.io, env, {
+        ...healthyDeps(root),
+        securityLogSinkFactory: (stateDir) => {
+          expect(stateDir).toBe(join(root, ".keiko"));
+          return { write: (event): void => void events.push(event) };
+        },
+      }),
+    ).toBe(0);
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId: "00000000-0000-4000-8000-000000000001",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          overriddenCount: 1,
+          overriddenKinds: ["ui-static-root"],
+        },
+      }),
+    ]);
   });
 });
 
@@ -1189,6 +1230,67 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(join(stateDir, "evidence"))).toBe(0o700);
   });
 
+  // #3530: a sealed Activity Log segment is read-only (0o400). Repair tightens by removing bits
+  // only, so it leaves that stricter owner-only mode alone and never makes a sealed segment writable
+  // again, while a group/world-readable log file loses exactly the bits beyond owner-only.
+  it("keeps a sealed Activity Log segment read-only while tightening loose log files", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const logsDir = join(stateDir, "logs");
+    mkdirSync(logsDir, { mode: 0o700 });
+    const identity = {
+      startMs: Date.parse("2026-09-18T10:00:00.000Z"),
+      pid: 4242,
+      instanceId: "a1b2c3d4",
+      index: 1,
+    };
+    const sealed = join(logsDir, activityLogSegmentFileName(identity, "sealed"));
+    const looseSealed = join(
+      logsDir,
+      activityLogSegmentFileName({ ...identity, index: 2 }, "sealed"),
+    );
+    const active = join(logsDir, activityLogSegmentFileName({ ...identity, index: 3 }, "active"));
+    for (const path of [sealed, looseSealed, active]) writeFileSync(path, "{}\n", "utf8");
+    chmodSync(sealed, 0o400);
+    chmodSync(looseSealed, 0o444);
+    chmodSync(active, 0o644);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(c.out()).toContain("[fixed] Runtime state artifacts");
+    expect(modeOf(sealed)).toBe(0o400);
+    expect(modeOf(looseSealed)).toBe(0o400);
+    expect(modeOf(active)).toBe(0o600);
+  });
+
+  // #3531: segment manifests are private Activity Log metadata; an operator file beside them is not.
+  it("narrows segment manifests like the other private stores and leaves foreign files", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const manifests = join(stateDir, "activity-log-manifests");
+    mkdirSync(manifests, { mode: 0o700 });
+    const segmentId = formatActivityLogSegmentId({
+      startMs: Date.parse("2026-09-18T10:00:00.000Z"),
+      pid: 4242,
+      instanceId: "a1b2c3d4",
+      index: 1,
+    });
+    const manifest = join(manifests, `manifest-${segmentId}.json`);
+    const foreign = join(manifests, "operator-notes.txt");
+    for (const path of [manifest, foreign]) writeFileSync(path, "{}\n", "utf8");
+    chmodSync(manifest, 0o644);
+    chmodSync(foreign, 0o644);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(modeOf(manifest)).toBe(0o600);
+    expect(modeOf(foreign)).toBe(0o644);
+  });
+
   it("tightens the sealed credential and Figma vaults", (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
@@ -1310,11 +1412,26 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(target, 0o755);
     chmodSync(outsideDb, 0o644);
     symlinkSync(target, stateDir, "dir");
+    let sinkFactoryCalls = 0;
+    const env: NodeJS.ProcessEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(
+      runRepairCli([], c.io, env, {
+        ...healthyDeps(root),
+        securityLogSinkFactory: () => {
+          sinkFactoryCalls += 1;
+          return { write: (): void => undefined };
+        },
+      }),
+    ).toBe(1);
     expect(c.out()).toContain("[action] State directory");
     expect(c.out()).toContain("refusing to inspect symlinked state directory");
+    expect(sinkFactoryCalls).toBe(0);
+    expect(existsSync(join(target, "logs"))).toBe(false);
     expect(modeOf(target)).toBe(0o755);
     expect(modeOf(outsideDb)).toBe(0o644);
   });
@@ -1402,5 +1519,42 @@ describe("runRepairCli — runtime state artifacts", () => {
     const c = makeIo();
     expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("owner-only permissions");
+  });
+
+  it("reports an unreadable runtime-state artifact instead of throwing", (ctx) => {
+    // #KEIKO-0301 must-fail-before-fix: the repair pipeline had no error containment,
+    // so an EACCES / ENOENT from any filesystem call (statSync inside tightenNodes,
+    // readdirSync inside walkOwnedDir, lstatSync inside classifyEntry) crashed the
+    // command it exists to rescue. After the fix, runRepairCli wraps the pipeline in
+    // a try/catch mirroring uninstall.ts, and reports the failure class as an
+    // `[action]` line without throwing.
+    //
+    // Model the failure by chmodding a Keiko-owned subdirectory (memory/) to 0o000.
+    // checkStateDirPerms tightens the top-level state dir first, then scanRuntimeState
+    // walks into memory/ where readdirSync throws EACCES. Skip when running as root
+    // because chmod does not restrict root.
+    if (process.platform === "win32") ctx.skip();
+    if (typeof process.getuid === "function" && process.getuid() === 0) ctx.skip();
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = join(root, ".keiko");
+    mkdirSync(join(stateDir, "memory"), { recursive: true });
+    chmodSync(stateDir, 0o700);
+    // Seed a Keiko-owned file inside memory/ so scanRuntimeState treats the subtree
+    // as owned, then chmod the parent to 0o000 to force readdirSync to throw EACCES.
+    writeFileSync(join(stateDir, "memory", "keiko-memory.db"), "x", "utf8");
+    chmodSync(join(stateDir, "memory"), 0o000);
+    try {
+      const c = makeIo();
+      // Must NOT throw (pre-fix would have thrown EACCES out of walkOwnedDir):
+      expect(() => runRepairCli([], c.io, {}, healthyDeps(root))).not.toThrow();
+      const c2 = makeIo();
+      const code = runRepairCli([], c2.io, {}, healthyDeps(root));
+      // Repair reports an [action] line naming the affected check and exits 1.
+      expect(code).toBe(1);
+      expect(c2.out()).toContain("[action] Runtime state artifacts");
+    } finally {
+      chmodSync(join(stateDir, "memory"), 0o700);
+    }
   });
 });

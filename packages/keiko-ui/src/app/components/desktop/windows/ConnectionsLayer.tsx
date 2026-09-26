@@ -1,12 +1,11 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { GroundedAnswer as GroundedAnswerWire } from "@/lib/types";
 import { Icons } from "../Icons";
 import { connPath, relLabel } from "./connectionUtils";
 import type { AppWindow, Connection, ConnectingState } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
-import { useOptionalChatSessionActivity } from "../context/ChatSessionContext";
+import { useChatWindowFlows, type ChatWindowFlowIntensity } from "./chatWindowActivity";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const GitIcon = Icons.git;
@@ -18,7 +17,7 @@ interface ConnectionsLayerProps {
   readonly api: WorkspaceApi;
 }
 
-type FlowIntensity = "light" | "heavy";
+type FlowIntensity = ChatWindowFlowIntensity;
 
 export interface ResolvedConn {
   readonly c: Connection;
@@ -28,6 +27,7 @@ export interface ResolvedConn {
   // True when this is a chat↔data-source edge (a grounding/data channel), so it can light up while
   // the connected chat is exchanging data with the source. Pure links (e.g. keiko↔agents) do not.
   readonly dataChannel: boolean;
+  readonly chatWindowId: string | undefined;
 }
 
 function connectionMetadataLabel(item: ResolvedConn): string {
@@ -66,6 +66,11 @@ function isDataChannel(a: AppWindow, b: AppWindow): boolean {
   return chatSide && sourceSide;
 }
 
+function chatWindowId(a: AppWindow, b: AppWindow): string | undefined {
+  if (a.type === "chat") return a.id;
+  return b.type === "chat" ? b.id : undefined;
+}
+
 // Exported for tests (the cached variant below must stay result-equivalent).
 export function resolveConnections(
   wins: readonly AppWindow[],
@@ -78,7 +83,14 @@ export function resolveConnections(
     const b = byId.get(c.b);
     if (a === undefined || b === undefined) continue;
     const p = connPath(a, b);
-    out.push({ c, d: p.d, mid: p.mid, label: relLabel(a, b), dataChannel: isDataChannel(a, b) });
+    out.push({
+      c,
+      d: p.d,
+      mid: p.mid,
+      label: relLabel(a, b),
+      dataChannel: isDataChannel(a, b),
+      chatWindowId: chatWindowId(a, b),
+    });
   }
   return out;
 }
@@ -124,6 +136,7 @@ export function resolveConnectionsCached(
       mid: p.mid,
       label: relLabel(a, b),
       dataChannel: isDataChannel(a, b),
+      chatWindowId: chatWindowId(a, b),
     };
     cache.set(c.id, { a, b, conn: c, resolved });
     out.push(resolved);
@@ -183,70 +196,6 @@ function shouldRenderConnectionBadgeAgainstRects(
 ): boolean {
   const badge = estimatedBadgeRect(item, active);
   return !windowRects.some((rect) => rectsIntersect(badge, rect));
-}
-
-// Heavy vs light data exchange, derived from the last grounded answer. The clearest proxy for "how
-// much data actually flowed" is the count of files/sources the model pulled into context, NOT raw
-// excerpt bytes: lexical folder retrieval reads only the matched lines of each file, so a 10-file
-// answer can still report a few KB of excerpt while filesRead (1 vs 10) cleanly separates light from
-// heavy. A single very large file also counts as heavy via the excerpt-byte fallback. Connector
-// (local-knowledge) and the connector side of a hybrid answer use referencesUsed instead of files.
-// Thresholds are deliberately low — a handful of real files/sources reads as "heavy" to the eye.
-// (The pre-first-answer "light" default lives in useChannelFlow, not here.)
-const HEAVY_FILES_READ = 4;
-const HEAVY_REFERENCES = 4;
-const HEAVY_EXCERPT_BYTES = 8_192;
-
-function isHeavyFolder(filesRead: number, excerptBytes: number): boolean {
-  return filesRead >= HEAVY_FILES_READ || excerptBytes >= HEAVY_EXCERPT_BYTES;
-}
-
-function groundingIntensity(latest: GroundedAnswerWire): FlowIntensity {
-  switch (latest.groundingKind) {
-    case "connected-context":
-      return isHeavyFolder(
-        latest.contextPack.usage.filesRead,
-        latest.contextPack.usage.excerptBytes,
-      )
-        ? "heavy"
-        : "light";
-    case "hybrid":
-      return isHeavyFolder(
-        latest.contextPack.folder.usage.filesRead,
-        latest.contextPack.folder.usage.excerptBytes,
-      ) || latest.contextPack.knowledge.referencesUsed >= HEAVY_REFERENCES
-        ? "heavy"
-        : "light";
-    case "local-knowledge":
-      return latest.contextPack.referencesUsed >= HEAVY_REFERENCES ? "heavy" : "light";
-    default:
-      return "light";
-  }
-}
-
-// The grounded-send flow clears `session.latestGrounded` at the START of every send (so a stale
-// citation block doesn't flash) and only repopulates it once the answer returns — by which point
-// the request is no longer in flight. So `latestGrounded` is undefined for the entire `sending`
-// window and cannot, alone, tell the edge whether the in-flight exchange is heavy or light. We
-// therefore REMEMBER the intensity of the most recent settled answer and keep the edge active for a
-// short afterglow after each answer lands: the first exchange reveals its true heaviness the moment
-// it completes, and every subsequent in-flight send animates at the channel's established intensity.
-const FLOW_AFTERGLOW_MS = 2_500;
-
-function useChannelFlow(
-  sending: boolean,
-  latest: GroundedAnswerWire | undefined,
-): { readonly flowing: boolean; readonly intensity: FlowIntensity } {
-  const [intensity, setIntensity] = useState<FlowIntensity>("light");
-  const [afterglow, setAfterglow] = useState(false);
-  useEffect(() => {
-    if (latest === undefined) return; // cleared at send-start — keep the last known intensity
-    setIntensity(groundingIntensity(latest));
-    setAfterglow(true);
-    const timer = setTimeout(() => setAfterglow(false), FLOW_AFTERGLOW_MS);
-    return () => clearTimeout(timer);
-  }, [latest]);
-  return { flowing: sending || afterglow, intensity };
 }
 
 // Audit C301 — the badge is the only element describing the relationship, yet a single click on
@@ -468,7 +417,7 @@ const ConnectionBadge = memo(function ConnectionBadge({
 });
 
 function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayerProps): ReactNode {
-  const activity = useOptionalChatSessionActivity();
+  const chatWindowFlows = useChatWindowFlows();
   const reducedMotion = usePrefersReducedMotion();
   const { armedId, arm, disarm, autoCancelledNonce } = useArmedRemove();
   // GEN-UI-A11Y-015 — one shared polite live region for the badge layer. It announces the silent
@@ -482,14 +431,6 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
     prevAutoCancelledNonce.current = autoCancelledNonce;
     setRemovalAnnouncement("Removal cancelled — the connection was not removed.");
   }, [autoCancelledNonce]);
-  // A data exchange is live whenever the chat session has a request in flight. We only light up
-  // chat↔data-source edges (dataChannel), so an ungrounded reply over a chat with no source edge
-  // animates nothing. Heavy/light intensity is remembered from the last settled answer (see useChannelFlow).
-  const { flowing, intensity } = useChannelFlow(
-    activity?.sending === true,
-    activity?.latestGrounded,
-  );
-
   // Issue #1580 — edge geometry depends only on window rects + the connection set,
   // never on the pan/zoom view (the SVG lives inside the CSS-transformed .ws-scene),
   // so recompute only when those actually change. Combined with the memo wrapper
@@ -513,12 +454,20 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
     const windowRects = wins.filter((win) => win.minimized !== true).map(windowRect);
     const ids = new Set<string>();
     for (const item of items) {
-      if (shouldRenderConnectionBadgeAgainstRects(item, windowRects, flowing && item.dataChannel)) {
+      const flow =
+        item.chatWindowId === undefined ? undefined : chatWindowFlows.get(item.chatWindowId);
+      if (
+        shouldRenderConnectionBadgeAgainstRects(
+          item,
+          windowRects,
+          flow?.flowing === true && item.dataChannel,
+        )
+      ) {
         ids.add(item.c.id);
       }
     }
     return ids;
-  }, [flowing, items, wins]);
+  }, [chatWindowFlows, items, wins]);
   const temp = connecting !== null ? tempPath(connecting, wins) : null;
   return (
     <>
@@ -530,15 +479,19 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
           viewBox="-10000 -10000 20000 20000"
           preserveAspectRatio="xMidYMid meet"
         >
-          {items.map((it) => (
-            <ConnectionEdge
-              key={it.c.id}
-              item={it}
-              active={flowing && it.dataChannel}
-              intensity={intensity}
-              reducedMotion={reducedMotion}
-            />
-          ))}
+          {items.map((it) => {
+            const flow =
+              it.chatWindowId === undefined ? undefined : chatWindowFlows.get(it.chatWindowId);
+            return (
+              <ConnectionEdge
+                key={it.c.id}
+                item={it}
+                active={flow?.flowing === true && it.dataChannel}
+                intensity={flow?.intensity ?? "light"}
+                reducedMotion={reducedMotion}
+              />
+            );
+          })}
           {temp !== null ? <path className="conn-path conn-temp" d={temp.d} /> : null}
           {temp !== null ? <circle className="conn-dot" cx={temp.ex} cy={temp.ey} r="5" /> : null}
         </svg>
@@ -555,12 +508,14 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
         </div>
         {items.map((it) => {
           if (!visibleBadgeIds.has(it.c.id)) return null;
+          const flow =
+            it.chatWindowId === undefined ? undefined : chatWindowFlows.get(it.chatWindowId);
           return (
             <ConnectionBadge
               key={it.c.id}
               item={it}
-              active={flowing && it.dataChannel}
-              intensity={intensity}
+              active={flow?.flowing === true && it.dataChannel}
+              intensity={flow?.intensity ?? "light"}
               armed={armedId === it.c.id}
               onArm={arm}
               onDisarm={disarm}

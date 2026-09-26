@@ -169,6 +169,52 @@ describe("docxParser", () => {
     );
   });
 
+  // #2906 KEIKO-0759 — OOXML allows `<w:br w:type="page"/>` and `<w:br w:type="column"/>`,
+  // and some generators attribute an ordinary manual break with `w:type="textWrapping"`.
+  // The break-tag regexes previously required a bare self-closing tag (`<w:tab\s*/>` etc.),
+  // so an attributed form went unmatched — a break inside `<w:t>...<w:br .../>...</w:t>`
+  // survived to the text-run pipeline verbatim and appeared inside the resulting text as
+  // literal XML. Broadened to `/<w:br\b[^>]*\/>/gi` so the attributed forms convert to
+  // whitespace exactly like the bare form.
+  it('substitutes an attributed <w:br w:type="page"/> inside a run with a newline', async () => {
+    const xml = [
+      "<w:document><w:body>",
+      '<w:p><w:r><w:t>A<w:br w:type="page"/>B</w:t></w:r></w:p>',
+      "</w:body></w:document>",
+    ].join("");
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
+    expect(normalizedText).toMatch(/A\s+B/);
+    // The literal XML fragment must not survive to the extracted text — that would be the
+    // symptom of the un-widened regex leaving the tag unmatched.
+    expect(normalizedText).not.toContain('<w:br w:type="page"/>');
+  });
+
+  // Same shape for `<w:tab w:val="…"/>` so both patterns tolerate attributes.
+  it('substitutes an attributed <w:tab w:val="clear"/> inside a run with a tab', async () => {
+    const xml = [
+      "<w:document><w:body>",
+      '<w:p><w:r><w:t>X<w:tab w:val="clear"/>Y</w:t></w:r></w:p>',
+      "</w:body></w:document>",
+    ].join("");
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
+    expect(normalizedText).toMatch(/X\s+Y/);
+    expect(normalizedText).not.toContain('<w:tab w:val="clear"/>');
+  });
+
   it("reports malformed archives safely", async () => {
     const result = await docxParser.parseAsync(
       selectionFromBytes(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), {
@@ -326,6 +372,34 @@ describe("docxParser", () => {
     expect(result.diagnostics[0]?.message).toBe(
       "docx parser rejected malformed or unsupported document",
     );
+  });
+
+  it("aborts a many-entry docx zip walk with PARSER_TIMEOUT instead of walking every entry (KEIKO-0428)", async () => {
+    // KEIKO-0428: readDocxXmlPartsFromZip used to drive yauzl's central-directory 'entry' loop
+    // to completion with no per-entry deadline or entry-count bound; only `input.bytes.byteLength
+    // > maxBytes` guarded the outer scan, and a ZIP whose central directory is huge easily fits
+    // that budget (~46 bytes per entry + filename). Feed the parser a ZIP with many non-matching
+    // entries followed by a valid document.xml, cap maxEntries indirectly by exceeding the fixed
+    // MAX_DOCX_ZIP_ENTRIES ceiling, and assert the parse aborts with the shared PARSER_TIMEOUT
+    // diagnostic code instead of a MALFORMED_INPUT or a hung run.
+    const filler = Array.from({ length: 5_000 }, (_, index) => ({
+      name: `assets/filler-${String(index).padStart(6, "0")}.xml`,
+      content: "<x/>",
+    }));
+    const document = {
+      name: "word/document.xml",
+      content: "<w:document><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>",
+    };
+    const bytes = zipDocxEntries([...filler, document]);
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(bytes, {
+        extension: "docx",
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics.some((entry) => entry.code === "PARSER_TIMEOUT")).toBe(true);
+    expect(result.units.filter((unit) => unit.kind === "section")).toEqual([]);
   });
 
   it("stops section emission at maxUnitsPerDocument", async () => {

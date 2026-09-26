@@ -1,22 +1,26 @@
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   RetrievalQuery,
   RetrievalQueryKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   FileTooLargeError,
+  PathDeniedError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
 } from "./errors.js";
 import { PathEscapeError, WorkspaceError } from "@oscharko-dev/keiko-security/errors/workspace";
 import { memFs } from "./_memfs.js";
+import { detectWorkspaceAt } from "./detect.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
+import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
 import {
   DEFAULT_SEARCH_LIMITS,
+  createRequestLocalSearchTextSessionPool,
   findFiles,
   readExcerpt,
   searchText,
@@ -25,6 +29,7 @@ import {
 } from "./repoSearch.js";
 import type { SemanticSearchProvider } from "./repoSearchSemantic.js";
 import type { WorkspaceInfo } from "./types.js";
+import { createWorkspaceIndex, type WorkspaceIndex } from "./workspaceIndex.js";
 
 const MEM_ROOT = "/ws";
 
@@ -34,6 +39,7 @@ function memScope(
 ): { scope: SearchScope; fs: ReturnType<typeof memFs> } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -96,6 +102,49 @@ function fpq(text: string, overrides: Partial<RetrievalQuery> = {}): RetrievalQu
 }
 
 const FIXED_NOW: () => number = () => 1_700_000_000_000;
+
+function measuredExcerptFs(
+  base: WorkspaceFs,
+  onTouch: () => void = (): void => undefined,
+): { readonly fs: WorkspaceFs; readonly touchCount: () => number } {
+  let touches = 0;
+  const touched = (): void => {
+    touches += 1;
+    onTouch();
+  };
+  return {
+    fs: {
+      ...base,
+      realPath: (path): string => {
+        touched();
+        return base.realPath(path);
+      },
+      stat: (path): ReturnType<WorkspaceFs["stat"]> => {
+        touched();
+        return base.stat(path);
+      },
+      readDir: (path, maxEntries): ReturnType<WorkspaceFs["readDir"]> => {
+        touched();
+        return base.readDir(path, maxEntries);
+      },
+      exists: (path): boolean => {
+        touched();
+        return base.exists(path);
+      },
+      readFileUtf8: (path): string => {
+        touched();
+        return base.readFileUtf8(path);
+      },
+      readFileBytes: async (path, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
+        touched();
+        return (
+          (await base.readFileBytes?.(path, maxBytes, hardLinkPolicy, expected)) ?? new Uint8Array()
+        );
+      },
+    },
+    touchCount: (): number => touches,
+  };
+}
 
 // ─── memFs-based unit tests ───────────────────────────────────────────────────
 
@@ -922,6 +971,7 @@ describe("searchText (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -998,6 +1048,7 @@ describe("searchText (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -1132,6 +1183,23 @@ describe("searchText (memFs)", () => {
       nowMs: FIXED_NOW,
     });
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+  });
+
+  it("rejects a missing explicitly selected file for text and file search", async () => {
+    const { scope, fs } = memScope(
+      { "src/present.ts": "match\n" },
+      { relativePaths: ["src/missing.ts"] },
+    );
+    const expected = {
+      message: "Connected scope path is not accessible from the selected project.",
+    };
+
+    await expect(
+      searchText(scope, nlq("match"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toMatchObject(expected);
+    await expect(
+      findFiles(scope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toMatchObject(expected);
   });
 
   it("rejects scope.relativePaths containing a parent-traversal entry", async () => {
@@ -1506,6 +1574,36 @@ describe("findFiles (memFs)", () => {
     expect(r.diagnostics?.maxFilesPrunedByDiscovery).toBeGreaterThan(0);
   });
 
+  it("bounds physical enumeration before an explicit-scope directory is materialized", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 1_024 }, (_, index) => [
+        `pkg/f${index.toString().padStart(4, "0")}.ts`,
+        "",
+      ]),
+    );
+    const { scope, fs: baseFs } = memScope(files, { relativePaths: ["pkg"] });
+    const requestedCaps: (number | undefined)[] = [];
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      readDir: (absolutePath, maxEntries) => {
+        requestedCaps.push(maxEntries);
+        return baseFs.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    const result = await findFiles(
+      scope,
+      fpq("**/*.ts"),
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 },
+      { fs, nowMs: FIXED_NOW },
+    );
+
+    expect(requestedCaps).toEqual([1, 1_024]);
+    expect(result.atoms).toEqual([]);
+    expect(result.truncated).toBe(true);
+    expect(result.diagnostics?.maxFilesPrunedByDiscovery).toBeGreaterThan(0);
+  });
+
   it("includes safe gitignored files from explicit-scope file search", async () => {
     const { scope, fs } = memScope(
       {
@@ -1517,6 +1615,7 @@ describe("findFiles (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -1550,6 +1649,7 @@ describe("findFiles (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "unknown",
@@ -1612,6 +1712,36 @@ describe("findFiles (memFs)", () => {
 });
 
 describe("readExcerpt (memFs)", () => {
+  it("starts no filesystem operation after an inherited deadline has expired", async () => {
+    const { scope, fs: base } = memScope({ "src/a.ts": "L1\n" });
+    const measured = measuredExcerptFs(base);
+    const error = await readExcerpt(
+      scope,
+      { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: 256 },
+      { fs: measured.fs, nowMs: () => 10, deadlineAtMs: 10 },
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(RepoSearchUnsupportedFileError);
+    expect(error).toMatchObject({ reason: "timeout" });
+    expect(measured.touchCount()).toBe(0);
+  });
+
+  it("does not begin a second filesystem operation when the first reaches the deadline", async () => {
+    const { scope, fs: base } = memScope({ "src/a.ts": "L1\n" });
+    let currentMs = 0;
+    const measured = measuredExcerptFs(base, () => {
+      currentMs = 10;
+    });
+    const error = await readExcerpt(
+      scope,
+      { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: 256 },
+      { fs: measured.fs, nowMs: () => currentMs, deadlineAtMs: 10 },
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({ reason: "timeout" });
+    expect(measured.touchCount()).toBe(1);
+  });
+
   it("returns lines [start..end] joined by \\n with redactionState=redacted", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "L1\nL2\nL3\nL4\n" });
     const r = await readExcerpt(
@@ -1646,6 +1776,27 @@ describe("readExcerpt (memFs)", () => {
 
     expect(error).toBeInstanceOf(RepoSearchUnsupportedFileError);
     expect(error).toMatchObject({ reason: "outside-range" });
+  });
+
+  // #3347: the guarded read lane serves content ONLY through the bounded same-descriptor primitive
+  // (ADR-0005 D1), so a port that does not offer one — like every read failure that lane reports —
+  // surfaces as WorkspaceReadError. That is a non-denial outcome for ONE file and must degrade to
+  // the same skip the binary/TOCTOU probe already produces; letting it escape raw fails the whole
+  // grounded answer instead of a single excerpt (grounded-orchestrator's readKeptExcerpts).
+  it("degrades to an unsupported-file skip when the port offers no bounded descriptor read", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "L1\nL2\n" });
+    const { readFileUtf8SameDescriptor, ...withoutDescriptorRead } = fs;
+    expect(readFileUtf8SameDescriptor).toBeTypeOf("function");
+    expect(withoutDescriptorRead.readFileBytes).toBeTypeOf("function");
+
+    const error = await readExcerpt(
+      scope,
+      { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: 256 },
+      { fs: withoutDescriptorRead, nowMs: FIXED_NOW },
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(RepoSearchUnsupportedFileError);
+    expect(error).toMatchObject({ reason: "io-error" });
   });
 
   it("truncates the excerpt to maxBytes and reports truncated=true", async () => {
@@ -1742,6 +1893,197 @@ describe("Copilot finding fixes (memFs)", () => {
 
     expect(r.atoms.map((atom) => atom.scopePath)).toEqual(["allowed/keep.ts"]);
     expect(r.filesScanned).toBe(1);
+  });
+
+  it("isolates persistent workspace indexes by candidate-path policy", async () => {
+    const { scope, fs } = memScope({
+      "src/a.ts": "export const alpha = 1;",
+      "other/z.ts": "export const target = 2;",
+    });
+    const workspaceIndex = createWorkspaceIndex();
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 };
+
+    const first = await searchText(scope, exq("alpha"), limits, {
+      fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex,
+      candidatePathGlobs: { include: ["src/**"], exclude: [] },
+    });
+    const second = await searchText(scope, exq("target"), limits, {
+      fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex,
+      candidatePathGlobs: { include: ["other/**"], exclude: [] },
+    });
+
+    expect(first.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts"]);
+    expect(second.atoms.map((atom) => atom.scopePath)).toEqual(["other/z.ts"]);
+  });
+
+  it("rejects mixed invalid scopes before reusing or loading aliased warm state", async () => {
+    const fixture = memScope({ "src/a.ts": "export const alpha = 1;" });
+    const backingIndex = createWorkspaceIndex();
+    let loadCount = 0;
+    const workspaceIndex: WorkspaceIndex = {
+      loadSnapshot: async (scopeKey) => {
+        loadCount += 1;
+        return await backingIndex.loadSnapshot(scopeKey);
+      },
+      saveSnapshot: (scopeKey, snapshot) => backingIndex.saveSnapshot(scopeKey, snapshot),
+    };
+    const options = { fs: fixture.fs, nowMs: FIXED_NOW, workspaceIndex };
+    const validScope = { ...fixture.scope, relativePaths: ["src/a.ts"] };
+    const invalidScope = { ...fixture.scope, relativePaths: ["src/a.ts", "../escape"] };
+
+    const warmPool = createRequestLocalSearchTextSessionPool();
+    await warmPool.searchText(validScope, exq("alpha"), DEFAULT_SEARCH_LIMITS, options);
+    const loadCountAfterWarm = loadCount;
+
+    await expect(
+      Promise.resolve().then(() =>
+        warmPool.searchText(invalidScope, exq("alpha"), DEFAULT_SEARCH_LIMITS, options),
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+    expect(loadCount).toBe(loadCountAfterWarm);
+
+    const freshPool = createRequestLocalSearchTextSessionPool();
+
+    await expect(
+      Promise.resolve().then(() =>
+        freshPool.searchText(invalidScope, exq("alpha"), DEFAULT_SEARCH_LIMITS, options),
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+    expect(loadCount).toBe(loadCountAfterWarm);
+  });
+
+  it("uses canonical explicit-scope order for warm capped request-local sessions", async () => {
+    const fixture = memScope({
+      "a.ts": "export const alpha = 1;",
+      "b.ts": "export const beta = 2;",
+    });
+    const workspaceIndex = createWorkspaceIndex();
+    const pool = createRequestLocalSearchTextSessionPool();
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const options = { fs: fixture.fs, nowMs: FIXED_NOW, workspaceIndex };
+
+    await pool.searchText(
+      { ...fixture.scope, relativePaths: ["b.ts", "a.ts"] },
+      rxq("absent"),
+      limits,
+      options,
+    );
+    const result = await pool.searchText(
+      { ...fixture.scope, relativePaths: ["a.ts", "b.ts"] },
+      rxq("alpha"),
+      limits,
+      options,
+    );
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["a.ts"]);
+  });
+
+  it("does not persist directory fingerprints for an older candidate membership", async () => {
+    const files: Record<string, string> = { "src/a.ts": "export const alpha = 1;" };
+    const fixture = memScope(files);
+    let directoryReads = 0;
+    const fs: WorkspaceFs = {
+      ...fixture.fs,
+      readDir: (absolutePath, maxEntries): ReturnType<WorkspaceFs["readDir"]> => {
+        directoryReads += 1;
+        if (directoryReads === 3) {
+          files["src/z.ts"] = "export const target = 2;";
+        }
+        return fixture.fs.readDir(absolutePath, maxEntries);
+      },
+    };
+    const workspaceIndex = createWorkspaceIndex();
+
+    await searchText(fixture.scope, exq("alpha"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex,
+    });
+    const result = await searchText(fixture.scope, exq("target"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex,
+    });
+
+    expect(directoryReads).toBeGreaterThanOrEqual(4);
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/z.ts"]);
+  });
+
+  it("does not let a slow workspace-index save commit after the search already returned (#3347)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scope, fs } = memScope({ "src/a.ts": "export const alpha = 1;" });
+      // A controlled clock: scanning this one-file scope never advances it, so the runner still
+      // has budget when persistence starts. The save mock itself jumps the clock forward past the
+      // budget the instant it is invoked, modeling a save that is slow relative to the search's
+      // own deadline -- exactly the scenario the fix must not let commit after the caller moved
+      // on. Fake timers make the old racing implementation's internal setTimeout (real wall-clock,
+      // independent of this injected clock) controllable, instead of depending on real elapsed
+      // time in the test.
+      let tick = 0;
+      const nowMs = (): number => tick;
+      let saveCalls = 0;
+      let resolveSave: (() => void) | undefined;
+      const committedSnapshots: unknown[] = [];
+      const workspaceIndex: WorkspaceIndex = {
+        loadSnapshot: () => Promise.resolve(undefined),
+        saveSnapshot: (_scopeKey, snapshot) => {
+          saveCalls += 1;
+          tick = 1_000;
+          return new Promise<void>((resolve) => {
+            resolveSave = (): void => {
+              committedSnapshots.push(snapshot);
+              resolve();
+            };
+          });
+        },
+      };
+      const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 30 };
+
+      const resultPromise = searchText(scope, exq("alpha"), limits, { fs, nowMs, workspaceIndex });
+
+      let settled = false;
+      void resultPromise.then(() => {
+        settled = true;
+      });
+
+      // Drive the microtask queue (via fake-timer advances, not real waiting) until persistence
+      // has reached and invoked the still-pending save.
+      for (let i = 0; i < 50 && saveCalls === 0; i += 1) {
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(saveCalls).toBe(1);
+      expect(settled).toBe(false);
+      expect(committedSnapshots).toHaveLength(0);
+
+      // Advance real wall-clock-equivalent (fake) time well past the search's own elapsedMsMax
+      // budget while the save is still pending. Under the old racing behavior this alone would
+      // resolve the search via the abandoned-timeout branch; the fix must keep waiting for the
+      // save it already started instead.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(false);
+      expect(committedSnapshots).toHaveLength(0);
+
+      resolveSave?.();
+      const result = await resultPromise;
+
+      expect(settled).toBe(true);
+      expect(committedSnapshots).toHaveLength(1);
+      expect(saveCalls).toBe(1);
+      expect(result.coverage.reasons).toContain("timeout");
+
+      // Observe the provider directly, well past when a delayed save would land under the old
+      // racing behavior, to prove there is no late, unaccounted-for second commit.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(saveCalls).toBe(1);
+      expect(committedSnapshots).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("searchText clamps matches to min(limits.maxMatchesReturned, query.maxResults)", async () => {
@@ -1905,6 +2247,7 @@ describe("Copilot finding fixes (memFs)", () => {
       {
         workspace: {
           root: MEM_ROOT,
+          selectedRoot: MEM_ROOT,
           name: "demo",
           version: "1.0.0",
           testFramework: "vitest",
@@ -1978,6 +2321,7 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     scope = {
       workspace: {
         root: tmp,
+        selectedRoot: tmp,
         name: "demo",
         version: "1.0.0",
         testFramework: "vitest",
@@ -2002,6 +2346,144 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     });
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
   });
+
+  it("scans children of only the exact owned denied workspace root", async () => {
+    const ownedRoot = join(tmp, ".keiko", "task-workspaces", "repo_a", "ws_b");
+    mkdirSync(join(ownedRoot, "src"), { recursive: true });
+    writeFileSync(join(ownedRoot, "src", "managed.ts"), "export const managedNeedle = 1;\n");
+    const canonicalRoot = nodeWorkspaceFs.realPath(ownedRoot);
+    const ownedScope: SearchScope = {
+      ...scope,
+      workspace: detectWorkspaceAt(
+        canonicalRoot,
+        workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, canonicalRoot),
+      ),
+    };
+    const fs = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, canonicalRoot);
+
+    const result = await searchText(ownedScope, nlq("managedNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/managed.ts"]);
+    expect(result.filesScanned).toBe(1);
+    await expect(
+      searchText(
+        { ...ownedScope, workspace: { ...ownedScope.workspace, root: dirname(canonicalRoot) } },
+        nlq("managedNeedle"),
+        DEFAULT_SEARCH_LIMITS,
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+  });
+
+  it("rejects a missing explicitly selected file on the real filesystem", async () => {
+    file("src/present.ts", "match\n");
+    const missingScope = { ...scope, relativePaths: ["src/missing.ts"] };
+    const expected = {
+      message: "Connected scope path is not accessible from the selected project.",
+    };
+
+    await expect(
+      searchText(missingScope, nlq("match"), DEFAULT_SEARCH_LIMITS, { nowMs: FIXED_NOW }),
+    ).rejects.toMatchObject(expected);
+    await expect(
+      findFiles(missingScope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, { nowMs: FIXED_NOW }),
+    ).rejects.toMatchObject(expected);
+  });
+
+  it("returns the deterministic first result from a bounded explicit directory walk", async () => {
+    const names = Array.from(
+      { length: 50 },
+      (_, index) => `file-${index.toString().padStart(2, "0")}.ts`,
+    );
+    for (const [directory, order] of [
+      ["forward", names],
+      ["reverse", [...names].reverse()],
+    ] as const) {
+      for (const name of order) file(`${directory}/${name}`, "needle\n");
+    }
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const run = async (directory: string): Promise<Awaited<ReturnType<typeof findFiles>>> =>
+      await findFiles({ ...scope, relativePaths: [directory] }, fpq("**/*.ts"), limits, {
+        nowMs: FIXED_NOW,
+      });
+
+    const forward = await run("forward");
+    const reverse = await run("reverse");
+
+    expect(forward.atoms.map((atom) => atom.scopePath)).toEqual(["forward/file-00.ts"]);
+    expect(reverse.atoms.map((atom) => atom.scopePath)).toEqual(["reverse/file-00.ts"]);
+    expect(forward.truncated).toBe(true);
+    expect(reverse.truncated).toBe(true);
+    expect(forward.diagnostics?.maxFilesPrunedByDiscovery).toBeGreaterThan(0);
+    expect(reverse.diagnostics?.maxFilesPrunedByDiscovery).toBeGreaterThan(0);
+  });
+
+  it("contains an explicit ancestor symlink before any stat, exists, or directory read", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-explicit-scope-outside-"));
+    try {
+      mkdirSync(join(outside, "nested"), { recursive: true });
+      writeFileSync(join(outside, "nested/secret.ts"), "outside-secret\n");
+      symlinkSync(outside, join(tmp, "linked-outside"), "dir");
+      const symlinkSubtree = join(tmp, "linked-outside");
+      const unsafeTouches: string[] = [];
+      const recordUnsafeTouch = (absolutePath: string): void => {
+        if (absolutePath === symlinkSubtree || absolutePath.startsWith(`${symlinkSubtree}/`)) {
+          unsafeTouches.push(absolutePath);
+        }
+      };
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        exists: (absolutePath): boolean => {
+          recordUnsafeTouch(absolutePath);
+          return nodeWorkspaceFs.exists(absolutePath);
+        },
+        stat: (absolutePath) => {
+          recordUnsafeTouch(absolutePath);
+          return nodeWorkspaceFs.stat(absolutePath);
+        },
+        readDir: (absolutePath, maxEntries) => {
+          recordUnsafeTouch(absolutePath);
+          return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+        },
+      };
+
+      await expect(
+        findFiles(
+          { ...scope, relativePaths: ["linked-outside/nested/secret.ts"] },
+          fpq("**/*.ts"),
+          DEFAULT_SEARCH_LIMITS,
+          { fs, nowMs: FIXED_NOW },
+        ),
+      ).rejects.toBeInstanceOf(PathEscapeError);
+      expect(unsafeTouches).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not traverse an explicit scope through a benign root alias into a denied directory",
+    async () => {
+      const deniedRoot = join(tmp, ".aws", "workspace");
+      mkdirSync(join(deniedRoot, "src"), { recursive: true });
+      writeFileSync(join(deniedRoot, "src", "secret.ts"), "export const secret = true;\n");
+      const linkedRoot = join(tmp, "docs");
+      symlinkSync(deniedRoot, linkedRoot, "dir");
+      const deniedScope: SearchScope = {
+        ...scope,
+        workspace: { ...scope.workspace, root: linkedRoot },
+        relativePaths: ["src"],
+      };
+
+      await expect(
+        findFiles(deniedScope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, {
+          nowMs: FIXED_NOW,
+        }),
+      ).rejects.toBeInstanceOf(PathDeniedError);
+    },
+  );
 
   it("drops a binary file (PNG-magic + NUL) from text search", async () => {
     const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00]);
@@ -2088,6 +2570,96 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     }
   });
 
+  it("rejects an explicitly scoped search through a relocated denied workspace root", async () => {
+    const deniedTarget = join(tmp, ".aws", "workspace");
+    const linkedRoot = join(tmp, "node_modules", "workspace");
+    mkdirSync(deniedTarget, { recursive: true });
+    mkdirSync(dirname(linkedRoot), { recursive: true });
+    writeFileSync(join(deniedTarget, "secret.ts"), "export const secret = 'do not read';\n");
+    symlinkSync(deniedTarget, linkedRoot);
+    scope = {
+      ...scope,
+      workspace: { ...scope.workspace, root: linkedRoot },
+      relativePaths: ["secret.ts"],
+    };
+    let byteProbeCalls = 0;
+    const readFileBytes = nodeWorkspaceFs.readFileBytes;
+    if (readFileBytes === undefined) {
+      throw new Error("nodeWorkspaceFs.readFileBytes is required for this test");
+    }
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        _hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
+        byteProbeCalls += 1;
+        return await readFileBytes(absolutePath, maxBytes, "reject", expected);
+      },
+    };
+
+    await expect(
+      searchText(scope, nlq("secret"), DEFAULT_SEARCH_LIMITS, {
+        fs,
+        nowMs: FIXED_NOW,
+      }),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+    expect(byteProbeCalls).toBe(0);
+  });
+
+  it("rejects an unavailable explicit-scope root before probing its contents", async () => {
+    scope = { ...scope, relativePaths: ["src"] };
+    let statCalls = 0;
+    let readDirCalls = 0;
+    let contentReadCalls = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      realPath: (absolutePath): string => {
+        if (absolutePath === scope.workspace.root) throw new Error("EACCES");
+        return nodeWorkspaceFs.realPath(absolutePath);
+      },
+      stat: (absolutePath) => {
+        statCalls += 1;
+        return nodeWorkspaceFs.stat(absolutePath);
+      },
+      readDir: (absolutePath, maxEntries) => {
+        readDirCalls += 1;
+        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
+      },
+      readFileUtf8: (absolutePath): string => {
+        contentReadCalls += 1;
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
+        contentReadCalls += 1;
+        return (
+          (await nodeWorkspaceFs.readFileBytes?.(
+            absolutePath,
+            maxBytes,
+            hardLinkPolicy,
+            expected,
+          )) ?? new Uint8Array()
+        );
+      },
+    };
+
+    await expect(
+      findFiles(scope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+    expect({ statCalls, readDirCalls, contentReadCalls }).toEqual({
+      statCalls: 0,
+      readDirCalls: 0,
+      contentReadCalls: 0,
+    });
+  });
+
   it("readExcerpt rejects a symlink whose resolved target is outside scope.relativePaths", async () => {
     file("docs/b.md", "secret\n");
     mkdirSync(join(tmp, "src"), { recursive: true });
@@ -2114,9 +2686,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     }
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         byteProbeCalls += 1;
-        return await readFileBytes(absolutePath, maxBytes);
+        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
 
@@ -2157,9 +2734,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     }
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+      readFileBytes: async (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): Promise<Uint8Array> => {
         byteProbeCalls += 1;
-        return await readFileBytes(absolutePath, maxBytes);
+        return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
 
@@ -2186,9 +2768,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
       }
       const fs: WorkspaceFs = {
         ...nodeWorkspaceFs,
-        readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+        readFileBytes: async (
+          absolutePath,
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        ): Promise<Uint8Array> => {
           byteProbeCalls += 1;
-          return await readFileBytes(absolutePath, maxBytes);
+          return await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         },
       };
 
@@ -2269,12 +2856,12 @@ describe("IO-error resilience (Audit Finding 1 – scan path)", () => {
     });
     const fs: WorkspaceFs = {
       ...baseFs,
-      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         if (absolutePath.includes("secret.ts")) {
           return Promise.reject(makeErrnoError("EACCES"));
         }
         if (baseFs.readFileBytes !== undefined) {
-          return baseFs.readFileBytes(absolutePath, maxBytes);
+          return baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         }
         return Promise.resolve(new Uint8Array());
       },
@@ -2303,12 +2890,12 @@ describe("IO-error resilience (Audit Finding 1 – scan path)", () => {
         }
         return baseFs.readFileUtf8(absolutePath);
       },
-      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
         if (absolutePath.includes("secret.ts")) {
           return Promise.reject(makeErrnoError("EACCES"));
         }
         if (baseFs.readFileBytes !== undefined) {
-          return baseFs.readFileBytes(absolutePath, maxBytes);
+          return baseFs.readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
         }
         return Promise.resolve(new Uint8Array());
       },

@@ -6,6 +6,7 @@ import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  WindowsRuntimeAttestationError,
   buildWindowsRuntimeAttestationCarrier,
   generateWindowsRuntimeAttestation,
   windowsBuildToolchain,
@@ -138,7 +139,7 @@ describe("Windows runtime attestation carrier", () => {
           ].join(win32.delimiter),
           INCLUDE: String.raw`C:\Program Files\MSVC\include`,
         },
-        { lstat, realpath: (path) => path },
+        { lstat, realpath: (path) => path, resolveMsvcEnvImpl: (environment) => environment },
       ),
     ).toEqual({
       compiler,
@@ -152,9 +153,23 @@ describe("Windows runtime attestation carrier", () => {
     expect(() =>
       windowsBuildToolchain(
         { PATH: String.raw`C:\Users\attacker\bin` },
-        { lstat, realpath: (path) => path },
+        { lstat, realpath: (path) => path, resolveMsvcEnvImpl: (environment) => environment },
       ),
     ).toThrow("approved MSVC compiler path is unavailable");
+    // A resolver failure surfaces as the attestation error type, so the CLI catch preserves
+    // the actionable toolchain cause instead of redacting it (#3085).
+    expect(() =>
+      windowsBuildToolchain(
+        { PATH: String.raw`C:\Users\attacker\bin` },
+        {
+          lstat,
+          realpath: (path) => path,
+          resolveMsvcEnvImpl: () => {
+            throw new Error("MSVC toolchain not found: vswhere missing");
+          },
+        },
+      ),
+    ).toThrow(WindowsRuntimeAttestationError);
   });
 
   it("rejects unsupported platforms, invalid receipts, stale activation binding, and failed builds", () => {

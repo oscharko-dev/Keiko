@@ -15,17 +15,19 @@
 // invariant); only the STATE it feeds is partitioned.
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type {
+  EditorVerificationCatalog,
+  EditorVerificationEvent,
+  VerificationKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_VERIFICATION_EVENT_KINDS,
-  isEditorVerificationCatalog,
   isEditorVerificationEvent,
   isEditorVerificationRun,
-  type EditorVerificationCatalog,
-  type EditorVerificationEvent,
-  type VerificationKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
+  fetchVerificationCatalog,
   mutateWorkspaceTrust,
   WORKSPACE_TRUST_CHANGED_EVENT,
   workspaceTrustEventProjectId,
@@ -40,7 +42,6 @@ import {
 
 const RUNS_URL = "/api/editor/verification/runs";
 const EVENTS_URL = "/api/editor/verification/events";
-const CATALOG_URL = "/api/editor/verification/catalog";
 const MUTATION_HEADERS = {
   "content-type": "application/json",
   "X-Keiko-CSRF": "1",
@@ -208,7 +209,8 @@ function emit(root: string, entry: ProjectRunState, next: SharedRunState): void 
     if (entry.pendingState === null) return;
     entry.state = entry.pendingState;
     entry.pendingState = null;
-    for (const listener of [...entry.listeners]) listener();
+    const listeners = new Set(entry.listeners);
+    for (const listener of listeners) listener();
   });
 }
 
@@ -638,20 +640,6 @@ export function resetEditorVerificationRunStateForTests(): void {
   projectIdByRunId.clear();
   rootsAwaitingFreshTerminal.clear();
   totalListenerCount = 0;
-}
-
-async function fetchVerificationCatalog(
-  root: string,
-  signal?: AbortSignal,
-): Promise<EditorVerificationCatalog> {
-  const url = `${CATALOG_URL}?projectId=${encodeURIComponent(root)}`;
-  const response = await fetch(url, signal === undefined ? undefined : { signal });
-  if (!response.ok) throw new Error("verification catalog rejected");
-  const payload: unknown = await response.json();
-  if (!isEditorVerificationCatalog(payload) || payload.projectId !== root) {
-    throw new Error("malformed verification catalog");
-  }
-  return payload;
 }
 
 function catalogAllows(catalog: EditorVerificationCatalog | null, kind: VerificationKind): boolean {

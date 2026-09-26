@@ -7,12 +7,12 @@
 // query reliably matches an indexed chunk — this proves index presence and the retrieval path, and
 // makes no claim about final answer quality (deferred to #1855).
 
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  type HtmlManualSource,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type {
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";

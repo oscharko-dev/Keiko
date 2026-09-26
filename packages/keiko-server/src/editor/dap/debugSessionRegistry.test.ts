@@ -1,6 +1,11 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import type { DebugLifecycleEvidence } from "@oscharko-dev/keiko-contracts";
+import {
+  DEBUG_LIFECYCLE_EVENT_KINDS,
+  isDebugLifecycleEvidence,
+  LEGAL_STATES_BY_EVENT,
+} from "@oscharko-dev/keiko-contracts/runtime/debug/debug-lifecycle";
 import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
 import {
   createDebugSessionRegistry,
@@ -9,6 +14,7 @@ import {
   type DebugProvisionalReservationInput,
   type DebugReservationPromotion,
   type DebugReservationInput,
+  type DebugSessionAbandonedEvidence,
   type DebugSessionRegistry,
 } from "./debugSessionRegistry.js";
 
@@ -394,7 +400,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
   it("retains evidencePending capacity until both terminal records reconcile", async () => {
     let failTerminal = true;
     const { append, registry } = setup();
-    append.mockImplementation((partition: string, evidence: DebugLifecycleEvidence) => {
+    append.mockImplementation((_partition: string, evidence: DebugLifecycleEvidence) => {
       if (failTerminal && evidence.eventKind === "teardown")
         return Promise.reject(new Error("private"));
       return Promise.resolve();
@@ -910,6 +916,69 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     fail = false;
     await registry.reconcile();
     await stopping;
+  });
+
+  it("self-heals from evidence-pending without an external reconcile() (KEIKO-0592)", async () => {
+    let fail = true;
+    const registry = createDebugSessionRegistry({
+      appendEvidence: (_partition, evidence) =>
+        fail && evidence.eventKind === "stop"
+          ? Promise.reject(new Error("private"))
+          : Promise.resolve(),
+      now: () => 1,
+      emitOutputLimit: ignoreOutputLimit,
+    });
+    await registry.reserve(identity());
+    const stopping = registry.stop("session_a");
+    await vi.waitFor(() => {
+      expect(registry.session("session_a")?.health).toBe("evidencePending");
+    });
+    // Drop the failing gate; without any external reconcile() call, the self-scheduled retry
+    // that runReconcile now arms on the evidence-append-failure branch must recover the session.
+    fail = false;
+    await stopping;
+    expect(registry.session("session_a")).toBeUndefined();
+  });
+
+  it("bounds the evidence-append retry and abandons the session instead of retrying forever (#2906 round 3, P1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const abandoned: DebugSessionAbandonedEvidence[] = [];
+      const registry = createDebugSessionRegistry({
+        appendEvidence: (_partition, evidence) =>
+          evidence.eventKind === "stop" ? Promise.reject(new Error("private")) : Promise.resolve(),
+        now: () => 1,
+        emitOutputLimit: ignoreOutputLimit,
+        onEvidenceAbandoned: (input) => {
+          abandoned.push(input);
+        },
+      });
+      await registry.reserve(identity());
+      const stopping = registry.stop("session_a");
+      await vi.waitFor(() => {
+        expect(registry.session("session_a")?.health).toBe("evidencePending");
+      });
+
+      // appendEvidence never recovers (a permanently broken evidence store). Advance far past the
+      // full exponential-backoff budget (~92s across 9 scheduled retries) instead of retrying
+      // forever -- without the bound, this would never settle and the test would time out.
+      await vi.advanceTimersByTimeAsync(200_000);
+      await stopping;
+
+      expect(registry.session("session_a")).toBeUndefined();
+      expect(registry.health()).toBe("ready");
+      expect(abandoned).toEqual([
+        { sessionId: "session_a", workspacePartitionKey: "partition_a", attempts: 10 },
+      ]);
+
+      // Capacity is no longer blocked by the abandoned session (the original bug: registry health
+      // stayed evidencePending forever, so EVERY new session was rejected indefinitely).
+      await expect(
+        registry.reserve({ ...identity("session_b", "partition_b"), planId: "plan_b" }),
+      ).resolves.toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("distinguishes workspace capacity from replay and preserves the first partition", async () => {
@@ -1730,5 +1799,59 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     ).rejects.toMatchObject({ code: "INVALID_CAPSULE_PLAN" });
     expect(records).toStrictEqual([]);
     expect(registry.sessionIds()).toStrictEqual([]);
+  });
+});
+
+// KEIKO-0890: keiko-contracts' `LEGAL_STATES_BY_EVENT` (consulted by `hasClosedVocabulary`) is a
+// second source of truth for the (eventKind, state) pairs this registry — the sole producer that
+// flows through dapLifecycleLedger.ts — actually emits. A mismatch would start rejecting legitimate
+// evidence, which is worse than the permissiveness it replaces, so this drives every terminal path
+// through the real registry and fails if the registry ever emits a pairing the table does not
+// recognize, catching drift instead of letting it silently reject real evidence.
+describe("DebugSessionRegistry (eventKind, state) pairings stay inside LEGAL_STATES_BY_EVENT (KEIKO-0890)", () => {
+  it("keeps every emitted pairing, across every terminal path, inside the legality table", async () => {
+    const seen = new Set<string>();
+    function trackAndValidate(records: { readonly evidence: DebugLifecycleEvidence }[]): void {
+      for (const { evidence } of records) {
+        expect(isDebugLifecycleEvidence(evidence)).toBe(true);
+        seen.add(`${evidence.eventKind}/${evidence.state}`);
+      }
+    }
+
+    const stopped = setup();
+    await activate(stopped.registry);
+    await stopped.registry.stop("session_a");
+    trackAndValidate(stopped.records);
+
+    const revoked = setup();
+    await activate(revoked.registry);
+    await revoked.registry.revoke("session_a");
+    trackAndValidate(revoked.records);
+
+    const failed = setup();
+    await activate(failed.registry);
+    await failed.registry.teardown("session_a", "debuggeeExit");
+    trackAndValidate(failed.records);
+
+    const throttled = setup(() => 1);
+    await throttled.registry.reserve(identity());
+    const first = await throttled.registry.beginStartupAttempt("session_a");
+    await throttled.registry.completeLaunchFailure("session_a", first.attemptId);
+    const second = await throttled.registry.beginStartupAttempt("session_a");
+    await throttled.registry.completeLaunchFailure("session_a", second.attemptId);
+    await expect(throttled.registry.beginStartupAttempt("session_a")).rejects.toMatchObject({
+      code: "STARTUP_THROTTLED",
+    });
+    trackAndValidate(throttled.records);
+
+    // Every legal pairing this table declares was actually exercised above, and nothing outside it
+    // was ever emitted: a table entry the registry never emits, or a registry pairing the table does
+    // not recognize, both surface as a mismatch here.
+    const legalPairs = new Set(
+      DEBUG_LIFECYCLE_EVENT_KINDS.flatMap((eventKind) =>
+        [...LEGAL_STATES_BY_EVENT[eventKind]].map((state) => `${eventKind}/${state}`),
+      ),
+    );
+    expect(seen).toStrictEqual(legalPairs);
   });
 });

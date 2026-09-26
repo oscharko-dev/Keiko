@@ -1,15 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32282");
 const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32283");
 const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32284");
 const stateId = `issue-2282-managed-language-${process.env.GITHUB_RUN_ID ?? String(process.pid)}`;
-const stateDir =
-  process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const binDir = join(stateDir, "managed-lsp-bin");
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");

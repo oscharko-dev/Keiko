@@ -8,18 +8,20 @@
 // invocation emits the same content-free, visible `skill-invoked` event whether it was explicit or
 // implicit; only the retained invocation fact differs. Evidence stays content-free: ids, the
 // normalized status, a result digest, and bounded reason codes only.
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  AuxiliaryCapabilityRequestV1,
+  CodeTaskSha256Digest,
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchRuntimeEvent,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODE_TASK_AUXILIARY_SCHEMA_VERSION,
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  isCodeTaskSha256Digest,
   validateAuxiliaryCapabilityRequestV1,
-  validateCodingWorkbenchRuntimeEvent,
-  type AuxiliaryCapabilityOutcomeV1,
-  type AuxiliaryCapabilityRequestV1,
-  type CodeTaskSha256Digest,
-  type CodingWorkbenchAuxiliaryStatus,
-  type CodingWorkbenchRuntimeEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isCodeTaskSha256Digest } from "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { SkillCatalog } from "./skillCatalog.js";
 
 /** The `capability: "skill"` variant of the auxiliary request this port handles. */

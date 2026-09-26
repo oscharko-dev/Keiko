@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  type LanguageDiagnostic,
-  type LanguagePosition,
-  type LanguageRange,
-  type LanguageServiceLimits,
-  type LanguageTextEdit,
+import type {
+  LanguageDiagnostic,
+  LanguagePosition,
+  LanguageRange,
+  LanguageServiceLimits,
+  LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { computeLineStarts, positionToOffset } from "@oscharko-dev/keiko-contracts/line-offsets";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";

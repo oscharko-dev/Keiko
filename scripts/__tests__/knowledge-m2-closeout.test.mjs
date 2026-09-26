@@ -243,6 +243,34 @@ describe("Knowledge M2 closeout proof evaluators", () => {
     expect(failures.every((override) => !evaluateAnnProof(annInput(override)).ok)).toBe(true);
   });
 
+  // KEIKO-0362: the proof used to assert only RELATIVE latency claims, so a build consuming 83% of
+  // its own 120s production timeout — with ANN still comfortably beating exact — was reported as
+  // closed. Absolute ceilings against the production BUILD_TIMEOUT_MS / QUERY_TIMEOUT_MS (imported,
+  // never re-declared) are what make "ANN is faster" also mean "and it still has headroom".
+  it("fails a build latency that has drifted into the production timeout's territory", () => {
+    const nearTimeout = annInput({ latencyLargeBuildMs: 100_000 });
+    // Precondition: the relative claim is still satisfied, so only the new ceiling can catch this.
+    expect(nearTimeout.latencyLargeAnnMedianMs).toBeLessThan(nearTimeout.latencyLargeExactMedianMs);
+    const proof = evaluateAnnProof(nearTimeout);
+    expect(proof.ok).toBe(false);
+    expect(proof.failures.join(",")).toContain("latency-large-build-not-measured-or-near-timeout");
+  });
+
+  it("fails an ANN query median that has drifted into the production query timeout", () => {
+    const nearTimeout = annInput({
+      latencyLargeAnnMedianMs: 20_000,
+      latencyLargeExactMedianMs: 25_000,
+    });
+    expect(nearTimeout.latencyLargeAnnMedianMs).toBeLessThan(nearTimeout.latencyLargeExactMedianMs);
+    const proof = evaluateAnnProof(nearTimeout);
+    expect(proof.ok).toBe(false);
+    expect(proof.failures.join(",")).toContain("latency-large-query-near-timeout");
+  });
+
+  it("still accepts healthy latencies well inside both budgets", () => {
+    expect(evaluateAnnProof(annInput()).ok).toBe(true);
+  });
+
   it("detects a second facade-bypassing importer", () => {
     const entries = [
       {

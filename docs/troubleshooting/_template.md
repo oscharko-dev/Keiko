@@ -41,7 +41,8 @@ blocks for shell input.
 ```bash
 # Example command with redacted placeholders.
 keiko status
-tail -n 200 .keiko/ui.log
+keiko support export --out keiko-support.jsonl
+keiko support analyze keiko-support.jsonl --clusters
 ```
 
 State which output confirms the root cause and which output indicates a
@@ -68,6 +69,6 @@ relevant document.
 - Keep examples deterministic. Do not embed timestamps, machine names,
   or one-off identifiers.
 - When citing log files, identify them by relative path
-  (`.keiko/ui.log`), not by the user's home directory.
+  (`.keiko/logs/`), not by the user's home directory.
 - Do not introduce new severity values. Use the four defined in the
   guide.

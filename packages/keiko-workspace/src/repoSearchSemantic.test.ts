@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   collectSemanticSearchDocument,
@@ -91,5 +91,78 @@ describe("repoSearchSemantic", () => {
     collectSemanticSearchDocument(session, { scopePath: "src/charge.ts", text: "charge card" });
     const matches = await runSemanticSearchSession(session, query(), undefined);
     expect(matches[0]?.score).toBe(1);
+  });
+
+  it("times out a provider that ignores abort without waiting for it to settle", async () => {
+    vi.useFakeTimers();
+    try {
+      let providerSignal: AbortSignal | undefined;
+      let timeoutCalls = 0;
+      const provider: SemanticSearchProvider = {
+        name: "pending-fixture",
+        search: ({ signal }) => {
+          providerSignal = signal;
+          return new Promise<readonly SemanticSearchMatch[]>(() => undefined);
+        },
+      };
+      const session = createSemanticSearchSession(provider, query());
+      collectSemanticSearchDocument(session, {
+        scopePath: "src/charge.ts",
+        text: "charge card",
+      });
+
+      const result = runSemanticSearchSession(session, query(), undefined, {
+        timeoutMs: 25,
+        onTimeout: (): void => {
+          timeoutCalls += 1;
+        },
+      });
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(result).resolves.toEqual([]);
+      expect(timeoutCalls).toBe(1);
+      expect(providerSignal?.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(timeoutCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets an external abort win without reporting a semantic timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = new AbortController();
+      let providerSignal: AbortSignal | undefined;
+      let timeoutCalls = 0;
+      const provider: SemanticSearchProvider = {
+        name: "pending-fixture",
+        search: ({ signal }) => {
+          providerSignal = signal;
+          return new Promise<readonly SemanticSearchMatch[]>(() => undefined);
+        },
+      };
+      const session = createSemanticSearchSession(provider, query());
+      collectSemanticSearchDocument(session, {
+        scopePath: "src/charge.ts",
+        text: "charge card",
+      });
+
+      const result = runSemanticSearchSession(session, query(), caller.signal, {
+        timeoutMs: 25,
+        onTimeout: (): void => {
+          timeoutCalls += 1;
+        },
+      });
+      caller.abort();
+
+      await expect(result).resolves.toEqual([]);
+      expect(providerSignal?.aborted).toBe(true);
+      expect(timeoutCalls).toBe(0);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(timeoutCalls).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

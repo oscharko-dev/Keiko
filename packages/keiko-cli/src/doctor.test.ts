@@ -3,30 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectDoctorReport, emitDoctorWarning, runDoctorCli } from "./doctor.js";
-import type { CliIo } from "./runner.js";
-
-interface Captured {
-  readonly io: CliIo;
-  readonly out: () => string;
-  readonly err: () => string;
-}
-
-function makeIo(): Captured {
-  const outChunks: string[] = [];
-  const errChunks: string[] = [];
-  return {
-    io: {
-      out: (text: string): void => {
-        outChunks.push(text);
-      },
-      err: (text: string): void => {
-        errChunks.push(text);
-      },
-    },
-    out: (): string => outChunks.join(""),
-    err: (): string => errChunks.join(""),
-  };
-}
+import { makeCapturedIo } from "./test-support/cli-io.js";
 
 const tempRoots: string[] = [];
 
@@ -73,7 +50,7 @@ describe("doctor", () => {
     );
     writeFileSync(join(root, "dist", "cli", "index.js"), "#!/usr/bin/env node\n");
     writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n");
-    const c = makeIo();
+    const c = makeCapturedIo();
     emitDoctorWarning(c.io, {
       cwd: root,
       argv: [process.execPath, "/opt/homebrew/bin/keiko"],
@@ -84,7 +61,7 @@ describe("doctor", () => {
 
   it("prints remediation guidance", () => {
     const root = makeRoot();
-    const c = makeIo();
+    const c = makeCapturedIo();
     const code = runDoctorCli([], c.io, {}, { cwd: root, argv: [process.execPath] });
     expect(code).toBe(0);
     expect(c.out()).toContain("Keiko doctor");

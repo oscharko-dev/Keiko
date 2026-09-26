@@ -10,7 +10,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { UPDATE_LOCAL_STATE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type {
   UpdateRemediationAction,
   UpdateReleaseImpactInput,
@@ -301,6 +300,31 @@ describe("update remediation manager", () => {
     ).rejects.toBeInstanceOf(UpdateRemediationError);
   });
 
+  it("does not offer runnable repair when compatibility inspection is incomplete", () => {
+    const stateDir = makeStateDir();
+    let nested = join(stateDir, "memory");
+    for (let depth = 0; depth <= 64; depth += 1) {
+      nested = join(nested, "d");
+      mkdirSync(nested, { recursive: true });
+    }
+
+    const status = manager(stateDir).getStatus({
+      targetVersion: TARGET,
+      impact: {
+        affectedStateStores: ["memory-vault"],
+        remediation: "repair-required",
+        userActionRequired: true,
+      },
+    });
+
+    expect(status.actions[0]).toMatchObject({
+      actionId: "manual-review:memory-vault",
+      kind: "manual-review",
+      canRun: false,
+      status: "manual-review-required",
+    });
+  });
+
   it("allows Local Knowledge reindex to be safely deferred while marking the feature degraded", async () => {
     const subject = manager(makeStateDir(), fakeLocalKnowledge());
 
@@ -474,15 +498,14 @@ describe("update remediation manager", () => {
     const stateDir = makeStateDir();
     const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
     localState.writeRuntimeState({
-      schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
-      updatedAt: "stale",
+      ...localState.readRuntimeState(),
       targetVersion: TARGET,
       remediations: [
         {
           store: "local-knowledge",
           remediation: "local-knowledge-reindex-required",
           status: "running",
-          updatedAt: "stale",
+          updatedAt: new Date(NOW - 1).toISOString(),
         },
       ],
       warnings: [],
@@ -507,15 +530,14 @@ describe("update remediation manager", () => {
     chmodSync(memoryDb, 0o644);
     const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
     localState.writeRuntimeState({
-      schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
-      updatedAt: "stale",
+      ...localState.readRuntimeState(),
       targetVersion: TARGET,
       remediations: [
         {
           store: "memory-vault",
           remediation: "repair-required",
           status: "running",
-          updatedAt: "stale",
+          updatedAt: new Date(NOW - 1).toISOString(),
         },
       ],
       warnings: [],
@@ -682,6 +704,66 @@ describe("update remediation manager", () => {
       }),
     ).rejects.toMatchObject({ code: "UPDATE_REMEDIATION_OUTCOME_UNCERTAIN", status: 409 });
     expect(localKnowledge.runs()).toBe(1);
+  });
+
+  // ADR-0173 D5 / g12: each of `recordDraftFailure`'s call sites used to mint its own
+  // `randomUUID()`, so a cascade of failures inside a SINGLE `runAction` call (persist fails, then
+  // the outcome-uncertainty fallback also fails) reported as if they were unrelated operations.
+  // Fails before the fix — two independent random UUIDs practically never match — and passes after,
+  // once every reporter reads the one id `runAction` mints at its own start.
+  it("shares one correlation id across every diagnostic from a single failing action run", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let stateWrites = 0;
+    const unreliable: UpdateLocalStateManager = {
+      ...durable,
+      writeRuntimeState: (state) => {
+        stateWrites += 1;
+        if (stateWrites >= 2) throw new Error("terminal state unavailable");
+        return durable.writeRuntimeState(state);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unreliable,
+      localKnowledge,
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    const sources = diagnostics.map((record) => record.source);
+    expect(sources).toContain("update-remediation.persistDraftStatus");
+    expect(sources).toContain("update-remediation.persistOutcomeUncertainty");
+    const correlationIds = new Set(diagnostics.map((record) => record.correlationId));
+    expect(correlationIds.size).toBe(1);
+  });
+
+  it("threads a caller-supplied correlation id through onto every reported diagnostic", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const subject = createUpdateRemediationManager({
+      localState: createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW }),
+      localKnowledge: throwingLocalKnowledge(),
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      redactString: (value) => value,
+    });
+
+    await subject.runAction(
+      {
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      },
+      "caller-req-77",
+    );
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({ correlationId: "caller-req-77" }));
   });
 
   it("retains the live lease when neither terminal nor uncertainty state can persist", async () => {

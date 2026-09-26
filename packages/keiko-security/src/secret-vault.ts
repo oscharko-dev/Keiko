@@ -38,14 +38,284 @@ import {
 import { randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isSealed, openString, sealString } from "./secretbox.js";
+import { atomicPublishRename } from "./fs-atomic-rename.js";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
 // pair; import it from the sibling module (relative — we ARE keiko-security).
 import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
+// Shared keychain-spawn bound [GEN-MAINT-COUPLING-006], so the three surfaces cannot drift apart.
+// `emitKeychainFallback` is the shared `security.keychain.fallback` reporter so this file's own
+// keychain reader (below) reports the identical shape as `readMacosKeychainSecret`'s.
+import {
+  emitKeychainFallback,
+  KEYCHAIN_SPAWN_TIMEOUT_MS,
+  keychainItemNotFound,
+} from "./macos-keychain.js";
+// Independent activity-log seam (ADR-0019, w4a-security-log-port).
+import {
+  emitSecurityLogEvent,
+  securityErrorKind,
+  startSecurityLogTimer,
+  type SecurityLogSink,
+} from "./log-port.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
 const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
+const MAX_VAULT_STACK_CHARS = 16 * 1024;
+const MAX_VAULT_STACK_LINES = 64;
+const MAX_VAULT_FRAMES = 8;
+const MAX_VAULT_CAUSES = 5;
+const VAULT_FRAME_ANCHOR = "/packages/keiko-security/";
+const VAULT_FRAME_RELATIVE_PATTERN = /^(?:dist|src)\/[A-Za-z0-9_./-]{1,160}\.(?:js|ts)$/u;
+const LINE_OR_COLUMN_PATTERN = /^\d{1,6}$/u;
+
+interface VaultFailureEvidence {
+  readonly failureKind: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+class SecretVaultUnsafeTargetError extends Error {
+  public override readonly name = "SecretVaultUnsafeTargetError";
+  public readonly code = "unsafe-target";
+}
+
+function vaultEnvelopeErrorKind(
+  error: unknown,
+  fallback: ActivityLogErrorKind,
+): ActivityLogErrorKind {
+  const failureKind = securityErrorKind(error);
+  if (failureKind === "unsafe-target") return "unsafe-target";
+  if (failureKind === "EACCES" || failureKind === "EPERM" || failureKind === "EROFS") {
+    return "permission-denied";
+  }
+  return fallback;
+}
+
+function safeErrorProperty(error: unknown, property: string): unknown {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+    return undefined;
+  }
+  try {
+    return Reflect.get(error, property);
+  } catch {
+    return undefined;
+  }
+}
+
+function frameLocation(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("at ")) return undefined;
+  const value = trimmed.slice(3);
+  if (!value.endsWith(")")) return value;
+  const openIndex = value.lastIndexOf("(");
+  return openIndex === -1 ? undefined : value.slice(openIndex + 1, -1);
+}
+
+function anchoredVaultFrame(line: string): string | undefined {
+  const location = frameLocation(line)
+    ?.replaceAll("\\", "/")
+    .replace(/^file:\/\//u, "");
+  if (location === undefined) return undefined;
+  const columnSeparator = location.lastIndexOf(":");
+  const lineSeparator = location.lastIndexOf(":", columnSeparator - 1);
+  if (columnSeparator <= 0 || lineSeparator <= 0) return undefined;
+  const lineNumber = location.slice(lineSeparator + 1, columnSeparator);
+  const column = location.slice(columnSeparator + 1);
+  if (!LINE_OR_COLUMN_PATTERN.test(lineNumber) || !LINE_OR_COLUMN_PATTERN.test(column)) {
+    return undefined;
+  }
+  const path = location.slice(0, lineSeparator);
+  const anchorIndex = path.lastIndexOf(VAULT_FRAME_ANCHOR);
+  if (anchorIndex === -1) return undefined;
+  const relative = path.slice(anchorIndex + VAULT_FRAME_ANCHOR.length);
+  if (!VAULT_FRAME_RELATIVE_PATTERN.test(relative) || relative.includes("../")) return undefined;
+  return `packages/keiko-security/${relative}:${lineNumber}:${column}`;
+}
+
+function vaultStackFrames(error: unknown): readonly string[] {
+  const stack = safeErrorProperty(error, "stack");
+  if (typeof stack !== "string") return [];
+  const bounded = stack.slice(0, MAX_VAULT_STACK_CHARS);
+  return bounded
+    .split("\n")
+    .slice(1, MAX_VAULT_STACK_LINES + 1)
+    .map(anchoredVaultFrame)
+    .filter((frame): frame is string => frame !== undefined)
+    .slice(0, MAX_VAULT_FRAMES);
+}
+
+function vaultCauseChain(error: unknown): readonly string[] {
+  const classes: string[] = [];
+  const seen = new WeakSet();
+  if (typeof error === "object" && error !== null) seen.add(error);
+  let current = error;
+  for (let depth = 0; depth < MAX_VAULT_CAUSES; depth += 1) {
+    const cause = safeErrorProperty(current, "cause");
+    if (typeof cause !== "object" || cause === null || seen.has(cause)) break;
+    seen.add(cause);
+    classes.push(securityErrorKind(cause));
+    current = cause;
+  }
+  return classes;
+}
+
+function vaultFailureEvidence(error: unknown): VaultFailureEvidence {
+  const frames = vaultStackFrames(error);
+  const chain = vaultCauseChain(error);
+  return {
+    failureKind: securityErrorKind(error),
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(chain.length === 0 ? {} : { causeChain: chain }),
+  };
+}
+
+const SECURITY_VAULT_FAILURE_REGISTRATION = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "security",
+  owner: "keiko-security",
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  releaseImpact: "patch",
+} as const;
+
+const SECURITY_VAULT_FAILURE_FIELDS = {
+  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  frames: {
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
+const SECURITY_VAULT_KEY_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.vault.key-resolved",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "secret-vault.resolveLocalVaultKey",
+  fields: {
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["env", "keychain", "keyfile"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["security-vault-key-resolution"],
+  proofIds: ["security.vault.key-resolved.source"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.key-resolution-failed",
+  emitter: "secret-vault.emitKeyResolutionFailed",
+  fields: { ...SECURITY_VAULT_FAILURE_FIELDS },
+  failureClasses: ["security-vault-key-resolution"],
+  proofIds: ["security.vault.key-resolution-failed.evidence"],
+});
+
+const SECURITY_VAULT_ENTRIES_MERGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.vault.entries-merged",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "secret-vault.emitEntriesMerged",
+  fields: { count: { type: "integer", dataClass: "count", required: true } },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["security-vault-write"],
+  proofIds: ["security.vault.entries-merged.count"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_VAULT_ENTRIES_DELETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.vault.entries-deleted",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "secret-vault.emitEntriesDeleted",
+  fields: { count: { type: "integer", dataClass: "count", required: true } },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["security-vault-delete"],
+  proofIds: ["security.vault.entries-deleted.count"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.entries-delete-failed",
+  emitter: "secret-vault.deleteManyWithLog",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-delete"],
+  proofIds: ["security.vault.entries-delete-failed.count"],
+});
+
+const SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.entries-merge-failed",
+  emitter: "secret-vault.setManyWithLog",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-write"],
+  proofIds: ["security.vault.entries-merge-failed.count"],
+});
+
+const SECURITY_VAULT_SHARD_UNREADABLE_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.shard-unreadable",
+  emitter: "secret-vault.emitShardUnreadable",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-read"],
+  proofIds: ["security.vault.shard-unreadable.count"],
+});
+
+const SECURITY_VAULT_ENTRIES_ROLLBACK_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.entries-rollback-failed",
+  emitter: "secret-vault.rollbackCommittedShards",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-rollback"],
+  proofIds: ["security.vault.entries-rollback-failed.count"],
+});
 
 export type SecretVaultStoreErrorCode =
   "SECRET_VAULT_STORE_INVALID_JSON" | "SECRET_VAULT_STORE_INVALID_SCHEMA";
@@ -92,6 +362,18 @@ export interface ResolveLocalVaultKeyOptions {
   readonly keyfileName: string;
   // Test/non-darwin seam. Defaults to the real `security` CLI reader scoped to keychainService.
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
+  /**
+   * Optional activity-log seam (ADR-0019; see `log-port.ts`), mirroring
+   * {@link ShardedLocalSecretVaultDeps.sink}. When wired:
+   *   - one `security.vault.key-resolved` event fires every time a key tier resolves, carrying
+   *     which tier won (`extra.source`) — visible even on the ordinary path where no fallback
+   *     ever happens (gap g18);
+   *   - a keychain read that fails for a reason other than "no such item" additionally emits
+   *     `security.keychain.fallback`, the same shape `readMacosKeychainSecret` reports for its
+   *     own read tier.
+   * Omitted or `undefined` keeps this resolver exactly as silent as before.
+   */
+  readonly sink?: SecurityLogSink | undefined;
 }
 
 export interface LocalSecretVault {
@@ -100,12 +382,21 @@ export interface LocalSecretVault {
   readonly get: (reference: string) => string | undefined;
   // Seals `secret` under `reference`, replacing any existing entry. Atomic and crash-safe.
   readonly set: (reference: string, secret: string) => void;
+  // Seals each entry, replacing any existing value for the same reference and leaving every other
+  // stored reference untouched. Empty maps are a no-op (unlike replaceAll, which would wipe the
+  // store). Atomic and crash-safe. The single-file layout commits the whole file once; the sharded
+  // layout writes one file per supplied reference and does not delete siblings. A later shard
+  // write that fails rolls back earlier writes in the same batch.
+  readonly setMany: (entries: ReadonlyMap<string, string>) => void;
   // Replaces the ENTIRE entry set with the supplied references, sealing each value. Removes any
-  // reference not present in `entries`. Atomic and crash-safe — used to keep the vault in lockstep
-  // with the current provider set on each persist.
+  // reference not present in `entries`. Atomic and crash-safe. Callers that must add or overwrite a
+  // batch without dropping siblings use setMany instead.
   readonly replaceAll: (entries: ReadonlyMap<string, string>) => void;
   // Removes the entry for `reference` if present. Atomic and crash-safe.
   readonly delete: (reference: string) => void;
+  // Removes every named reference in one read-merge-write (single-file) or after preflighting
+  // every shard path (sharded). Empty lists are a no-op.
+  readonly deleteMany: (references: readonly string[]) => void;
   readonly has: (reference: string) => boolean;
   // Lists the stored references (NON-SECRET identifiers only; never decrypts).
   readonly list: () => readonly string[];
@@ -114,6 +405,12 @@ export interface LocalSecretVault {
 export interface LocalSecretVaultDeps {
   readonly key: Buffer;
   readonly storePath: string;
+  /**
+   * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired, {@link LocalSecretVault.setMany}
+   * emits one `security.vault.entries-merged` event with the sealed entry count. Omitted or
+   * `undefined` keeps this layout exactly as silent as before.
+   */
+  readonly sink?: SecurityLogSink | undefined;
 }
 
 function decodeKeyOrThrow(raw: string): Buffer {
@@ -138,24 +435,39 @@ function keyFromEnv(
 // (read-hit, read-miss-then-generate, generate-failure) is unit-testable with a fake runner.
 export type KeychainCommandRunner = (args: readonly string[]) => string;
 
-function defaultKeychainCommandRunner(args: readonly string[]): string {
-  return execFileSync(MACOS_SECURITY_EXECUTABLE, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+// The spawn is bounded for the reason the shared owner documents [GEN-MAINT-COUPLING-006]: a locked,
+// absent, or policy-withheld keychain makes `security` raise a modal dialog instead of returning, and
+// an unbounded call then waits for a human forever. The bound is imported rather than restated so
+// all three keychain surfaces share one number. `executable` and `timeoutMs` are test seams only.
+export function createKeychainCommandRunner(
+  executable = MACOS_SECURITY_EXECUTABLE,
+  timeoutMs = KEYCHAIN_SPAWN_TIMEOUT_MS,
+): KeychainCommandRunner {
+  return (args: readonly string[]): string =>
+    execFileSync(executable, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    });
 }
+
+const defaultKeychainCommandRunner = createKeychainCommandRunner();
 
 // Builds the default keychain-backed key access for a service. Exported with an injectable runner so
 // the reader/generate branches are deterministically testable without the real login keychain.
 export function createKeychainVaultKeyAccess(
   keychainService: string,
   runCommand: KeychainCommandRunner = defaultKeychainCommandRunner,
+  sink?: SecurityLogSink,
 ): LocalVaultKeychainAccess {
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
     const account = userInfo().username;
+    const elapsedMs = startSecurityLogTimer();
+    let found: string;
     try {
-      const found = runCommand([
+      found = runCommand([
         "find-generic-password",
         "-s",
         keychainService,
@@ -163,8 +475,20 @@ export function createKeychainVaultKeyAccess(
         account,
         "-w",
       ]).trim();
+    } catch (error) {
+      // Only "the item is not there" invites a write. A read that timed out, or a keychain that
+      // refused outright, means a store attempt would meet the same wall and spend a SECOND bounded
+      // wait — on a path a caller may be blocking on. Same rule, same predicate, as the shared owner.
+      if (keychainItemNotFound(error)) {
+        return generateKeychainKey(keychainService, account, runCommand);
+      }
+      emitKeychainFallback(sink, error, elapsedMs);
+      return undefined;
+    }
+    try {
       return decodeKeyOrThrow(found);
     } catch {
+      // A stored value we cannot decode is replaced, as before.
       return generateKeychainKey(keychainService, account, runCommand);
     }
   };
@@ -179,6 +503,9 @@ function generateKeychainKey(
   try {
     runCommand([
       "add-generic-password",
+      // `-U` updates an existing item; without it `security` rejects a duplicate (status 45) and
+      // the "replace an undecodable stored key" path above would never actually replace anything.
+      "-U",
       "-s",
       keychainService,
       "-a",
@@ -208,11 +535,42 @@ function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
   return key;
 }
 
+function emitKeyResolutionFailed(sink: SecurityLogSink | undefined, error: unknown): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION,
+      { level: "error", errorKind: vaultEnvelopeErrorKind(error, "unavailable") },
+      vaultFailureEvidence(error),
+    ),
+  );
+}
+
 export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
+  let resolved: ResolvedLocalVaultKey;
+  try {
+    resolved = computeLocalVaultKey(options);
+  } catch (error) {
+    emitKeyResolutionFailed(options.sink, error);
+    throw error;
+  }
+  emitSecurityLogEvent(
+    options.sink,
+    activityLogEvent(
+      SECURITY_VAULT_KEY_RESOLVED_OPERATION,
+      { level: "info" },
+      { source: resolved.source },
+    ),
+  );
+  return resolved;
+}
+
+function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
   const fromEnv = keyFromEnv(options.env, options.envVarName);
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };
   const keychainAccess =
-    options.keychainAccess ?? createKeychainVaultKeyAccess(options.keychainService);
+    options.keychainAccess ??
+    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink);
   const fromKeychain = keychainAccess();
   if (fromKeychain !== undefined) return { key: fromKeychain, source: "keychain" };
   return { key: keyFromKeyfile(options.vaultDir, options.keyfileName), source: "keyfile" };
@@ -222,7 +580,9 @@ function assertNoSymlinkedPathSegments(resolvedPath: string): void {
   let current = resolvedPath;
   while (current !== dirname(current)) {
     if (isSymlink(current)) {
-      throw new Error("refusing to write secret vault through a symlinked path");
+      throw new SecretVaultUnsafeTargetError(
+        "refusing to write secret vault through a symlinked path",
+      );
     }
     current = dirname(current);
   }
@@ -242,6 +602,10 @@ function isSymlink(path: string): boolean {
 interface StoreFile {
   readonly version: number;
   readonly entries: Record<string, string>;
+}
+
+function emptyVaultEntries(): Record<string, string> {
+  return Object.create(null) as Record<string, string>;
 }
 
 function isStoreFile(value: unknown): value is StoreFile {
@@ -273,7 +637,7 @@ function storeUnreadableError(
 function readStore(storePath: string): Record<string, string> {
   const resolvedPath = resolve(storePath);
   assertNoSymlinkedPathSegments(resolvedPath);
-  if (!existsSync(resolvedPath)) return {};
+  if (!existsSync(resolvedPath)) return emptyVaultEntries();
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(resolvedPath, "utf8"));
@@ -283,7 +647,7 @@ function readStore(storePath: string): Record<string, string> {
   if (!isStoreFile(parsed)) {
     throw storeUnreadableError("SECRET_VAULT_STORE_INVALID_SCHEMA", resolvedPath);
   }
-  return { ...parsed.entries };
+  return Object.assign(emptyVaultEntries(), parsed.entries);
 }
 
 // Lists the references held in a sealed store WITHOUT resolving a vault key — a pure read over the
@@ -330,7 +694,11 @@ function fsyncDirectory(dir: string): void {
 
 // Atomic, crash-safe write: a fresh temp file in the same directory is written with 0600 and renamed
 // over the target so a reader never observes a partially written store. Mirrors savePrivateJson.
-function writeStore(storePath: string, entries: Record<string, string>): void {
+function writeStore(
+  storePath: string,
+  entries: Record<string, string>,
+  sink?: SecurityLogSink,
+): void {
   const resolvedPath = resolve(storePath);
   const dir = dirname(resolvedPath);
   // Check both before and after directory creation (mirrors private-json.ts): the first guards an
@@ -347,7 +715,10 @@ function writeStore(storePath: string, entries: Record<string, string>): void {
   try {
     writeDurableTextFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    renameSync(tempPath, resolvedPath);
+    atomicPublishRename(tempPath, resolvedPath, {
+      rename: renameSync,
+      ...(sink === undefined ? {} : { securityLogSink: sink }),
+    });
     chmodIfPresent(resolvedPath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {
@@ -375,6 +746,16 @@ export interface ShardedLocalSecretVaultDeps {
   readonly key: Buffer;
   // Directory that holds this vault's sealed entry files. It is created hardened on first write.
   readonly storeDir: string;
+  /**
+   * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired:
+   *   - a shard file that fails to read for a reason other than the symlink guarantee (EACCES,
+   *     EISDIR, EIO — previously collapsed to `undefined`, indistinguishable from "never set")
+   *     emits one `security.vault.shard-unreadable` event instead of failing silently;
+   *   - {@link LocalSecretVault.setMany} emits one `security.vault.entries-merged` event with the
+   *     sealed entry count.
+   * Omitted or `undefined` keeps this layout exactly as silent as before.
+   */
+  readonly sink?: SecurityLogSink | undefined;
 }
 
 // References are opaque, NON-SECRET identifiers, so the filename may carry one — the single-file
@@ -397,6 +778,26 @@ function shardFileName(reference: string): string | undefined {
     : undefined;
 }
 
+function optionalShardPath(storeDir: string, reference: string): string | undefined {
+  const name = shardFileName(reference);
+  return name === undefined ? undefined : join(storeDir, name);
+}
+
+function requiredShardPath(storeDir: string, reference: string): string {
+  const filePath = optionalShardPath(storeDir, reference);
+  if (filePath === undefined) {
+    throw new Error("secret vault reference cannot be stored as a sharded entry");
+  }
+  return filePath;
+}
+
+function removeShard(storeDir: string, reference: string): void {
+  const filePath = optionalShardPath(storeDir, reference);
+  if (filePath === undefined) return;
+  assertNoSymlinkedPathSegments(filePath);
+  rmSync(filePath, { force: true });
+}
+
 // Only a filename this vault could itself have written yields a reference, and `shardFileName` is
 // the single authority on that. Deciding both directions with one encoder is what keeps `list`,
 // `get` and `delete` agreeing: a name that decodes to a reference the vault would store elsewhere —
@@ -412,7 +813,7 @@ function shardReference(fileName: string): string | undefined {
 
 // Atomic, crash-safe single-entry write. Mirrors writeStore's temp-then-rename discipline; the
 // difference is that the temp file holds ONE envelope, so the cost does not grow with the vault.
-function writeShard(dir: string, filePath: string, envelope: string): void {
+function writeShard(dir: string, filePath: string, envelope: string, sink?: SecurityLogSink): void {
   // Checked twice on purpose, exactly as writeStore does: the first call guards an already
   // symlinked path, the second narrows the window where a parent could be swapped between
   // directory creation and the rename. The atomic temp-then-rename below remains the real
@@ -427,7 +828,10 @@ function writeShard(dir: string, filePath: string, envelope: string): void {
   try {
     writeDurableTextFile(tempPath, envelope, FILE_MODE);
     chmodIfPresent(tempPath, FILE_MODE);
-    renameSync(tempPath, filePath);
+    atomicPublishRename(tempPath, filePath, {
+      rename: renameSync,
+      ...(sink === undefined ? {} : { securityLogSink: sink }),
+    });
     chmodIfPresent(filePath, FILE_MODE);
     fsyncDirectory(dir);
   } finally {
@@ -441,7 +845,182 @@ function writeShard(dir: string, filePath: string, envelope: string): void {
   }
 }
 
-function readShardEnvelope(filePath: string): string | undefined {
+function emitEntriesMerged(
+  sink: SecurityLogSink | undefined,
+  count: number,
+  elapsedMs: () => number,
+): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_ENTRIES_MERGED_OPERATION,
+      { durationMs: elapsedMs() },
+      { count },
+    ),
+  );
+}
+
+function emitEntriesDeleted(
+  sink: SecurityLogSink | undefined,
+  count: number,
+  elapsedMs: () => number,
+): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_ENTRIES_DELETED_OPERATION,
+      { durationMs: elapsedMs() },
+      { count },
+    ),
+  );
+}
+
+function deleteManyWithLog(
+  sink: SecurityLogSink | undefined,
+  references: readonly string[],
+  run: () => void,
+): void {
+  if (references.length === 0) return;
+  const elapsedMs = startSecurityLogTimer();
+  try {
+    run();
+  } catch (error) {
+    emitSecurityLogEvent(
+      sink,
+      activityLogEvent(
+        SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION,
+        {
+          level: "error",
+          errorKind: vaultEnvelopeErrorKind(error, "write-failed"),
+          durationMs: elapsedMs(),
+        },
+        { count: references.length, ...vaultFailureEvidence(error) },
+      ),
+    );
+    throw error;
+  }
+  emitEntriesDeleted(sink, references.length, elapsedMs);
+}
+
+function setManyWithLog(
+  sink: SecurityLogSink | undefined,
+  next: ReadonlyMap<string, string>,
+  merge: (entries: ReadonlyMap<string, string>) => void,
+): void {
+  if (next.size === 0) return;
+  const elapsedMs = startSecurityLogTimer();
+  try {
+    merge(next);
+  } catch (error) {
+    emitSecurityLogEvent(
+      sink,
+      activityLogEvent(
+        SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION,
+        {
+          level: "error",
+          errorKind: vaultEnvelopeErrorKind(error, "write-failed"),
+          durationMs: elapsedMs(),
+        },
+        { count: next.size, ...vaultFailureEvidence(error) },
+      ),
+    );
+    throw error;
+  }
+  emitEntriesMerged(sink, next.size, elapsedMs);
+}
+
+function mergeStoreEntries(
+  storePath: string,
+  key: Buffer,
+  next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
+): void {
+  if (next.size === 0) return;
+  const entries = readStore(storePath);
+  for (const [reference, secret] of next) {
+    entries[reference] = sealString(key, secret);
+  }
+  writeStore(storePath, entries, sink);
+}
+
+function replaceStoreEntries(
+  storePath: string,
+  key: Buffer,
+  next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
+): void {
+  if (existsSync(storePath)) {
+    readStore(storePath);
+  }
+  const entries = emptyVaultEntries();
+  for (const [reference, secret] of next) {
+    entries[reference] = sealString(key, secret);
+  }
+  if (Object.keys(entries).length === 0) {
+    assertNoSymlinkedPathSegments(storePath);
+    rmSync(storePath, { force: true });
+    return;
+  }
+  writeStore(storePath, entries, sink);
+}
+
+function deleteStoreEntries(
+  storePath: string,
+  references: readonly string[],
+  sink?: SecurityLogSink,
+): void {
+  if (references.length === 0) return;
+  const drop = new Set(references);
+  const entries = readStore(storePath);
+  let changed = false;
+  const next = emptyVaultEntries();
+  for (const [storedRef, sealed] of Object.entries(entries)) {
+    if (drop.has(storedRef)) {
+      changed = true;
+      continue;
+    }
+    next[storedRef] = sealed;
+  }
+  if (!changed) return;
+  if (Object.keys(next).length === 0) {
+    assertNoSymlinkedPathSegments(storePath);
+    rmSync(storePath, { force: true });
+    return;
+  }
+  writeStore(storePath, next, sink);
+}
+
+function deleteStoreEntry(storePath: string, reference: string, sink?: SecurityLogSink): void {
+  deleteStoreEntries(storePath, [reference], sink);
+}
+
+// ENOENT is the ORDINARY case — no such shard file, no such store directory yet, exactly what
+// every never-set reference looks like — and must never itself produce a log line, or every plain
+// miss on a fresh vault would emit one. Only a read that fails for a reason OTHER than "not there"
+// (EISDIR, EACCES, EIO) is the genuine unreadable-entry case this event exists to surface.
+function isEnoent(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_SHARD_UNREADABLE_OPERATION,
+      { level: "warn", errorKind: "read-failed" },
+      // A single unreadable file per call; never the filename (it decodes to the reference) or the
+      // read error's message (it can carry the resolved path).
+      { count: 1, ...vaultFailureEvidence(cause) },
+    ),
+  );
+}
+
+function readShardEnvelope(filePath: string, sink?: SecurityLogSink): string | undefined {
   // The symlink refusal is a guarantee and still throws. A read that fails for any other reason
   // (EISDIR, EACCES, EIO) is one unreadable entry, which says nothing about the others — reporting
   // it as absent is what this layout documents, and what `get`/`has` promise their callers.
@@ -449,7 +1028,8 @@ function readShardEnvelope(filePath: string): string | undefined {
   let envelope: string;
   try {
     envelope = readFileSync(filePath, "utf8");
-  } catch {
+  } catch (cause) {
+    if (!isEnoent(cause)) emitShardUnreadable(sink, cause);
     return undefined;
   }
   return isSealed(envelope) ? envelope : undefined;
@@ -474,6 +1054,125 @@ function listShardReferences(dir: string): readonly string[] {
   return references;
 }
 
+interface PreparedShardWrite {
+  readonly path: string;
+  readonly envelope: string;
+  readonly previous: string | undefined;
+}
+
+function snapshotShardEnvelope(filePath: string): string | undefined {
+  assertNoSymlinkedPathSegments(filePath);
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch (cause) {
+    if (isEnoent(cause)) return undefined;
+    throw cause;
+  }
+}
+
+function restorePreparedShard(
+  storeDir: string,
+  item: PreparedShardWrite,
+  sink?: SecurityLogSink,
+): void {
+  if (item.previous === undefined) {
+    rmSync(item.path, { force: true });
+    return;
+  }
+  writeShard(storeDir, item.path, item.previous, sink);
+}
+
+function rollbackCommittedShards(
+  storeDir: string,
+  committed: readonly PreparedShardWrite[],
+  sink?: SecurityLogSink,
+): void {
+  for (let index = committed.length - 1; index >= 0; index -= 1) {
+    const item = committed[index];
+    if (item === undefined) continue;
+    try {
+      restorePreparedShard(storeDir, item, sink);
+    } catch (cause) {
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          SECURITY_VAULT_ENTRIES_ROLLBACK_FAILED_OPERATION,
+          { level: "error", errorKind: "durability-failed" },
+          { count: 1, ...vaultFailureEvidence(cause) },
+        ),
+      );
+    }
+  }
+}
+
+function commitShardWrites(
+  storeDir: string,
+  prepared: readonly PreparedShardWrite[],
+  sink?: SecurityLogSink,
+): void {
+  const committed: PreparedShardWrite[] = [];
+  try {
+    for (const item of prepared) {
+      writeShard(storeDir, item.path, item.envelope, sink);
+      committed.push(item);
+    }
+  } catch (error) {
+    rollbackCommittedShards(storeDir, committed, sink);
+    throw error;
+  }
+}
+
+function mergeShardEntries(
+  storeDir: string,
+  writePath: (reference: string) => string,
+  key: Buffer,
+  next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
+): void {
+  const prepared: PreparedShardWrite[] = [];
+  for (const [reference, secret] of next) {
+    const path = writePath(reference);
+    prepared.push({
+      path,
+      envelope: sealString(key, secret),
+      previous: snapshotShardEnvelope(path),
+    });
+  }
+  commitShardWrites(storeDir, prepared, sink);
+}
+
+function deleteShardEntries(storeDir: string, references: readonly string[]): void {
+  const prepared: string[] = [];
+  for (const reference of references) {
+    const filePath = optionalShardPath(storeDir, reference);
+    if (filePath !== undefined) prepared.push(filePath);
+  }
+  for (const filePath of prepared) {
+    assertNoSymlinkedPathSegments(filePath);
+  }
+  for (const filePath of prepared) {
+    rmSync(filePath, { force: true });
+  }
+}
+
+function replaceAllShards(
+  storeDir: string,
+  key: Buffer,
+  next: ReadonlyMap<string, string>,
+  sink?: SecurityLogSink,
+): void {
+  mergeShardEntries(
+    storeDir,
+    (reference) => requiredShardPath(storeDir, reference),
+    key,
+    next,
+    sink,
+  );
+  for (const reference of listShardReferences(storeDir)) {
+    if (!next.has(reference)) removeShard(storeDir, reference);
+  }
+}
+
 /**
  * A {@link LocalSecretVault} whose entries live in one sealed file each, under `storeDir`.
  *
@@ -494,42 +1193,15 @@ function listShardReferences(dir: string): readonly string[] {
  * bodies against its own index.
  */
 export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
-  const { key } = deps;
+  const { key, sink } = deps;
   const storeDir = resolve(deps.storeDir);
   // A reference with no representable filename can hold no entry, so reads and deletes report
   // "absent" rather than throwing — matching the single-file layout, where an unknown reference is
   // never an error. Only storing one is refused, and loudly.
-  const readPath = (reference: string): string | undefined => {
-    const name = shardFileName(reference);
-    return name === undefined ? undefined : join(storeDir, name);
-  };
-  const writePath = (reference: string): string => {
-    const name = shardFileName(reference);
-    if (name === undefined) {
-      throw new Error("secret vault reference cannot be stored as a sharded entry");
-    }
-    return join(storeDir, name);
-  };
-
-  const remove = (reference: string): void => {
-    const filePath = readPath(reference);
-    if (filePath === undefined) return;
-    assertNoSymlinkedPathSegments(filePath);
-    rmSync(filePath, { force: true });
-  };
-
-  const replaceAll = (next: ReadonlyMap<string, string>): void => {
-    for (const [reference, secret] of next) {
-      writeShard(storeDir, writePath(reference), sealString(key, secret));
-    }
-    for (const reference of listShardReferences(storeDir)) {
-      if (!next.has(reference)) remove(reference);
-    }
-  };
 
   const envelopeFor = (reference: string): string | undefined => {
-    const filePath = readPath(reference);
-    return filePath === undefined ? undefined : readShardEnvelope(filePath);
+    const filePath = optionalShardPath(storeDir, reference);
+    return filePath === undefined ? undefined : readShardEnvelope(filePath, sink);
   };
 
   return {
@@ -538,67 +1210,65 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
       return envelope === undefined ? undefined : openString(key, envelope);
     },
     set: (reference, secret): void => {
-      writeShard(storeDir, writePath(reference), sealString(key, secret));
+      writeShard(storeDir, requiredShardPath(storeDir, reference), sealString(key, secret), sink);
     },
-    replaceAll,
-    delete: remove,
+    setMany: (next): void => {
+      setManyWithLog(sink, next, (entries) => {
+        mergeShardEntries(
+          storeDir,
+          (reference) => requiredShardPath(storeDir, reference),
+          key,
+          entries,
+          sink,
+        );
+      });
+    },
+    replaceAll: (next): void => {
+      replaceAllShards(storeDir, key, next, sink);
+    },
+    delete: (reference): void => {
+      removeShard(storeDir, reference);
+    },
+    deleteMany: (references): void => {
+      deleteManyWithLog(sink, references, () => {
+        deleteShardEntries(storeDir, references);
+      });
+    },
     has: (reference): boolean => envelopeFor(reference) !== undefined,
     list: (): readonly string[] => listShardReferences(storeDir),
   };
 }
 
 export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretVault {
-  const { key, storePath } = deps;
-  const resolvedStorePath = resolve(storePath);
+  const { key, sink } = deps;
+  const resolvedStorePath = resolve(deps.storePath);
 
-  const get = (reference: string): string | undefined => {
-    const envelope = readStore(resolvedStorePath)[reference];
-    if (envelope === undefined || !isSealed(envelope)) return undefined;
-    return openString(key, envelope);
+  return {
+    get: (reference): string | undefined => {
+      const envelope = readStore(resolvedStorePath)[reference];
+      if (envelope === undefined || !isSealed(envelope)) return undefined;
+      return openString(key, envelope);
+    },
+    set: (reference, secret): void => {
+      mergeStoreEntries(resolvedStorePath, key, new Map([[reference, secret]]), sink);
+    },
+    setMany: (next): void => {
+      setManyWithLog(sink, next, (entries) => {
+        mergeStoreEntries(resolvedStorePath, key, entries, sink);
+      });
+    },
+    replaceAll: (next): void => {
+      replaceStoreEntries(resolvedStorePath, key, next, sink);
+    },
+    delete: (reference): void => {
+      deleteStoreEntry(resolvedStorePath, reference, sink);
+    },
+    deleteMany: (references): void => {
+      deleteManyWithLog(sink, references, () => {
+        deleteStoreEntries(resolvedStorePath, references, sink);
+      });
+    },
+    has: (reference): boolean => reference in readStore(resolvedStorePath),
+    list: (): readonly string[] => Object.keys(readStore(resolvedStorePath)),
   };
-
-  const set = (reference: string, secret: string): void => {
-    const entries = readStore(resolvedStorePath);
-    entries[reference] = sealString(key, secret);
-    writeStore(resolvedStorePath, entries);
-  };
-
-  const replaceAll = (next: ReadonlyMap<string, string>): void => {
-    if (existsSync(resolvedStorePath)) {
-      readStore(resolvedStorePath);
-    }
-    const entries: Record<string, string> = {};
-    for (const [reference, secret] of next) {
-      entries[reference] = sealString(key, secret);
-    }
-    if (Object.keys(entries).length === 0) {
-      assertNoSymlinkedPathSegments(resolvedStorePath);
-      rmSync(resolvedStorePath, { force: true });
-      return;
-    }
-    writeStore(resolvedStorePath, entries);
-  };
-
-  const remove = (reference: string): void => {
-    const entries = readStore(resolvedStorePath);
-    if (!(reference in entries)) return;
-    const next: Record<string, string> = {};
-    for (const [storedRef, sealed] of Object.entries(entries)) {
-      if (storedRef !== reference) {
-        next[storedRef] = sealed;
-      }
-    }
-    if (Object.keys(next).length === 0) {
-      assertNoSymlinkedPathSegments(resolvedStorePath);
-      rmSync(resolvedStorePath, { force: true });
-      return;
-    }
-    writeStore(resolvedStorePath, next);
-  };
-
-  const has = (reference: string): boolean => reference in readStore(resolvedStorePath);
-
-  const list = (): readonly string[] => Object.keys(readStore(resolvedStorePath));
-
-  return { get, set, replaceAll, delete: remove, has, list };
 }

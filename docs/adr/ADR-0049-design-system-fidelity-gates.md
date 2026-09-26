@@ -19,8 +19,9 @@ The audit established the ground truth (full evidence in `docs/design-system/`):
 
 - The product UI is a single-route governed desktop. The entire visual language lives in one 16,191-line
   `packages/keiko-ui/src/app/globals.css` of global class names. There is one theme engine (CSS custom
-  properties switched by `data-theme` / `data-hc` / `data-input-modality` and `@media` queries) and no
-  CSS-Modules, Tailwind, styled-components, or Storybook layer.
+  properties switched by `data-theme` / `data-hc` / `data-input-modality` and `@media` queries). Component
+  surfaces also use CSS Modules with the documented `cmp` prefix; Tailwind, styled-components, and Storybook
+  are not part of the product styling layer.
 - The design-system defines a four-layer token architecture (primitive → scale → semantic → component). The
   product implements only Tier 1 (primitives) plus the editor extension; **160 Tier-2/3/4 tokens are absent**,
   two Tier-1 primitives (`--focus-w`, `--grid-dot`) are missing, and the `@media (forced-colors: active)` mode
@@ -41,9 +42,9 @@ and never weaken, the existing architecture, security, accessibility, evidence, 
 
 1. **Single token source, no duplication.** Token consolidation extends `globals.css` as the single emitted
    token source; the semantic/component tiers are layered on top of the existing primitives. No second `:root`
-   token block, no parallel token namespace, no parallel theme engine, and no new styling framework
-   (CSS-Modules / Tailwind / styled-components / Storybook) may be introduced. Enforced by review against this
-   ADR and by extending `globals.css.test.ts`.
+   token block, no parallel token namespace, or parallel theme engine may be introduced. New component styling
+   uses the governed CSS Module convention; Tailwind, styled-components, and Storybook remain prohibited.
+   Enforced by review against this ADR and by extending `globals.css.test.ts`.
 
 2. **Token-tier completeness.** After #1292, `globals.css` defines the design-system Tier-2 scales, Tier-3
    semantic, and Tier-4 component tokens, the `--focus-w` and `--grid-dot` primitives, an

@@ -94,7 +94,13 @@ const KEY_VALUE_KEYWORD_RE = /\b(formatter|database|db|test\s+runner|runner|tool
 // the complexity threshold even after REGION_VALUE_RE's narrower 6-branch sibling stayed under
 // it). The connector is always non-capturing and optional, so skipping it in plain code before
 // applying the atom regex is behavior-identical to the original single pattern.
-const KEY_VALUE_CONNECTOR_RE = /^\s*(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)\s*/iu;
+// The word connectors carry a trailing `\b`; the punctuation ones cannot and do not need one.
+// Without it an alphabetic connector matched a PREFIX of an ordinary word and the atom pass then
+// took the remainder of that same word as the value — "tool token" yielded tool=ken, "tool topic"
+// tool=pic, "tool issues" tool=sues, "database auftrag" database=trag. Requiring a connector is
+// only a guard if the connector has to be a whole token. `\b` is zero-width, so the linear-time
+// S8786 shape described above is unchanged.
+const KEY_VALUE_CONNECTOR_RE = /^\s*(?:(?:is|ist|to|auf|should\s+be|soll(?:te)?)\b|[=:])\s*/iu;
 const KEY_VALUE_ATOM_RE = /^\s*([a-z][a-z0-9+#._-]{1,40})\b/iu;
 
 interface KeyValueValueMatch {
@@ -103,18 +109,26 @@ interface KeyValueValueMatch {
 }
 
 function execKeyValueValue(text: string): KeyValueValueMatch | null {
-  const connectorLength = KEY_VALUE_CONNECTOR_RE.exec(text)?.[0].length ?? 0;
+  // A connector is what makes the following atom a VALUE for this keyword rather than merely the
+  // next word in the sentence. Letting the connector length fall back to 0 when nothing matched
+  // turned every passing mention of a bare generic keyword — "a tool sometimes", "the model
+  // railway" — into a fact, and two such facts sharing a keyword surface as a value-replacement
+  // conflict, the one evidence kind that bypasses the Jaccard similarity floor. Requiring the
+  // connector up front is the guard the extraction never had.
+  const connectorMatch = KEY_VALUE_CONNECTOR_RE.exec(text);
+  if (connectorMatch === null) {
+    return null;
+  }
+  const connectorLength = connectorMatch[0].length;
   const atomMatch = KEY_VALUE_ATOM_RE.exec(text.slice(connectorLength));
   if (atomMatch?.[1] !== undefined) {
     return { value: atomMatch[1], consumedLength: connectorLength + atomMatch[0].length };
   }
-  if (connectorLength === 0) {
-    return null;
-  }
   // The original combined regex's optional connector group could backtrack out entirely when
   // nothing valid followed it — e.g. body "is" alone, where "is" itself is both a connector word
   // and a valid atom (Gitar review finding). Retrying the atom pass against the un-skipped text
-  // replicates that backtrack instead of silently dropping the fact.
+  // replicates that backtrack instead of silently dropping the fact. Only reachable with a
+  // connector already matched, so the atom it recovers is still connector-backed.
   const fallbackMatch = KEY_VALUE_ATOM_RE.exec(text);
   if (fallbackMatch?.[1] === undefined) {
     return null;

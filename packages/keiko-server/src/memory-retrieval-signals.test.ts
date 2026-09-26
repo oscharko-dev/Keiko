@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-memory-vault";
 
 import type { UiHandlerDeps } from "./deps.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const { embedMock, observations, searchMock } = vi.hoisted(() => ({
   embedMock: vi.fn(),
@@ -109,6 +110,20 @@ function collectSignals(
     allowed: true,
     reason: "allowed",
   });
+}
+
+// A recording diagnostics sink, so a test can assert on the redaction-safe record a degraded
+// semantic-retrieval path emits instead of on a console.warn call (#2902 O-F4).
+function depsWithDiagnostics(): {
+  readonly deps: UiHandlerDeps;
+  readonly calls: ServerDiagnosticRecord[];
+} {
+  const calls: ServerDiagnosticRecord[] = [];
+  const deps = {
+    env: {},
+    diagnostics: { record: (record: ServerDiagnosticRecord) => calls.push(record) },
+  } as unknown as UiHandlerDeps;
+  return { deps, calls };
 }
 
 beforeEach(() => {
@@ -215,25 +230,31 @@ describe("buildConversationRetrievalSignals", () => {
       () => [metadata(invalidNonFinite, 300), metadata(invalidZero, 200), metadata(valid, 100)],
       embeddings,
     );
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { deps, calls } = depsWithDiagnostics();
 
-    try {
-      const signals = await collectSignals(vault);
+    const signals = await buildConversationRetrievalSignals(
+      deps,
+      vault,
+      "memory query",
+      [SCOPE],
+      NOW_MS,
+      { allowed: true, reason: "allowed" },
+    );
 
-      expect(observations[0]?.ids).toEqual(["valid"]);
-      expect([...(signals.semanticById?.keys() ?? [])]).toEqual([valid]);
-      expect(warning).toHaveBeenCalledWith(
-        "memory semantic scores skipped for incompatible embeddings",
-        {
-          reason: "identity-mismatch",
-          skipped: 2,
-          candidates: 3,
-          queryModelId: IDENTITY.modelId,
-        },
-      );
-    } finally {
-      warning.mockRestore();
-    }
+    expect(observations[0]?.ids).toEqual(["valid"]);
+    expect([...(signals.semanticById?.keys() ?? [])]).toEqual([valid]);
+    // Degraded semantic retrieval reaches the redaction-safe operator diagnostic sink (so it
+    // lands in server.log and a support bundle), never only a console.warn nobody captures.
+    const skipped = calls.find(
+      (record) => record.operation === "memory.retrieval.semantic-skipped",
+    );
+    expect(skipped).toMatchObject({
+      code: "identity-mismatch",
+      semanticSkippedCount: 2,
+      semanticCandidateCount: 3,
+    });
+    // Never the raw model id — only bounded counts and the closed-vocabulary reason code.
+    expect(JSON.stringify(skipped)).not.toContain(IDENTITY.modelId);
   });
 
   it("reports the vector-index failure reason without misclassifying it as an identity mismatch", async () => {
@@ -243,19 +264,48 @@ describe("buildConversationRetrievalSignals", () => {
     ]);
     const vault = vaultFor(() => [metadata(alpha, 100)], embeddings);
     searchMock.mockResolvedValueOnce({ ok: false, reason: "runtime-integrity-failed" });
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { deps, calls } = depsWithDiagnostics();
 
-    try {
-      const signals = await collectSignals(vault);
+    const signals = await buildConversationRetrievalSignals(
+      deps,
+      vault,
+      "memory query",
+      [SCOPE],
+      NOW_MS,
+      { allowed: true, reason: "allowed" },
+    );
 
-      expect(signals.semanticById).toBeUndefined();
-      expect(warning).toHaveBeenCalledWith("memory semantic scores disabled", {
-        reason: "vector-index-failed",
-        vectorIndexReason: "runtime-integrity-failed",
-        candidates: 1,
-      });
-    } finally {
-      warning.mockRestore();
-    }
+    expect(signals.semanticById).toBeUndefined();
+    const disabled = calls.find(
+      (record) => record.operation === "memory.retrieval.semantic-disabled",
+    );
+    expect(disabled).toMatchObject({
+      code: "vector-index-failed:runtime-integrity-failed",
+      semanticCandidateCount: 1,
+    });
+  });
+
+  it("reports a degraded conversation-memory recall diagnostic, not a knowledge-store citation one", async () => {
+    // Regression pin (#2902 Finding 1 refinement): this module feeds chat/BFF conversation-memory
+    // recall, not the local-knowledge citation-grounding pipeline. Its diagnostics must never be
+    // mistaken for a local-knowledge-store event.
+    const alpha = memoryId("alpha");
+    const embeddings = new Map<MemoryId, MemoryEmbeddingRow>([
+      [alpha, embedding(alpha, new Float32Array([1, 0]))],
+    ]);
+    const vault = vaultFor(() => [metadata(alpha, 100)], embeddings);
+    searchMock.mockResolvedValueOnce({ ok: false, reason: "runtime-integrity-failed" });
+    const { deps, calls } = depsWithDiagnostics();
+
+    await buildConversationRetrievalSignals(deps, vault, "memory query", [SCOPE], NOW_MS, {
+      allowed: true,
+      reason: "allowed",
+    });
+
+    const disabled = calls.find(
+      (record) => record.operation === "memory.retrieval.semantic-disabled",
+    );
+    expect(disabled?.source).toBe("memory-retrieval-signals");
+    expect(disabled?.source).not.toMatch(/local-knowledge/iu);
   });
 });

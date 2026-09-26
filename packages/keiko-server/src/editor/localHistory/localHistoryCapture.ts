@@ -5,13 +5,87 @@ import type {
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import type { FilesContentResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { UiHandlerDeps } from "../../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 import { emitServerDiagnostic } from "../../diagnostics-log.js";
+import type { ServerLogSink } from "../../observability/index.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 import {
   resolveCurrentWorkspaceRootMembership,
   WorkspaceRootMembershipError,
 } from "../../workspace-root-membership.js";
 import { EditorLocalHistoryError, editorLocalHistoryWorkspaceId } from "./localHistoryStore.js";
+
+// #2906 review (comment 3863185711): a rename-triggered reKey failure is not a checkpoint
+// capture, so it must never be mislabeled under a real EditorLocalHistoryOrigin (a rename can hit
+// this failure path no matter which origin captured the checkpoints being renamed). Kept as a
+// sibling union rather than widening EditorLocalHistoryOrigin itself: that contract type is the
+// closed vocabulary a PERSISTED checkpoint's `origin` field is validated against
+// (isHistoryOrigin/EDITOR_LOCAL_HISTORY_ORIGINS in localHistoryStore.ts's contract), and a reKey
+// never produces a new checkpoint, so it has no `origin` of that kind to report.
+export type EditorLocalHistoryDiagnosticOrigin =
+  EditorLocalHistoryOrigin | "editor.local-history.rekey";
+
+const REKEY_DIAGNOSTIC_ORIGIN: EditorLocalHistoryDiagnosticOrigin = "editor.local-history.rekey";
+
+const EDITOR_LOCAL_HISTORY_REKEY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.local-history.rekey.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.localHistory.localHistoryCapture.reKeyFailureOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failed"],
+    },
+    rewrittenCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["editor-local-history-rekey"],
+  proofIds: ["editor.local-history.rekey.failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const EDITOR_LOCAL_HISTORY_REKEY_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.local-history.rekey.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.localHistory.localHistoryCapture.reKeyEditorLocalHistorySafely",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded"],
+    },
+    rewrittenCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["editor-local-history-rekey"],
+  proofIds: ["editor.local-history.rekey.completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function reKeyActivityErrorKind(error: unknown): ActivityLogErrorKind {
+  if (!(error instanceof EditorLocalHistoryError)) return "internal";
+  if (error.code === "INDEX_UNAVAILABLE") return "unavailable";
+  return error.code === "INVALID_CAPTURE" ? "validation-failed" : "internal";
+}
 
 export interface EditorLocalHistoryResolvedRoot {
   readonly workspaceId: string;
@@ -63,11 +137,15 @@ function captureFailureCode(error: unknown): string {
 
 export function emitEditorLocalHistoryCaptureFailure(
   deps: Pick<UiHandlerDeps, "diagnostics">,
-  origin: EditorLocalHistoryOrigin,
+  origin: EditorLocalHistoryDiagnosticOrigin,
   error: unknown,
   nowMs = Date.now(),
+  // Threads the request's own correlation id (ADR-0173 D5 / g12) when the caller has one in
+  // scope, so this failure — and the client-visible protection payload it returns the id on —
+  // joins the SAME id as the rest of the request's trail instead of a disconnected mint.
+  requestCorrelationId?: string,
 ): string {
-  const correlationId = `local-history-${randomUUID()}`;
+  const correlationId = requestCorrelationId ?? `local-history-${randomUUID()}`;
   emitServerDiagnostic(deps.diagnostics, {
     correlationId,
     timestamp: new Date(nowMs).toISOString(),
@@ -101,6 +179,103 @@ function degradedProtection(
   };
 }
 
+// A secret-shaped capture is a deliberate protection decision, not unavailable infrastructure — it
+// gets its own status instead of being folded into "degraded" (#2898). Kept as a thin branch ahead
+// of degradedProtection rather than inside it, since the store-unavailable call site above can never
+// produce this error and should keep reading as the plain "degraded" case it always was.
+function protectionForCaptureFailure(
+  error: unknown,
+  correlationId: string,
+): EditorLocalHistoryCaptureProtection {
+  if (error instanceof EditorLocalHistoryError && error.code === "SECRET_CONTENT_SUPPRESSED") {
+    return { status: "suppressed", reason: "secret-detected", correlationId };
+  }
+  return degradedProtection(error, correlationId);
+}
+
+// KEIKO-0675: rename-driven re-key wrapper mirroring captureEditorLocalHistorySafely's shape.
+// Fail-safe: a re-key failure never breaks the rename response; it emits a body-free diagnostic
+// AND a body-free activity-log line (#2906 review, comment 3863185711), then returns 0 rewritten
+// entries. `activityLog` defaults to the same process-wide ServerLogSink every other server
+// operation writes through (mirrors gitDelivery/execution.ts's `seams.activityLog ??
+// processServerLogSink()` seam) so production observability holds with zero composition-root
+// wiring, while a test can still inject a capturing sink to assert on the emitted line.
+//
+// Before this fix the returned rewritten-entry count was silently discarded by the rename route
+// (files.ts) — never logged anywhere — and the failure path mislabeled itself under the real
+// checkpoint-capture origin "user-save", making a rename-triggered failure indistinguishable from
+// an ordinary user-save capture failure in both the diagnostic and (via its activity-log bridge)
+// the activity log.
+// #2906 review (comment 3865159301): both failure records for the SAME rekey failure must carry
+// the identical, already-resolved correlationId -- never a freshly minted one -- so a
+// support-analyze pass can join them. Shared by the store-unavailable early return and the catch
+// branch below, which used to pass the caller's possibly-undefined `input.correlationId` straight
+// through and let emitEditorLocalHistoryCaptureFailure mint its own disconnected id.
+function reKeyFailureOutcome(
+  deps: Pick<UiHandlerDeps, "diagnostics">,
+  activityLog: ServerLogSink,
+  correlationId: string,
+  error: unknown,
+): number {
+  emitEditorLocalHistoryCaptureFailure(
+    deps,
+    REKEY_DIAGNOSTIC_ORIGIN,
+    error,
+    Date.now(),
+    correlationId,
+  );
+  activityLog.write(
+    activityLogEvent(
+      EDITOR_LOCAL_HISTORY_REKEY_FAILED_OPERATION,
+      { level: "error", correlationId, errorKind: reKeyActivityErrorKind(error) },
+      { outcome: "failed", rewrittenCount: 0 },
+    ),
+  );
+  return 0;
+}
+
+export function reKeyEditorLocalHistorySafely(input: {
+  readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics"> & {
+    readonly activityLog?: ServerLogSink | undefined;
+  };
+  readonly realRoot: string;
+  readonly previousRelativePath: string;
+  readonly nextRelativePath: string;
+  readonly correlationId?: string | undefined;
+}): number {
+  const activityLog = input.deps.activityLog ?? processServerLogSink();
+  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
+  if (input.deps.editorLocalHistoryStore === undefined) {
+    // #2906 review (comment 3865159301): this used to return 0 with no diagnostic and no
+    // activity-log line at all, making an unavailable subsystem indistinguishable from a genuine
+    // zero-rewrite success.
+    const error = new EditorLocalHistoryError(
+      "INDEX_UNAVAILABLE",
+      "Editor Local History is unavailable.",
+      "STORE_UNAVAILABLE",
+    );
+    return reKeyFailureOutcome(input.deps, activityLog, correlationId, error);
+  }
+  try {
+    const identity = resolveEditorLocalHistoryRoot(input.deps, input.realRoot);
+    const rewrittenCount = input.deps.editorLocalHistoryStore.reKey(
+      identity,
+      input.previousRelativePath,
+      input.nextRelativePath,
+    );
+    activityLog.write(
+      activityLogEvent(
+        EDITOR_LOCAL_HISTORY_REKEY_COMPLETED_OPERATION,
+        { correlationId },
+        { outcome: "succeeded", rewrittenCount },
+      ),
+    );
+    return rewrittenCount;
+  } catch (error) {
+    return reKeyFailureOutcome(input.deps, activityLog, correlationId, error);
+  }
+}
+
 export function captureEditorLocalHistorySafely(input: {
   readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics">;
   readonly realRoot: string;
@@ -109,6 +284,8 @@ export function captureEditorLocalHistorySafely(input: {
   readonly content: string;
   readonly origin: EditorLocalHistoryOrigin;
   readonly nowMs?: number | undefined;
+  // The request's own correlation id (ADR-0173 D5 / g12), when the caller has one in scope.
+  readonly correlationId?: string | undefined;
 }): EditorLocalHistoryCaptureProtection {
   if (input.deps.editorLocalHistoryStore === undefined) {
     const error = new EditorLocalHistoryError(
@@ -121,6 +298,7 @@ export function captureEditorLocalHistorySafely(input: {
       input.origin,
       error,
       input.nowMs,
+      input.correlationId,
     );
     return degradedProtection(error, correlationId);
   }
@@ -141,7 +319,8 @@ export function captureEditorLocalHistorySafely(input: {
       input.origin,
       error,
       input.nowMs,
+      input.correlationId,
     );
-    return degradedProtection(error, correlationId);
+    return protectionForCaptureFailure(error, correlationId);
   }
 }

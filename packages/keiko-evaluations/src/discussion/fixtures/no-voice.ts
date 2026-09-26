@@ -26,6 +26,7 @@ const noVoiceChallenge: DiscussionEvalFixture = {
     expectedUncertaintyDisclosure: true,
     expectedDecisionRecommendation: false,
     expectedContradictionPolicies: ["disclose-and-defer"],
+    expectsRecoveredContext: false,
   },
 };
 
@@ -50,6 +51,7 @@ const noVoiceDecide: DiscussionEvalFixture = {
     expectedUncertaintyDisclosure: true,
     expectedDecisionRecommendation: true,
     expectedContradictionPolicies: ["disclose-and-defer"],
+    expectsRecoveredContext: false,
   },
 };
 
@@ -77,6 +79,7 @@ const noVoiceBrainstorm: DiscussionEvalFixture = {
     expectedUncertaintyDisclosure: false,
     expectedDecisionRecommendation: false,
     expectedContradictionPolicies: ["synthesize-with-caveats"],
+    expectsRecoveredContext: false,
   },
 };
 

@@ -1,7 +1,8 @@
 // ADF-to-text converter tests (Issue #2243). Golden output per node type, hostile-input
 // degradation, purity/determinism (byte-identical repeat runs), and depth/node/output caps at
-// their exact boundary values. Hermetic and clock-free except the explicit wall-clock bound on
-// the 10k-node hostile corpus, which the acceptance criteria demand.
+// their exact boundary values. Hermetic and clock-free except two explicit wall-clock bounds: the
+// 10k-node hostile corpus the acceptance criteria demand, and the KEIKO-0944 node-budget early-exit
+// regression (a relative bound calibrated against the same run, not an absolute machine-speed one).
 
 import { describe, expect, it } from "vitest";
 import {
@@ -347,6 +348,40 @@ describe("convertAdfToText — purity and determinism", () => {
     expect(second.truncationReasons).toStrictEqual(first.truncationReasons);
     expect(second.unknownNodeTypes).toStrictEqual(first.unknownNodeTypes);
     expect(elapsedMs).toBeLessThan(2_000);
+  });
+
+  it("visits at most ADF_TO_TEXT_MAX_NODES + 1 nodes once the budget trips, regardless of input array length (KEIKO-0723 follow-up)", (): void => {
+    // Regression for KEIKO-0944, replacing the earlier wall-clock + ~160 MB reference-fixture
+    // shape (Codex P1 on #3279: allocation + GC pauses inside the 200 ms timed region are host-
+    // dependent and produce OOM/flake on constrained CI runners). The property this pins is a
+    // count invariant, not a timing one: "no further sibling walking once nodesVisited passes
+    // the budget". The deterministic observable is `outcome.nodesVisited`; if renderChildren
+    // (or any of the list/table iteration helpers) regresses to dispatching every remaining
+    // sibling into renderNode after the budget trips, `nodesVisited` grows with the array
+    // length instead of stopping at the budget + 1, and this assertion fails.
+    //
+    // A single shared, non-recursive paragraph object is reused across every array slot (safe:
+    // the converter has no identity-based cycle tracking, only count/depth caps — see the
+    // module header's own note on the depth cap terminating self-referencing graphs); the array
+    // now only needs to be a bit past the budget to prove the point, not 1000× larger, so peak
+    // memory is a few hundred KB, not ~160 MB.
+    const trivialParagraph: Json = { type: "paragraph", content: [] };
+    const OVER_BUDGET_MARGIN = 100;
+    const overBudgetDoc = {
+      type: "doc",
+      version: 1,
+      content: new Array<Json>(ADF_TO_TEXT_MAX_NODES + OVER_BUDGET_MARGIN).fill(trivialParagraph),
+    };
+    const outcome = convertAdfToText(overBudgetDoc);
+    expect(outcome.truncated).toBe(true);
+    expect(outcome.truncationReasons).toStrictEqual(["node-budget-exceeded"]);
+    // Upper bound: ADF_TO_TEXT_MAX_NODES + 1 (the +1 counts the visit that trips the check).
+    // A bounded implementation stops here; a regressed one visits every one of the
+    // OVER_BUDGET_MARGIN extra siblings and blows past this cap deterministically.
+    expect(outcome.nodesVisited).toBeLessThanOrEqual(ADF_TO_TEXT_MAX_NODES + 1);
+    // Lower bound: at least the whole budget was actually visited (guards against the opposite
+    // regression where the budget trips too early and the invariant becomes vacuously true).
+    expect(outcome.nodesVisited).toBeGreaterThan(ADF_TO_TEXT_MAX_NODES / 2);
   });
 
   it("produces identical output for a JSON round-tripped clone of the same document", () => {

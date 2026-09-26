@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "status": "verified",
+  "verificationKind": "deterministic-production-managed",
+  "sequence": 1,
+  "sourceCommit": "0f23317f810b6e9a459bb3f2d5dacdb1e2afc4ea",
+  "catalogRevision": "fd9e603b1b7dc740b53524faee86233b63f8591ae6c5413a17792deab68ce329",
+  "projectionDigest": "4684a4db5df09d1255865474a68e07b81aced651d0a88fb7502008f9d400d1c0",
+  "command": "npx vitest run packages/keiko-tool-catalog/src",
+  "testFiles": 12,
+  "testCount": 226,
+  "result": "passed",
+  "evidenceRef": "github:oscharko-dev/Keiko#pull/3452/checks@0f23317f810b6e9a459bb3f2d5dacdb1e2afc4ea"
+}
