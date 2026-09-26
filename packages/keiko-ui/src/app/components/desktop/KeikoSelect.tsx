@@ -206,6 +206,29 @@ function menuMaxHeight(rect: DOMRect, openUp: boolean, sizing: MenuSizing): numb
   );
 }
 
+// The options a search shows, exact and leading matches first.
+function searchSections(
+  sections: readonly KeikoSelectSection[],
+  rawQuery: string,
+): readonly KeikoSelectSection[] {
+  const query = rawQuery.trim().toLocaleLowerCase();
+  if (query === "") return sections;
+  return sections.map((section) => ({
+    ...section,
+    options: section.options
+      .filter((option) => option.label.toLocaleLowerCase().includes(query))
+      .sort((a, b) => searchRank(a.label, query) - searchRank(b.label, query)),
+  }));
+}
+
+// A new query activates its first enabled match, or none when nothing matches (PR #3625 review:
+// index 0 could name a disabled option or no option at all).
+function firstEnabledSearchMatch(sections: readonly KeikoSelectSection[], query: string): number {
+  return searchSections(sections, query)
+    .flatMap((section) => section.options)
+    .findIndex((option) => option.disabled !== true);
+}
+
 function buildTriggerClasses(params: {
   readonly disabled: boolean;
   readonly mono: boolean;
@@ -417,7 +440,7 @@ function KeikoSelectSearchField({
 }): ReactNode {
   if (search === undefined) return null;
   return (
-    <div className={styles.menuSearch}>
+    <div className={styles.cmpMenuSearch}>
       <input
         ref={search.inputRef}
         type="search"
@@ -441,7 +464,7 @@ function KeikoSelectNoMatches({
   readonly visible: boolean;
 }): ReactNode {
   if (!visible || search?.emptyLabel === undefined) return null;
-  return <p className={styles.menuEmpty}>{search.emptyLabel}</p>;
+  return <p className={styles.cmpMenuEmpty}>{search.emptyLabel}</p>;
 }
 
 function KeikoSelectMenu({
@@ -583,16 +606,10 @@ export default function KeikoSelect({
   const [openUp, setOpenUp] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const visibleSections = useMemo<readonly KeikoSelectSection[]>(() => {
-    const query = searchQuery.trim().toLocaleLowerCase();
-    if (query === "") return sections;
-    return sections.map((section) => ({
-      ...section,
-      options: section.options
-        .filter((option) => option.label.toLocaleLowerCase().includes(query))
-        .sort((a, b) => searchRank(a.label, query) - searchRank(b.label, query)),
-    }));
-  }, [searchQuery, sections]);
+  const visibleSections = useMemo<readonly KeikoSelectSection[]>(
+    () => searchSections(sections, searchQuery),
+    [searchQuery, sections],
+  );
 
   const flatOptions = useMemo<readonly FlatOption[]>(
     () =>
@@ -901,7 +918,7 @@ export default function KeikoSelect({
                 inputRef: searchRef,
                 onChange: (next): void => {
                   setSearchQuery(next);
-                  setActiveIndex(0);
+                  setActiveIndex(firstEnabledSearchMatch(sections, next));
                 },
                 onKeyDown: onSearchKeyDown,
               }

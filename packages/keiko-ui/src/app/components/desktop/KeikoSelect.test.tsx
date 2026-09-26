@@ -325,6 +325,35 @@ describe("KeikoSelect searchable menus", () => {
     ]);
   });
 
+  // PR #3625 review: a query whose first match is disabled activates the first enabled match.
+  it("activates the first enabled match after a query", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Repository"
+        onValueChange={vi.fn()}
+        searchPlaceholder="Search repositories"
+        sections={[
+          {
+            options: [
+              { value: "other", label: "other" },
+              { value: "repo-a", label: "repo-a", disabled: true },
+              { value: "repo-b", label: "repo-b" },
+            ],
+          },
+        ]}
+        value="other"
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "repo");
+    const options = screen.getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual(["repo-a", "repo-b"]);
+    expect(options[0]).not.toHaveClass("ksel-option-active");
+    expect(options[1]).toHaveClass("ksel-option-active");
+  });
+
   it("says in the caller's copy when a search matches nothing", async () => {
     const user = userEvent.setup();
     render(
