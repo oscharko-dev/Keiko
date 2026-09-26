@@ -613,13 +613,37 @@ function taskWorkspaceControl(page: Page): Locator {
   return page.locator('button[aria-label^="Task workspaces: "]');
 }
 
+/**
+ * `TaskWorkspaceManager`'s own trigger (the "Task workspaces: …" button) renders only inside the
+ * "Coding Workbench information" dialog (CodingWorkbenchInfoPanel.tsx) -- unlike the
+ * repository/branch chips read alongside it below, which sit on the composer directly and need no
+ * dialog. Reading or awaiting its accessible name therefore means opening that dialog first, and
+ * leaving it exactly as this call found it: closed if this call is the one that opened it, still
+ * open if the caller already had it open for its own reason.
+ */
+async function withInformationDialogOpen<T>(page: Page, read: () => Promise<T>): Promise<T> {
+  const dialog = page.getByRole("dialog", { name: "Coding Workbench information" });
+  const alreadyOpen = await dialog.isVisible();
+  if (!alreadyOpen) {
+    await page.getByRole("button", { name: "Open Coding Workbench information" }).click();
+    await expect(dialog).toBeVisible();
+  }
+  try {
+    return await read();
+  } finally {
+    if (!alreadyOpen) await page.keyboard.press("Escape");
+  }
+}
+
 async function currentLiveWorkbenchIdentity(page: Page): Promise<LiveWorkbenchIdentity> {
   // ActiveWorkspaceContext publishes "Workspace ready" only after it has reconciled the server
   // instance and the rendered repository binding, so every control read below is taken after that
   // boundary and names the reconciled workspace rather than a pre-setup one.
   await waitForWorkbenchWorkspace(page);
   return {
-    taskControlName: await controlName(taskWorkspaceControl(page), "task workspace"),
+    taskControlName: await withInformationDialogOpen(page, () =>
+      controlName(taskWorkspaceControl(page), "task workspace"),
+    ),
     repositoryControlName: await controlName(
       page.locator('button[aria-label^="Manage repository "]'),
       "repository",
@@ -635,9 +659,11 @@ async function waitForLiveWorkbenchIdentity(
   page: Page,
   identity: LiveWorkbenchIdentity,
 ): Promise<void> {
-  await expect(page.getByRole("button", { name: identity.taskControlName })).toBeVisible({
-    timeout: 60_000,
-  });
+  await withInformationDialogOpen(page, () =>
+    expect(page.getByRole("button", { name: identity.taskControlName })).toBeVisible({
+      timeout: 60_000,
+    }),
+  );
   await waitForWorkbenchResources(page);
   await expect(page.getByRole("button", { name: identity.repositoryControlName })).toBeVisible();
   await expect(page.getByRole("button", { name: identity.branchControlName })).toBeVisible();
@@ -858,69 +884,134 @@ export async function assertRuntimeReady(page: Page, mode: CodingWorkbenchMode):
   await assertObservedRuntimeReady(page);
 }
 
-async function previewAndAcceptIssue(page: Page, issueRef: string): Promise<void> {
+// PR #3625 retired the setup card's own "Issue URL or #number" field and its "Preview issue" /
+// "Use this issue" / "Start from a GitHub issue" controls. An issue reference is no longer
+// previewed and accepted as its own step: `useCodingWorkbenchIssueIntake.ts` extracts it from the
+// free-text "Task instructions" prompt and resolves it automatically inside the SAME "Start coding
+// run" click, so previewing and starting are now one action. This still hits the identical
+// preview route and still offers the identical refuse-grant-retry remedy (#3390) when the only
+// obstacle is the per-repository GitHub issue-reader grant -- `GitHubIssueAccessGrant`
+// (CodingWorkbenchIssueIntake.tsx) -- just reached through Send instead of a dedicated button.
+//
+// Resolves once the run-start request has actually been sent (the prompt's issue reference
+// resolved cleanly). Throws instead of hanging a caller's own `waitForResponse` on a request that
+// was never sent: a request that never left the browser is a much clearer defect than a
+// downstream timeout with no visible cause.
+export async function previewAndAcceptIssue(page: Page, prompt: string): Promise<void> {
   await raiseWorkbench(page);
-  const issueField = page.getByLabel("Issue URL or #number");
-  const startFromIssue = page.getByRole("button", {
-    name: "Start from a GitHub issue",
-    exact: true,
-  });
-  // Settle first, then branch. `isVisible()` answers false for a field that has simply not painted
-  // yet, which sent the lane down the disclosure branch and then waited for a control that was
-  // never going to appear.
-  await expect(issueField.or(startFromIssue).first()).toBeVisible({ timeout: 60_000 });
-  if (!(await issueField.isVisible())) await startFromIssue.click();
-  await expect(issueField).toBeVisible();
-  await issueField.fill(issueRef);
-  await previewIssueGrantingAccessIfRefused(page);
-  await page.getByRole("button", { name: "Use this issue", exact: true }).click();
+  await page.getByLabel("Task instructions").fill(prompt);
+  const alert = page.getByTestId("coding-workbench-issue-alert");
+  await clickStartCodingRun(page);
+  if ((await awaitIssueIntakeOutcome(page, alert)) === "resolved") return;
+  const failure = await alert.getAttribute("data-failure");
+  if (failure !== "auth-required") {
+    throw new Error(
+      `the coding workbench refused the prompt's issue reference (${failure ?? "unknown"}), and it is not the auth-required grant this helper can remedy`,
+    );
+  }
+  await page.getByRole("button", { name: "Enable GitHub issue access", exact: true }).click();
+  // The control withdraws itself only once the server has confirmed the grant, so its
+  // disappearance is the confirmation -- never an optimistic local flag.
+  await expect(
+    page.getByRole("button", { name: "Enable GitHub issue access", exact: true }),
+  ).toBeHidden({ timeout: 60_000 });
+  // "Try again" (CodingWorkbenchIssueIntake.tsx's retry control) re-submits the SAME prompt
+  // through the identical `startTask` the composer's own "Start coding run" button calls.
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  if ((await awaitIssueIntakeOutcome(page, alert)) === "resolved") return;
+  const retryFailure = await alert.getAttribute("data-failure");
+  throw new Error(
+    `the coding workbench still refused the prompt's issue reference after granting GitHub issue access (${retryFailure ?? "unknown"})`,
+  );
+}
+
+async function clickStartCodingRun(page: Page): Promise<void> {
+  const startButton = page.getByRole("button", { name: "Start coding run", exact: true });
+  await expect(startButton).toBeEnabled({ timeout: 60_000 });
+  await startButton.click();
 }
 
 /**
- * Previews the entered issue, and -- when the repository has no GitHub issue-reader grant yet --
- * enables it through the Workbench's OWN control before previewing again. That refuse-grant-retry
- * sequence IS the real user journey (#3390): the preview is the moment the missing precondition
- * shows up, and `GitHubIssueAccessGrant` (CodingWorkbenchIssueIntake.tsx) offers it right there for
- * the exact repository path the intake is bound to. Before that control existed this lane PUT the
- * authorization route itself, because the only affordance lived in Settings, bound to a root no
- * task workspace had produced yet.
- *
- * Any refusal that is NOT the access one is surfaced as itself rather than retried: only the
- * access refusal has a remedy on this surface.
+ * Settles once the prompt's issue reference either resolved (the run-start request went out,
+ * observed as the Coding Workbench surface leaving its idle `data-state`) or failed (the intake
+ * alert is showing). Never both: a resolved prompt clears the alert and moves the surface past
+ * idle in the same action.
  */
-async function previewIssueGrantingAccessIfRefused(page: Page): Promise<void> {
-  const preview = page.getByRole("button", { name: "Preview issue", exact: true });
-  const previewRegion = page.getByRole("region", { name: "Issue preview", exact: true });
-  const alert = page.getByTestId("coding-workbench-issue-alert");
-  const grant = page.getByRole("button", { name: "Enable GitHub issue access", exact: true });
-  await preview.click();
-  await expect(previewRegion.or(alert).first()).toBeVisible({ timeout: 60_000 });
-  if (await alert.isVisible()) {
-    await expect(alert).toHaveAttribute("data-failure", "auth-required");
-    await grant.click();
-    // The control withdraws itself only once the server has confirmed the grant, so its
-    // disappearance is the confirmation -- never an optimistic local flag.
-    await expect(grant).toBeHidden({ timeout: 60_000 });
-    await preview.click();
-  }
-  await expect(previewRegion).toBeVisible({ timeout: 60_000 });
+async function awaitIssueIntakeOutcome(page: Page, alert: Locator): Promise<"resolved" | "failed"> {
+  await expect
+    .poll(
+      async () => {
+        if (await alert.isVisible()) return "failed";
+        const state = await workbenchSurface(page).getAttribute("data-state");
+        return state !== null && state !== "idle" ? "resolved" : "pending";
+      },
+      {
+        timeout: 60_000,
+        message: "the prompt's issue reference neither resolved nor failed",
+      },
+    )
+    .not.toBe("pending");
+  return (await alert.isVisible()) ? "failed" : "resolved";
 }
 
-export async function previewAndBindIssue(page: Page, issueRef: string): Promise<void> {
-  await previewAndAcceptIssue(page, issueRef);
-  await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
+/**
+ * Binds the plain repository/branch task workspace the "Code setup" card provisions. Issue
+ * binding no longer happens here: PR #3625 retired the setup card's own issue field, and binding a
+ * workspace is now unrelated to resolving any issue reference (that happens later, from the
+ * free-text prompt, at Send time -- `previewAndAcceptIssue`). Idempotent: a workspace already
+ * bound to the selected repository and branch leaves no "Code setup" region to click, so a repeat
+ * call (the post-reload path in `reacceptBoundIssue` below) is a no-op.
+ */
+export async function previewAndBindIssue(page: Page): Promise<void> {
+  const setup = page.getByRole("region", { name: "Code setup", exact: true });
+  if ((await setup.count()) === 0) return;
+  await setup.getByRole("button", { name: "Bind workspace", exact: true }).click();
   // Real worktree provisioning, trust derivation and activation -- minutes, not the 30s default.
-  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0, {
-    timeout: 10 * 60_000,
-  });
+  await expect(setup).toHaveCount(0, { timeout: 10 * 60_000 });
 }
 
+interface BoundTaskWorkspace {
+  readonly workspaceId: string;
+  readonly taskBranch: string;
+}
+
+// Server truth, not a control's accessible name: BEFORE any run exists (exactly when
+// `reacceptBoundIssue` runs) the repository/branch controls are still the "Choose coding
+// repository"/"Choose coding branch" comboboxes in the composer's OWN placement, never the
+// "Manage repository"/"Manage branch" buttons `currentLiveWorkbenchIdentity` reads -- those render
+// only once a run is active. The task workspace list is the one fact both placements, and a
+// scripted or a live fixture alike, agree on regardless of which control is on screen.
+async function activeTaskWorkspace(page: Page): Promise<BoundTaskWorkspace | undefined> {
+  const response = await page.request.get("/api/task-workspaces");
+  if (!response.ok()) return undefined;
+  const body = (await response.json()) as { readonly instances: readonly BoundTaskWorkspace[] };
+  return body.instances[0];
+}
+
+/**
+ * Re-establishes the SAME task workspace after a model-qualification reload, before any run has
+ * started. Unlike the retired flow's ephemeral, client-side "accepted issue" (lost on a reload
+ * that landed between accepting and binding), the repository/branch workspace binding is server
+ * state that survives a reload on its own -- there is nothing issue-specific left to redo here.
+ * `issueRef` is resolved fresh from the prompt the next time the caller sends one
+ * (`previewAndAcceptIssue`); this only confirms the SAME workspace came back, not a new one.
+ */
 export async function reacceptBoundIssue(page: Page, issueRef: string): Promise<void> {
-  const identity = await currentLiveWorkbenchIdentity(page);
-  // The setup surface closes only after the existing bind/reconcile/activate sequence settles.
-  // Provision reuses this repository/task pair; assert that reacceptance did not create a task.
-  await previewAndBindIssue(page, issueRef);
-  await waitForLiveWorkbenchIdentity(page, identity);
+  const before = await activeTaskWorkspace(page);
+  if (before === undefined) {
+    throw new Error(
+      `no task workspace was bound before the qualification reload for issue ${issueRef}`,
+    );
+  }
+  await previewAndBindIssue(page);
+  await expect(page.getByLabel("Task instructions")).toBeVisible({ timeout: 60_000 });
+  const after = await activeTaskWorkspace(page);
+  if (after?.workspaceId !== before.workspaceId || after.taskBranch !== before.taskBranch) {
+    throw new Error(
+      `the task workspace for issue ${issueRef} did not survive the qualification reload ` +
+        `(before ${before.workspaceId}/${before.taskBranch}, after ${after?.workspaceId ?? "none"}/${after?.taskBranch ?? "none"})`,
+    );
+  }
 }
 
 export interface BoundIssueRunPreparation {
@@ -940,10 +1031,20 @@ export async function prepareBoundIssueForRun(steps: BoundIssueRunPreparation): 
  * the full commit/push/draft-PR/CI-observe-and-repair sequence issue #3390 AC3 requires must be
  * requested up front and left to the real model's own tool-call planning -- a nondeterministic
  * sequence, per issue #3390 ("do not require one hardcoded tool sequence").
+ *
+ * `issueRef`, when given, is embedded as its own sentence rather than passed out of band: the
+ * retired "Issue URL or #number" field is gone, so for a FRESH start the free-text prompt is the
+ * only surface left that attaches an issue to the run (`useCodingWorkbenchIssueIntake.ts`'s
+ * `promptReference`), and it must find this exact reference in the text to resolve it at all. A
+ * continuation request (`coding-issue-journey-live-resume.ts`) omits it: it carries the PRIOR
+ * run's own issue binding forward server-side (codingRuntimeOrchestrator.ts's `resumeRequest`)
+ * rather than re-parsing one from this text.
  */
-export function issueResolutionTaskInstructions(): string {
+export function issueResolutionTaskInstructions(issueRef?: string): string {
   return [
-    "Resolve the linked issue end to end, using your available tools:",
+    issueRef === undefined
+      ? "Resolve the linked issue end to end, using your available tools:"
+      : `Resolve the linked issue end to end: ${issueRef}. Using your available tools:`,
     "1) Use keiko_repository_search to locate the existing production implementation and tests, and use at least one returned hit to choose the files you read.",
     "2) Add the regression test before the production fix, run that targeted test, and observe it fail for the issue's stated behavior.",
     "3) Implement the required fix across the affected production modules without a pre-recorded patch.",
@@ -981,9 +1082,6 @@ export async function startCodingRun(
   await selectCodingIssueMode(page, mode);
   // The mode selection opens and closes the Settings window over the workbench.
   await raiseWorkbench(page);
-  await page.getByLabel("Task instructions").fill(issueResolutionTaskInstructions());
-  const startButton = page.getByRole("button", { name: "Start coding run", exact: true });
-  await expect(startButton).toBeEnabled({ timeout: 60_000 });
   const started = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -991,7 +1089,9 @@ export async function startCodingRun(
     // Starting a run provisions the sidecar runtime; not the 30s action-timeout default.
     { timeout: 5 * 60_000 },
   );
-  await startButton.click();
+  // Fills "Task instructions", clicks "Start coding run" and settles any auth-required grant
+  // retry -- the same real refuse-grant-retry journey #3390 always exercised, just through Send.
+  await previewAndAcceptIssue(page, issueResolutionTaskInstructions(issueRef));
   const response = await started;
   const encodedPayload = response.request().postData();
   assertBoundIssueStartPayload(
@@ -1373,7 +1473,7 @@ export async function driveIssueToDraftPullRequest(
       }),
     bindIssue: () =>
       prepareBoundIssueForRun({
-        previewAndBind: () => previewAndBindIssue(page, input.issueRef),
+        previewAndBind: () => previewAndBindIssue(page),
         qualifyModel: () => ensureWorkflowEligibleModel(page),
         previewAndAccept: () => reacceptBoundIssue(page, input.issueRef),
       }),
