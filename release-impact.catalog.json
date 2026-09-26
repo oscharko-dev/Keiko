@@ -2810,8 +2810,15 @@
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
       "userVisibleSummary": "Coding Workbench approvals take fewer steps and never end a run by themselves. Denying a step now rejects only that step: the coding agent is told and continues, where before the whole run stopped. In Ask for approval, a file change needs one decision, Apply or Reject in the change review, instead of an approval followed by the same review, and rejecting a change is that decision: the agent is told and the run can still succeed. An approval request that is not answered within its five minutes is removed at once and the next request is shown, where before the expired card stayed on screen and blocked the next one. A turn the model provider rejects outright now ends once instead of being retried without end, a stopped run no longer leaves its change review on screen, and the Workbench window no longer turns blank after an approval. The task history, the question list, issue references, run refreshes and the information popover behave as expected again.",
-      "affectedStateStores": [],
-      "stateImpact": [],
+      "affectedStateStores": ["activity-log"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "1.1.10 adds and removes activity-log operations and closed values (see the review rationale), so the records it writes carry a new registry catalog digest. Records written before 1.1.10 stay on disk unchanged under normal age-based retention; nothing is rewritten or migrated. The 1.1.10 support analyzer classifies those older records as unsupported, because their catalog digest differs, instead of reconstructing them; the analyzer of the version that wrote them still reads them.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
       "releaseNoteBullets": [
         "Coding Workbench: denying a step rejects only that step; the coding agent is told and the run continues instead of stopping.",
         "Coding Workbench (Ask for approval): a file change needs one decision, Apply or Reject in the change review; the separate approval before it is gone.",
