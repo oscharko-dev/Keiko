@@ -10,7 +10,10 @@ import {
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
-import { reportGitClientOperationDiagnostic } from "./git-client-operation-diagnostics";
+import {
+  reportGitClientOperationDiagnostic,
+  reportGitClientRetryAttempt,
+} from "./git-client-operation-diagnostics";
 
 interface CapturedDiagnostic {
   readonly message: string;
@@ -82,6 +85,48 @@ describe("reportGitClientOperationDiagnostic", () => {
     expect(diagnostics[0]?.meta).not.toHaveProperty("errorKind");
   });
 
+  // PR #3625 review: a failed settlement with a thrown error carried no structured error evidence
+  // at all — no dist-anchored frames, no cause chain — leaving a failure cluster with nothing to
+  // reconstruct beyond the closed error kind.
+  it("carries error evidence through when supplied, alongside correlation id and error kind", () => {
+    const diagnostics = captureDiagnostics();
+
+    reportGitClientOperationDiagnostic(
+      "git-client: status retry failed",
+      { operation: "status-read", outcome: "retry-failed" },
+      {
+        correlationId: "corr-status-retry-1",
+        errorKind: "unavailable",
+        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+      },
+    );
+
+    expect(diagnostics).toEqual([
+      {
+        message: "git-client: status retry failed",
+        meta: {
+          kind: "other",
+          gitClientOperation: { operation: "status-read", outcome: "retry-failed" },
+          correlationId: "corr-status-retry-1",
+          errorKind: "unavailable",
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+        },
+      },
+    ]);
+  });
+
+  it("omits errorEvidence rather than sending the key with an undefined value", () => {
+    const diagnostics = captureDiagnostics();
+
+    reportGitClientOperationDiagnostic(
+      "git-client: status retry recovered",
+      { operation: "status-read", outcome: "retry-recovered" },
+      { errorEvidence: undefined },
+    );
+
+    expect(diagnostics[0]?.meta).not.toHaveProperty("errorEvidence");
+  });
+
   it("delegates to the shared reportClientDiagnostic sink rather than a private transport", () => {
     // A structural check that this helper is a thin wrapper, not a second diagnostic pipeline
     // (AGENTS.md §5): calling it must be observable through the SAME writer every other
@@ -96,5 +141,41 @@ describe("reportGitClientOperationDiagnostic", () => {
     });
     expect(sawIt).toBe(true);
     expect(reportClientDiagnostic).toBeTypeOf("function");
+  });
+});
+
+// PR #3625 review: sent the moment a manual Retry starts, minting its own correlation id — before
+// any settlement exists — so a later supersession is still joinable to it.
+describe("reportGitClientRetryAttempt", () => {
+  it("reports the attempt under its own operation, message and correlation id, and nothing else", () => {
+    const diagnostics = captureDiagnostics();
+
+    reportGitClientRetryAttempt(
+      "git-client: manual status-read attempted",
+      "status-read",
+      "ui_git-retry-0001",
+    );
+
+    expect(diagnostics).toEqual([
+      {
+        message: "git-client: manual status-read attempted",
+        meta: {
+          gitRetryAttemptReport: { operation: "status-read", correlationId: "ui_git-retry-0001" },
+        },
+      },
+    ]);
+  });
+
+  it("delegates to the shared reportClientDiagnostic sink rather than a private transport", () => {
+    let sawIt = false;
+    setClientDiagnosticWriter(() => {
+      sawIt = true;
+    });
+    reportGitClientRetryAttempt(
+      "git-client: manual branches-read attempted",
+      "branches-read",
+      "ui_git-retry-0002",
+    );
+    expect(sawIt).toBe(true);
   });
 });

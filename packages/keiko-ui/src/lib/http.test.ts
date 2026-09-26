@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { bffFetchJson, bffRequestErrorKind } from "./http";
+import { bffFetchJson, bffRequestErrorKind, responseCorrelationIdOf } from "./http";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 // bffFetchJson loads this primitive through a dynamic import() (http.ts documents why: a static
@@ -125,6 +125,53 @@ describe("bffFetchJson — correlation id (RB-6, GEN-OBS-CORRELATION-601)", () =
       thrown = error as ApiError;
     }
     expect(thrown?.correlationId).toBe("env-id-000999");
+  });
+});
+
+// PR #3625 review: a successful JSON response exposed no correlation id at all — only `ApiError`
+// did, on failure — so a settlement built from a succeeded request's result (AddRepositoryDialog's
+// discarded-succeeded clone/register) could never be joined to it. The server already stamps
+// `X-Keiko-Correlation-Id` on every response, success included (server.ts); the capture below reads
+// it the moment ANY code calls `Response#json()` — not only `bffFetchJson`'s own — because api.ts's
+// `fetchJson` parses `Response#json()` directly and independently of this module (http.ts header
+// comment), so a capture reachable only through `performBffFetch` would never fire for it.
+describe("responseCorrelationIdOf (PR #3625 review)", () => {
+  const CORRELATED = {
+    status: 200,
+    headers: { "Content-Type": "application/json", "X-Keiko-Correlation-Id": "server-echoed-1" },
+  };
+
+  it("recovers the server's correlation id from a value bffFetchJson parsed on success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ value: 7 }), CORRELATED)),
+    );
+    const value = await bffFetchJson<{ value: number }>("/api/x");
+    expect(responseCorrelationIdOf(value)).toBe("server-echoed-1");
+  });
+
+  // api.ts never calls into this module at all — this proves the capture is installed on the
+  // shared `Response#json()` itself, not merely wired through `bffFetchJson`'s own code path.
+  it("recovers the id from a response parsed with no bffFetchJson involved", async () => {
+    const response = new Response(JSON.stringify({ value: 7 }), CORRELATED);
+    const value: unknown = await response.json();
+    expect(responseCorrelationIdOf(value)).toBe("server-echoed-1");
+  });
+
+  it("returns undefined for a value this process never parsed from a Response", () => {
+    expect(responseCorrelationIdOf({ value: 7 })).toBeUndefined();
+    expect(responseCorrelationIdOf(undefined)).toBeUndefined();
+    expect(responseCorrelationIdOf(null)).toBeUndefined();
+    expect(responseCorrelationIdOf("a string")).toBeUndefined();
+  });
+
+  it("returns undefined when the parsed response carried no correlation header", async () => {
+    const response = new Response(JSON.stringify({ value: 7 }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    const value: unknown = await response.json();
+    expect(responseCorrelationIdOf(value)).toBeUndefined();
   });
 });
 

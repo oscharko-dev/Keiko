@@ -32,6 +32,7 @@
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
 import { isActivityLogErrorKind, type ActivityLogErrorKind } from "./observability.js";
+import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
 // or CLOSED (2). A closed vocabulary, not a raw number, so a future EventSource-shaped value can
@@ -1004,6 +1005,10 @@ export const CLIENT_GIT_CLIENT_OPERATION_OUTCOMES = [
   "discarded-failed",
   "retry-recovered",
   "retry-failed",
+  // A manual retry whose response arrived after a newer read (a redemption, a mutation's revision
+  // bump) had already superseded it: neither a recovery nor a failure of the read itself, just
+  // discarded evidence (PR #3625 review, GitClientWindow.tsx finding).
+  "retry-superseded",
 ] as const;
 export type ClientGitClientOperationOutcome = (typeof CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)[number];
 
@@ -1030,13 +1035,19 @@ export const CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES: ReadonlySet<ClientGit
 export interface ClientDiagnosticGitClientOperation {
   readonly operation: ClientGitClientOperationKind;
   readonly outcome: ClientGitClientOperationOutcome;
+  // Only ever alongside `retry-failed`: the closed reason a resolved (HTTP 200) unavailable
+  // response gave for the read that failed, so a git-error retry failure is distinguishable from a
+  // thrown/rejected one without the report ever carrying a message (PR #3625 review,
+  // GitClientWindow.tsx finding). Never present on a discard, a recovery, or a superseded retry.
+  readonly reason?: GitWireUnavailableReason | undefined;
 }
 
 /**
  * True for a closed, body-free git-client operation settlement: a known operation paired with a
  * known outcome from the SAME family (a discarded add-repository result names a discarded outcome,
  * a retried read names a retry outcome — never the other family's outcome, and never an unknown
- * value on either side).
+ * value on either side), and — only for a retry that failed — an optional closed unavailable
+ * reason.
  */
 export function isClientDiagnosticGitClientOperation(
   value: unknown,
@@ -1044,10 +1055,66 @@ export function isClientDiagnosticGitClientOperation(
   if (!isRecord(value)) return false;
   if (!isOneOf(value.operation, CLIENT_GIT_CLIENT_OPERATION_KINDS)) return false;
   if (!isOneOf(value.outcome, CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)) return false;
-  return (
-    GIT_CLIENT_DISCARD_OPERATIONS.has(value.operation) ===
+  if (
+    GIT_CLIENT_DISCARD_OPERATIONS.has(value.operation) !==
     GIT_CLIENT_DISCARD_OUTCOMES.has(value.outcome)
+  ) {
+    return false;
+  }
+  if (!isOptional(value.reason, isGitWireUnavailableReason)) return false;
+  return value.reason === undefined || value.outcome === "retry-failed";
+}
+
+// ─── Git-client manual retry attempt (PR #3625 review) ──────────────────────────
+//
+// A manual Retry can be superseded by an automatic refetch before it settles (a session redemption
+// or a mutation's revision bump starting a newer read first): the settlement callback then simply
+// returned without reporting anything, leaving no trace that the operator ever retried or why its
+// result was discarded. This minimal report is sent the moment Retry starts, carrying a correlation
+// id GitClientWindow.tsx mints before the request goes out; the settlement — `client.git-operation.
+// settled` on a recovery or a supersession, `client.diagnostic` on a genuine failure — carries the
+// SAME id, so the pair joins on one timeline exactly like `client.stage.started`/`.settled`
+// (KEIKO-3557) join theirs.
+
+// Narrower than `ClientGitClientOperationKind`: only the three reads a manual Retry control ever
+// attempts (an add-repository clone/register has no retry concept). Typing the field itself this
+// way — rather than the full 5-value kind and a runtime-only restriction — keeps a consumer that
+// narrows on `isClientGitRetryAttemptIngestRequest` assignable directly into a registration whose
+// own field is declared over just these three values, with no further cast.
+export type ClientGitRetryOperation = Exclude<
+  ClientGitClientOperationKind,
+  "repository-clone" | "repository-register"
+>;
+
+const GIT_RETRY_OPERATIONS: readonly ClientGitRetryOperation[] =
+  CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
+    (operation): operation is ClientGitRetryOperation =>
+      !GIT_CLIENT_DISCARD_OPERATIONS.has(operation),
   );
+
+export interface ClientGitRetryAttemptIngestRequest {
+  readonly kind: "git-retry-attempt";
+  readonly operation: ClientGitRetryOperation;
+  readonly correlationId: string;
+}
+
+const CLIENT_GIT_RETRY_ATTEMPT_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "operation",
+  "correlationId",
+]);
+
+/**
+ * True for a closed, minimal retry-attempt report: one of the three retriable reads, paired with a
+ * well-formed client-minted correlation id, and no undeclared field.
+ */
+export function isClientGitRetryAttemptIngestRequest(
+  value: unknown,
+): value is ClientGitRetryAttemptIngestRequest {
+  if (!isRecord(value) || value.kind !== "git-retry-attempt") return false;
+  if (Object.keys(value).some((key) => !CLIENT_GIT_RETRY_ATTEMPT_KEYS.has(key))) return false;
+  if (!isOneOf(value.operation, GIT_RETRY_OPERATIONS)) return false;
+  return isCorrelationIdShape(value.correlationId);
 }
 
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────

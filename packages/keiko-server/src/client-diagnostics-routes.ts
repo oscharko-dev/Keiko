@@ -45,11 +45,16 @@
 //
 // PR #3625 review: a message report whose `gitClientOperation.outcome` is not a failure (an
 // add-repository dialog discarding a result that actually succeeded, or a manual status/branches/
-// summary retry that recovered) spends the ROUTINE budget instead of the message shape's usual
-// failure budget — the one outcome-conditional exception to "a message report is always a failure
-// budget". The persisted line itself is unchanged: still `client.diagnostic`, still at warn, since
-// unlike the stage/binding/session-repair shapes this evidence rides the same message shape as
-// every other diagnostic rather than its own lifecycle-appropriate operation.
+// summary retry that recovered or was superseded by a newer read) spends the ROUTINE budget instead
+// of the message shape's usual failure budget — the one outcome-conditional exception to "a message
+// report is always a failure budget". `logClientGitOperationSettled` also diverts that same routine
+// evidence to its own lifecycle-appropriate operation, `client.git-operation.settled`, at info with
+// no `errorKind` — exactly the stage/binding/session-repair fix, applied to this one outcome-
+// conditional case. Only a genuine failure (`discarded-failed`, `retry-failed`) still persists as
+// `client.diagnostic` at warn. A third, minimal shape — `kind: "git-retry-attempt"` — is sent the
+// moment a manual retry starts and persists as `client.git-operation.attempted`; it carries the
+// SAME client-minted correlation id its later settlement reuses, so a retry superseded before it
+// settles still leaves a joinable trace instead of none at all.
 
 import type { IncomingMessage } from "node:http";
 
@@ -57,6 +62,8 @@ import type {
   ClientBindingIngestRequest,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
+  ClientGitClientOperationOutcome,
+  ClientGitRetryAttemptIngestRequest,
   ClientSessionRepairIngestRequest,
   ClientStageId,
   ClientStageIngestRequest,
@@ -69,6 +76,7 @@ import {
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  isClientGitRetryAttemptIngestRequest,
   isClientSessionRepairIngestRequest,
   isClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
@@ -419,11 +427,30 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "summary-read",
       ],
     },
+    // Routine outcomes (discarded-succeeded, retry-recovered, retry-superseded) never reach this
+    // line — `logClientGitOperationSettled` diverts them to `client.git-operation.settled` before
+    // this operation's fields are built, so only the two genuine failures are ever registered here
+    // (PR #3625 review).
     gitClientOperationOutcome: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["discarded-succeeded", "discarded-failed", "retry-recovered", "retry-failed"],
+      values: ["discarded-failed", "retry-failed"],
+    },
+    // Only ever alongside `gitClientOperationOutcome: "retry-failed"`: the closed reason a resolved
+    // (HTTP 200) unavailable response gave for the read that failed (PR #3625 review).
+    gitClientOperationReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "not-a-repository",
+        "git-missing",
+        "repository-root-outside-root",
+        "unknown",
+        "unsafe-repository",
+        "git-error",
+      ],
     },
     historyScopeReason: {
       type: "string",
@@ -810,6 +837,74 @@ const CLIENT_SESSION_REPAIR_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// PR #3625 review: a git-client operation settling as ROUTINE evidence — an add-repository result
+// discarded after it actually succeeded, or a manual retry that recovered or was superseded by a
+// newer read — reaches this lifecycle-appropriate operation instead of the failure-shaped
+// `client.diagnostic` above. Root cause mirrors KEIKO-3557's stage fix: reusing a single
+// failure-shaped operation for routine settlement collapsed a recovered retry into the same
+// warn/unknown shape as a genuine failure.
+const CLIENT_GIT_OPERATION_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.git-operation.settled",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientGitOperationSettled",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "repository-clone",
+        "repository-register",
+        "status-read",
+        "branches-read",
+        "summary-read",
+      ],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["discarded-succeeded", "retry-recovered", "retry-superseded"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-git-operation"],
+  proofIds: ["client.git-operation.settled.line"],
+  releaseImpact: "patch",
+});
+
+// PR #3625 review: a manual retry's attempt, minted client-side the moment Retry is clicked so its
+// settlement — `client.git-operation.settled` above, or `client.diagnostic` on a genuine failure —
+// can carry the SAME correlation id even when a newer automatic read supersedes it before it
+// settles. Without this line, a superseded retry left no trace that the operator ever retried.
+const CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.git-operation.attempted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientGitOperationAttempted",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["status-read", "branches-read", "summary-read"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-git-operation"],
+  proofIds: ["client.git-operation.attempted.line"],
+  releaseImpact: "patch",
+});
+
 // One declaration for production and the test reset below — duplicating these three literals let
 // them drift, so the test reset silently exercised a limiter with different bounds than production.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG = {
@@ -1183,7 +1278,50 @@ function projectGitContext(
   if (request.gitClientOperation !== undefined) {
     extra.gitClientOperation = request.gitClientOperation.operation;
     extra.gitClientOperationOutcome = request.gitClientOperation.outcome;
+    if (request.gitClientOperation.reason !== undefined) {
+      extra.gitClientOperationReason = request.gitClientOperation.reason;
+    }
   }
+}
+
+// The routine (non-failure) git-client operation outcomes: exactly the ones
+// `CLIENT_GIT_OPERATION_SETTLED_OPERATION` registers, narrower than the full
+// `ClientGitClientOperationOutcome` union so `logClientGitOperationSettled` below assigns straight
+// into that registration's own field type with no cast (PR #3625 review).
+type GitOperationRoutineOutcome = Exclude<
+  ClientGitClientOperationOutcome,
+  "discarded-failed" | "retry-failed"
+>;
+
+function isGitOperationRoutineOutcome(
+  outcome: ClientGitClientOperationOutcome,
+): outcome is GitOperationRoutineOutcome {
+  return !CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome);
+}
+
+// PR #3625 review: a git-client operation settling as ROUTINE evidence (a discarded-succeeded
+// add-repository result, a recovered or superseded manual retry) is diverted here, before
+// `logClientDiagnostic` builds the failure-shaped `extra` below — mirrors
+// `logVoiceDialogueStage`/`logMarkdownLayout`'s own diversion.
+function logClientGitOperationSettled(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const gitOp = request.gitClientOperation;
+  if (gitOp === undefined || !isGitOperationRoutineOutcome(gitOp.outcome)) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_GIT_OPERATION_SETTLED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        operation: gitOp.operation,
+        outcome: gitOp.outcome,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
 }
 
 function logClientDiagnostic(
@@ -1194,8 +1332,13 @@ function logClientDiagnostic(
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId
       : correlationIdOrUnknown(ingestCorrelationId);
-  if (logVoiceDialogueStage(request, correlationId) || logMarkdownLayout(request, correlationId))
+  if (
+    logVoiceDialogueStage(request, correlationId) ||
+    logMarkdownLayout(request, correlationId) ||
+    logClientGitOperationSettled(request, correlationId)
+  ) {
     return;
+  }
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };
@@ -1583,6 +1726,20 @@ function logClientSessionRepair(
   logClientSessionRepairFailed({ ...request, outcome }, correlationId);
 }
 
+// PR #3625 review: the retry-attempt line always carries its OWN client-minted correlation id (the
+// contract guard requires it), never the ingest POST's own — that id is what its later settlement
+// (`client.git-operation.settled` or, on a genuine failure, `client.diagnostic`) reuses to join the
+// pair on one timeline, so falling back to the ingest id here would silently break that join.
+function logClientGitOperationAttempted(request: ClientGitRetryAttemptIngestRequest): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION,
+      { correlationId: request.correlationId },
+      { operation: request.operation, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 // The closed report shapes this route accepts. They are mutually exclusive by construction: only
 // the message shape carries `message`, and every other shape declares its own `kind` literal,
 // which the message shape's closed `kind` vocabulary never contains.
@@ -1590,6 +1747,7 @@ type ClassifiedClientReport =
   | { readonly shape: "stage"; readonly report: ClientStageIngestRequest }
   | { readonly shape: "binding"; readonly report: ClientBindingIngestRequest }
   | { readonly shape: "session-repair"; readonly report: ClientSessionRepairIngestRequest }
+  | { readonly shape: "git-retry-attempt"; readonly report: ClientGitRetryAttemptIngestRequest }
   | { readonly shape: "message"; readonly report: ClientDiagnosticIngestRequest };
 
 function classifyClientReport(value: unknown): ClassifiedClientReport | undefined {
@@ -1602,13 +1760,20 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
       ? { shape: "session-repair", report: value }
       : undefined;
   }
+  if (isClientGitRetryAttemptIngestRequest(value)) {
+    // The attempt's own correlation id is the sole join key its later settlement reuses, so an
+    // invalid one is refused here rather than silently substituted (PR #3625 review).
+    return isValidCorrelationId(value.correlationId)
+      ? { shape: "git-retry-attempt", report: value }
+      : undefined;
+  }
   if (isClientDiagnosticIngestRequest(value)) return { shape: "message", report: value };
   return undefined;
 }
 
 // A message report is a failure budget by default, except a git-client operation settlement that
-// discarded a succeeded result or recovered on retry — that is routine evidence, not a failure,
-// exactly like a binding that resolved or a session repair that recovered (#3625 review).
+// discarded a succeeded result or recovered/superseded on retry — that is routine evidence, not a
+// failure, exactly like a binding that resolved or a session repair that recovered (#3625 review).
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";
@@ -1618,6 +1783,7 @@ function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientRepor
 function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
   switch (classified.shape) {
     case "stage":
+    case "git-retry-attempt":
       return "routine";
     case "binding":
       return CLIENT_BINDING_FAILURE_OUTCOMES.has(classified.report.outcome) ? "failure" : "routine";
@@ -1643,6 +1809,9 @@ function logClientReport(
       return;
     case "session-repair":
       logClientSessionRepair(classified.report, ingestCorrelationId);
+      return;
+    case "git-retry-attempt":
+      logClientGitOperationAttempted(classified.report);
       return;
     case "message":
       logClientDiagnostic(classified.report, ingestCorrelationId);

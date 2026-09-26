@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { correlationIdOf } from "@/lib/client-error-summary";
-import { bffRequestErrorKind } from "@/lib/http";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind, responseCorrelationIdOf } from "@/lib/http";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
@@ -171,10 +172,13 @@ export function AddRepositoryDialog({
           // #3646/PR #3625 review: the request settled after this dialog closed. The repository
           // was created (or reconnected) but deliberately never activated — a structured,
           // body-free settlement distinguishes this from a discarded FAILED request below and
-          // names which operation it was, never the repository path or URL.
+          // names which operation it was, never the repository path or URL. The server stamps a
+          // correlation id on every response, success included (server.ts); `responseCorrelationIdOf`
+          // recovers it from this exact parsed value so the line joins the request that created it.
           reportGitClientOperationDiagnostic(
             `git-client: add-repository discarded (dialog closed before response): ${operation} succeeded`,
             { operation, outcome: "discarded-succeeded" },
+            { correlationId: responseCorrelationIdOf(res) },
           );
           return;
         }
@@ -186,11 +190,17 @@ export function AddRepositoryDialog({
         if (closedRef.current) {
           // A discarded failure used to return silently, losing the fact that the request ever
           // happened at all — the activity log must show the attempt even though nothing failed
-          // "for the user" (there is no user surface left to show it to).
+          // "for the user" (there is no user surface left to show it to). Body-free error evidence
+          // (PR #3625 review) carries the thrown error's class and dist-anchored frames/cause chain
+          // alongside the closed kind, never its message.
           reportGitClientOperationDiagnostic(
             `git-client: add-repository discarded (dialog closed before response): ${operation} failed`,
             { operation, outcome: "discarded-failed" },
-            { correlationId: correlationIdOf(err), errorKind: bffRequestErrorKind(err) },
+            {
+              correlationId: correlationIdOf(err),
+              errorKind: bffRequestErrorKind(err),
+              errorEvidence: clientErrorEvidence(err),
+            },
           );
           return;
         }

@@ -636,6 +636,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-git-operation",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: ["client.git-operation.attempted"],
+      state: [],
+      end: ["client.git-operation.settled"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.git-operation.attempted", "client.git-operation.settled"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.git-operation.attempted", "client.git-operation.settled"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.git-operation.attempted", "client.git-operation.settled"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-session-repair",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

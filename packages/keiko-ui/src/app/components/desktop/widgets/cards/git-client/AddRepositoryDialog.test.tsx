@@ -47,8 +47,22 @@ afterEach(() => {
   resetClientDiagnosticWriter();
 });
 
+// The server stamps `X-Keiko-Correlation-Id` on every response, success included (server.ts); a
+// resolved value built this way — through a real `Response#json()` — exercises the SAME capture
+// (http.ts's `responseCorrelationIdOf`) `cloneRepository`/`createProject` rely on in production,
+// rather than asserting against a hand-built object no capture ever touched (PR #3625 review).
+async function correlatedProjectResponse(
+  correlationId: string,
+): Promise<{ project: ProjectWithAvailability }> {
+  const response = new Response(JSON.stringify({ project: PROJECT_FIXTURE }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "X-Keiko-Correlation-Id": correlationId },
+  });
+  return (await response.json()) as { project: ProjectWithAvailability };
+}
+
 describe("AddRepositoryDialog — settlement after the dialog has closed", () => {
-  it("reports a discarded-succeeded clone settlement, with no correlation id and no path/URL", async () => {
+  it("reports a discarded-succeeded clone settlement, with the response's correlation id and no path/URL", async () => {
     const user = userEvent.setup();
     const diagnostics = captureDiagnostics();
     let resolveClone!: (value: { project: ProjectWithAvailability }) => void;
@@ -77,8 +91,9 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     // The dialog closing unmounts it — the same lifecycle a parent's onClose-driven unmount
     // triggers in production (#3646) — which is what flips `closedRef.current`.
     view.unmount();
+    const resolved = await correlatedProjectResponse("server-echoed-clone-1");
     await act(async () => {
-      resolveClone({ project: PROJECT_FIXTURE });
+      resolveClone(resolved);
       await clonePromise;
     });
 
@@ -86,9 +101,9 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.meta).toMatchObject({
       kind: "other",
+      correlationId: "server-echoed-clone-1",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
-    expect(diagnostics[0]?.meta?.correlationId).toBeUndefined();
     expect(diagnostics[0]?.meta?.errorKind).toBeUndefined();
     const serialized = JSON.stringify(diagnostics[0]);
     expect(serialized).not.toContain("private-repo");
@@ -96,7 +111,34 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     expect(serialized).not.toContain("example.test");
   });
 
-  it("reports a discarded-failed register settlement with correlation id and error kind, never silently", async () => {
+  // A response resolved with no correlation header at all (a fixture, never a real BFF response)
+  // must not crash the settlement — it simply carries no correlation id, same as before this fix.
+  it("omits the correlation id when the resolved value carries none", async () => {
+    const diagnostics = captureDiagnostics();
+    let resolveClone!: (value: { project: ProjectWithAvailability }) => void;
+    const clonePromise = new Promise<{ project: ProjectWithAvailability }>((resolve) => {
+      resolveClone = resolve;
+    });
+    const client = makeClient({ cloneRepository: vi.fn(() => clonePromise) });
+    const view = render(
+      <AddRepositoryDialog
+        client={client}
+        onAdded={vi.fn()}
+        onClose={vi.fn()}
+        initialMode="clone"
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Repository URL")).toBeInTheDocument());
+    view.unmount();
+    await act(async () => {
+      resolveClone({ project: PROJECT_FIXTURE });
+      await clonePromise;
+    });
+
+    expect(diagnostics[0]?.meta?.correlationId).toBeUndefined();
+  });
+
+  it("reports a discarded-failed register settlement with correlation id, error kind and error evidence, never silently", async () => {
     const user = userEvent.setup();
     const diagnostics = captureDiagnostics();
     let rejectRegister!: (reason: unknown) => void;
@@ -136,6 +178,14 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
       errorKind: "internal",
       gitClientOperation: { operation: "repository-register", outcome: "discarded-failed" },
     });
+    // Structured, body-free error evidence (PR #3625 review): the closed error class and its
+    // (empty, in this fixture) dist-anchored frames and cause chain — never the error's message.
+    expect(diagnostics[0]?.meta?.errorEvidence).toEqual({
+      errorClass: "ApiError",
+      frames: [],
+      causeChain: [],
+    });
     expect(JSON.stringify(diagnostics[0])).not.toContain("private-existing-repo");
+    expect(JSON.stringify(diagnostics[0])).not.toContain("boom");
   });
 });

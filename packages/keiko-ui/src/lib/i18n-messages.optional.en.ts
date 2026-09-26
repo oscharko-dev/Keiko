@@ -145,6 +145,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.history.commitUnavailable":
     "The requested commit is not available in bounded history.",
   "gitClientWindow.history.loadFailed": "Could not load commit history.",
+  "gitClientWindow.status.loadFailed": "Could not load the repository status.",
   "gitClientWindow.branch.loadFailed": "Could not load branches.",
   "gitClientWindow.sync.summaryUnavailable": "Could not read the sync state.",
   "gitClientWindow.history.loadMoreFailed": "Could not load more commits.",

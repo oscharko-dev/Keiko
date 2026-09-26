@@ -31,6 +31,7 @@ import {
   isActivityLogReadinessSnapshot,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  isClientGitRetryAttemptIngestRequest,
   isClientSessionRepairIngestRequest,
   isClientDiagnosticKind,
   isClientDiagnosticLossCount,
@@ -270,6 +271,34 @@ describe("isClientDiagnosticIngestRequest", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...validRequest(), correlationId: "not valid!!" }),
     ).toBe(true);
+  });
+
+  // PR #3625 review (GitClientWindow.tsx finding): the closed unavailable reason is evidence for a
+  // resolved-unavailable retry failure only — never a discard, and never a recovered or superseded
+  // retry — so a reason on any other outcome must refuse the whole report, fail-closed.
+  it("accepts the closed unavailable reason only alongside retry-failed", () => {
+    const retryFailedWithReason = {
+      operation: "status-read",
+      outcome: "retry-failed",
+      reason: "git-error",
+    };
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        gitClientOperation: retryFailedWithReason,
+      }),
+    ).toBe(true);
+    for (const invalid of [
+      { operation: "status-read", outcome: "retry-recovered", reason: "git-error" },
+      { operation: "status-read", outcome: "retry-superseded", reason: "git-error" },
+      { operation: "repository-clone", outcome: "discarded-failed", reason: "git-error" },
+      { operation: "status-read", outcome: "retry-failed", reason: "not-a-real-reason" },
+      { operation: "status-read", outcome: "retry-failed", reason: 7 },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: invalid }),
+      ).toBe(false);
+    }
   });
 });
 
@@ -773,6 +802,14 @@ describe("client report budgets", () => {
       ),
     ).toEqual(["discarded-failed", "retry-failed"]);
   });
+
+  // PR #3625 review: a retry superseded by a newer automatic read is discarded evidence, never a
+  // failure of the read itself — it must spend the routine budget alongside a recovery, exactly
+  // like a discarded-succeeded add-repository result.
+  it("classifies retry-superseded as routine, not a git-client failure", () => {
+    expect(CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has("retry-superseded")).toBe(false);
+    expect(CLIENT_GIT_CLIENT_OPERATION_OUTCOMES).toContain("retry-superseded");
+  });
 });
 
 describe("git-client operation settlement vocabulary", () => {
@@ -809,6 +846,38 @@ describe("git-client operation settlement vocabulary", () => {
         ).toBe(true);
       }
     }
+  });
+});
+
+// PR #3625 review: a manual retry's attempt line mints its own correlation id up front so a later
+// supersession is still joinable to it, mirroring the stage lifecycle's own correlation contract.
+describe("isClientGitRetryAttemptIngestRequest", () => {
+  function attemptRequest(): Record<string, unknown> {
+    return { kind: "git-retry-attempt", operation: "status-read", correlationId: "ui_retry-0001" };
+  }
+
+  it("accepts a well-formed retry attempt", () => {
+    expect(isClientGitRetryAttemptIngestRequest(attemptRequest())).toBe(true);
+  });
+
+  it("accepts every retriable read operation and refuses a discard operation", () => {
+    for (const operation of ["status-read", "branches-read", "summary-read"]) {
+      expect(isClientGitRetryAttemptIngestRequest({ ...attemptRequest(), operation })).toBe(true);
+    }
+    for (const operation of ["repository-clone", "repository-register"]) {
+      expect(isClientGitRetryAttemptIngestRequest({ ...attemptRequest(), operation })).toBe(false);
+    }
+  });
+
+  it.each([
+    ["a missing correlation id", { correlationId: undefined }],
+    ["an oversized correlation id", { correlationId: "c".repeat(129) }],
+    ["a non-string correlation id", { correlationId: 7 }],
+    ["an unknown operation", { operation: "write-file" }],
+    ["a mismatched kind", { kind: "stage" }],
+    ["an undeclared field", { extra: "x" }],
+  ])("refuses %s", (_label, patch) => {
+    expect(isClientGitRetryAttemptIngestRequest({ ...attemptRequest(), ...patch })).toBe(false);
   });
 });
 

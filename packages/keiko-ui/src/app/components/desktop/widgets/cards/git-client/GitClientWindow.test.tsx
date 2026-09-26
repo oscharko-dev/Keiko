@@ -48,6 +48,7 @@ import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
 import { notifyWorkspaceFileMutated } from "../workspace-file-events";
+import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
 
 // Issue #3400 — the "Connect to Chat" dialog calls fetchChats/connectGitChangeToChat directly
 // (it owns no GitClientSeam methods). Only these two are replaced; every other @/lib/api export
@@ -2097,9 +2098,12 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // PR #3625 review: the settlement now carries the retry's own client-minted correlation id
+    // (joinable to its attempt line — proven directly in the "joins a retry attempt..." test below).
     expect(settlements()).toEqual([
       {
         kind: "other",
+        correlationId: expect.any(String),
         gitClientOperation: { operation: "branches-read", outcome: "retry-recovered" },
       },
     ]);
@@ -2134,7 +2138,89 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(settlements()).toEqual([
       {
         kind: "other",
+        correlationId: expect.any(String),
         gitClientOperation: { operation: "summary-read", outcome: "retry-recovered" },
+      },
+    ]);
+  });
+
+  // PR #3625 review: `git status` (or `for-each-ref`) failing or timing out answers HTTP 200 with
+  // `available: false` and `reason: "git-error"` — that used to render only the static "not a Git
+  // repository" text, with no Retry at all, indistinguishable from a genuinely non-repository
+  // folder.
+  it("treats a resolved unavailable status read as a failed read with Retry", async () => {
+    const settlements = captureRetrySettlements();
+    let attempt = 0;
+    const getStatus = vi.fn<GitClientSeam["getStatus"]>(async () => {
+      attempt += 1;
+      return attempt === 1
+        ? makeStatus({ available: false, state: "error", reason: "git-error" })
+        : makeStatus({ clean: true });
+    });
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByText("Could not load the repository status.")).toBeInTheDocument();
+    expect(screen.queryByText("This folder is not a Git repository.")).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+    expect(screen.queryByText("Could not load the repository status.")).not.toBeInTheDocument();
+    expect(settlements()).toEqual([
+      {
+        kind: "other",
+        correlationId: expect.any(String),
+        gitClientOperation: { operation: "status-read", outcome: "retry-recovered" },
+      },
+    ]);
+  });
+
+  // A structural non-repository state is still explained by the changes pane alone, with no Retry
+  // (unchanged) — and, since status now has its own Retry, it must not hide branches'/summary's own.
+  it("keeps the branches Retry visible while status failed for a non-structural reason", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () =>
+        makeStatus({ available: false, state: "error", reason: "git-error" }),
+      ),
+      listBranches: vi.fn(async () => {
+        throw new Error("branch list unavailable");
+      }),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByText("Could not load the repository status.")).toBeInTheDocument();
+    // Both errors carry role="alert"; findByRole (which expects exactly one match) would throw
+    // here, so target the branches error by its own text instead.
+    expect(await screen.findByText("branch list unavailable")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Retry" }).length).toBeGreaterThanOrEqual(2);
+  });
+
+  // The closed reason a resolved-unavailable response gave travels only with a retry-FAILED
+  // settlement (never a recovery), and only reaches the log — never rendered text.
+  it("preserves the closed reason when a status retry resolves unavailable again", async () => {
+    const settlements = captureRetrySettlements();
+    const getStatus = vi.fn<GitClientSeam["getStatus"]>(async () =>
+      makeStatus({ available: false, state: "error", reason: "git-error" }),
+    );
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByText("Could not load the repository status.")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(settlements()).toHaveLength(1));
+
+    expect(settlements()).toEqual([
+      {
+        kind: "other",
+        correlationId: expect.any(String),
+        errorKind: "unavailable",
+        gitClientOperation: {
+          operation: "status-read",
+          outcome: "retry-failed",
+          reason: "git-error",
+        },
       },
     ]);
   });
@@ -2852,15 +2938,113 @@ describe("GitClientWindow — empty / loading / error states", () => {
     await user.click(await screen.findByRole("button", { name: "Retry" }));
 
     expect(await screen.findByText("No changes")).toBeInTheDocument();
+    // PR #3625 review: each settlement now carries the correlation id its own attempt line minted
+    // (proven joinable directly in the "joins a retry attempt..." test below), and a rejected retry
+    // additionally carries body-free error evidence — never the rejection's message.
     expect(settlements()).toEqual([
       {
         kind: "other",
+        correlationId: expect.any(String),
         gitClientOperation: { operation: "status-read", outcome: "retry-failed" },
         errorKind: "unknown",
+        errorEvidence: { errorClass: "Error", frames: [], causeChain: [] },
       },
       {
         kind: "other",
+        correlationId: expect.any(String),
         gitClientOperation: { operation: "status-read", outcome: "retry-recovered" },
+      },
+    ]);
+  });
+
+  // PR #3625 review: a manual retry mints its own correlation id and reports an attempt line before
+  // the request even starts; its settlement (recovered here) reuses the SAME id, so the pair is
+  // reconstructable as one timeline regardless of which server request the retry itself carried.
+  it("joins a retry attempt to its recovered settlement under one correlation id", async () => {
+    const attempts: { operation: string; correlationId: string }[] = [];
+    const settlements: { correlationId?: string | undefined; gitClientOperation?: unknown }[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta?.gitRetryAttemptReport !== undefined) attempts.push(meta.gitRetryAttemptReport);
+      if (meta?.gitClientOperation !== undefined) {
+        settlements.push({
+          correlationId: meta.correlationId,
+          gitClientOperation: meta.gitClientOperation,
+        });
+      }
+    });
+    const user = userEvent.setup();
+    let attempt = 0;
+    const listBranches = vi.fn<GitClientSeam["listBranches"]>(async () => {
+      attempt += 1;
+      return attempt === 1
+        ? makeBranchList({
+            available: false,
+            state: "unavailable",
+            reason: "git-error",
+            branches: [],
+          })
+        : makeBranchList();
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ listBranches })} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load branches.");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByRole("button", { name: "Branch: main" });
+
+    expect(attempts).toEqual([{ operation: "branches-read", correlationId: expect.any(String) }]);
+    expect(settlements).toEqual([
+      {
+        correlationId: attempts[0]?.correlationId,
+        gitClientOperation: { operation: "branches-read", outcome: "retry-recovered" },
+      },
+    ]);
+  });
+
+  // PR #3625 review: if a session redemption or a mutation's revision bump starts a NEWER read
+  // before a manual retry's own response arrives, both settlement callbacks used to return before
+  // `reportReadRetry` — this call had no attempt line at all, so the log could not reconstruct that
+  // the operator retried or why its result was discarded. The newer read's own settlement must not
+  // itself report anything: only the superseded retry does.
+  it("reports a superseded retry when a newer read lands before the retry settles", async () => {
+    const settlements = captureRetrySettlements();
+    let resolveRetry!: (value: GitRepositoryStatusResponse) => void;
+    let call = 0;
+    const getStatus = vi.fn<GitClientSeam["getStatus"]>(async () => {
+      call += 1;
+      if (call === 1) throw new Error("Status fetch failed");
+      if (call === 2) {
+        return new Promise<GitRepositoryStatusResponse>((resolve) => {
+          resolveRetry = resolve;
+        });
+      }
+      return makeStatus({ clean: true });
+    });
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Status fetch failed");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
+
+    // A newer automatic read (a repository-state invalidation) supersedes the still-pending retry.
+    await act(async () => {
+      notifyGitRepositoryStateInvalidated(REPO_A.path);
+    });
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+    expect(settlements()).toHaveLength(0);
+
+    // The stale retry finally settles — reported as superseded, never silently dropped.
+    await act(async () => {
+      resolveRetry(makeStatus({ clean: true }));
+    });
+
+    expect(settlements()).toEqual([
+      {
+        kind: "other",
+        correlationId: expect.any(String),
+        gitClientOperation: { operation: "status-read", outcome: "retry-superseded" },
       },
     ]);
   });

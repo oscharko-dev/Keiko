@@ -41,6 +41,7 @@ import {
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticGitClientOperation,
+  type ClientGitRetryOperation,
   type ClientMarkdownLayout,
   type ClientErrorEvidence,
   type ClientDiagnosticKind,
@@ -104,6 +105,15 @@ export interface ClientDiagnosticSessionRepairReport {
   readonly stream?: ClientSessionRepairStream | undefined;
 }
 
+// A manual retry's attempt, minted client-side the moment Retry is clicked (PR #3625 review): the
+// correlation id here is REQUIRED and reused by whatever settlement follows — recovered, failed or
+// superseded — so the pair joins on one timeline exactly like a stage's started/settled report join
+// theirs, even when a newer automatic read supersedes the retry before it settles.
+export interface ClientDiagnosticGitRetryAttemptReport {
+  readonly operation: ClientGitRetryOperation;
+  readonly correlationId: string;
+}
+
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
@@ -127,6 +137,7 @@ export interface ClientDiagnosticMeta {
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
   readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
   readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;
+  readonly gitRetryAttemptReport?: ClientDiagnosticGitRetryAttemptReport | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;

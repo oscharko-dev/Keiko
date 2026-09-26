@@ -49,12 +49,14 @@ import {
   type ClientDiagnosticLossCounts,
   type ClientDiagnosticReadyState,
   type ClientGitClientOperationOutcome,
+  type ClientGitRetryAttemptIngestRequest,
   type ClientSessionRepairIngestRequest,
   type ClientSessionRepairOutcome,
   type ClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   type ClientDiagnosticBindingReport,
+  type ClientDiagnosticGitRetryAttemptReport,
   type ClientDiagnosticMeta,
   type ClientDiagnosticSessionRepairReport,
   type ClientDiagnosticStageReport,
@@ -196,8 +198,23 @@ function clientSessionRepairPostBody(
   };
 }
 
+// PR #3625 review: a manual retry's attempt, sent the moment Retry starts. Unlike a session
+// repair's denied-request id (`meta.correlationId`), this report carries its OWN required
+// correlation id — there is no other request for it to ride alongside — which its later settlement
+// reuses so the pair joins on one timeline even across a supersession.
+function clientGitRetryAttemptPostBody(
+  report: ClientDiagnosticGitRetryAttemptReport,
+): ClientGitRetryAttemptIngestRequest | undefined {
+  const correlationId = validCorrelationId(report.correlationId);
+  if (correlationId === undefined) return undefined;
+  return { kind: "git-retry-attempt", operation: report.operation, correlationId };
+}
+
 type StructuredPostBody =
-  ClientStageIngestRequest | ClientBindingIngestRequest | ClientSessionRepairIngestRequest;
+  | ClientStageIngestRequest
+  | ClientBindingIngestRequest
+  | ClientSessionRepairIngestRequest
+  | ClientGitRetryAttemptIngestRequest;
 
 // The closed report the metadata names, if any. A closed report carries no loss counts.
 function structuredPostBody(
@@ -211,6 +228,9 @@ function structuredPostBody(
   }
   if (meta?.sessionRepairReport !== undefined) {
     return clientSessionRepairPostBody(meta.sessionRepairReport, meta.correlationId);
+  }
+  if (meta?.gitRetryAttemptReport !== undefined) {
+    return clientGitRetryAttemptPostBody(meta.gitRetryAttemptReport);
   }
   return undefined;
 }
@@ -319,11 +339,12 @@ function gitClientOperationPostBudget(
 
 // Routine evidence: a stage, every binding outcome but a missing target (an offer and a person's
 // decision included), a session repair that recovered, a git-client operation that discarded a
-// succeeded result or recovered on retry. Everything else is a failure report. The binding, repair
-// and git-client rules are the server's own (keiko-contracts), so the two budgets never drift.
+// succeeded result or recovered/superseded on retry, a manual retry's attempt line. Everything else
+// is a failure report. The binding, repair and git-client rules are the server's own
+// (keiko-contracts), so the two budgets never drift.
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
   if (meta === undefined) return "failure";
-  if (meta.stageReport !== undefined) return "routine";
+  if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
   if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
   if (meta.sessionRepairReport !== undefined) {
     return repairPostBudget(meta.sessionRepairReport.outcome);

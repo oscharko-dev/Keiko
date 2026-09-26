@@ -3,6 +3,10 @@ import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   clientBindingDigest,
   clientDiagnosticNoteDigest,
   handleClientDiagnosticIngest,
@@ -71,6 +75,17 @@ function clientStageEvents(
   op: "client.stage.started" | "client.stage.settled",
 ): readonly ServerLogEvent[] {
   return sink.events.filter((event) => event.op === op);
+}
+
+// PR #3625 review: routine git-client settlements (discarded-succeeded, retry-recovered,
+// retry-superseded) and the manual retry attempt line, each their own operation.
+function gitOperationEvent(
+  sink: BufferedServerLogSink,
+  op: "client.git-operation.settled" | "client.git-operation.attempted",
+): ServerLogEvent {
+  const event = sink.events.find((candidate) => candidate.op === op);
+  expect(event, `expected exactly one ${op} event`).toBeDefined();
+  return event ?? { category: "diagnostic", op };
 }
 
 function clientDiagnosticRejectedEvents(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
@@ -557,9 +572,11 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
-  // PR #3625 review: an add-repository clone/register request that settled after its dialog
-  // already closed. The repository was created but deliberately never activated — not a failure.
-  it("preserves a discarded-succeeded git-client operation settlement", async () => {
+  // PR #3625 review: routine settlements — an add-repository result discarded after it actually
+  // succeeded, a manual retry that recovered or was superseded — are routed to their own
+  // lifecycle-appropriate `client.git-operation.settled` at info with no `errorKind`, never the
+  // failure-shaped `client.diagnostic` (KEIKO-3557's stage fix, applied to this one outcome).
+  it("persists a discarded-succeeded git-client operation as client.git-operation.settled", async () => {
     const sink = captureServerLog();
     const body = JSON.stringify({
       message: "git-client: add-repository discarded: repository-clone succeeded",
@@ -569,11 +586,143 @@ describe("POST /api/diagnostics/client", () => {
     });
 
     expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    expect(event.level).toBe("info");
+    expect(event.errorKind).toBeUndefined();
+    const record = expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      operation: "repository-clone",
+      outcome: "discarded-succeeded",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // A manual retry that recovers carries the SAME id its attempt line minted, so the two join on
+  // one timeline (PR #3625 review).
+  it("persists a recovered manual retry as client.git-operation.settled with its correlation id", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual status-read retry-recovered",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_git-retry-0001",
+      kind: "other",
+      gitClientOperation: { operation: "status-read", outcome: "retry-recovered" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    const record = expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_git-retry-0001",
+      operation: "status-read",
+      outcome: "retry-recovered",
+    });
+  });
+
+  // A manual retry superseded by a newer automatic read before it settled is discarded evidence,
+  // never a failure of the read itself — routine, and joinable to its attempt (PR #3625 review).
+  it("persists a superseded manual retry as client.git-operation.settled", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual branches-read retry-superseded",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_git-retry-0002",
+      kind: "other",
+      gitClientOperation: { operation: "branches-read", outcome: "retry-superseded" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    const record = expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_git-retry-0002",
+      operation: "branches-read",
+      outcome: "retry-superseded",
+    });
+  });
+
+  // The attempt line is sent the moment Retry is clicked, minting its own correlation id — before
+  // any settlement exists (PR #3625 review).
+  it("persists a manual retry attempt as client.git-operation.attempted", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      kind: "git-retry-attempt",
+      operation: "summary-read",
+      correlationId: "ui_git-retry-0003",
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    const event = gitOperationEvent(sink, "client.git-operation.attempted");
+    expect(event.level).toBe("info");
+    const record = expectActivityLogProof(
+      "client.git-operation.attempted.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_git-retry-0003",
+      operation: "summary-read",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // A resolved (HTTP 200) unavailable response's closed reason travels only alongside retry-failed,
+  // and only reaches `client.diagnostic` — never the routine `client.git-operation.settled` above
+  // (PR #3625 review, GitClientWindow.tsx finding).
+  it("preserves the closed unavailable reason on a resolved retry-failed settlement", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual status-read retry-failed (unavailable)",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_git-retry-0004",
+      errorKind: "unavailable",
+      kind: "other",
+      gitClientOperation: {
+        operation: "status-read",
+        outcome: "retry-failed",
+        reason: "git-error",
+      },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
     expect(clientDiagnosticLine(sink)).toMatchObject({
       op: "client.diagnostic",
-      gitClientOperation: "repository-clone",
-      gitClientOperationOutcome: "discarded-succeeded",
+      correlationId: "ui_git-retry-0004",
+      errorKind: "unavailable",
+      gitClientOperation: "status-read",
+      gitClientOperationOutcome: "retry-failed",
+      gitClientOperationReason: "git-error",
     });
+  });
+
+  // The contracts guard already refuses a reason on any other outcome (diagnostics.test.ts); this
+  // pins the same fail-closed behaviour through the real route, never silently dropping the reason.
+  it("rejects a reason attached to a recovered retry, fail-closed", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual status-read retry-recovered",
+      clientTs: CLIENT_TS,
+      gitClientOperation: {
+        operation: "status-read",
+        outcome: "retry-recovered",
+        reason: "git-error",
+      },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(sink.events.some((event) => event.op.startsWith("client.git-operation."))).toBe(false);
   });
 
   // The failed counterpart: before this fix a discarded failure returned silently client-side and

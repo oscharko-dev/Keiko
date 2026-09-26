@@ -749,6 +749,42 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
     });
     expect(lastPostedBody(fetchMock)).not.toHaveProperty("kind", "session-repair");
   });
+
+  // PR #3625 review: the attempt line is sent the moment a manual Retry starts, minting its OWN
+  // correlation id — before any settlement exists — so a later supersession is still joinable to it.
+  it("posts a git retry attempt report under its own client-minted correlation id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("git-client: manual status-read attempted", {
+      gitRetryAttemptReport: { operation: "status-read", correlationId: "ui_git-retry-0001" },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "git-retry-attempt",
+      operation: "status-read",
+      correlationId: "ui_git-retry-0001",
+    });
+  });
+
+  // Mirrors the session-repair fallback above: an attempt whose own id is not shape-valid can never
+  // join a settlement anyway, so it is refused rather than posted as an unjoinable report the server
+  // would reject on its own correlation-id check.
+  it("falls back to a plain message report when a git retry attempt has no safe correlation id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("git-client: manual status-read attempted", {
+      gitRetryAttemptReport: { operation: "status-read", correlationId: "not a safe id" },
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      message: "git-client: manual status-read attempted",
+    });
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("kind", "git-retry-attempt");
+  });
 });
 
 // #3557: a page load posts about a dozen routine stage reports. With one shared budget, a failure
@@ -850,6 +886,28 @@ describe("fanOutClientDiagnostic budgets", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(25);
     expect(lastPostedBody(fetchMock)).toMatchObject({ outcome: "target-missing" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
+
+  // PR #3625 review: a burst of manual retry attempts is routine, exactly like a burst of stage
+  // reports — it must never crowd out a genuine failure report's own budget.
+  it("never lets a burst of git retry attempts use up the budget of a failure report", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let index = 1; index <= 30; index += 1) {
+      fanOutClientDiagnostic("git-client: manual status-read attempted", {
+        gitRetryAttemptReport: {
+          operation: "status-read",
+          correlationId: `ui_git-retry-${String(index).padStart(4, "0")}`,
+        },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(31);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
     expect(clientDiagnosticPostThrottledCount()).toBe(0);
   });
 

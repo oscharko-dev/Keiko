@@ -14,7 +14,11 @@
 // being hand-built at each call site.
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import type { ClientDiagnosticGitClientOperation } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientDiagnosticGitClientOperation,
+  ClientErrorEvidence,
+  ClientGitRetryOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export interface GitClientOperationDiagnosticOptions {
@@ -25,13 +29,19 @@ export interface GitClientOperationDiagnosticOptions {
   readonly correlationId?: string | undefined;
   // The closed class of the failure, when the settlement is a failure outcome (`bffRequestErrorKind`).
   readonly errorKind?: ActivityLogErrorKind | undefined;
+  // Body-free error evidence (`clientErrorEvidence(error)`) for a failed settlement raised by a
+  // thrown error: the error's class, its dist-anchored frames and cause chain — never its message
+  // (PR #3625 review). Omitted for a settlement with no thrown error (a resolved unavailable
+  // response, a discarded success, a recovered or superseded retry).
+  readonly errorEvidence?: ClientErrorEvidence | undefined;
 }
 
 /**
  * Reports a Git-client operation settling after its own surface (a dialog, a panel) is already
  * gone: which operation, and how it settled — never the repository, path or URL involved. `message`
  * is the already-redacted, body-free console text `reportClientDiagnostic` requires; only the
- * closed `gitClientOperation` fields, `correlationId` and `errorKind` reach the activity log.
+ * closed `gitClientOperation` fields, `correlationId`, `errorKind` and `errorEvidence` reach the
+ * activity log.
  */
 export function reportGitClientOperationDiagnostic(
   message: string,
@@ -43,5 +53,20 @@ export function reportGitClientOperationDiagnostic(
     gitClientOperation,
     ...(options?.correlationId === undefined ? {} : { correlationId: options.correlationId }),
     ...(options?.errorKind === undefined ? {} : { errorKind: options.errorKind }),
+    ...(options?.errorEvidence === undefined ? {} : { errorEvidence: options.errorEvidence }),
   });
+}
+
+/**
+ * Reports a manual retry's attempt the moment it starts, minting no evidence beyond which read and
+ * a correlation id the caller has already minted (`newClientCorrelationId()`). Its settlement —
+ * recovered, failed or superseded — reuses the SAME id, so the pair joins on one timeline even when
+ * a newer automatic read supersedes the retry before it settles (PR #3625 review).
+ */
+export function reportGitClientRetryAttempt(
+  message: string,
+  operation: ClientGitRetryOperation,
+  correlationId: string,
+): void {
+  reportClientDiagnostic(message, { gitRetryAttemptReport: { operation, correlationId } });
 }

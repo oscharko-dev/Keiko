@@ -23,9 +23,14 @@ import type {
 } from "react";
 import type { GitBranchListEntry, GitBranchListResponse } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { correlationIdOf } from "@/lib/client-error-summary";
-import { bffRequestErrorKind } from "@/lib/http";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind, newClientCorrelationId } from "@/lib/http";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
+import type { ClientGitRetryOperation } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  isGitWireUnavailableReason,
+  type GitWireUnavailableReason,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
 import {
@@ -47,7 +52,10 @@ import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
-import { reportGitClientOperationDiagnostic } from "./git-client-operation-diagnostics";
+import {
+  reportGitClientOperationDiagnostic,
+  reportGitClientRetryAttempt,
+} from "./git-client-operation-diagnostics";
 import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
@@ -729,14 +737,28 @@ function syncViewForDisplay(
   };
 }
 
+// The one unavailable reason a resolved (HTTP 200) read answers that is a FAILED read rather than a
+// structural explanation: `git status`/`for-each-ref` erroring or timing out (the server folds a
+// timeout into this same wire reason — gitRoutes.ts `classifyFailure` — since "timeout" itself is
+// not part of the wire vocabulary). Every other reason (not-a-repository, git-missing,
+// repository-root-outside-root, unsafe-repository, unknown — the last is an unpaired-session
+// authority refusal, gitRoutes.ts `resolveRepository`) is a structural state the changes pane already
+// explains; retrying it would hit the identical refusal (PR #3625 review).
+function isFailedGitRead(reason: GitWireUnavailableReason | undefined): boolean {
+  return reason === "git-error";
+}
+
 // A failed branch or summary read shows its own Retry, except while the repository itself is
-// unavailable: the changes pane already says why, and a Retry there would misstate a folder that is
-// not a Git repository as a failed read (PR #3625 review).
+// unavailable for a STRUCTURAL reason: the changes pane already says why, and a Retry there would
+// misstate a folder that is not a Git repository as a failed read. A genuinely FAILED status read
+// (STATUS_READ.failureKey below) must not hide the branch/summary Retry the same way — it has its
+// own Retry now, so it no longer needs branches/summary to defer to it (PR #3625 review).
 function readErrorForDisplay(
   error: string | null,
   status: GitRepositoryStatusResponse | null,
 ): string | null {
-  return status?.available === false ? null : error;
+  if (status === null || status.available) return error;
+  return isFailedGitRead(status.reason) ? error : null;
 }
 
 function sidebarMaxWidth(bodyWidth: number): number {
@@ -885,34 +907,57 @@ function repositoryToolbarList(
   return [locked, ...repositories];
 }
 
-type GitReadOperation = "status-read" | "branches-read" | "summary-read";
+// Exactly `ClientGitRetryOperation` (keiko-contracts): the three reads a manual Retry control ever
+// attempts. Aliased under this file's own name since every read-spec/retry symbol here already reads
+// "GitRead…", but kept as one type so the wire vocabulary and this file's own can never drift apart.
+type GitReadOperation = ClientGitRetryOperation;
 
-// One repository read of the window: how it is fetched, and when an answer that resolved is still a
-// failed read. `for-each-ref` or a transient `git status` failing answers HTTP 200 with
-// `available: false`, and that gets the same message and Retry as a rejection (PR #3625 review).
+// One repository read of the window: how it is fetched, when an answer that resolved is still a
+// failed read, and — only then — the closed reason it gave. `for-each-ref` or a transient
+// `git status` failing answers HTTP 200 with `available: false`, and that gets the same message and
+// Retry as a rejection (PR #3625 review).
 interface GitReadSpec<T> {
   readonly operation: GitReadOperation;
   readonly fetch: (client: GitClientSeam, path: string) => Promise<T>;
   readonly failureKey: (response: T) => OptionalWidgetMessageKey | null;
+  readonly reason: (response: T) => GitWireUnavailableReason | undefined;
 }
 
-// A status the repository cannot serve is explained by the changes pane itself, never as a failure.
+// A closed, validated reason from a response field this file's own local types leave as a bare
+// `string` (`GitBranchListResponse.reason`, api.ts) — never trusted onto the wire unchecked; an
+// unrecognized value is silently dropped rather than sent and rejected by the server's own guard.
+function safeGitWireUnavailableReason(
+  reason: string | undefined,
+): GitWireUnavailableReason | undefined {
+  return reason !== undefined && isGitWireUnavailableReason(reason) ? reason : undefined;
+}
+
+// A status read used to treat every RESOLVED response as success — `for-each-ref`/`git status`
+// erroring or timing out answers HTTP 200 with `available: false`, and that failed read had no
+// reachable Retry at all (PR #3625 review). Only `isFailedGitRead`'s one reason is a failure; every
+// other unavailable reason is still explained by the changes pane itself, never as a failure.
 const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
   operation: "status-read",
   fetch: (client, path) => client.getStatus(path),
-  failureKey: () => null,
+  failureKey: (response) =>
+    !response.available && isFailedGitRead(response.reason)
+      ? "gitClientWindow.status.loadFailed"
+      : null,
+  reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
 
 const BRANCHES_READ: GitReadSpec<GitBranchListResponse> = {
   operation: "branches-read",
   fetch: (client, path) => client.listBranches(path),
   failureKey: (response) => (response.available ? null : "gitClientWindow.branch.loadFailed"),
+  reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
 
 const SUMMARY_READ: GitReadSpec<GitRepositorySummary> = {
   operation: "summary-read",
   fetch: (client, path) => client.getSummary(path),
   failureKey: (response) => (response.available ? null : "gitClientWindow.sync.summaryUnavailable"),
+  reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
 
 interface GitReadState<T> {
@@ -945,25 +990,152 @@ const IDLE_READ: GitReadState<never> = {
   error: null,
 };
 
-// A manual Retry's settlement, body-free (PR #3625 review): which read, whether it recovered, and
-// for a rejection its closed error kind and the failed request's correlation id.
-function reportReadRetry(operation: GitReadOperation, recovered: boolean, error?: unknown): void {
-  const outcome = recovered ? "retry-recovered" : "retry-failed";
+// A recovered manual retry is routine evidence — no error kind, just the id its attempt line
+// already minted, so the two join on one timeline (PR #3625 review).
+function reportReadRetryRecovered(operation: GitReadOperation, correlationId: string): void {
   reportGitClientOperationDiagnostic(
-    `git-client: manual ${operation} ${outcome}`,
-    { operation, outcome },
-    error === undefined
-      ? undefined
-      : { correlationId: correlationIdOf(error), errorKind: bffRequestErrorKind(error) },
+    `git-client: manual ${operation} retry-recovered`,
+    { operation, outcome: "retry-recovered" },
+    { correlationId },
   );
 }
 
+// A retry answered with a RESOLVED unavailable response (HTTP 200, `available: false`) carries the
+// response's own closed reason — never a message — alongside the fixed `unavailable` error kind a
+// resolved-but-failed read always is; `reason` is a body-free field, never sent when the response
+// carried none the guard recognizes (PR #3625 review).
+function reportReadRetryUnavailable(
+  operation: GitReadOperation,
+  reason: GitWireUnavailableReason | undefined,
+  correlationId: string,
+): void {
+  reportGitClientOperationDiagnostic(
+    `git-client: manual ${operation} retry-failed (unavailable)`,
+    { operation, outcome: "retry-failed", ...(reason === undefined ? {} : { reason }) },
+    { correlationId, errorKind: "unavailable" },
+  );
+}
+
+// A retry whose request itself rejected carries the thrown error's closed kind and body-free
+// evidence (class, dist-anchored frames, cause chain — never its message), same as a discarded
+// add-repository failure (PR #3625 review).
+function reportReadRetryRejected(
+  operation: GitReadOperation,
+  error: unknown,
+  correlationId: string,
+): void {
+  reportGitClientOperationDiagnostic(
+    `git-client: manual ${operation} retry-failed`,
+    { operation, outcome: "retry-failed" },
+    {
+      correlationId,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    },
+  );
+}
+
+// A manual retry's response (or rejection) arrived after a newer read — a redemption, a mutation's
+// revision bump — already superseded it: neither a recovery nor a failure of the read itself, just
+// discarded evidence, reported under the SAME id its attempt line minted (PR #3625 review). Before
+// this fix the settlement returned silently here, leaving no trace the operator ever retried.
+function reportReadRetrySuperseded(operation: GitReadOperation, correlationId: string): void {
+  reportGitClientOperationDiagnostic(
+    `git-client: manual ${operation} retry-superseded`,
+    { operation, outcome: "retry-superseded" },
+    { correlationId },
+  );
+}
+
+// Removes and returns this sequence's minted retry id, if any — present only when `manualRetry`
+// requested this load. Consuming it here (rather than merely reading it) means a duplicate settle
+// of the same sequence can never report twice.
+function takeRetryCorrelationId(
+  retryAttempts: Map<number, string>,
+  sequence: number,
+): string | undefined {
+  const id = retryAttempts.get(sequence);
+  retryAttempts.delete(sequence);
+  return id;
+}
+
+function reportIfSuperseded(
+  operation: GitReadOperation,
+  retryCorrelationId: string | undefined,
+): void {
+  if (retryCorrelationId !== undefined) reportReadRetrySuperseded(operation, retryCorrelationId);
+}
+
 // The stale guard keeps an older answer from landing over a newer one, whether the newer load came
-// from a revision bump or a manual Retry (#3651, #3653).
+// from a revision bump or a manual Retry (#3651, #3653). A manual retry additionally mints its own
+// correlation id up front (`retryAttemptsRef`) and reports an attempt line before the request even
+// starts, so a settlement that arrives after this same load was superseded is still reportable
+// (PR #3625 review).
+// Mints this attempt's own correlation id up front, records it against the load's sequence so its
+// eventual settlement (however it settles) can find and consume it, and reports the attempt line —
+// all BEFORE the request goes out (PR #3625 review).
+function mintGitReadRetryAttempt(
+  operation: GitReadOperation,
+  sequence: number,
+  retryAttempts: Map<number, string>,
+): void {
+  const retryCorrelationId = newClientCorrelationId();
+  retryAttempts.set(sequence, retryCorrelationId);
+  reportGitClientRetryAttempt(
+    `git-client: manual ${operation} attempted`,
+    operation,
+    retryCorrelationId,
+  );
+}
+
+// Everything one load's settlement needs, carried as one value so the resolve/reject handlers below
+// stay small extracted functions rather than closures re-capturing `useGitRead`'s own locals — kept
+// under the repo's max-lines-per-function ceiling as its own concern, not a behavioral seam.
+interface GitReadSettleArgs<T> {
+  readonly spec: GitReadSpec<T>;
+  readonly selectedPath: string;
+  readonly sequence: number;
+  readonly sequenceRef: RefObject<number>;
+  readonly retryAttempts: Map<number, string>;
+  readonly optionalT: OptionalWidgetTranslate;
+  readonly setState: Dispatch<SetStateAction<GitReadState<T>>>;
+  readonly onLoaded: ((response: T) => void) | undefined;
+}
+
+function settleGitReadResponse<T>(args: GitReadSettleArgs<T>, response: T): void {
+  const retryCorrelationId = takeRetryCorrelationId(args.retryAttempts, args.sequence);
+  if (args.sequenceRef.current !== args.sequence) {
+    reportIfSuperseded(args.spec.operation, retryCorrelationId);
+    return;
+  }
+  const failureKey = args.spec.failureKey(response);
+  const error = failureKey === null ? null : args.optionalT(failureKey);
+  args.setState({ response, projectKey: args.selectedPath, loading: false, error });
+  args.onLoaded?.(response);
+  if (retryCorrelationId === undefined) return;
+  if (error === null) reportReadRetryRecovered(args.spec.operation, retryCorrelationId);
+  else {
+    reportReadRetryUnavailable(args.spec.operation, args.spec.reason(response), retryCorrelationId);
+  }
+}
+
+function settleGitReadFailure<T>(args: GitReadSettleArgs<T>, error: unknown): void {
+  const retryCorrelationId = takeRetryCorrelationId(args.retryAttempts, args.sequence);
+  if (args.sequenceRef.current !== args.sequence) {
+    reportIfSuperseded(args.spec.operation, retryCorrelationId);
+    return;
+  }
+  args.setState({ response: null, projectKey: null, loading: false, error: formatGitError(error) });
+  if (retryCorrelationId !== undefined) {
+    reportReadRetryRejected(args.spec.operation, error, retryCorrelationId);
+  }
+}
+
 function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
   const { client, selectedPath, spec, optionalT, redemptions, statusRevision, onLoaded } = input;
   const [state, setState] = useState<GitReadState<T>>(IDLE_READ);
   const sequenceRef = useRef(0);
+  const retryAttemptsRef = useRef(new Map<number, string>());
   const load = useCallback(
     (manualRetry: boolean): void => {
       if (selectedPath === null) {
@@ -972,26 +1144,21 @@ function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
       }
       sequenceRef.current += 1;
       const sequence = sequenceRef.current;
+      if (manualRetry) mintGitReadRetryAttempt(spec.operation, sequence, retryAttemptsRef.current);
       setState((current) => ({ ...current, loading: true, error: null }));
+      const args: GitReadSettleArgs<T> = {
+        spec,
+        selectedPath,
+        sequence,
+        sequenceRef,
+        retryAttempts: retryAttemptsRef.current,
+        optionalT,
+        setState,
+        onLoaded,
+      };
       void spec.fetch(client, selectedPath).then(
-        (response) => {
-          if (sequenceRef.current !== sequence) return;
-          const failureKey = spec.failureKey(response);
-          const error = failureKey === null ? null : optionalT(failureKey);
-          setState({ response, projectKey: selectedPath, loading: false, error });
-          onLoaded?.(response);
-          if (manualRetry) reportReadRetry(spec.operation, error === null);
-        },
-        (error: unknown) => {
-          if (sequenceRef.current !== sequence) return;
-          setState({
-            response: null,
-            projectKey: null,
-            loading: false,
-            error: formatGitError(error),
-          });
-          if (manualRetry) reportReadRetry(spec.operation, false, error);
-        },
+        (response) => settleGitReadResponse(args, response),
+        (error: unknown) => settleGitReadFailure(args, error),
       );
     },
     [client, onLoaded, optionalT, selectedPath, spec],
