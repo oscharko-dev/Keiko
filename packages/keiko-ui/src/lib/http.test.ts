@@ -4,7 +4,7 @@
 // the enrichError hook, the optional validator, and the 204 → undefined short-circuit.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "./api";
+import { ApiError, fetchGitBranches } from "./api";
 import { bffFetchJson, bffRequestErrorKind, responseCorrelationIdOf } from "./http";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
@@ -128,13 +128,11 @@ describe("bffFetchJson — correlation id (RB-6, GEN-OBS-CORRELATION-601)", () =
   });
 });
 
-// PR #3625 review: a successful JSON response exposed no correlation id at all — only `ApiError`
-// did, on failure — so a settlement built from a succeeded request's result (AddRepositoryDialog's
-// discarded-succeeded clone/register) could never be joined to it. The server already stamps
-// `X-Keiko-Correlation-Id` on every response, success included (server.ts); the capture below reads
-// it the moment ANY code calls `Response#json()` — not only `bffFetchJson`'s own — because api.ts's
-// `fetchJson` parses `Response#json()` directly and independently of this module (http.ts header
-// comment), so a capture reachable only through `performBffFetch` would never fire for it.
+// PR #3625 review: a successful JSON response exposed no correlation id — only `ApiError` did, on
+// failure — so a settlement built from a succeeded request's result (AddRepositoryDialog's
+// discarded-succeeded clone/register) could never be joined to it. Both BFF fetch scaffolds record
+// the server's X-Keiko-Correlation-Id (stamped on every response, server.ts) against the value they
+// parse: `bffFetchJson` here and api.ts's own `fetchJson`.
 describe("responseCorrelationIdOf (PR #3625 review)", () => {
   const CORRELATED = {
     status: 200,
@@ -150,15 +148,35 @@ describe("responseCorrelationIdOf (PR #3625 review)", () => {
     expect(responseCorrelationIdOf(value)).toBe("server-echoed-1");
   });
 
-  // api.ts never calls into this module at all — this proves the capture is installed on the
-  // shared `Response#json()` itself, not merely wired through `bffFetchJson`'s own code path.
-  it("recovers the id from a response parsed with no bffFetchJson involved", async () => {
-    const response = new Response(JSON.stringify({ value: 7 }), CORRELATED);
-    const value: unknown = await response.json();
+  it("recovers the id from a value api.ts's own fetch scaffold parsed on success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            schemaVersion: "1",
+            root: "/repos/alpha",
+            available: true,
+            state: "available",
+            branches: [],
+            truncated: false,
+          }),
+          CORRELATED,
+        ),
+      ),
+    );
+    const value = await fetchGitBranches("/repos/alpha");
     expect(responseCorrelationIdOf(value)).toBe("server-echoed-1");
   });
 
-  it("returns undefined for a value this process never parsed from a Response", () => {
+  // The capture is the scaffolds' explicit record, not a patch of the platform's Response#json().
+  it("records nothing for a response parsed outside the BFF fetch scaffolds", async () => {
+    const response = new Response(JSON.stringify({ value: 7 }), CORRELATED);
+    const value: unknown = await response.json();
+    expect(responseCorrelationIdOf(value)).toBeUndefined();
+  });
+
+  it("returns undefined for a value no scaffold parsed", () => {
     expect(responseCorrelationIdOf({ value: 7 })).toBeUndefined();
     expect(responseCorrelationIdOf(undefined)).toBeUndefined();
     expect(responseCorrelationIdOf(null)).toBeUndefined();
@@ -166,11 +184,16 @@ describe("responseCorrelationIdOf (PR #3625 review)", () => {
   });
 
   it("returns undefined when the parsed response carried no correlation header", async () => {
-    const response = new Response(JSON.stringify({ value: 7 }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-    const value: unknown = await response.json();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ value: 7 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const value = await bffFetchJson<{ value: number }>("/api/x");
     expect(responseCorrelationIdOf(value)).toBeUndefined();
   });
 });

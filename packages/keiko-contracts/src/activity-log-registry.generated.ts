@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "826a8bafe63d6bda752af7f7af9b9913e2927a86d8ccd57c3ba06ba272e14899" as const;
+  "9774163f13489b2dceeaecd0a44362b344111474941fbe51b8ca4dc36e6302f1" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2346,7 +2346,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["discarded-succeeded", "discarded-failed", "retry-recovered", "retry-failed"],
+        values: ["discarded-failed", "retry-failed"],
+      },
+      gitClientOperationReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "not-a-repository",
+          "git-missing",
+          "repository-root-outside-root",
+          "unknown",
+          "unsafe-repository",
+          "git-error",
+        ],
       },
       historyScopeReason: {
         type: "string",
@@ -2514,6 +2527,82 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["client-diagnostic-rejection"],
     proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.git-operation.attempted",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientGitOperationAttempted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["status-read", "branches-read", "summary-read"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "start",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-git-operation"],
+    proofIds: ["client.git-operation.attempted.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.git-operation.settled",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientGitOperationSettled",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "repository-clone",
+          "repository-register",
+          "status-read",
+          "branches-read",
+          "summary-read",
+        ],
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["discarded-succeeded", "retry-recovered", "retry-superseded"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-git-operation"],
+    proofIds: ["client.git-operation.settled.line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",
@@ -28058,8 +28147,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 319,
-  completeClassCount: 319,
+  supportedClassCount: 320,
+  completeClassCount: 320,
   completeness: "complete",
   classes: [
     {
@@ -30824,6 +30913,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "gitClientOperationReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "historyScopeReason",
               type: "string",
               dataClass: "closed-enum",
@@ -31212,6 +31307,90 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "client.diagnostic.rejected.line",
             "client.diagnostic.rejected.shutdown-flush",
           ],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-git-operation",
+      requirementContract: "client-git-operation",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end", "start"],
+      lifecycleOperations: {
+        start: ["client.git-operation.attempted"],
+        state: [],
+        end: ["client.git-operation.settled"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.git-operation.attempted",
+          mode: "correlation",
+        },
+        {
+          op: "client.git-operation.settled",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.git-operation.attempted", "client.git-operation.settled"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.git-operation.attempted",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "start",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "operation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.git-operation.attempted.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.git-operation.settled",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "operation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.git-operation.settled.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -62007,6 +62186,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",
+    "client.git-operation.attempted": "client-diagnostics",
+    "client.git-operation.settled": "client-diagnostics",
     "client.markdown.layout": "client-diagnostics",
     "client.session-repair.acknowledged": "client-diagnostics",
     "client.session-repair.failed": "client-diagnostics",

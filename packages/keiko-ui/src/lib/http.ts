@@ -40,7 +40,13 @@
 
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ApiError } from "./api";
-import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
+import {
+  buildBffHeaders,
+  CORRELATION_HEADER,
+  newClientCorrelationId,
+  recordResponseCorrelationId,
+  responseCorrelationIdOf,
+} from "./bff-correlation";
 import {
   reportClientDiagnostic,
   type ClientDiagnosticSessionRepairReport,
@@ -50,66 +56,7 @@ import { clientErrorSummary } from "./client-error-summary";
 // Re-exported for the existing consumers that import these two from "./http"
 // (SelectionAwareWorkspaceHosts.tsx, coding-app-session-channel-api.ts). The implementation lives in ./bff-correlation so this file
 // and ./api can both depend on it without the module cycle documented above.
-export { CORRELATION_HEADER, newClientCorrelationId };
-
-// A successful JSON response exposed no correlation id at all — only a thrown `ApiError` did, via
-// `.correlationId` above. The server stamps `X-Keiko-Correlation-Id` on every response, success
-// included (server.ts), so the gap was entirely client-side: a caller holding only the parsed body
-// (AddRepositoryDialog's discarded-succeeded clone/register settlement, PR #3625 review) had no way
-// back to it.
-//
-// `api.ts` — the pinned SonarCloud/update-UI-evidence surface `check:update-ui-evidence` hashes —
-// owns its OWN fetch scaffold, `fetchJson`, entirely independent of `performBffFetch` below (its own
-// header comment lists the satellite modules that delegate here; `api.ts` is deliberately not one of
-// them). A capture wired only through `performBffFetch` would therefore never see a single Git route
-// (`cloneRepository`, `createProject`, `fetchGitStatus`, …) — every one of them is a `fetchJson` call.
-// The capture below is installed on the shared `Response.prototype.json` itself instead: the one
-// point every JSON parse in this application passes through regardless of which scaffold called it,
-// so it works for both without duplicating either.
-//
-// Tagging the wrapper function (rather than a module-level boolean) makes installation idempotent
-// per REALM rather than per module evaluation: a test environment that hands each file its own
-// `Response` class (a fresh jsdom window) must still install its own capture even though this
-// module's top-level code may already have run once in the process.
-const RESPONSE_JSON_CORRELATION_CAPTURE_TAG = Symbol.for("keiko.responseJsonCorrelationCapture");
-
-const RESPONSE_CORRELATION_IDS = new WeakMap<object, string>();
-
-function installResponseJsonCorrelationCapture(): void {
-  if (typeof Response === "undefined") return;
-  const current = Response.prototype.json as Partial<
-    Record<typeof RESPONSE_JSON_CORRELATION_CAPTURE_TAG, boolean>
-  >;
-  if (current[RESPONSE_JSON_CORRELATION_CAPTURE_TAG] === true) return;
-  const originalJson = Response.prototype.json;
-  async function correlatedJson(this: Response): Promise<unknown> {
-    const correlationId = this.headers.get(CORRELATION_HEADER);
-    const value: unknown = await originalJson.call(this);
-    if (correlationId !== null && typeof value === "object" && value !== null) {
-      RESPONSE_CORRELATION_IDS.set(value, correlationId);
-    }
-    return value;
-  }
-  (correlatedJson as unknown as Record<typeof RESPONSE_JSON_CORRELATION_CAPTURE_TAG, boolean>)[
-    RESPONSE_JSON_CORRELATION_CAPTURE_TAG
-  ] = true;
-  Response.prototype.json = correlatedJson;
-}
-
-installResponseJsonCorrelationCapture();
-
-/**
- * The server's correlation id for the response a successful JSON body was parsed from, when that
- * response carried one (every response does, server.ts) — the success-path counterpart to
- * `ApiError.correlationId`. Looked up by the exact parsed object identity the capture above records,
- * so it survives being handed back unchanged through `fetchJson`/`bffFetchJson`'s pinned call sites;
- * `undefined` for any value this process never parsed from a `Response` (a hand-built fixture, a
- * response whose body was empty, or one that carried no correlation header at all).
- */
-export function responseCorrelationIdOf(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  return RESPONSE_CORRELATION_IDS.get(value);
-}
+export { CORRELATION_HEADER, newClientCorrelationId, responseCorrelationIdOf };
 
 // The `{ error: { code, message, … } }` envelope every BFF route returns on a non-2xx. Extra
 // fields (e.g. task-workspace `failureClass`) are surfaced to `opts.enrichError`.
@@ -246,6 +193,7 @@ async function performBffFetch<T>(
   }
 
   const value = (await res.json()) as unknown;
+  recordResponseCorrelationId(value, res.headers.get(CORRELATION_HEADER));
   if (opts?.validator === undefined) return value as T;
   try {
     return opts.validator(path, value);

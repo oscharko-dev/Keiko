@@ -181,7 +181,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
-import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
+import {
+  buildBffHeaders,
+  CORRELATION_HEADER,
+  newClientCorrelationId,
+  recordResponseCorrelationId,
+} from "./bff-correlation";
 import {
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -335,6 +340,7 @@ async function fetchJson<T>(
   }
 
   const value = (await res.json()) as unknown;
+  recordResponseCorrelationId(value, res.headers.get(CORRELATION_HEADER));
   return validator === undefined
     ? (value as T)
     : validateBffResponse<T>(path, value, validator, res.headers.get(CORRELATION_HEADER));

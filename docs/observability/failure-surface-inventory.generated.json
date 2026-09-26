@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "826a8bafe63d6bda752af7f7af9b9913e2927a86d8ccd57c3ba06ba272e14899"
+    "catalogDigest": "9774163f13489b2dceeaecd0a44362b344111474941fbe51b8ca4dc36e6302f1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 461,
-    "proofCount": 469,
-    "resolvedProofCount": 469,
-    "failureClassCount": 319,
+    "operationCount": 463,
+    "proofCount": 471,
+    "resolvedProofCount": 471,
+    "failureClassCount": 320,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -120,6 +120,8 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.git-operation.attempted",
+        "client.git-operation.settled",
         "client.markdown.layout",
         "client.session-repair.acknowledged",
         "client.session-repair.failed",
@@ -650,6 +652,7 @@
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
+    "client-git-operation": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
     "coding-app-session-channel": ["tools-workflows.dependency-failure"],
@@ -1058,6 +1061,12 @@
     ],
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.git-operation.attempted.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.git-operation.settled.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.markdown.layout.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.session-repair.acknowledged.line": [

@@ -13,6 +13,7 @@ import {
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
+import { recordResponseCorrelationId } from "@/lib/bff-correlation";
 import { ApiError } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
@@ -47,18 +48,13 @@ afterEach(() => {
   resetClientDiagnosticWriter();
 });
 
-// The server stamps `X-Keiko-Correlation-Id` on every response, success included (server.ts); a
-// resolved value built this way — through a real `Response#json()` — exercises the SAME capture
-// (http.ts's `responseCorrelationIdOf`) `cloneRepository`/`createProject` rely on in production,
-// rather than asserting against a hand-built object no capture ever touched (PR #3625 review).
-async function correlatedProjectResponse(
-  correlationId: string,
-): Promise<{ project: ProjectWithAvailability }> {
-  const response = new Response(JSON.stringify({ project: PROJECT_FIXTURE }), {
-    status: 200,
-    headers: { "Content-Type": "application/json", "X-Keiko-Correlation-Id": correlationId },
-  });
-  return (await response.json()) as { project: ProjectWithAvailability };
+// The server stamps `X-Keiko-Correlation-Id` on every response, success included (server.ts), and
+// the BFF fetch scaffold records it against the value it parsed (bff-correlation.ts; proven through
+// api.ts's own scaffold in http.test.ts). This helper stands in for that scaffold (PR #3625 review).
+function correlatedProjectResponse(correlationId: string): { project: ProjectWithAvailability } {
+  const value = { project: PROJECT_FIXTURE };
+  recordResponseCorrelationId(value, correlationId);
+  return value;
 }
 
 describe("AddRepositoryDialog — settlement after the dialog has closed", () => {
@@ -91,7 +87,7 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     // The dialog closing unmounts it — the same lifecycle a parent's onClose-driven unmount
     // triggers in production (#3646) — which is what flips `closedRef.current`.
     view.unmount();
-    const resolved = await correlatedProjectResponse("server-echoed-clone-1");
+    const resolved = correlatedProjectResponse("server-echoed-clone-1");
     await act(async () => {
       resolveClone(resolved);
       await clonePromise;
