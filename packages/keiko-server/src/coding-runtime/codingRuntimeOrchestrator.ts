@@ -348,6 +348,33 @@ const CODING_RUNTIME_APPROVAL_WAITING_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// 1.1.9 lab: the active approval's wait ran out without a human decision. The governed ask ends at
+// the same instant (MAX_APPROVAL_CHALLENGE_TTL_MS is its human-decision wait), so the run stops
+// waiting on it too. Before, the expired card stayed on screen, the model's next ask queued behind
+// it, and neither reached a human. `replaced` names an ask that arrived after the expiry and took
+// the expired one's place.
+const CODING_RUNTIME_APPROVAL_RETIRED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.approval.retired",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeApprovalRetired",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    requestId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: { type: "string", dataClass: "closed-enum", required: true, values: ["expired"] },
+    replaced: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-approval-wait"],
+  proofIds: ["coding-runtime.approval.retired.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const CODING_RUNTIME_RUN_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1031,6 +1058,23 @@ function recordRuntimeStopFailure(
   );
 }
 
+function recordApprovalExpiryFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: runtimeDiagnosticCorrelationId(runId),
+      operation: "coding-runtime.approval",
+      source: "coding-runtime-orchestrator.approval-expiry",
+      error,
+      redact: () => "Coding runtime approval expiry failed.",
+    }),
+  );
+}
+
 function recordRuntimeRunStarted(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
@@ -1150,6 +1194,22 @@ function recordRuntimeApprovalWaiting(
         ...(permission.actionKind === undefined ? {} : { actionKind: permission.actionKind }),
         ...(queuePosition === undefined ? {} : { queuePosition }),
       },
+    ),
+  );
+}
+
+function recordRuntimeApprovalRetired(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  revision: number,
+  requestId: string,
+  replaced: boolean,
+): void {
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_APPROVAL_RETIRED_OPERATION,
+      { correlationId: runtimeDiagnosticCorrelationId(runId) },
+      { runId, revision, requestId, reason: "expired", replaced },
     ),
   );
 }
@@ -1543,6 +1603,7 @@ export class CodingRuntimeOrchestrator {
   private readonly settledEffectiveModes = new Map<string, CodingWorkbenchMode>();
   private readonly approvals = new Map<string, ApprovalChallenge>();
   private readonly queuedApprovals = new Map<string, ApprovalChallenge[]>();
+  private readonly approvalExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly operations: CodingRuntimeOperationCoordinator;
   private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
@@ -1809,6 +1870,7 @@ export class CodingRuntimeOrchestrator {
         transitioned.snapshot.revision,
         approval.permission,
       );
+      this.scheduleApprovalExpiry(runId, approval);
     }
     return transitioned;
   }
@@ -2317,24 +2379,89 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
   ): Promise<CodingRuntimeOrchestratorResult> {
-    const challenge = this.approvalChallenge(current, event);
+    // An ask that arrives after the active one's wait ran out takes its place, never a queue slot
+    // behind an approval nobody can decide any more (1.1.9 lab).
+    const live = await this.retireExpiredApproval(current, true);
+    const challenge = this.approvalChallenge(live, event);
     if (challenge === undefined) return this.fail("invalid-intent");
-    if (current.state === "awaiting-approval") {
-      return await this.queueApproval(current, challenge);
+    if (live.state === "awaiting-approval") {
+      return await this.queueApproval(live, challenge);
     }
-    this.approvals.set(current.runId, challenge);
-    const next = this.transition(current, "awaiting-approval");
+    this.approvals.set(live.runId, challenge);
+    const next = this.transition(live, "awaiting-approval");
     if (!next.ok) {
-      this.approvals.delete(current.runId);
+      this.approvals.delete(live.runId);
     } else {
       recordRuntimeApprovalWaiting(
         this.deps.activityLog,
-        current.runId,
+        live.runId,
         next.snapshot.revision,
         challenge.permission,
       );
+      this.scheduleApprovalExpiry(live.runId, challenge);
     }
     return next;
+  }
+
+  /**
+   * Ends the wait on an active approval whose expiry passed without a decision: the governed ask
+   * ended as expired at the same instant, so nothing can decide it any more. The run returns to
+   * `running`, or to the next queued ask, under a new revision the Workbench reads. Any other state
+   * is returned as it is.
+   */
+  private async retireExpiredApproval(
+    current: CodingRuntimeSnapshot,
+    replaced: boolean,
+  ): Promise<CodingRuntimeSnapshot> {
+    const active = this.approvals.get(current.runId);
+    if (
+      current.state !== "awaiting-approval" ||
+      active === undefined ||
+      active.used ||
+      active.expiresAt > this.now().getTime()
+    ) {
+      return current;
+    }
+    this.approvals.delete(current.runId);
+    const running = this.transition(current, "running");
+    const live = this.current();
+    if (!running.ok || live === undefined) return live ?? current;
+    recordRuntimeApprovalRetired(
+      this.deps.activityLog,
+      live.runId,
+      live.revision,
+      active.permission.requestId,
+      replaced,
+    );
+    await this.promoteQueuedApproval(live);
+    return this.current() ?? live;
+  }
+
+  // The active approval's own expiry, so the run stops waiting at the instant its governed ask ends
+  // (MAX_APPROVAL_CHALLENGE_TTL_MS), not only once the model asks again.
+  private scheduleApprovalExpiry(runId: string, challenge: ApprovalChallenge): void {
+    clearTimeout(this.approvalExpiryTimers.get(runId));
+    const timer = setTimeout(
+      () => {
+        if (this.approvalExpiryTimers.get(runId) === timer) this.approvalExpiryTimers.delete(runId);
+        this.serial(() => this.expireActiveApproval(runId, challenge)).catch((error: unknown) => {
+          recordApprovalExpiryFailure(this.deps.diagnostics, runId, error);
+        });
+      },
+      Math.max(0, challenge.expiresAt - this.now().getTime()),
+    );
+    timer.unref();
+    this.approvalExpiryTimers.set(runId, timer);
+  }
+
+  private async expireActiveApproval(runId: string, challenge: ApprovalChallenge): Promise<void> {
+    const current = this.current();
+    if (current?.runId !== runId || this.approvals.get(runId) !== challenge) return;
+    if (challenge.expiresAt > this.now().getTime()) {
+      this.scheduleApprovalExpiry(runId, challenge);
+      return;
+    }
+    await this.retireExpiredApproval(current, false);
   }
 
   private approvalChallenge(
@@ -2408,14 +2535,17 @@ export class CodingRuntimeOrchestrator {
     const promoted = { ...challenge, revision: current.revision + 1 };
     this.approvals.set(current.runId, promoted);
     const waiting = this.transition(current, "awaiting-approval");
-    if (!waiting.ok) this.approvals.delete(current.runId);
-    else
-      recordRuntimeApprovalWaiting(
-        this.deps.activityLog,
-        current.runId,
-        waiting.snapshot.revision,
-        promoted.permission,
-      );
+    if (!waiting.ok) {
+      this.approvals.delete(current.runId);
+      return waiting;
+    }
+    recordRuntimeApprovalWaiting(
+      this.deps.activityLog,
+      current.runId,
+      waiting.snapshot.revision,
+      promoted.permission,
+    );
+    this.scheduleApprovalExpiry(current.runId, promoted);
     return waiting;
   }
 

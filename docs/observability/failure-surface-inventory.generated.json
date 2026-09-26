@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3803a5ba31a2f59d9b6ed48159af80c032a2897891322c1493355b622ca7f78a"
+    "catalogDigest": "31cd508c59a2948a5efcd4c89a928ff5faafa1472f442c4f650d977e4ce1096b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 457,
-    "proofCount": 465,
-    "resolvedProofCount": 465,
+    "operationCount": 458,
+    "proofCount": 466,
+    "resolvedProofCount": 466,
     "failureClassCount": 319,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -240,6 +240,7 @@
         "coding-repository-handler.settled",
         "coding-repository-handler.started",
         "coding-runtime.approval.base-checked",
+        "coding-runtime.approval.retired",
         "coding-runtime.approval.waiting",
         "coding-runtime.authority.mint-failed",
         "coding-runtime.authority.minted",
@@ -1111,6 +1112,9 @@
     ],
     "coding-runtime.approval.base-checked.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeV2ApprovalRequests.test.ts"
+    ],
+    "coding-runtime.approval.retired.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
     ],
     "coding-runtime.approval.waiting.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"

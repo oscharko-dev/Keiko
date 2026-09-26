@@ -241,7 +241,13 @@ outcome (`current`, `stale`, `denied`, `failed`, `cancelled`), the file counts u
 ended, and a stale file only as a digest. An ask that arrives after, or whose check finishes after,
 the run's approval registry closed is cancelled, logged as `cancelled`, and reaches no one. A denied ask settles its tool call as `denied`, an expired
 or cancelled one as `cancelled`, so the timeline shows the human's verdict instead of the generic
-failure OpenCode reports for a refused call.
+failure OpenCode reports for a refused call. The run's own wait on an approval ends at the same
+instant as the ask's (`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval
+nobody decided in time is retired, the run returns to `running`, or to the next queued ask, under a
+new revision, so the Workbench stops offering a card nothing can decide; an ask that arrives after
+the expiry takes the expired one's place instead of a queue slot behind it. Each retirement writes
+`coding-runtime.approval.retired` (1.1.9 lab: the expired card stayed on screen, approving it failed
+as `invalid-intent`, and the model's next ask expired unseen behind it).
 
 ### D7 — Coding evidence is content-free by construction
 

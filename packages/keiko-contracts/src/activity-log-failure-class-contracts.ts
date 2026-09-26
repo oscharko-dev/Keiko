@@ -918,22 +918,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: ["coding-runtime.approval.base-checked", "coding-runtime.approval.waiting"],
-      end: [],
+      end: ["coding-runtime.approval.retired"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "coding-runtime.approval.base-checked",
+      "coding-runtime.approval.retired",
       "coding-runtime.approval.waiting",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "coding-runtime.approval.base-checked",
+      "coding-runtime.approval.retired",
       "coding-runtime.approval.waiting",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-runtime.approval.base-checked",
+      "coding-runtime.approval.retired",
       "coding-runtime.approval.waiting",
     ],
     requiredEvidenceClasses: [
