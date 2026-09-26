@@ -1796,11 +1796,15 @@ describe("coding runtime manager", () => {
   it("reaps the sandbox tree when attestation evidence cannot be recorded", async () => {
     const fixture = createManagedFixture();
     const harness = reapingSpawnHarness();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const privateFailureBody = "evidence-store-unavailable";
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
       processEnv: {},
+      diagnostics,
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
       onSandboxAttestation: (): never => {
-        throw new Error("evidence-store-unavailable");
+        throw new TypeError(privateFailureBody);
       },
     });
 
@@ -1815,6 +1819,19 @@ describe("coding runtime manager", () => {
     });
     expect(harness.children[0]?.kills).toEqual(["SIGTERM"]);
     expect(manager.health()).toEqual({ status: "stopped" });
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "run-1988",
+        timestamp: "2026-07-07T13:00:00.000Z",
+        operation: "coding-runtime.sandbox-attestation",
+        source: "coding-runtime-manager.sandbox-attestation",
+        errorClass: "TypeError",
+        message: "runtime-start-failed",
+        code: "sandbox-attestation-observer",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(privateFailureBody);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
   });
 
   it("emits a content-free diagnostic when a runtime event fails validation", () => {
@@ -4539,12 +4556,15 @@ describe("codex reviewed egress policy validation", () => {
   it("fails closed when a reviewed CA bundle disappears before attestation", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const root = tempDir("keiko-egress-root-");
     const bundle = join(root, "ca.pem");
     writeFileSync(bundle, "reviewed-ca\n");
     const manager = createCodexTestCodingRuntimeManager({
       processEnv: {},
       supervisor: testSupervisor(harness.spawn),
+      diagnostics,
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
       codexLocalSecretRoot: tempDir("keiko-codex-secret-root-"),
       codexLifecycleAdapter: qualifiedCodexAdapter({
         prepare: (request) => {
@@ -4566,6 +4586,19 @@ describe("codex reviewed egress policy validation", () => {
       ),
     ).resolves.toEqual({ ok: false, failureCode: "egress-unqualified", retryable: false });
     expect(harness.children).toHaveLength(0);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "run-1988",
+        timestamp: "2026-07-07T13:00:00.000Z",
+        operation: "coding-runtime.egress-policy",
+        source: "coding-runtime-manager.egress-policy",
+        errorClass: "Error",
+        message: "runtime-start-failed",
+        code: "egress-policy-attestation",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(bundle);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
   });
 
   it("reports an already-aborted start before any qualification work", async () => {
