@@ -857,56 +857,78 @@ function confirmedJourneySubject(
 // per-request `correlationId`/CI-readiness snapshot legitimately differ call to call, so a single
 // long-lived instance with frozen `options` cannot serve every request correctly), so the
 // controller's own `this.active` in-flight guard can never see two overlapping calls for the same
-// run and never fires in production. This module-scoped set is the per-run mutex
+// run and never fires in production. This module-scoped map is the per-run mutex
 // `productionCiObservationRuntime.ts` gets from binding one persistent object per accepted run
 // (there, the CI observation service itself IS long-lived); enforced here at the route layer,
 // keyed by the same runId the controller's draft binding is scoped to, a double-click or retried
 // refresh for one run never dispatches two concurrent provider observations.
-const activeJourneyRefreshRuns = new Set<string>();
+//
+// A refresh that lands while one runs for the same run joins it and answers with its result
+// (PR #3625). The Coding Workbench card starts its own first observation the moment a confirmed
+// draft pull request appears; a click during it used to be answered `observation-in-flight`, so the
+// clicked refresh observed nothing, and the card, whose newest request wins, dropped the running
+// read's result as well.
+const activeJourneyRefreshes = new Map<string, Promise<RouteResult>>();
 
-// Owner audit finding b3-20: a request that never reaches the controller (an unbound run, or a
-// refresh already in flight for this run) still ran an operation and must leave a body-free
-// activity-log line, on the observation op the controller itself uses for every other terminal
-// phase — never a silent early return.
+// Owner audit finding b3-20: a request that never reaches the controller (an unbound run) still ran
+// an operation and must leave a body-free activity-log line, on the observation op the controller
+// itself uses for every other terminal phase — never a silent early return.
 function logJourneyRefreshUnavailable(
   deps: UiHandlerDeps,
   correlationId: string,
   runId: string,
-  reason: "draft-unavailable" | "observation-in-flight",
 ): void {
   logJourneyObservationActivity(
     deps.activityLog ?? processServerLogSink(),
     correlationId,
-    { phase: "unavailable", runId, reason },
-    { errorKind: reason === "observation-in-flight" ? "conflict" : "unavailable" },
+    { phase: "unavailable", runId, reason: "draft-unavailable" },
+    { errorKind: "unavailable" },
   );
 }
 
+// The joining request's own line: it dispatched nothing and answers with the run's running
+// observation, whose lines carry the same runId.
+function logJourneyRefreshJoined(deps: UiHandlerDeps, correlationId: string, runId: string): void {
+  logJourneyObservationActivity(deps.activityLog ?? processServerLogSink(), correlationId, {
+    phase: "joined",
+    runId,
+  });
+}
+
 async function observeJourney(
-  _ctx: RouteContext,
   deps: UiHandlerDeps,
   options: GitDeliveryJourneyRouteOptions,
   runId: string,
   correlationId: string,
   subject: ConfirmedJourneySubject,
 ): Promise<RouteResult> {
-  activeJourneyRefreshRuns.add(runId);
+  const observation = observeJourneyOnce(deps, options, correlationId, subject);
+  activeJourneyRefreshes.set(runId, observation);
   try {
-    const draftDelivery = await loadDraftDeliveryReaderModule();
-    const observationOptions = buildJourneyObservationOptions(
-      deps,
-      options,
-      subject.repositoryId,
-      subject.draft,
-      subject.ciReadiness,
-      correlationId,
-      draftDelivery,
-    );
-    const result = await new JourneyObservationController(observationOptions).observe();
-    return { status: 200, body: result };
+    return await observation;
   } finally {
-    activeJourneyRefreshRuns.delete(runId);
+    if (activeJourneyRefreshes.get(runId) === observation) activeJourneyRefreshes.delete(runId);
   }
+}
+
+async function observeJourneyOnce(
+  deps: UiHandlerDeps,
+  options: GitDeliveryJourneyRouteOptions,
+  correlationId: string,
+  subject: ConfirmedJourneySubject,
+): Promise<RouteResult> {
+  const draftDelivery = await loadDraftDeliveryReaderModule();
+  const observationOptions = buildJourneyObservationOptions(
+    deps,
+    options,
+    subject.repositoryId,
+    subject.draft,
+    subject.ciReadiness,
+    correlationId,
+    draftDelivery,
+  );
+  const result = await new JourneyObservationController(observationOptions).observe();
+  return { status: 200, body: result };
 }
 
 async function handleJourneyRefresh(
@@ -924,16 +946,17 @@ async function handleJourneyRefresh(
   if (runId === undefined) return errResult(400, "GIT_DELIVERY_JOURNEY_BAD_REQUEST");
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
 
-  if (activeJourneyRefreshRuns.has(runId)) {
-    logJourneyRefreshUnavailable(deps, correlationId, runId, "observation-in-flight");
-    return unavailableResult("observation-in-flight");
+  const running = activeJourneyRefreshes.get(runId);
+  if (running !== undefined) {
+    logJourneyRefreshJoined(deps, correlationId, runId);
+    return running;
   }
   const subject = confirmedJourneySubject(deps, runId);
   if (subject === undefined) {
-    logJourneyRefreshUnavailable(deps, correlationId, runId, "draft-unavailable");
+    logJourneyRefreshUnavailable(deps, correlationId, runId);
     return unavailableResult("draft-unavailable");
   }
-  return observeJourney(ctx, deps, options, runId, correlationId, subject);
+  return observeJourney(deps, options, runId, correlationId, subject);
 }
 
 // ─── Route group ────────────────────────────────────────────────────────────────────────────────

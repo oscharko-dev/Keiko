@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "927734a6824c5b86742efffe42e49ff9dee08b690a1e3455fac4aa90b639d4ed",
+    "catalogDigest": "a9d992fdd6d5be97e5094c43946af848fae5d4636a50bd5119f94ad7534e30ee",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16821,7 +16821,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["started", "observed", "unavailable"]
+            "values": ["started", "observed", "unavailable", "joined"]
           },
           "runId": {
             "type": "string",
@@ -16957,7 +16957,7 @@
           }
         },
         "registrationSite": "packages/keiko-server/src/gitDelivery/journeyObservationService.ts:146",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/journeyObservationService.ts:182"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/journeyObservationService.ts:183"]
       },
       {
         "contractKind": "activity-log-operation",
