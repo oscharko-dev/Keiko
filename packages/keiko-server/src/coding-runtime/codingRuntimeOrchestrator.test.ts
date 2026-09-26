@@ -2761,7 +2761,36 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
-  it("contains an expired queued challenge instead of exposing an undecidable approval", async () => {
+  // Relocated pin (PR #3625 review): an expired queued ask is still never exposed as an undecidable
+  // approval, but it no longer ends the run. Its governed ask already ended as expired on its own, so
+  // it is retired like an expired active ask (ADR-0124 D6) and the next live ask takes the card.
+  it("retires an expired queued challenge instead of exposing an undecidable approval", async () => {
+    let nowMs = FIXTURE_NOW_MS;
+    const captured = captureActivityLog();
+    const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    const first = await f.orchestrator.ingest(
+      verificationPermission("permission-1", "2026-01-01T00:04:00.000Z"),
+    );
+    await f.orchestrator.ingest(verificationPermission("permission-2", "2026-01-01T00:01:00.000Z"));
+    await f.orchestrator.ingest(verificationPermission("permission-3", "2026-01-01T00:05:00.000Z"));
+    nowMs += 2 * 60 * 1_000;
+
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: successfulSnapshot(first).revision,
+      }),
+    ).toMatchObject({ ok: true, snapshot: { state: "awaiting-approval" } });
+    expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-3");
+    expect(f.manager.stop).not.toHaveBeenCalled();
+    expect(
+      captured.records.find((event) => event.op === "coding-runtime.approval.retired")?.extra,
+    ).toMatchObject({ requestId: "permission-2", reason: "expired", replaced: false });
+  });
+
+  it("returns the run to running when every queued challenge has expired", async () => {
     let nowMs = FIXTURE_NOW_MS;
     const f = fixture(undefined, () => new Date(nowMs));
     await f.orchestrator.start(start);
@@ -2777,11 +2806,9 @@ describe("CodingRuntimeOrchestrator", () => {
         decision: "approved",
         expectedRevision: successfulSnapshot(first).revision,
       }),
-    ).toMatchObject({
-      ok: true,
-      snapshot: { state: "failed", failureCode: "authority-expired" },
-    });
-    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+    ).toMatchObject({ ok: true, snapshot: { state: "running" } });
+    expect(f.orchestrator.status().pendingPermission).toBeUndefined();
+    expect(f.manager.stop).not.toHaveBeenCalled();
   });
 
   // 1.1.9 lab: the active approval's wait ran out while nobody decided it. Its governed ask ended as
@@ -2825,6 +2852,30 @@ describe("CodingRuntimeOrchestrator", () => {
         reason: "expired",
         replaced: false,
       });
+    });
+
+    // PR #3625 review: an approval that is decided, or whose run stops, takes its expiry timer with
+    // it instead of leaving a stale serialized callback until the old deadline.
+    it("clears the expiry timer once the approval is decided or the run stops", async () => {
+      vi.useFakeTimers();
+      const f = fixture(undefined, () => new Date(FIXTURE_NOW_MS));
+      await f.orchestrator.start(start);
+      const baseline = vi.getTimerCount();
+      const first = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      expect(vi.getTimerCount()).toBe(baseline + 1);
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: first.revision,
+      });
+      expect(vi.getTimerCount()).toBe(baseline);
+
+      await f.orchestrator.ingest(verificationPermission("permission-2"));
+      expect(vi.getTimerCount()).toBe(baseline + 1);
+      await f.orchestrator.stop("run-1", { requestId: "run-1" });
+      expect(vi.getTimerCount()).toBe(baseline);
     });
 
     it("gives the model's next ask the approval instead of a queue slot", async () => {
