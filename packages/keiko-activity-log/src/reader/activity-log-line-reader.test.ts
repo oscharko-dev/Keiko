@@ -1,9 +1,10 @@
-import { mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fstatSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ActivityLogReadError,
+  consumeActivityLogFileLines,
   readActivityLogFileLines,
   type ActivityLogReadLine,
 } from "./activity-log-line-reader.js";
@@ -99,6 +100,39 @@ describe("readActivityLogFileLines (#3531)", () => {
     expect(
       [...readActivityLogFileLines(() => openSync(firstPath, "r"))].map((line) => line.text),
     ).toEqual(["first-a", "first-b"]);
+  });
+
+  it("consumes through the same split-line parser and closes when the callback throws", () => {
+    const path = writeText('first\n{"ü":"€ – 𝄞"}\nlast');
+    const observed: ActivityLogReadLine[] = [];
+    let descriptor = -1;
+    const failure = new Error("stop after the split line");
+
+    expect(() => {
+      consumeActivityLogFileLines(
+        () => {
+          descriptor = openSync(path, "r");
+          return descriptor;
+        },
+        (line) => {
+          observed.push({ ...line });
+          if (line.text.includes("ü")) throw failure;
+        },
+        { chunkBytes: 5 },
+      );
+    }).toThrow(failure);
+    expect(observed).toEqual([
+      { text: "first", terminated: true, byteLength: 5, oversized: false },
+      {
+        text: '{"ü":"€ – 𝄞"}',
+        terminated: true,
+        byteLength: Buffer.byteLength('{"ü":"€ – 𝄞"}'),
+        oversized: false,
+      },
+    ]);
+    expect(() => {
+      fstatSync(descriptor);
+    }).toThrow();
   });
 
   it("wraps open and read failures in a content-free ActivityLogReadError", () => {

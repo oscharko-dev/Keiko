@@ -784,6 +784,16 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   all below the unchanged 32 MiB limit. The history, segment count, 112 MiB heap cap, empty-command
   baseline, and absence of forced garbage collection remain unchanged.
 
+  A later canonical Linux run exposed additional platform-sensitive allocation pressure: the same
+  strict test measured 34.78125 MiB of cold-query RSS growth. Profiling traced the remaining hot-path
+  churn to per-line Buffer views and wrappers plus short-lived classifier collections. The reader now
+  decodes wholly contained lines directly, reuses one private callback value while draining a segment,
+  and classifies fields without temporary key and membership collections; the public iterator still
+  returns a distinct line value on every yield. Three consecutive final Linux measurements grew by
+  29.28515625, 31.73046875, and 29.90234375 MiB. Three clean, uninstrumented runs then passed on Linux
+  and three passed on macOS. The test's 80 MiB history, 40 segments, 112 MiB heap cap, empty-command
+  baseline, 32 MiB limit, and garbage-collection behavior were unchanged.
+
 - **Versioned output.** `--json` forms name themselves and their version: `keiko.support.query`,
   `keiko.support.manifest`, the stored `keiko.activity-log.segment-manifest`, and the export
   manifest line's `selection` member, `keiko.support.export-selection`, all at version 1.

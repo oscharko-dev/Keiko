@@ -22,8 +22,10 @@ import {
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   ActivityLogReadError,
+  consumeActivityLogFileLines,
   readActivityLogFileLines,
   type ActivityLogReadLine,
+  type ActivityLogReadOptions,
 } from "./activity-log-line-reader.js";
 import { classifyLine, type LineClassification } from "./support-analyze.js";
 import {
@@ -101,9 +103,9 @@ export interface ActivityLogScannerDeps {
   readonly openFile?: ((file: ActivityLogStoreFile, stateDir: string) => number) | undefined;
 }
 
-interface ActivityLogScan {
+interface ActivityLogScanContext {
   readonly builder: SegmentManifestBuilder;
-  readonly lines: Generator<ActivityLogReadLine>;
+  readonly open: () => number;
 }
 
 function openStoreFile(file: ActivityLogStoreFile, stateDir: string): number {
@@ -133,19 +135,22 @@ export class ActivityLogScanner {
     return this.lastManifests.get(file.name);
   }
 
-  private start(file: ActivityLogStoreFile): ActivityLogScan {
+  private prepare(file: ActivityLogStoreFile): ActivityLogScanContext {
     const open = this.deps.openFile ?? openStoreFile;
     const builder = new SegmentManifestBuilder(file.segmentId ?? "legacy");
     this.opened.add(file.name);
     this.openCount += 1;
     this.lastManifests.delete(file.name);
-    const lines = readActivityLogFileLines(() => open(file, this.stateDir), {
-      onChunk: (chunk) => {
+    return { builder, open: () => open(file, this.stateDir) };
+  }
+
+  private readOptions(builder: SegmentManifestBuilder): ActivityLogReadOptions {
+    return {
+      onChunk: (chunk): void => {
         this.scannedBytes += chunk.length;
         builder.observeChunk(chunk);
       },
-    });
-    return { builder, lines };
+    };
   }
 
   private observe(
@@ -172,7 +177,8 @@ export class ActivityLogScanner {
   }
 
   public *scan(file: ActivityLogStoreFile): Generator<ScannedLine> {
-    const { builder, lines } = this.start(file);
+    const { builder, open } = this.prepare(file);
+    const lines = readActivityLogFileLines(open, this.readOptions(builder));
     let index = 0;
     try {
       for (const line of lines) {
@@ -189,13 +195,17 @@ export class ActivityLogScanner {
 
   /** Streams `file` to its end without retaining anything but its derived manifest. */
   public drain(file: ActivityLogStoreFile): SegmentManifest | undefined {
-    const { builder, lines } = this.start(file);
+    const { builder, open } = this.prepare(file);
     let index = 0;
     try {
-      for (const line of lines) {
-        this.observe(builder, line, index);
-        index += 1;
-      }
+      consumeActivityLogFileLines(
+        open,
+        (line) => {
+          this.observe(builder, line, index);
+          index += 1;
+        },
+        this.readOptions(builder),
+      );
     } catch (error) {
       if (!this.readFailed(file, error)) throw error;
       return undefined;

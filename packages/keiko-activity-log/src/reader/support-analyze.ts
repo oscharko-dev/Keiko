@@ -326,7 +326,8 @@ function extraFields(
   // reporting it, which is exactly the silent skip this module's header states it must not do.
   const extra: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   let hasAny = false;
-  for (const key of Object.keys(record)) {
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
     if (isReservedEnvelopeKey(key, record[key])) continue;
     extra[key] = record[key];
     hasAny = true;
@@ -530,9 +531,12 @@ function declaredCompatibility(record: Record<string, unknown>): ActivityLogEvid
 function registryIdentityClassification(
   record: Record<string, unknown>,
 ): ActivityLogEvidenceClassification {
-  const present = ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.filter((key) => record[key] !== undefined);
-  if (present.length === 0) return "supported";
-  if (present.length !== ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.length) return "incomplete";
+  let present = 0;
+  for (const key of ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS) {
+    if (record[key] !== undefined) present += 1;
+  }
+  if (present === 0) return "supported";
+  if (present !== ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.length) return "incomplete";
   if (!validRegistryIdentityShape(record)) return "corrupt";
   if (
     record.registryVersion !== ACTIVITY_LOG_REGISTRY_VERSION ||
@@ -563,8 +567,10 @@ function schemaVersionClassification(
 function identityClassification(
   record: Record<string, unknown>,
 ): ActivityLogEvidenceClassification {
-  const identityValues = [record.pid, record.instanceId, record.seq];
-  const identityCount = identityValues.filter((value) => value !== undefined).length;
+  const identityCount =
+    Number(record.pid !== undefined) +
+    Number(record.instanceId !== undefined) +
+    Number(record.seq !== undefined);
   const hasInvalidPresentIdentity = hasInvalidPresentProcessIdentity(record);
   const schemaClassification = schemaVersionClassification(record.schemaVersion, identityCount);
   if (schemaClassification !== undefined) {
@@ -573,7 +579,7 @@ function identityClassification(
       : schemaClassification;
   }
   if (hasInvalidPresentIdentity) return "corrupt";
-  if (identityCount < identityValues.length) return "incomplete";
+  if (identityCount < 3) return "incomplete";
   return registryIdentityClassification(record);
 }
 
@@ -582,7 +588,8 @@ function registeredFields(
   registration: ActivityLogOperationRegistration,
 ): Readonly<Record<string, unknown>> {
   const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  for (const name of Object.keys(registration.fields)) {
+  for (const name in registration.fields) {
+    if (!Object.hasOwn(registration.fields, name)) continue;
     if (name === "status" && typeof record.status === "number") continue;
     if (record[name] !== undefined) fields[name] = record[name];
   }
@@ -635,22 +642,37 @@ function recordEnvelope(
   const durationMs = optionalNumber(record, "durationMs");
   const status = optionalNumber(record, "status");
   const errorKind = isActivityLogErrorKind(record.errorKind) ? record.errorKind : undefined;
-  return {
-    ...(level === undefined ? {} : { level: level as ActivityLogEventEnvelope["level"] }),
-    ...(correlationId === undefined ? {} : { correlationId }),
-    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
-    ...(durationMs === undefined ? {} : { durationMs }),
-    ...(typeof status === "number" ? { status } : {}),
-    ...(errorKind === undefined ? {} : { errorKind }),
-  };
+  const envelope: {
+    level?: ActivityLogEventEnvelope["level"];
+    correlationId?: string;
+    parentCorrelationId?: string;
+    durationMs?: number;
+    status?: number;
+    errorKind?: ActivityLogEventEnvelope["errorKind"];
+  } = {};
+  if (level !== undefined) envelope.level = level;
+  if (correlationId !== undefined) envelope.correlationId = correlationId;
+  if (parentCorrelationId !== undefined) envelope.parentCorrelationId = parentCorrelationId;
+  if (durationMs !== undefined) envelope.durationMs = durationMs;
+  if (typeof status === "number") envelope.status = status;
+  if (errorKind !== undefined) envelope.errorKind = errorKind;
+  return envelope;
 }
 
 function hasUnknownRegisteredField(
   record: Record<string, unknown>,
   registration: ActivityLogOperationRegistration,
 ): boolean {
-  const allowed = new Set(Object.keys(registration.fields));
-  return Object.keys(record).some((key) => !KNOWN_ENVELOPE_KEYS.has(key) && !allowed.has(key));
+  for (const key in record) {
+    if (
+      Object.hasOwn(record, key) &&
+      !KNOWN_ENVELOPE_KEYS.has(key) &&
+      !Object.hasOwn(registration.fields, key)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function registeredRecordClassification(

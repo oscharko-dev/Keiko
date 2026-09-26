@@ -46,6 +46,13 @@ export interface ActivityLogReadLine extends ActivityLogTextLine {
   readonly oversized: boolean;
 }
 
+interface MutableActivityLogReadLine {
+  text: string;
+  terminated: boolean;
+  byteLength: number;
+  oversized: boolean;
+}
+
 export interface ActivityLogReadOptions {
   readonly chunkBytes?: number | undefined;
   readonly maxLineBytes?: number | undefined;
@@ -91,22 +98,29 @@ class PendingLine {
   }
 
   public take(terminated: boolean): ActivityLogReadLine {
-    const text =
+    const line: MutableActivityLogReadLine = {
+      text: "",
+      terminated,
+      byteLength: 0,
+      oversized: false,
+    };
+    this.takeInto(line, terminated);
+    return line;
+  }
+
+  public takeInto(line: MutableActivityLogReadLine, terminated: boolean): void {
+    line.text =
       this.discarded || this.parts.length === 0
         ? ""
         : this.parts.length === 1
           ? (this.parts[0]?.toString("utf8") ?? "")
           : Buffer.concat(this.parts, this.bytes).toString("utf8");
-    const line: ActivityLogReadLine = {
-      text,
-      terminated,
-      byteLength: this.bytes,
-      oversized: this.discarded,
-    };
+    line.terminated = terminated;
+    line.byteLength = this.bytes;
+    line.oversized = this.discarded;
     this.parts = [];
     this.bytes = 0;
     this.discarded = false;
-    return line;
   }
 }
 
@@ -115,6 +129,84 @@ function readChunk(descriptor: number, chunk: Buffer, position: number): number 
     return readSync(descriptor, chunk, 0, chunk.length, position);
   } catch (error) {
     throw new ActivityLogReadError(error);
+  }
+}
+
+class DescriptorLineCursor {
+  private readonly chunk: Buffer;
+  private readonly reusable: boolean;
+  private readonly maxLineBytes: number;
+  private readonly pending: PendingLine;
+  private position = 0;
+  private view: Buffer | undefined;
+  private start = 0;
+  private closed = false;
+
+  public constructor(
+    private readonly descriptor: number,
+    private readonly options: ActivityLogReadOptions,
+  ) {
+    const acquired = acquireReadChunk(options.chunkBytes);
+    this.chunk = acquired.chunk;
+    this.reusable = acquired.reusable;
+    this.maxLineBytes = options.maxLineBytes ?? MAX_ACTIVITY_LOG_READ_LINE_BYTES;
+    this.pending = new PendingLine(this.maxLineBytes);
+  }
+
+  public next(): ActivityLogReadLine | undefined {
+    const line: MutableActivityLogReadLine = {
+      text: "",
+      terminated: false,
+      byteLength: 0,
+      oversized: false,
+    };
+    return this.nextInto(line) ? line : undefined;
+  }
+
+  public nextInto(line: MutableActivityLogReadLine): boolean {
+    while (!this.closed) {
+      if (this.view !== undefined) {
+        const newline = this.view.indexOf(NEWLINE, this.start);
+        if (newline >= 0) {
+          const byteLength = newline - this.start;
+          if (this.pending.empty && byteLength <= this.maxLineBytes) {
+            // Most persisted lines are wholly inside one chunk. Decode that byte range directly so
+            // the hot path creates neither a Buffer view nor a one-element pending-parts array.
+            line.text = this.view.toString("utf8", this.start, newline);
+            line.terminated = true;
+            line.byteLength = byteLength;
+            line.oversized = false;
+          } else {
+            // A line completed across chunks (or exceeded the configured bound) still needs the
+            // bounded pending-line state before the read buffer may be reused.
+            this.pending.append(this.view.subarray(this.start, newline), false);
+            this.pending.takeInto(line, true);
+          }
+          this.start = newline + 1;
+          return true;
+        }
+        this.pending.append(this.view.subarray(this.start), true);
+      }
+
+      const count = readChunk(this.descriptor, this.chunk, this.position);
+      if (count === 0) {
+        this.close();
+        if (this.pending.empty) return false;
+        this.pending.takeInto(line, false);
+        return true;
+      }
+      this.position += count;
+      this.view = this.chunk.subarray(0, count);
+      this.start = 0;
+      this.options.onChunk?.(this.view);
+    }
+    return false;
+  }
+
+  public close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    releaseReadChunk(this.chunk, this.reusable);
   }
 }
 
@@ -127,28 +219,31 @@ export function* readDescriptorLines(
   descriptor: number,
   options: ActivityLogReadOptions = {},
 ): Generator<ActivityLogReadLine> {
-  const { chunk, reusable } = acquireReadChunk(options.chunkBytes);
-  const pending = new PendingLine(options.maxLineBytes ?? MAX_ACTIVITY_LOG_READ_LINE_BYTES);
-  let position = 0;
+  const cursor = new DescriptorLineCursor(descriptor, options);
   try {
-    for (let count = readChunk(descriptor, chunk, position); count > 0;) {
-      position += count;
-      const view = chunk.subarray(0, count);
-      options.onChunk?.(view);
-      let start = 0;
-      for (let newline = view.indexOf(NEWLINE, start); newline >= 0;) {
-        // A line completed inside this chunk is decoded before the chunk is reused: no copy needed.
-        pending.append(view.subarray(start, newline), false);
-        yield pending.take(true);
-        start = newline + 1;
-        newline = view.indexOf(NEWLINE, start);
-      }
-      pending.append(view.subarray(start), true);
-      count = readChunk(descriptor, chunk, position);
-    }
-    if (!pending.empty) yield pending.take(false);
+    for (let line = cursor.next(); line !== undefined; line = cursor.next()) yield line;
   } finally {
-    releaseReadChunk(chunk, reusable);
+    cursor.close();
+  }
+}
+
+/** Consumes every line while reusing the callback value for the manifest-only drain path. */
+export function consumeDescriptorLines(
+  descriptor: number,
+  consume: (line: ActivityLogReadLine) => void,
+  options: ActivityLogReadOptions = {},
+): void {
+  const cursor = new DescriptorLineCursor(descriptor, options);
+  const line: MutableActivityLogReadLine = {
+    text: "",
+    terminated: false,
+    byteLength: 0,
+    oversized: false,
+  };
+  try {
+    while (cursor.nextInto(line)) consume(line);
+  } finally {
+    cursor.close();
   }
 }
 
@@ -165,6 +260,25 @@ export function* readActivityLogFileLines(
   }
   try {
     yield* readDescriptorLines(descriptor, options);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/** Opens, consumes and closes one file without allocating a line wrapper for every line. */
+export function consumeActivityLogFileLines(
+  open: () => number,
+  consume: (line: ActivityLogReadLine) => void,
+  options: ActivityLogReadOptions = {},
+): void {
+  let descriptor: number;
+  try {
+    descriptor = open();
+  } catch (error) {
+    throw new ActivityLogReadError(error);
+  }
+  try {
+    consumeDescriptorLines(descriptor, consume, options);
   } finally {
     closeSync(descriptor);
   }
