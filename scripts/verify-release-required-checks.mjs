@@ -3,7 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { HOST_COMMAND_MAX_BUFFER_BYTES, resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const githubApiVersion = "2022-11-28";
 const defaultBaseBranch = "release/1.0";
@@ -292,6 +292,7 @@ function githubJsonFromGh(path, token) {
     {
       encoding: "utf8",
       env,
+      maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
     },
   );
   if (result.error?.code === "ENOENT") return undefined;

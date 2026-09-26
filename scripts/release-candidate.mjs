@@ -3,11 +3,10 @@
 // portable target and not yet published. The decision, the write and the report live in
 // scripts/lib/release-candidate.mjs; this file only wires the host executables.
 
-import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-executable.mjs";
 import { releaseCandidateMain } from "./lib/release-candidate.mjs";
 import { portableRehearsalReadiness } from "./portable-rehearsal-readiness.mjs";
 
@@ -18,8 +17,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import
     decideReadiness: portableRehearsalReadiness,
     env: process.env,
     readText: (path) => readFileSync(resolve(process.cwd(), path), "utf8"),
-    spawn: (executable, args, env) =>
-      spawnSync(resolveHostExecutable(executable), args, { encoding: "utf8", env }),
+    spawn: (executable, args, env) => spawnHostExecutable(executable, args, { env }),
     write: (stream, text) => process[stream].write(text),
   });
 }

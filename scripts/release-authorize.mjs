@@ -4,11 +4,10 @@
 // publish job may release. The decision lives in scripts/lib/release-automation.mjs; this file only
 // wires the host executables.
 
-import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-executable.mjs";
 import { releaseAutomationMain, runReleaseAuthorize } from "./lib/release-automation.mjs";
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {
@@ -20,8 +19,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import
     run: () =>
       runReleaseAuthorize({
         env: process.env,
-        runGh: (args) =>
-          spawnSync(resolveHostExecutable("gh"), args, { encoding: "utf8", env: ghEnv }),
+        runGh: (args) => spawnHostExecutable("gh", args, { env: ghEnv }),
       }),
     write: (stream, text) => process[stream].write(text),
   });

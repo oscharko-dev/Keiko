@@ -32,7 +32,7 @@ import { parse as parseYaml } from "yaml";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { HOST_COMMAND_MAX_BUFFER_BYTES, resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
 const RELEASE_LINE = /^release\/(\d+\.\d+)$/u;
@@ -309,7 +309,7 @@ export function printAlignmentReport(result, { log = console.log, logError = con
 }
 
 function spawnResult(command, args) {
-  return spawnSync(command, args, { encoding: "utf8" });
+  return spawnSync(command, args, { encoding: "utf8", maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES });
 }
 
 function realSeams() {
