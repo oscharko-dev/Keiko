@@ -788,7 +788,7 @@ export function CodingWorkbenchWindow({
     [chatCatalog?.models],
   );
   useEffect(() => requestGatewayModelCatalogRefresh(), []);
-  useCodingModelSelection(state, actions, codingModels);
+  useCodingModelSelection(state, actions, codingModels, (chatCatalog?.models.length ?? 0) === 0);
   const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
@@ -855,18 +855,28 @@ export function CodingWorkbenchWindow({
   );
 }
 
+// #3642: the shared gateway model catalog (useChatSession.ts `clearSessionModelsForPendingRefresh`)
+// deliberately reports an EMPTY `models` list while a refresh is in flight, so a stale model can
+// never be selected mid-request — chat's own selection survives this through an internal
+// `restorableModelId` memo the Workbench cannot see. Without a guard, an empty list read as "no
+// eligible models" made this effect fall back to `null` immediately and then, once the SAME
+// catalog came back, re-elect `models[0]` instead of the operator's own choice. An empty CATALOG is
+// never conclusive by itself (it is indistinguishable from "still refreshing" or "not loaded yet");
+// a catalog that lists models but no coding-capable one is, so the check reads the whole catalog.
 function useCodingModelSelection(
   state: CodingWorkbenchRuntimeState,
   actions: CodingWorkbenchRuntimeActions,
   models: readonly ModelCapability[],
+  catalogEmpty: boolean,
 ): void {
   const selected = models.find((model) => model.id === state.selectedModelId);
   useEffect(() => {
-    if (state.runtimePreference !== "managed-gateway") return;
+    if (state.runtimePreference !== "managed-gateway" || catalogEmpty) return;
     const next = selected?.id ?? models[0]?.id ?? null;
     if (next !== state.selectedModelId) actions.setSelectedModel(next);
-  }, [actions, models, selected?.id, state.runtimePreference, state.selectedModelId]);
+  }, [actions, catalogEmpty, models, selected?.id, state.runtimePreference, state.selectedModelId]);
   useEffect(() => {
+    if (catalogEmpty) return;
     const efforts = selected?.reasoningEfforts ?? [];
     const currentAllowed =
       state.reasoningEffort !== null && efforts.includes(state.reasoningEffort);
@@ -874,7 +884,7 @@ function useCodingModelSelection(
       ? state.reasoningEffort
       : (efforts.find((effort) => effort === "medium") ?? efforts[0] ?? null);
     if (next !== state.reasoningEffort) actions.setReasoningEffort(next);
-  }, [actions, selected, state.reasoningEffort]);
+  }, [actions, catalogEmpty, selected, state.reasoningEffort]);
 }
 
 interface WorkbenchContentProps {
@@ -1762,7 +1772,7 @@ function PermissionPrompt({
   const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
-      <PanelTitle eyebrow={t("codingWorkbench.approval.eyebrow")} id="permission-title">
+      <PanelTitle eyebrow={t("codingWorkbench.approval.eyebrow")} id="permission-title" focusable>
         {t("codingWorkbench.approval.title")}
       </PanelTitle>
       <ApprovalFacts request={request} t={t} />
@@ -1878,6 +1888,7 @@ function ChangesetReviewPanel({
       <PanelTitle
         eyebrow={t("codingWorkbench.changesetReview.eyebrow")}
         id="changeset-review-title"
+        focusable
       >
         {t("codingWorkbench.changesetReview.title")}
       </PanelTitle>

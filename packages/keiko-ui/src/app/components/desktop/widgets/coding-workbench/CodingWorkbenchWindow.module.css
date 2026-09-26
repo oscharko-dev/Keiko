@@ -561,7 +561,7 @@
   background: transparent;
 }
 
-.repositorySelector {
+.cmpRepositorySelector {
   display: flex;
   width: fit-content;
   max-width: calc(100% - 2 * var(--space-5));
@@ -574,30 +574,30 @@
   justify-content: flex-start;
 }
 
-.repositorySelectorChip {
+.cmpRepositorySelectorChip {
   display: flex;
   min-width: 0;
 }
 
-.setupSelector {
+.cmpSetupSelector {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
   gap: var(--space-3);
   margin: var(--space-4) 0;
 }
 
-.setupSelectorField {
+.cmpSetupSelectorField {
   display: grid;
   min-width: 0;
   gap: var(--space-1);
 }
 
-.setupSelectorField > span {
+.cmpSetupSelectorField > span {
   color: var(--text-tertiary);
   font: var(--weight-medium) var(--text-caption) var(--font-ui);
 }
 
-.setupSelectorTrigger {
+.cmpSetupSelectorTrigger {
   min-width: 0;
   min-height: 2.25rem;
   border: 1px solid var(--border-subtle);
@@ -609,18 +609,18 @@
   cursor: pointer;
 }
 
-.setupSelectorTrigger:hover,
-.setupSelectorTrigger:focus-visible {
+.cmpSetupSelectorTrigger:hover,
+.cmpSetupSelectorTrigger:focus-visible {
   border-color: var(--border-strong);
 }
 
-.setupSelector > .repositorySelectorGit,
-.setupSelector > .repositorySelectorNotice {
+.cmpSetupSelector > .cmpRepositorySelectorGit,
+.cmpSetupSelector > .cmpRepositorySelectorNotice {
   grid-column: 1 / -1;
   justify-self: start;
 }
 
-.repositorySelectorTrigger {
+.cmpRepositorySelectorTrigger {
   flex: 0 1 auto;
   max-width: min(100%, 19rem);
   min-width: 0;
@@ -634,13 +634,13 @@
   cursor: pointer;
 }
 
-.repositorySelectorTrigger:hover,
-.repositorySelectorTrigger:focus-visible {
+.cmpRepositorySelectorTrigger:hover,
+.cmpRepositorySelectorTrigger:focus-visible {
   border-color: var(--border-subtle);
   background: var(--button-secondary-surface);
 }
 
-.repositorySelectorGit {
+.cmpRepositorySelectorGit {
   border: 0;
   padding: var(--space-1);
   color: var(--text-secondary);
@@ -649,16 +649,16 @@
   cursor: pointer;
 }
 
-.repositorySelectorTrigger:disabled {
+.cmpRepositorySelectorTrigger:disabled {
   cursor: default;
 }
 
-.repositorySelectorGit:hover {
+.cmpRepositorySelectorGit:hover {
   color: var(--text-primary);
   text-decoration: underline;
 }
 
-.repositorySelectorNotice {
+.cmpRepositorySelectorNotice {
   flex-basis: 100%;
   margin: 0;
   color: var(--feedback-warning);

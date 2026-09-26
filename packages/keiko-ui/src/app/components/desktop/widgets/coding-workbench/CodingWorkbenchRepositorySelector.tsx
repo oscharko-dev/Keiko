@@ -10,14 +10,21 @@ import {
 } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
-import { useRepositoryBranchState } from "../../hooks/useRepositoryBranchState";
+import {
+  useRepositoryBranchState,
+  type RepositoryBranchState,
+} from "../../hooks/useRepositoryBranchState";
 import { selectableRepositories } from "./codingWorkbenchRepositories";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
+import { RetryMessage } from "./CodingWorkbenchChanges";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 interface CatalogState {
@@ -25,6 +32,18 @@ interface CatalogState {
   readonly loading: boolean;
   readonly error: boolean;
   readonly reload: () => void;
+}
+
+// #C review: body-free, but closed — the class of failure, the originating request's correlation
+// id (when the caught error carries one) and bounded frame evidence, never raw content.
+function reportCatalogFailure(error: unknown): void {
+  const correlationId = correlationIdOf(error);
+  reportClientDiagnostic("[keiko] coding workbench repository catalog unavailable", {
+    kind: "other",
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
 }
 
 function useGitRepositoryCatalog(): CatalogState {
@@ -42,11 +61,11 @@ function useGitRepositoryCatalog(): CatalogState {
         setError(false);
         setLoading(false);
       },
-      () => {
+      (error: unknown) => {
         if (request.current !== sequence) return;
         setError(true);
         setLoading(false);
-        reportClientDiagnostic("[keiko] coding workbench repository catalog unavailable");
+        reportCatalogFailure(error);
       },
     );
   }, []);
@@ -113,9 +132,9 @@ function chipTrigger(
   readonly triggerStyle: CSSProperties | undefined;
 } {
   return placement === "setup"
-    ? { triggerClassName: styles.setupSelectorTrigger, triggerStyle: undefined }
+    ? { triggerClassName: styles.cmpSetupSelectorTrigger, triggerStyle: undefined }
     : {
-        triggerClassName: styles.repositorySelectorTrigger,
+        triggerClassName: styles.cmpRepositorySelectorTrigger,
         triggerStyle: { width: controlWidth(label) },
       };
 }
@@ -160,16 +179,28 @@ function RepositoryChip({
   );
 }
 
-// The current branch first, then every other local branch.
-function branchOptions(
+// The current branch first, then every other local branch. #I review: a stored branch that is
+// not (or no longer) in the loaded list is marked the same way an unregistered root is — disabled,
+// with the "unavailable" badge — rather than shown as an ordinary selectable option. `loaded` gates
+// this: while the list is still loading or unreadable, an absent match says nothing yet.
+export function branchOptions(
   current: string,
   branches: readonly { readonly name: string }[],
+  loaded: boolean,
+  unavailableBadge: string,
 ): readonly RepositoryOption[] {
+  const rest = branches
+    .filter((entry) => entry.name !== current)
+    .map((entry) => ({ value: entry.name, label: entry.name }));
+  if (current === "") return rest;
+  const missing = loaded && !branches.some((entry) => entry.name === current);
   return [
-    ...(current === "" ? [] : [{ value: current, label: current }]),
-    ...branches
-      .filter((entry) => entry.name !== current)
-      .map((entry) => ({ value: entry.name, label: entry.name })),
+    {
+      value: current,
+      label: current,
+      ...(missing ? { disabled: true, badge: unavailableBadge } : {}),
+    },
+    ...rest,
   ];
 }
 
@@ -177,6 +208,7 @@ function BranchChip({
   root,
   branch,
   locked,
+  branchState,
   onSelect,
   t,
   placement,
@@ -184,15 +216,21 @@ function BranchChip({
   readonly root: string | null;
   readonly branch: string | null;
   readonly locked: boolean;
+  readonly branchState: RepositoryBranchState;
   readonly onSelect: (branch: string) => void;
   readonly t: CodingWorkbenchTranslate;
   readonly placement: SelectorPlacement;
 }): ReactNode {
-  const state = useRepositoryBranchState(locked ? null : root);
-  const current = branch ?? state.currentBranch ?? "";
-  const options = branchOptions(current, state.branches);
+  const current = branch ?? branchState.currentBranch ?? "";
+  const loaded = !branchState.loading && branchState.error === null;
+  const options = branchOptions(
+    current,
+    branchState.branches,
+    loaded,
+    t("codingWorkbench.repository.unavailable"),
+  );
   const label = current || t("codingWorkbench.repository.noBranch");
-  const unreadable = state.loading || state.error !== null;
+  const unreadable = branchState.loading || branchState.error !== null;
   return (
     <KeikoSelect
       value={current}
@@ -220,6 +258,27 @@ function repositoryUnavailable(root: string | null, catalog: CatalogState): bool
   return selected === undefined || !projectAvailable(selected);
 }
 
+// #B review: a registered, workspace-available root that is not (or no longer) a Git repository —
+// `repositoryUnavailable` above says nothing about this, since it only checks catalog membership.
+// The branch read failing IS the signal: `useRepositoryBranchState`'s error means Git itself
+// refused this root. Gated the same way the branch chip locks itself (never while already flagged
+// unavailable, or while either read is still settling), so the two notices stay mutually exclusive.
+function repositoryBranchUnavailable(
+  root: string | null,
+  unavailable: boolean,
+  catalog: CatalogState,
+  branchState: RepositoryBranchState,
+): boolean {
+  return (
+    root !== null &&
+    !unavailable &&
+    !catalog.loading &&
+    !catalog.error &&
+    !branchState.loading &&
+    branchState.error !== null
+  );
+}
+
 function SelectorField({
   placement,
   label,
@@ -231,7 +290,9 @@ function SelectorField({
 }): ReactNode {
   return (
     <div
-      className={placement === "setup" ? styles.setupSelectorField : styles.repositorySelectorChip}
+      className={
+        placement === "setup" ? styles.cmpSetupSelectorField : styles.cmpRepositorySelectorChip
+      }
     >
       {placement === "setup" ? <span>{label}</span> : null}
       {children}
@@ -239,43 +300,106 @@ function SelectorField({
   );
 }
 
-// The way back when the catalog failed or the repository left Git: open Git from the setup form,
-// and say what happened.
+// #D review: a catalog-error notice with no way back — the repository KeikoSelect disables itself
+// on `catalog.error`, so its own `onOpen={catalog.reload}` can never fire, and the composer
+// placement never rendered the setup form's "Open Git" escape at all. Reuses the one retry
+// affordance the Workbench already has (`RetryMessage`, CodingWorkbenchChanges.tsx) instead of a
+// second copy of "message plus button".
+function SelectorNotice({
+  unavailable,
+  branchUnavailable,
+  catalogError,
+  onRetryCatalog,
+  t,
+}: {
+  readonly unavailable: boolean;
+  readonly branchUnavailable: boolean;
+  readonly catalogError: boolean;
+  readonly onRetryCatalog: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (catalogError) {
+    return (
+      <RetryMessage
+        text={t("codingWorkbench.repository.loadError")}
+        className={styles.cmpRepositorySelectorNotice}
+        role="alert"
+        retry={{ label: t("codingWorkbench.repository.retryLoad"), onRetry: onRetryCatalog }}
+      />
+    );
+  }
+  const key = unavailable
+    ? "codingWorkbench.repository.unavailableHelp"
+    : branchUnavailable
+      ? "codingWorkbench.repository.gitUnavailableHelp"
+      : undefined;
+  if (key === undefined) return null;
+  return (
+    <p className={styles.cmpRepositorySelectorNotice} role="alert">
+      {t(key)}
+    </p>
+  );
+}
+
+// The way back when the catalog failed, the repository left Git, or a registered folder never
+// was a Git repository (#B review): open Git from the setup form, and say what happened.
 function SelectorRecovery({
   placement,
   root,
   unavailable,
+  branchUnavailable,
   catalogError,
   onOpenGit,
+  onRetryCatalog,
   t,
 }: {
   readonly placement: SelectorPlacement;
   readonly root: string | null;
   readonly unavailable: boolean;
+  readonly branchUnavailable: boolean;
   readonly catalogError: boolean;
   readonly onOpenGit: () => void;
+  readonly onRetryCatalog: () => void;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const showGit = placement === "setup" && (root === null || unavailable || catalogError);
-  const notice = catalogError
-    ? "codingWorkbench.repository.loadError"
-    : unavailable
-      ? "codingWorkbench.repository.unavailableHelp"
-      : undefined;
+  const showGit =
+    placement === "setup" && (root === null || unavailable || branchUnavailable || catalogError);
   return (
     <>
       {showGit ? (
-        <button type="button" className={styles.repositorySelectorGit} onClick={onOpenGit}>
+        <button type="button" className={styles.cmpRepositorySelectorGit} onClick={onOpenGit}>
           {t("codingWorkbench.repository.manage")}
         </button>
       ) : null}
-      {notice === undefined ? null : (
-        <p className={styles.repositorySelectorNotice} role="alert">
-          {t(notice)}
-        </p>
-      )}
+      <SelectorNotice
+        unavailable={unavailable}
+        branchUnavailable={branchUnavailable}
+        catalogError={catalogError}
+        onRetryCatalog={onRetryCatalog}
+        t={t}
+      />
     </>
   );
+}
+
+interface RepositorySelectorState {
+  readonly catalog: CatalogState;
+  readonly unavailable: boolean;
+  readonly branchLocked: boolean;
+  readonly branchState: RepositoryBranchState;
+  readonly branchUnavailable: boolean;
+}
+
+// Extracted so the exported component stays under the lint bar's max-lines-per-function: the
+// catalog and branch reads, and the two derived "cannot proceed with Git" flags (#B, #D), belong
+// together as one unit of state the component's JSX only renders.
+function useRepositorySelectorState(root: string | null, locked: boolean): RepositorySelectorState {
+  const catalog = useGitRepositoryCatalog();
+  const unavailable = repositoryUnavailable(root, catalog);
+  const branchLocked = locked || unavailable;
+  const branchState = useRepositoryBranchState(branchLocked ? null : root);
+  const branchUnavailable = repositoryBranchUnavailable(root, unavailable, catalog, branchState);
+  return { catalog, unavailable, branchLocked, branchState, branchUnavailable };
 }
 
 interface CodingWorkbenchRepositorySelectorProps {
@@ -298,10 +422,10 @@ export function CodingWorkbenchRepositorySelector({
   placement = "composer",
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const catalog = useGitRepositoryCatalog();
-  const unavailable = repositoryUnavailable(root, catalog);
+  const { catalog, unavailable, branchLocked, branchState, branchUnavailable } =
+    useRepositorySelectorState(root, locked);
   return (
-    <div className={placement === "setup" ? styles.setupSelector : styles.repositorySelector}>
+    <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <SelectorField placement={placement} label={t("codingWorkbench.repository.label")}>
         <RepositoryChip
           root={root}
@@ -316,7 +440,8 @@ export function CodingWorkbenchRepositorySelector({
         <BranchChip
           root={root}
           branch={branch}
-          locked={locked || unavailable}
+          locked={branchLocked}
+          branchState={branchState}
           onSelect={onSelectBranch}
           t={t}
           placement={placement}
@@ -326,8 +451,10 @@ export function CodingWorkbenchRepositorySelector({
         placement={placement}
         root={root}
         unavailable={unavailable}
+        branchUnavailable={branchUnavailable}
         catalogError={catalog.error}
         onOpenGit={onOpenGit}
+        onRetryCatalog={catalog.reload}
         t={t}
       />
     </div>

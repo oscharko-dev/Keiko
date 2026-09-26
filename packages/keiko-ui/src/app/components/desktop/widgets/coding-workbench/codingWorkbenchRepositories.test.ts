@@ -51,4 +51,12 @@ describe("coding workbench Git repository catalog", () => {
     expect(await repositorySelectable("/repos/ready")).toBe(false);
     expect(fetchGitSummary).toHaveBeenCalledExactlyOnceWith("/repos/ready");
   });
+
+  // #G: every other case in this file is a refusal — none of them prove the accepting path ever
+  // returns `true` at all.
+  it("accepts a registered, workspace-available repository once Git confirms it is available", async () => {
+    fetchGitSummary.mockResolvedValue({ available: true, state: "available" });
+    expect(await repositorySelectable("/repos/ready")).toBe(true);
+    expect(fetchGitSummary).toHaveBeenCalledExactlyOnceWith("/repos/ready");
+  });
 });

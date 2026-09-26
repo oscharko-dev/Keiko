@@ -35,6 +35,19 @@ vi.mock("./codingWorkbenchRepositories", () => ({
       },
     ]),
 }));
+// The selector reads the bound repository's branches; this suite answers them as a Git repository so
+// the selector raises no alert of its own beside the rejected start.
+vi.mock("../../hooks/useRepositoryBranchState", () => ({
+  useRepositoryBranchState: (root: string | null): unknown => ({
+    root,
+    response: null,
+    loading: false,
+    error: null,
+    branches: [],
+    currentBranch: root === null ? null : "issue/2835",
+    refresh: (): Promise<void> => Promise.resolve(),
+  }),
+}));
 vi.mock("@/lib/useCodingWorkbenchQuestions", () => ({
   useCodingWorkbenchQuestions: questionsHookMock,
 }));

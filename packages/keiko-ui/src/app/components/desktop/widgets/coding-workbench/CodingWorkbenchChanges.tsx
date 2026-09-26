@@ -142,7 +142,14 @@ export interface RetryMessageProps {
   // `className`, because a CSS-module lookup is `string | undefined` under noUncheckedIndexedAccess.
   readonly className: string | undefined;
   readonly role?: "alert" | undefined;
-  readonly retry?: { readonly label: string; readonly onRetry: () => void } | undefined;
+  readonly retry?:
+    | {
+        readonly label: string;
+        readonly onRetry: () => void;
+        /** Disables the control while the retry it triggers is in flight (#F review). */
+        readonly disabled?: boolean;
+      }
+    | undefined;
 }
 
 export function RetryMessage({ text, className, role, retry }: RetryMessageProps): ReactNode {
@@ -150,7 +157,12 @@ export function RetryMessage({ text, className, role, retry }: RetryMessageProps
   return (
     <div className={className} role={role}>
       <p>{text}</p>
-      <button className={styles.button} type="button" onClick={retry.onRetry}>
+      <button
+        className={styles.button}
+        type="button"
+        disabled={retry.disabled === true}
+        onClick={retry.onRetry}
+      >
         {retry.label}
       </button>
     </div>
@@ -335,7 +347,14 @@ function DiffContent({
     return <ChangesMessage role="status" text={t("codingWorkbench.changes.diff.loading")} />;
   }
   if (changes.diffStatus === "error") {
-    return <ChangesMessage role="alert" text={t("codingWorkbench.changes.diff.error")} />;
+    return (
+      <RetryMessage
+        text={t("codingWorkbench.changes.diff.error")}
+        className={styles.changesMessage}
+        role="alert"
+        retry={{ label: t("codingWorkbench.changes.diff.retry"), onRetry: changes.retryDiff }}
+      />
+    );
   }
   if (changes.diffStatus === "empty" || changes.diff === null) {
     return <ChangesMessage text={t("codingWorkbench.changes.diff.empty")} />;

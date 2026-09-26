@@ -13,6 +13,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  ModelCapability,
   WorkspaceBinding,
   WorkspaceInstance,
   WorkspaceTrustStatus,
@@ -50,6 +51,9 @@ const repositoryBranchHookMock = vi.hoisted(() =>
 const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
+  // #3642: mutable so a test can simulate a catalog refresh (chat's own
+  // `clearSessionModelsForPendingRefresh`, useChatSession.ts) publishing an empty list mid-flight.
+  models: [] as ModelCapability[],
 }));
 vi.mock("./codingWorkbenchRepositories", () => ({
   repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
@@ -152,7 +156,7 @@ vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
     useOptionalChatSessionCatalog: (): unknown => ({
       activeProject: chatCatalogMock.activeProject,
       projects: chatCatalogMock.projects,
-      models: [],
+      models: chatCatalogMock.models,
       noEligibleModels: true,
     }),
   };
@@ -405,6 +409,7 @@ function trustStatus(
 beforeEach(() => {
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
+  chatCatalogMock.models = [];
   // Every other suite in this file leaves the journey read unmocked-in-spirit: it never sets up an
   // observed outcome, so it must keep resolving to a valid "nothing observed" envelope rather than
   // silently reusing whatever a mark-ready test configured last (AGENTS.md §7: hermetic tests, no
@@ -3528,5 +3533,94 @@ describe("CodingWorkbenchWindow approved-skills channel state (#3417)", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+});
+
+// #3642: a catalog refresh (opening the model picker, a gateway settings change) must never
+// silently replace an operator's selected model or reasoning effort merely because the shared
+// chat catalog reports empty mid-refresh (useChatSession.ts `clearSessionModelsForPendingRefresh`).
+describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
+  const MODEL_A: ModelCapability = {
+    id: "model-a",
+    kind: "chat",
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
+    toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "fingerprint-1",
+    },
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "standard",
+    preferredUseCases: ["Coding"],
+    knownLimitations: [],
+    reasoningEfforts: ["low", "medium"],
+  };
+  const MODEL_B: ModelCapability = {
+    ...MODEL_A,
+    id: "model-b",
+    reasoningEfforts: ["medium", "high"],
+  };
+
+  it("preserves the selected model and effort across a transient empty-catalog refresh", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    // Baseline: the mocked state already matches the catalog, so there is nothing to reconcile.
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+
+    // The refresh goes pending: the shared catalog reports an empty list, exactly as it does
+    // while the fetch is in flight. The operator's choice must not be wiped by this alone.
+    chatCatalogMock.models = [];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+
+    // The refresh succeeds and returns the SAME models: the selection must still be there,
+    // rather than falling back to models[0] because the mid-refresh empty list already cleared it.
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+  });
+
+  it("still falls back once the refreshed catalog genuinely no longer offers the selected model", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    chatCatalogMock.models = [MODEL_A];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+  });
+
+  // A catalog that answers with models but no coding-capable one is conclusive: the stale choice
+  // goes, only an empty catalog (a refresh in flight) keeps it.
+  it("clears the selection when the catalog lists models but no coding-capable one", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    chatCatalogMock.models = [{ ...MODEL_A, id: "model-no-tools", toolCalling: false }];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
   });
 });

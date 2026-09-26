@@ -367,8 +367,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.unavailable": "unavailable",
   "codingWorkbench.repository.unavailableHelp":
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
+  "codingWorkbench.repository.gitUnavailableHelp":
+    "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
   "codingWorkbench.repository.loadError":
     "Repositories could not be loaded. Refresh the list and try again.",
+  "codingWorkbench.repository.retryLoad": "Retry",
   "codingWorkbench.repository.manage": "Open Git",
   "codingWorkbench.setup.title": "Code setup",
   "codingWorkbench.setup.help": "Prepare a governed task workspace for the selected repository.",
@@ -473,6 +476,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.empty": "No text diff is available for this changed file.",
   "codingWorkbench.changes.diff.error":
     "The selected file diff is unavailable. No stale diff is shown.",
+  "codingWorkbench.changes.diff.retry": "Retry diff",
   "codingWorkbench.changes.diff.truncated":
     "This bounded file diff is incomplete because it reached the server limit.",
   "codingWorkbench.changes.diff.addedLine": "Added line",

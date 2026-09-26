@@ -387,8 +387,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.unavailable": "nicht verfügbar",
   "codingWorkbench.repository.unavailableHelp":
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
+  "codingWorkbench.repository.gitUnavailableHelp":
+    "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
   "codingWorkbench.repository.loadError":
     "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
+  "codingWorkbench.repository.retryLoad": "Erneut versuchen",
   "codingWorkbench.repository.manage": "Git öffnen",
   "codingWorkbench.setup.title": "Code-Einrichtung",
   "codingWorkbench.setup.help":
@@ -497,6 +500,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.empty": "Für diese geänderte Datei ist kein Text-Diff verfügbar.",
   "codingWorkbench.changes.diff.error":
     "Das Diff der ausgewählten Datei ist nicht verfügbar. Es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.diff.retry": "Diff erneut laden",
   "codingWorkbench.changes.diff.truncated":
     "Dieses begrenzte Datei-Diff ist unvollständig, weil es das Serverlimit erreicht hat.",
   "codingWorkbench.changes.diff.addedLine": "Hinzugefügte Zeile",

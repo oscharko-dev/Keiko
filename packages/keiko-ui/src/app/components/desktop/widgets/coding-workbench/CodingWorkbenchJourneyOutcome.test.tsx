@@ -53,6 +53,27 @@ describe("observed issue journey handoff", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
+  // #F review: before this fix, the unavailable card's retry was a bare, uncaught `void
+  // onRefresh()` — a rejecting `onRefresh` (useCodingWorkbenchJourney.refresh rethrows) became an
+  // unhandled promise rejection with no operator-visible feedback and the button never disabled.
+  it("disables the retry while pending and surfaces a body-free failure without an unhandled rejection (#F)", async () => {
+    const onRefresh = vi.fn().mockRejectedValue(new Error("private/customer-content token-value"));
+    render(
+      <CodingWorkbenchJourneyOutcome
+        snapshot={journeyFixture().snapshot}
+        outcome={undefined}
+        onRefresh={onRefresh}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Refresh observed status" });
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(document.body).not.toHaveTextContent("customer-content");
+    expect(button).toBeEnabled();
+  });
+
   it("shows nothing while no draft pull request exists", () => {
     const { snapshot } = journeyFixture();
     const { container } = render(
@@ -178,6 +199,42 @@ describe("observed issue journey handoff", () => {
     await act(async () => {});
     expect(onProposeReady).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /merge|close issue/i })).not.toBeInTheDocument();
+  });
+  // #3649: the action reported completion but the card kept its pre-action outcome and the
+  // already-completed control stayed enabled until a manual Refresh — a second click could
+  // resubmit mark-ready against a PR that is no longer draft.
+  it("refreshes the observed journey after a successful mark-ready action (#3649)", async () => {
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    const onProposeReady = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CodingWorkbenchJourneyOutcome
+        {...journeyFixture()}
+        onRefresh={onRefresh}
+        onProposeReady={onProposeReady}
+        markReadyAvailable
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review ready-for-review request" }));
+    await waitFor(() => expect(onProposeReady).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+  });
+  // The mark-ready action DID succeed server-side; a failed follow-up re-read must never render
+  // as "the propose-ready action failed" — that would misreport a successful mutation as refused.
+  it("does not present a post-success refresh failure as a failed propose-ready (#3649)", async () => {
+    const onRefresh = vi.fn().mockRejectedValue(new Error("private/customer-content token-value"));
+    const onProposeReady = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CodingWorkbenchJourneyOutcome
+        {...journeyFixture()}
+        onRefresh={onRefresh}
+        onProposeReady={onProposeReady}
+        markReadyAvailable
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review ready-for-review request" }));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
   it("replaces expired readiness with observed history and offers an explicit refresh", () => {
     const fixture = journeyFixture();
