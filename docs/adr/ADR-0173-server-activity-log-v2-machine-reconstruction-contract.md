@@ -1031,7 +1031,12 @@ context window below the 32,000-token minimum (`long_context`), which is what a 
 declares no token limits leaves behind as the 4,096 setup placeholder. Expect
 `gateway.readiness.automatic.started` / `.completed` under the profile read's correlation id;
 `.completed` carries `verifiedContextTokens` when the long-context probe passed, and the same run
-persists the renewed proof and raises the stored window (raise-only). The work is bounded: one
+persists the renewed proof and raises the stored window (raise-only). A model whose proof the
+config loader demoted to `toolCalling: false` after it aged out still claims tool calling (ADR-0124
+D5): after a restart the day after setup its read starts that automatic run, and a read that
+answers while the run is still open logs `coding-sidecar.gateway.readiness-insufficient` with
+`reason: "model-verification-pending"`. For such a model, `reason: "no-tool-calling"` follows only
+a run whose probe refuted tool calling. The work is bounded: one
 attempt per deployment identity within a six-hour cooldown, never for a model that does not
 claim tool calling, never while a subscription source is selected, and only the model the
 Workbench would elect is awaited. A profile read that

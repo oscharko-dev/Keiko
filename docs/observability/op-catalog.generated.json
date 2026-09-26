@@ -74783,14 +74783,14 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2067",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2069",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2240",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2242",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

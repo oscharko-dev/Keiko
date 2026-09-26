@@ -187,7 +187,13 @@ context window below the coding minimum that the gateway never declared — so t
 sent to Gateway Settings for something Keiko can determine itself (owner decision for 1.1.1,
 amending #3561; mechanics and log lines in ADR-0173). That verification is bounded: only models
 that claim tool calling, one attempt per deployment identity within a six-hour cooldown, under the
-existing probe spend ledger. It never runs when a subscription source is selected, when the
+existing probe spend ledger. A model claims tool calling when it is admitted to call tools or when
+Keiko's forced tool-call probe verified it before. The gateway config loader stores a proof that
+aged out, or that is bound to another deployment configuration, as `toolCalling: false`; such a
+model still claims tool calling and gets its proof renewed, so a restart the day after setup does
+not leave the Workbench blocked (1.1.8 lab). A model whose probe refuted tool calling
+(`unsupported`) or never concluded claims nothing and is not probed from here. Only a fresh proof
+admits a model to a run. It never runs when a subscription source is selected, when the
 deployment policy disables the gateway source, or when the gateway is not configured. The same
 gateway capability evidence gates all models.
 

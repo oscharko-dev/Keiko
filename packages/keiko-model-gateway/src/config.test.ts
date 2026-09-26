@@ -24,6 +24,7 @@ import {
   toSafeObject,
   type ParseGatewayConfigOptions,
 } from "./config.js";
+import { resolveCodingSafeSidecarGatewayProfile } from "./model-selection.js";
 
 interface RawProvider {
   modelId: string;
@@ -98,6 +99,7 @@ function rawToolCallingProof(): ToolCallingProofRaw {
 describe("parseGatewayConfig", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("parses a structurally valid config", () => {
@@ -732,6 +734,51 @@ describe("parseGatewayConfig", () => {
       ],
     };
     expect(parseGatewayConfig(staleRaw).capabilities?.[0]?.toolCalling).toBe(false);
+  });
+
+  // 1.1.8 lab: a restart the day after setup loads the proof above as stale. The Coding Workbench
+  // must read the demoted model as a proof to renew, never as a model without tool calling, or its
+  // profile read never probes and the Workbench stays blocked until a manual check.
+  it("leaves a lapsed or moved proof renewable by the Coding Workbench", () => {
+    // One instant for the proof, the loader and the resolver, so the 1 ms boundary holds exactly.
+    vi.useFakeTimers({ now: Date.parse("2026-09-26T08:00:00.000Z") });
+    const raw = rawToolCallingProof();
+    const provider = parseGatewayConfig(raw).providers[0];
+    if (provider === undefined) throw new Error("expected provider");
+    const rawProvider = raw.providers[0];
+    const provenAt = (checkedAtMs: number, baseUrl = rawProvider.baseUrl): unknown => ({
+      ...raw,
+      providers: [
+        {
+          ...rawProvider,
+          baseUrl,
+          capability: {
+            ...rawProvider.capability,
+            toolCallingVerification: {
+              status: "verified",
+              checkedAt: new Date(checkedAtMs).toISOString(),
+              probe: "gateway-tool-calling-v1",
+              configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+            },
+          },
+        },
+      ],
+    });
+    const lapsed = [
+      provenAt(Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 1),
+      provenAt(Date.now(), "https://moved.example/v1"),
+    ];
+
+    for (const config of lapsed.map((value) => parseGatewayConfig(value))) {
+      expect(config.capabilities?.[0]?.toolCalling).toBe(false);
+      expect(resolveCodingSafeSidecarGatewayProfile(config)).toEqual({
+        status: "unavailable",
+        reason: "tool-calling-unverified",
+      });
+    }
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(parseGatewayConfig(provenAt(Date.now()))),
+    ).toMatchObject({ status: "available", modelAlias: provider.modelId });
   });
 
   it("round-trips calibrated token accounting through the inline provider capability path", () => {

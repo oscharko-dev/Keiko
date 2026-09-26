@@ -3477,10 +3477,21 @@ describe("coding-sidecar gateway", () => {
       reason: "non-chat",
     },
     {
+      // No tool calling means the forced probe refuted it: a demoted verified proof is one the
+      // Workbench renews (strict-gateway-field.test.ts, "after a restart the day after setup").
       label: "no tool calling",
       config: configValue(
         provider({ modelId: "no-tools" }),
-        capability({ id: "no-tools", toolCalling: false }),
+        capability({
+          id: "no-tools",
+          toolCalling: false,
+          toolCallingVerification: {
+            status: "unsupported",
+            checkedAt: new Date().toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: "test-fingerprint",
+          },
+        }),
       ),
       reason: "no-tool-calling",
     },

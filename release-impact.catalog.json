@@ -2732,6 +2732,58 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.9",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.9",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-26-keiko-1.1.9-coding-workbench-renews-lapsed-tool-proof",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "The Coding Workbench renews an expired tool-calling check by itself after a restart. Keiko's forced tool-call proof expires after 24 hours, and Keiko loads an expired proof as no tool calling. Until now the Workbench read that as a model that cannot call tools: after a restart more than a day after the gateway setup it found no coding model and stayed blocked until a check was started in Settings. Opening the Workbench now renews the proof of every model Keiko verified before, within the existing six-hour bound, and only a fresh proof admits a model to a run.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: after a restart more than a day after the gateway setup, opening the Workbench renews the expired tool-calling check of every model Keiko verified before, instead of reporting that no model can call tools.",
+        "A model whose check found no tool calling, or never concluded, is still not probed automatically, and only a fresh check admits a model to a run."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-26",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
+        "rationale": "The release owner ordered on 2026-09-25 that release 1.1.8 ship without defects and that epic #3591 be completed. Repeating the lab flows with the published 1.1.8 package (issue #3610) found that a restart more than a day after setup left the Coding Workbench without a model: the config loader demotes an aged-out tool-call proof to toolCalling false, and the Workbench's automatic renewal of the 1.1.1 owner decision keyed on that flag. 1.1.9 ships that repair; it adds no export, no route, no operation and no configuration key.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }
