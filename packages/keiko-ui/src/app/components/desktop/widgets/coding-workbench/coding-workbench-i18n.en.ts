@@ -359,6 +359,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.branchLabel": "Branch",
   "codingWorkbench.repository.search": "Search repositories",
   "codingWorkbench.repository.searchBranch": "Search branches",
+  "codingWorkbench.repository.noMatches": "No matching repositories.",
+  "codingWorkbench.repository.noBranchMatches": "No matching branches.",
   "codingWorkbench.repository.noBranch": "No branch",
   "codingWorkbench.repository.loading": "Loading repositories…",
   "codingWorkbench.repository.none": "Select a repository",
@@ -369,8 +371,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Repositories could not be loaded. Refresh the list and try again.",
   "codingWorkbench.repository.manage": "Open Git",
   "codingWorkbench.setup.title": "Code setup",
-  "codingWorkbench.setup.help":
-    "Prepare a governed task workspace for the selected repository.",
+  "codingWorkbench.setup.help": "Prepare a governed task workspace for the selected repository.",
   "codingWorkbench.setup.repositoryNotConnected":
     "This repository is not available in Git. Reconnect it there, then choose it again.",
   "codingWorkbench.setup.repositoryCatalogUnavailable":

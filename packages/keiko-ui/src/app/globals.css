@@ -874,34 +874,6 @@ button {
   font-size: 0.68em;
 }
 
-.ksel-menu-search {
-  padding: 7px 8px 5px;
-}
-
-.ksel-menu-search input {
-  width: 100%;
-  min-width: 0;
-  height: 30px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
-  padding: 0 8px;
-  color: var(--text-primary);
-  background: var(--button-secondary-surface);
-  font: inherit;
-}
-
-.ksel-menu-search input:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: -1px;
-}
-
-.ksel-menu-empty {
-  margin: 0;
-  padding: 8px;
-  color: var(--text-tertiary);
-  font-size: 0.86em;
-}
-
 .ksel-menu-scroll {
   overflow-y: auto;
   padding: 4px;

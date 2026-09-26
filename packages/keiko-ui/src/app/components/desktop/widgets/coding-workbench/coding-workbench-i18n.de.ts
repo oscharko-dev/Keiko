@@ -379,6 +379,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.branchLabel": "Branch",
   "codingWorkbench.repository.search": "Repositories suchen",
   "codingWorkbench.repository.searchBranch": "Branches suchen",
+  "codingWorkbench.repository.noMatches": "Keine passenden Repositories.",
+  "codingWorkbench.repository.noBranchMatches": "Keine passenden Branches.",
   "codingWorkbench.repository.noBranch": "Kein Branch",
   "codingWorkbench.repository.loading": "Repositories werden geladen…",
   "codingWorkbench.repository.none": "Repository auswählen",

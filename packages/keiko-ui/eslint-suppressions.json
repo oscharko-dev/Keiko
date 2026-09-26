@@ -101,10 +101,10 @@
       "count": 3
     },
     "complexity": {
-      "count": 3
+      "count": 2
     },
     "max-lines-per-function": {
-      "count": 5
+      "count": 4
     }
   },
   "src/app/components/desktop/LeftRail.tsx": {

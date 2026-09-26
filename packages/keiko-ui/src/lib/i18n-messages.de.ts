@@ -1392,7 +1392,6 @@ export const DE_MESSAGES = {
   "updates.phase.failed": "Update fehlgeschlagen",
   "updates.phase.cancelled": "Update abgebrochen",
   "select.placeholder": "Option auswählen",
-  "select.noMatches": "Keine passenden Optionen.",
   "workspace.empty.openWindow": "Neues Fenster öffnen",
   "workspace.notice.dismiss": "Arbeitsbereichshinweis schließen",
   "workspace.windowLimitReached":

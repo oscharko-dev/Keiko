@@ -14,6 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslate } from "@/lib/i18n";
+import styles from "./KeikoSelect.module.css";
 
 type KeikoSelectOption = {
   readonly value: string;
@@ -58,6 +59,8 @@ export interface KeikoSelectProps {
   readonly menuPopoverMaxHeight?: number;
   readonly menuPlacement?: "auto" | "up";
   readonly searchPlaceholder?: string;
+  /** The line a search shows when nothing matches, in the caller's own copy. */
+  readonly searchEmptyLabel?: string;
   readonly attached?: boolean;
   readonly triggerStyle?: CSSProperties | undefined;
   readonly autoFocus?: boolean;
@@ -159,6 +162,48 @@ function searchRank(label: string, query: string): number {
   const candidate = label.toLocaleLowerCase();
   if (candidate === query) return 0;
   return candidate.startsWith(query) ? 1 : 2;
+}
+
+const MENU_VIEWPORT_PADDING = 16;
+
+interface MenuSizing {
+  readonly menuMinWidth: number | undefined;
+  readonly menuPopoverMinWidth: number | undefined;
+  readonly menuPopoverMaxHeight: number | undefined;
+  /** The height the menu's header and search field take above its options. */
+  readonly chromeReserve: number;
+}
+
+// A compact trigger narrower than the options gets a readable menu, never wider than the viewport.
+function menuWidth(rect: DOMRect, sizing: MenuSizing): number {
+  const compactReadableWidth =
+    sizing.menuMinWidth !== undefined && rect.width < Math.min(sizing.menuMinWidth, 96)
+      ? sizing.menuMinWidth
+      : rect.width;
+  return Math.min(
+    Math.max(compactReadableWidth, sizing.menuPopoverMinWidth ?? 0),
+    window.innerWidth - MENU_VIEWPORT_PADDING * 2,
+  );
+}
+
+function menuOpensUp(rect: DOMRect, placement: "auto" | "up"): boolean {
+  const spaceBelow = window.innerHeight - rect.bottom - MENU_VIEWPORT_PADDING;
+  const spaceAbove = rect.top - MENU_VIEWPORT_PADDING;
+  const minUsableHeight = Math.max(96, rect.height * 2);
+  return placement === "up" || (spaceBelow < minUsableHeight && spaceAbove > spaceBelow);
+}
+
+function menuMaxHeight(rect: DOMRect, openUp: boolean, sizing: MenuSizing): number {
+  const availableHeight = openUp
+    ? rect.top - MENU_VIEWPORT_PADDING
+    : window.innerHeight - rect.bottom - MENU_VIEWPORT_PADDING;
+  return Math.max(
+    rect.height,
+    Math.min(
+      Math.max(rect.height, availableHeight - sizing.chromeReserve),
+      sizing.menuPopoverMaxHeight ?? 380,
+    ),
+  );
 }
 
 function buildTriggerClasses(params: {
@@ -355,6 +400,50 @@ function KeikoSelectMenuSection({
   );
 }
 
+/** An opt-in menu search: its field, current query and the line shown when nothing matches. */
+interface KeikoSelectMenuSearch {
+  readonly placeholder: string;
+  readonly query: string;
+  readonly emptyLabel: string | undefined;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
+  readonly onChange: (value: string) => void;
+  readonly onKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
+}
+
+function KeikoSelectSearchField({
+  search,
+}: {
+  readonly search: KeikoSelectMenuSearch | undefined;
+}): ReactNode {
+  if (search === undefined) return null;
+  return (
+    <div className={styles.menuSearch}>
+      <input
+        ref={search.inputRef}
+        type="search"
+        aria-label={search.placeholder}
+        placeholder={search.placeholder}
+        value={search.query}
+        onChange={(event): void => {
+          search.onChange(event.currentTarget.value);
+        }}
+        onKeyDown={search.onKeyDown}
+      />
+    </div>
+  );
+}
+
+function KeikoSelectNoMatches({
+  search,
+  visible,
+}: {
+  readonly search: KeikoSelectMenuSearch | undefined;
+  readonly visible: boolean;
+}): ReactNode {
+  if (!visible || search?.emptyLabel === undefined) return null;
+  return <p className={styles.menuEmpty}>{search.emptyLabel}</p>;
+}
+
 function KeikoSelectMenu({
   activeIndex,
   ariaLabel,
@@ -371,12 +460,7 @@ function KeikoSelectMenu({
   position,
   selectedIndex,
   sections,
-  searchPlaceholder,
-  searchQuery,
-  onSearchChange,
-  onSearchKeyDown,
-  searchRef,
-  searchEmptyLabel,
+  search,
   setOptionRef,
   showMenuHeader,
 }: {
@@ -395,12 +479,7 @@ function KeikoSelectMenu({
   readonly position: MenuPosition;
   readonly selectedIndex: number;
   readonly sections: readonly KeikoSelectSection[];
-  readonly searchPlaceholder: string | undefined;
-  readonly searchQuery: string;
-  readonly onSearchChange: (value: string) => void;
-  readonly onSearchKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
-  readonly searchRef: RefObject<HTMLInputElement | null>;
-  readonly searchEmptyLabel: string;
+  readonly search: KeikoSelectMenuSearch | undefined;
   readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
   readonly showMenuHeader: boolean;
 }): ReactNode {
@@ -435,19 +514,7 @@ function KeikoSelectMenu({
           </div>
         </div>
       ) : null}
-      {searchPlaceholder !== undefined ? (
-        <div className="ksel-menu-search">
-          <input
-            ref={searchRef}
-            type="search"
-            aria-label={searchPlaceholder}
-            placeholder={searchPlaceholder}
-            value={searchQuery}
-            onChange={(event) => onSearchChange(event.currentTarget.value)}
-            onKeyDown={onSearchKeyDown}
-          />
-        </div>
-      ) : null}
+      <KeikoSelectSearchField search={search} />
       <div
         className="ksel-menu-scroll"
         role="listbox"
@@ -469,7 +536,7 @@ function KeikoSelectMenu({
             setOptionRef={setOptionRef}
           />
         ))}
-        {flatOptions.length === 0 ? <p className="ksel-menu-empty">{searchEmptyLabel}</p> : null}
+        <KeikoSelectNoMatches search={search} visible={flatOptions.length === 0} />
       </div>
     </div>,
     document.body,
@@ -499,6 +566,7 @@ export default function KeikoSelect({
   menuPopoverMaxHeight,
   menuPlacement = "auto",
   searchPlaceholder,
+  searchEmptyLabel,
   attached = true,
   triggerStyle,
   autoFocus = false,
@@ -570,7 +638,9 @@ export default function KeikoSelect({
       setSearchQuery("");
     };
     window.addEventListener(SELECT_OPEN_EVENT, onOtherSelectOpen);
-    return () => window.removeEventListener(SELECT_OPEN_EVENT, onOtherSelectOpen);
+    return (): void => {
+      window.removeEventListener(SELECT_OPEN_EVENT, onOtherSelectOpen);
+    };
   }, []);
 
   useEffect(() => {
@@ -598,38 +668,25 @@ export default function KeikoSelect({
 
   useLayoutEffect(() => {
     if (!open || triggerRef.current === null) return;
+    const sizing: MenuSizing = {
+      menuMinWidth,
+      menuPopoverMinWidth,
+      menuPopoverMaxHeight,
+      chromeReserve: (showMenuHeader ? 50 : 0) + (searchPlaceholder === undefined ? 0 : 46) + 2,
+    };
     const updatePosition = (): void => {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (rect === undefined) return;
-      const viewportPadding = 16;
-      const compactReadableWidth =
-        menuMinWidth !== undefined && rect.width < Math.min(menuMinWidth, 96)
-          ? menuMinWidth
-          : rect.width;
-      const width = Math.min(
-        Math.max(compactReadableWidth, menuPopoverMinWidth ?? 0),
-        window.innerWidth - viewportPadding * 2,
-      );
+      const trigger = triggerRef.current;
+      if (trigger === null) return;
+      const rect = trigger.getBoundingClientRect();
+      const viewportPadding = MENU_VIEWPORT_PADDING;
+      const width = menuWidth(rect, sizing);
       const menuAttached = attached && Math.abs(width - rect.width) < 1;
       const menuGap = menuAttached ? -1 : 6;
-      const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
-      const spaceAbove = rect.top - viewportPadding;
-      const minUsableHeight = Math.max(96, rect.height * 2);
-      const openUp =
-        menuPlacement === "up" || (spaceBelow < minUsableHeight && spaceAbove > spaceBelow);
+      const openUp = menuOpensUp(rect, menuPlacement);
       setOpenUp(openUp);
-      const availableHeight = openUp ? spaceAbove : spaceBelow;
-      const menuChromeReserve = (showMenuHeader ? 50 : 0) +
-        (searchPlaceholder === undefined ? 0 : 46) + 2;
-      const maxHeight = Math.max(
-        rect.height,
-        Math.min(
-          Math.max(rect.height, availableHeight - menuChromeReserve),
-          menuPopoverMaxHeight ?? 380,
-        ),
-      );
-      const totalMenuHeight = maxHeight + menuChromeReserve;
-      const computed = window.getComputedStyle(triggerRef.current!);
+      const maxHeight = menuMaxHeight(rect, openUp, sizing);
+      const totalMenuHeight = maxHeight + sizing.chromeReserve;
+      const computed = window.getComputedStyle(trigger);
       const left = Math.min(
         Math.max(viewportPadding, rect.left),
         window.innerWidth - width - viewportPadding,
@@ -834,15 +891,21 @@ export default function KeikoSelect({
         position={position}
         selectedIndex={selectedIndex}
         sections={visibleSections}
-        searchPlaceholder={searchPlaceholder}
-        searchQuery={searchQuery}
-        onSearchChange={(next): void => {
-          setSearchQuery(next);
-          setActiveIndex(0);
-        }}
-        onSearchKeyDown={onSearchKeyDown}
-        searchRef={searchRef}
-        searchEmptyLabel={t("select.noMatches")}
+        search={
+          searchPlaceholder === undefined
+            ? undefined
+            : {
+                placeholder: searchPlaceholder,
+                query: searchQuery,
+                emptyLabel: searchEmptyLabel,
+                inputRef: searchRef,
+                onChange: (next): void => {
+                  setSearchQuery(next);
+                  setActiveIndex(0);
+                },
+                onKeyDown: onSearchKeyDown,
+              }
+        }
         setOptionRef={(optionIndex, element) => {
           optionRefs.current[optionIndex] = element;
         }}

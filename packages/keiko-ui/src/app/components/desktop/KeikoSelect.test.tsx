@@ -325,6 +325,25 @@ describe("KeikoSelect searchable menus", () => {
     ]);
   });
 
+  it("says in the caller's copy when a search matches nothing", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Branch"
+        onValueChange={vi.fn()}
+        searchPlaceholder="Search branches"
+        searchEmptyLabel="No matching branches."
+        sections={[{ options: [{ value: "dev", label: "dev" }] }]}
+        value="dev"
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search branches" }), "zzz");
+    expect(screen.queryAllByRole("option")).toEqual([]);
+    expect(screen.getByText("No matching branches.")).toBeInTheDocument();
+  });
+
   it("closes the previous menu when another select opens", async () => {
     const user = userEvent.setup();
     render(

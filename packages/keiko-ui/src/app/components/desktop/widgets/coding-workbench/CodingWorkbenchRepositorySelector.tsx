@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { Icons } from "../../Icons";
@@ -97,6 +104,22 @@ function repositoryOptions(
   ];
 }
 
+// The trigger of a chip: the setup form's field, or the composer's compact chip sized to its label.
+function chipTrigger(
+  placement: SelectorPlacement,
+  label: string,
+): {
+  readonly triggerClassName: string | undefined;
+  readonly triggerStyle: CSSProperties | undefined;
+} {
+  return placement === "setup"
+    ? { triggerClassName: styles.setupSelectorTrigger, triggerStyle: undefined }
+    : {
+        triggerClassName: styles.repositorySelectorTrigger,
+        triggerStyle: { width: controlWidth(label) },
+      };
+}
+
 function RepositoryChip({
   root,
   locked,
@@ -127,16 +150,27 @@ function RepositoryChip({
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.choose")}
       leadingVisual={<Icons.folder size={15} aria-hidden="true" />}
-      triggerClassName={
-        placement === "setup" ? styles.setupSelectorTrigger : styles.repositorySelectorTrigger
-      }
-      triggerStyle={placement === "setup" ? undefined : { width: controlWidth(label) }}
+      {...chipTrigger(placement, label)}
       showMenuHeader={false}
       menuPopoverMinWidth={280}
       menuPlacement="up"
       searchPlaceholder={t("codingWorkbench.repository.search")}
+      searchEmptyLabel={t("codingWorkbench.repository.noMatches")}
     />
   );
+}
+
+// The current branch first, then every other local branch.
+function branchOptions(
+  current: string,
+  branches: readonly { readonly name: string }[],
+): readonly RepositoryOption[] {
+  return [
+    ...(current === "" ? [] : [{ value: current, label: current }]),
+    ...branches
+      .filter((entry) => entry.name !== current)
+      .map((entry) => ({ value: entry.name, label: entry.name })),
+  ];
 }
 
 function BranchChip({
@@ -156,36 +190,102 @@ function BranchChip({
 }): ReactNode {
   const state = useRepositoryBranchState(locked ? null : root);
   const current = branch ?? state.currentBranch ?? "";
-  const options = [
-    ...(current === "" ? [] : [{ value: current, label: current }]),
-    ...state.branches
-      .filter((entry) => entry.name !== current)
-      .map((entry) => ({ value: entry.name, label: entry.name })),
-  ];
+  const options = branchOptions(current, state.branches);
   const label = current || t("codingWorkbench.repository.noBranch");
+  const unreadable = state.loading || state.error !== null;
   return (
     <KeikoSelect
       value={current}
       sections={[{ options }]}
       onValueChange={onSelect}
-      disabled={
-        locked || root === null || state.loading || state.error !== null || options.length === 0
-      }
+      disabled={locked || root === null || unreadable || options.length === 0}
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.chooseBranch")}
       leadingVisual={<Icons.branch size={15} aria-hidden="true" />}
-      triggerClassName={
-        placement === "setup" ? styles.setupSelectorTrigger : styles.repositorySelectorTrigger
-      }
-      triggerStyle={placement === "setup" ? undefined : { width: controlWidth(label) }}
+      {...chipTrigger(placement, label)}
       showMenuHeader={false}
       menuPopoverMinWidth={340}
       menuPopoverMaxHeight={280}
       menuPlacement="up"
       searchPlaceholder={t("codingWorkbench.repository.searchBranch")}
+      searchEmptyLabel={t("codingWorkbench.repository.noBranchMatches")}
       mono
     />
   );
+}
+
+function repositoryUnavailable(root: string | null, catalog: CatalogState): boolean {
+  if (root === null || catalog.loading || catalog.error) return false;
+  const selected = catalog.repositories.find((project) => project.path === root);
+  return selected === undefined || !projectAvailable(selected);
+}
+
+function SelectorField({
+  placement,
+  label,
+  children,
+}: {
+  readonly placement: SelectorPlacement;
+  readonly label: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div
+      className={placement === "setup" ? styles.setupSelectorField : styles.repositorySelectorChip}
+    >
+      {placement === "setup" ? <span>{label}</span> : null}
+      {children}
+    </div>
+  );
+}
+
+// The way back when the catalog failed or the repository left Git: open Git from the setup form,
+// and say what happened.
+function SelectorRecovery({
+  placement,
+  root,
+  unavailable,
+  catalogError,
+  onOpenGit,
+  t,
+}: {
+  readonly placement: SelectorPlacement;
+  readonly root: string | null;
+  readonly unavailable: boolean;
+  readonly catalogError: boolean;
+  readonly onOpenGit: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const showGit = placement === "setup" && (root === null || unavailable || catalogError);
+  const notice = catalogError
+    ? "codingWorkbench.repository.loadError"
+    : unavailable
+      ? "codingWorkbench.repository.unavailableHelp"
+      : undefined;
+  return (
+    <>
+      {showGit ? (
+        <button type="button" className={styles.repositorySelectorGit} onClick={onOpenGit}>
+          {t("codingWorkbench.repository.manage")}
+        </button>
+      ) : null}
+      {notice === undefined ? null : (
+        <p className={styles.repositorySelectorNotice} role="alert">
+          {t(notice)}
+        </p>
+      )}
+    </>
+  );
+}
+
+interface CodingWorkbenchRepositorySelectorProps {
+  readonly root: string | null;
+  readonly branch: string | null;
+  readonly locked: boolean;
+  readonly onSelect: (root: string) => void;
+  readonly onSelectBranch: (branch: string) => void;
+  readonly onOpenGit: () => void;
+  readonly placement?: SelectorPlacement;
 }
 
 export function CodingWorkbenchRepositorySelector({
@@ -196,29 +296,13 @@ export function CodingWorkbenchRepositorySelector({
   onSelectBranch,
   onOpenGit,
   placement = "composer",
-}: {
-  readonly root: string | null;
-  readonly branch: string | null;
-  readonly locked: boolean;
-  readonly onSelect: (root: string) => void;
-  readonly onSelectBranch: (branch: string) => void;
-  readonly onOpenGit: () => void;
-  readonly placement?: SelectorPlacement;
-}): ReactNode {
+}: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const catalog = useGitRepositoryCatalog();
-  const selected = catalog.repositories.find((project) => project.path === root);
-  const unavailable =
-    root !== null &&
-    !catalog.loading &&
-    !catalog.error &&
-    (selected === undefined || !projectAvailable(selected));
+  const unavailable = repositoryUnavailable(root, catalog);
   return (
     <div className={placement === "setup" ? styles.setupSelector : styles.repositorySelector}>
-      <div
-        className={placement === "setup" ? styles.setupSelectorField : styles.repositorySelectorChip}
-      >
-        {placement === "setup" ? <span>{t("codingWorkbench.repository.label")}</span> : null}
+      <SelectorField placement={placement} label={t("codingWorkbench.repository.label")}>
         <RepositoryChip
           root={root}
           locked={locked}
@@ -227,11 +311,8 @@ export function CodingWorkbenchRepositorySelector({
           t={t}
           placement={placement}
         />
-      </div>
-      <div
-        className={placement === "setup" ? styles.setupSelectorField : styles.repositorySelectorChip}
-      >
-        {placement === "setup" ? <span>{t("codingWorkbench.repository.branchLabel")}</span> : null}
+      </SelectorField>
+      <SelectorField placement={placement} label={t("codingWorkbench.repository.branchLabel")}>
         <BranchChip
           root={root}
           branch={branch}
@@ -240,21 +321,15 @@ export function CodingWorkbenchRepositorySelector({
           t={t}
           placement={placement}
         />
-      </div>
-      {placement === "setup" && (root === null || unavailable || catalog.error) ? (
-        <button type="button" className={styles.repositorySelectorGit} onClick={onOpenGit}>
-          {t("codingWorkbench.repository.manage")}
-        </button>
-      ) : null}
-      {catalog.error || unavailable ? (
-        <p className={styles.repositorySelectorNotice} role="alert">
-          {t(
-            catalog.error
-              ? "codingWorkbench.repository.loadError"
-              : "codingWorkbench.repository.unavailableHelp",
-          )}
-        </p>
-      ) : null}
+      </SelectorField>
+      <SelectorRecovery
+        placement={placement}
+        root={root}
+        unavailable={unavailable}
+        catalogError={catalog.error}
+        onOpenGit={onOpenGit}
+        t={t}
+      />
     </div>
   );
 }
