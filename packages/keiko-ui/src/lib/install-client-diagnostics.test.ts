@@ -852,6 +852,42 @@ describe("fanOutClientDiagnostic budgets", () => {
     expect(lastPostedBody(fetchMock)).toMatchObject({ outcome: "target-missing" });
     expect(clientDiagnosticPostThrottledCount()).toBe(0);
   });
+
+  // PR #3625 review: a discarded add-repository result that actually succeeded is routine evidence
+  // — never the failure budget a genuine crash report needs.
+  it("spends a discarded-succeeded git-client operation from the routine budget, never the failure budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let index = 1; index <= 25; index += 1) {
+      fanOutClientDiagnostic("git-client: add-repository discarded: repository-clone succeeded", {
+        gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(26);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
+
+  // The failed counterpart spends the failure budget like any other genuine failure report, and is
+  // bounded by it exactly like the pre-existing failure reports above.
+  it("spends a discarded-failed git-client operation from the failure budget and bounds it there", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let index = 1; index <= 21; index += 1) {
+      fanOutClientDiagnostic("git-client: add-repository discarded: repository-register failed", {
+        gitClientOperation: { operation: "repository-register", outcome: "discarded-failed" },
+      });
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(20);
+    expect(clientDiagnosticPostThrottledCount()).toBe(1);
+  });
 });
 
 it("posts reduced production frames and closed causes through the existing transport", () => {

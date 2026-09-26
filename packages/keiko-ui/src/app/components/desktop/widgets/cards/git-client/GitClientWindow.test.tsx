@@ -34,7 +34,11 @@ import type {
 } from "@/lib/api";
 import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import {
   redeemCodingAppSessionPairingNavigation,
   type CodingAppSessionPairingSeams,
@@ -119,6 +123,13 @@ function makeBranchList(overrides: Partial<GitBranchListResponse> = {}): GitBran
     truncated: false,
     ...overrides,
   };
+}
+
+// The Git-client settlements a test's diagnostic writer captured (PR #3625 review).
+function captureRetrySettlements(): () => unknown[] {
+  const metas: (ClientDiagnosticMeta | undefined)[] = [];
+  setClientDiagnosticWriter((_message, meta) => metas.push(meta));
+  return () => metas.flatMap((meta) => (meta?.gitClientOperation === undefined ? [] : [meta]));
 }
 
 function makeStatus(
@@ -2061,6 +2072,94 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(screen.queryByText("Summary fetch failed")).not.toBeInTheDocument();
   });
 
+  // PR #3625 review: a read can fail and still resolve — `for-each-ref` or `git status` failing
+  // answers HTTP 200 with `available: false` — and that must get the same Retry as a rejection.
+  it("treats a resolved unavailable branch read as a failure with Retry", async () => {
+    const settlements = captureRetrySettlements();
+    const user = userEvent.setup();
+    let attempt = 0;
+    const listBranches = vi.fn<GitClientSeam["listBranches"]>(async () => {
+      attempt += 1;
+      return attempt === 1
+        ? makeBranchList({
+            available: false,
+            state: "unavailable",
+            reason: "git-error",
+            branches: [],
+          })
+        : makeBranchList();
+    });
+    const client = makeClient({ listBranches });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load branches.");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(settlements()).toEqual([
+      {
+        kind: "other",
+        gitClientOperation: { operation: "branches-read", outcome: "retry-recovered" },
+      },
+    ]);
+  });
+
+  it("treats a resolved unavailable summary as a failed read and restores Sync via Retry", async () => {
+    const settlements = captureRetrySettlements();
+    const user = userEvent.setup();
+    let attempt = 0;
+    const getSummary = vi.fn<GitClientSeam["getSummary"]>(async () => {
+      attempt += 1;
+      return attempt === 1
+        ? makeSummary({
+            available: false,
+            state: "error",
+            reason: "git-error",
+            upstream: undefined,
+          })
+        : makeSummary();
+    });
+    const client = makeClient({ getSummary });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByText("Could not read the sync state.")).toBeInTheDocument();
+    const syncButton = screen.getByRole("button", { name: /Run sync/ });
+    expect(syncButton).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(syncButton).toBeEnabled());
+    expect(screen.queryByText("Could not read the sync state.")).not.toBeInTheDocument();
+    expect(settlements()).toEqual([
+      {
+        kind: "other",
+        gitClientOperation: { operation: "summary-read", outcome: "retry-recovered" },
+      },
+    ]);
+  });
+
+  it("offers no read Retry for a folder that is not a Git repository", async () => {
+    const unavailable = {
+      available: false,
+      state: "unavailable",
+      reason: "not-a-repository",
+    } as const;
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatus(unavailable)),
+      listBranches: vi.fn(async () => makeBranchList({ ...unavailable, branches: [] })),
+      getSummary: vi.fn(async () => makeSummary({ ...unavailable, upstream: undefined })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await waitFor(() => expect(client.getSummary).toHaveBeenCalledWith(REPO_A.path));
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+    expect(await screen.findByText("This folder is not a Git repository.")).toBeInTheDocument();
+    expect(screen.queryByText("Could not load branches.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Could not read the sync state.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
   it("renders commit history and selected commit diff metadata", async () => {
     const user = userEvent.setup();
     const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
@@ -2732,6 +2831,38 @@ describe("GitClientWindow — empty / loading / error states", () => {
 
     expect(await screen.findByText("No changes")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // PR #3625 review: a manual Retry records how it settled — failed again, with the rejection's
+  // closed error kind, or recovered — so the log tells a manual attempt from a background refresh.
+  it("records a status retry that fails again and one that recovers", async () => {
+    const settlements = captureRetrySettlements();
+    const user = userEvent.setup();
+    let attempt = 0;
+    const getStatus = vi.fn<GitClientSeam["getStatus"]>(async () => {
+      attempt += 1;
+      if (attempt <= 2) throw new Error("Status fetch failed");
+      return makeStatus({ clean: true });
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Status fetch failed");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(settlements()).toHaveLength(1));
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+    expect(settlements()).toEqual([
+      {
+        kind: "other",
+        gitClientOperation: { operation: "status-read", outcome: "retry-failed" },
+        errorKind: "unknown",
+      },
+      {
+        kind: "other",
+        gitClientOperation: { operation: "status-read", outcome: "retry-recovered" },
+      },
+    ]);
   });
 
   it("shows no-changes empty state when status is clean", async () => {

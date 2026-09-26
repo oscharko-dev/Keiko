@@ -149,6 +149,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.history.commitUnavailable":
     "Der angeforderte Commit ist im begrenzten Verlauf nicht verfügbar.",
   "gitClientWindow.history.loadFailed": "Der Commit-Verlauf konnte nicht geladen werden.",
+  "gitClientWindow.branch.loadFailed": "Die Branches konnten nicht geladen werden.",
+  "gitClientWindow.sync.summaryUnavailable": "Der Sync-Status konnte nicht gelesen werden.",
   "gitClientWindow.history.loadMoreFailed": "Weitere Commits konnten nicht geladen werden.",
   "gitClientWindow.history.truncated":
     "Es werden die neuesten {count} Commits angezeigt; der Verlauf ist gekürzt.",

@@ -40,6 +40,7 @@ import {
   type ClientSessionRepairOutcome,
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
+  type ClientDiagnosticGitClientOperation,
   type ClientMarkdownLayout,
   type ClientErrorEvidence,
   type ClientDiagnosticKind,
@@ -117,6 +118,10 @@ export interface ClientDiagnosticMeta {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  // A Git-client operation (add-repository dialog discard, or manual retry) settling after the
+  // surface that asked for it is already gone (PR #3625 review): which operation, and how it
+  // settled — never the repository, path or URL involved.
+  readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

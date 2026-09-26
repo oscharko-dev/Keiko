@@ -37,21 +37,21 @@
 // (sharedEventSource.ts, useSSE.ts) carry their failure streak's client-minted id instead, which
 // their session-repair reports share (#3557 review).
 
-import type {
-  ClientBindingIngestRequest,
-  ClientBindingOutcome,
-  ClientDiagnosticIngestRequest,
-  ClientDiagnosticLossCounts,
-  ClientDiagnosticReadyState,
-  ClientSessionRepairIngestRequest,
-  ClientSessionRepairOutcome,
-  ClientStageIngestRequest,
-} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+  CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
+  type ClientBindingIngestRequest,
+  type ClientBindingOutcome,
+  type ClientDiagnosticIngestRequest,
+  type ClientDiagnosticLossCounts,
+  type ClientDiagnosticReadyState,
+  type ClientGitClientOperationOutcome,
+  type ClientSessionRepairIngestRequest,
+  type ClientSessionRepairOutcome,
+  type ClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   type ClientDiagnosticBindingReport,
@@ -246,6 +246,7 @@ function clientMessagePostBody(
     errorEvidence: meta.errorEvidence,
     gitChangeDescription: meta.gitChangeDescription,
     workspaceTrustBinding: meta.workspaceTrustBinding,
+    gitClientOperation: meta.gitClientOperation,
     codingHistoryScope: meta.codingHistoryScope,
     codingIssueOutcome: meta.codingIssueOutcome,
     loss,
@@ -310,14 +311,27 @@ function repairPostBudget(
     : "failure";
 }
 
+function gitClientOperationPostBudget(
+  outcome: ClientGitClientOperationOutcome,
+): ClientDiagnosticPostBudget {
+  return CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";
+}
+
 // Routine evidence: a stage, every binding outcome but a missing target (an offer and a person's
-// decision included), a session repair that recovered. Everything else is a failure report. The
-// binding and repair rules are the server's own (keiko-contracts), so the two budgets never drift.
+// decision included), a session repair that recovered, a git-client operation that discarded a
+// succeeded result or recovered on retry. Everything else is a failure report. The binding, repair
+// and git-client rules are the server's own (keiko-contracts), so the two budgets never drift.
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
   if (meta === undefined) return "failure";
   if (meta.stageReport !== undefined) return "routine";
   if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
-  return repairPostBudget(meta.sessionRepairReport?.outcome);
+  if (meta.sessionRepairReport !== undefined) {
+    return repairPostBudget(meta.sessionRepairReport.outcome);
+  }
+  if (meta.gitClientOperation !== undefined) {
+    return gitClientOperationPostBudget(meta.gitClientOperation.outcome);
+  }
+  return "failure";
 }
 
 function admittedByClientPostRateLimit(window: PostWindow, limit: number, nowMs: number): boolean {

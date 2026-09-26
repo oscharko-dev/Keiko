@@ -380,6 +380,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -542,17 +543,24 @@ function hasValidCodingContext(value: Record<string, unknown>): boolean {
   );
 }
 
+// The three Git-related structured fields, grouped only to keep the caller below under the
+// complexity ceiling — each is independently optional and validated on its own (PR #3625 review).
+function hasValidGitContext(value: Record<string, unknown>): boolean {
+  const { gitChangeDescription, workspaceTrustBinding, gitClientOperation } = value;
+  if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
+  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
+  return isOptional(gitClientOperation, isClientDiagnosticGitClientOperation);
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { errorKind, gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } =
-    value;
+  const { errorKind, loss, parentCorrelationId } = value;
   if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
-  if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
-  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
+  if (!hasValidGitContext(value)) return false;
   return hasValidCodingContext(value) && isOptional(loss, isClientDiagnosticLossCounts);
 }
 
@@ -968,6 +976,77 @@ export function isClientSessionRepairIngestRequest(
   if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
   return (
     isCorrelationIdShape(value.correlationId) && isCorrelationIdShape(value.repairCorrelationId)
+  );
+}
+
+// ─── Git-client operation settlement (PR #3625 review) ──────────────────────────
+//
+// A Git-client dialog or manual retry can settle after the surface that asked for it is already
+// gone: the Add-repository dialog can be closed while its clone/register request is still in
+// flight, and a manual retry of the status/branches/summary reads can recover or fail after its own
+// panel unmounted. Reporting only a generic failure-shaped message collapses every one of these
+// into one indistinguishable warn-level digest — it cannot show that a repository was created but
+// deliberately not activated, tell a discarded clone from a discarded register, or tell a recovered
+// retry from one that failed again. This closed pair of fields, always reported together, makes
+// each case reconstructable without ever naming the repository, path or URL involved.
+
+export const CLIENT_GIT_CLIENT_OPERATION_KINDS = [
+  "repository-clone",
+  "repository-register",
+  "status-read",
+  "branches-read",
+  "summary-read",
+] as const;
+export type ClientGitClientOperationKind = (typeof CLIENT_GIT_CLIENT_OPERATION_KINDS)[number];
+
+export const CLIENT_GIT_CLIENT_OPERATION_OUTCOMES = [
+  "discarded-succeeded",
+  "discarded-failed",
+  "retry-recovered",
+  "retry-failed",
+] as const;
+export type ClientGitClientOperationOutcome = (typeof CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)[number];
+
+// The two families never mix: a discarded settlement always names the clone/register operation it
+// discarded, a retry settlement always names the status/branches/summary read it retried.
+// `isClientDiagnosticGitClientOperation` enforces the pairing rather than trusting the browser to
+// send a matching pair.
+const GIT_CLIENT_DISCARD_OPERATIONS: ReadonlySet<ClientGitClientOperationKind> = new Set([
+  "repository-clone",
+  "repository-register",
+]);
+const GIT_CLIENT_DISCARD_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> = new Set([
+  "discarded-succeeded",
+  "discarded-failed",
+]);
+
+// The outcomes that represent an actual failure, shared by the client-side POST throttle
+// (install-client-diagnostics.ts) and the server's rate-limit budget (client-diagnostics-routes.ts)
+// so the two budgets can never drift — exactly like the binding and session-repair outcome sets
+// above.
+export const CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> =
+  new Set(["discarded-failed", "retry-failed"]);
+
+export interface ClientDiagnosticGitClientOperation {
+  readonly operation: ClientGitClientOperationKind;
+  readonly outcome: ClientGitClientOperationOutcome;
+}
+
+/**
+ * True for a closed, body-free git-client operation settlement: a known operation paired with a
+ * known outcome from the SAME family (a discarded add-repository result names a discarded outcome,
+ * a retried read names a retry outcome — never the other family's outcome, and never an unknown
+ * value on either side).
+ */
+export function isClientDiagnosticGitClientOperation(
+  value: unknown,
+): value is ClientDiagnosticGitClientOperation {
+  if (!isRecord(value)) return false;
+  if (!isOneOf(value.operation, CLIENT_GIT_CLIENT_OPERATION_KINDS)) return false;
+  if (!isOneOf(value.outcome, CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)) return false;
+  return (
+    GIT_CLIENT_DISCARD_OPERATIONS.has(value.operation) ===
+    GIT_CLIENT_DISCARD_OUTCOMES.has(value.outcome)
   );
 }
 

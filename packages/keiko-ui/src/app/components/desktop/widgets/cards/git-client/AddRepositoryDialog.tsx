@@ -3,17 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import type { ProjectWithAvailability } from "@/lib/types";
+import type { ClientGitClientOperationKind } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { Icons } from "../../../Icons";
 import { useNativeFileDialogCapability } from "../../../hooks/useNativeFileDialogCapability";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
+import { reportGitClientOperationDiagnostic } from "./git-client-operation-diagnostics";
 import type { GitClientSeam } from "./git-client-seam";
 import { formatGitError } from "./git-client-seam";
 import {
@@ -84,6 +87,13 @@ interface AddRepositoryDialogProps {
   readonly initialMode?: AddMode | undefined;
 }
 
+// `AddMode` is a UI-only label ("open" reads as "open local repository" in the mode tabs); the
+// wire vocabulary (PR #3625 review) names the actual git-client seam method invoked instead, so a
+// reader of the activity log never has to know this component's own internal mode naming.
+function gitClientAddOperation(mode: AddMode): ClientGitClientOperationKind {
+  return mode === "clone" ? "repository-clone" : "repository-register";
+}
+
 function submitButtonLabel(busy: boolean, mode: AddMode, t: OptionalWidgetTranslate): string {
   let label: string;
   if (busy) {
@@ -147,6 +157,7 @@ export function AddRepositoryDialog({
     if (busy || !canSubmit) return;
     setBusy(true);
     setError(null);
+    const operation = gitClientAddOperation(mode);
     const op =
       mode === "clone"
         ? client.cloneRepository({
@@ -157,8 +168,13 @@ export function AddRepositoryDialog({
     void op.then(
       (res) => {
         if (closedRef.current) {
-          reportClientDiagnostic(
-            "git-client: add-repository result discarded (dialog closed before response)",
+          // #3646/PR #3625 review: the request settled after this dialog closed. The repository
+          // was created (or reconnected) but deliberately never activated — a structured,
+          // body-free settlement distinguishes this from a discarded FAILED request below and
+          // names which operation it was, never the repository path or URL.
+          reportGitClientOperationDiagnostic(
+            `git-client: add-repository discarded (dialog closed before response): ${operation} succeeded`,
+            { operation, outcome: "discarded-succeeded" },
           );
           return;
         }
@@ -167,7 +183,17 @@ export function AddRepositoryDialog({
         onClose();
       },
       (err: unknown) => {
-        if (closedRef.current) return;
+        if (closedRef.current) {
+          // A discarded failure used to return silently, losing the fact that the request ever
+          // happened at all — the activity log must show the attempt even though nothing failed
+          // "for the user" (there is no user surface left to show it to).
+          reportGitClientOperationDiagnostic(
+            `git-client: add-repository discarded (dialog closed before response): ${operation} failed`,
+            { operation, outcome: "discarded-failed" },
+            { correlationId: correlationIdOf(err), errorKind: bffRequestErrorKind(err) },
+          );
+          return;
+        }
         setBusy(false);
         setError(formatGitError(err));
       },

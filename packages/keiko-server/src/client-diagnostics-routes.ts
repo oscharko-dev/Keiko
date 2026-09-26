@@ -42,6 +42,14 @@
 // this pair fixes: a live log showed 416 of 449 `client.diagnostic` lines were stage evidence, all
 // misclassified warn/unknown and burying the rare real failures a `keiko support analyze --clusters`
 // pass needs to find.
+//
+// PR #3625 review: a message report whose `gitClientOperation.outcome` is not a failure (an
+// add-repository dialog discarding a result that actually succeeded, or a manual status/branches/
+// summary retry that recovered) spends the ROUTINE budget instead of the message shape's usual
+// failure budget — the one outcome-conditional exception to "a message report is always a failure
+// budget". The persisted line itself is unchanged: still `client.diagnostic`, still at warn, since
+// unlike the stage/binding/session-repair shapes this evidence rides the same message shape as
+// every other diagnostic rather than its own lifecycle-appropriate operation.
 
 import type { IncomingMessage } from "node:http";
 
@@ -57,6 +65,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
@@ -398,6 +407,24 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
     },
     repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    gitClientOperation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "repository-clone",
+        "repository-register",
+        "status-read",
+        "branches-read",
+        "summary-read",
+      ],
+    },
+    gitClientOperationOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["discarded-succeeded", "discarded-failed", "retry-recovered", "retry-failed"],
+    },
     historyScopeReason: {
       type: "string",
       dataClass: "closed-enum",
@@ -1135,6 +1162,30 @@ function projectCodingContext(
   if (scope.targetWorkspaceId !== undefined) extra.targetWorkspaceId = scope.targetWorkspaceId;
 }
 
+// The three Git-related structured fields, grouped only to keep `logClientDiagnostic` under the
+// complexity ceiling — each is independently optional (PR #3625 review).
+function projectGitContext(
+  request: ClientDiagnosticIngestRequest,
+  extra: Record<string, unknown>,
+): void {
+  if (request.gitChangeDescription !== undefined) {
+    extra.action = request.gitChangeDescription.action;
+    extra.disposition = request.gitChangeDescription.disposition;
+    extra.relationshipId = request.gitChangeDescription.relationshipId;
+    extra.snapshotDigest = request.gitChangeDescription.snapshotDigest;
+    extra.proposalId = request.gitChangeDescription.proposalId;
+    extra.outcome = request.gitChangeDescription.outcome;
+  }
+  if (request.workspaceTrustBinding !== undefined) {
+    extra.repositoryId = request.workspaceTrustBinding.repositoryId;
+    extra.workspaceId = request.workspaceTrustBinding.workspaceId;
+  }
+  if (request.gitClientOperation !== undefined) {
+    extra.gitClientOperation = request.gitClientOperation.operation;
+    extra.gitClientOperationOutcome = request.gitClientOperation.outcome;
+  }
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1154,18 +1205,7 @@ function logClientDiagnostic(
   if (request.voiceDialogueStage !== undefined) {
     extra.voiceDialogueStage = request.voiceDialogueStage;
   }
-  if (request.gitChangeDescription !== undefined) {
-    extra.action = request.gitChangeDescription.action;
-    extra.disposition = request.gitChangeDescription.disposition;
-    extra.relationshipId = request.gitChangeDescription.relationshipId;
-    extra.snapshotDigest = request.gitChangeDescription.snapshotDigest;
-    extra.proposalId = request.gitChangeDescription.proposalId;
-    extra.outcome = request.gitChangeDescription.outcome;
-  }
-  if (request.workspaceTrustBinding !== undefined) {
-    extra.repositoryId = request.workspaceTrustBinding.repositoryId;
-    extra.workspaceId = request.workspaceTrustBinding.workspaceId;
-  }
+  projectGitContext(request, extra);
   projectCodingContext(request, extra);
   projectClientLoss(request.loss, extra);
   extra.completeness = "complete";
@@ -1566,6 +1606,15 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
   return undefined;
 }
 
+// A message report is a failure budget by default, except a git-client operation settlement that
+// discarded a succeeded result or recovered on retry — that is routine evidence, not a failure,
+// exactly like a binding that resolved or a session repair that recovered (#3625 review).
+function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
+  const outcome = report.gitClientOperation?.outcome;
+  if (outcome === undefined) return "failure";
+  return CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";
+}
+
 function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
   switch (classified.shape) {
     case "stage":
@@ -1577,7 +1626,7 @@ function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
         ? "routine"
         : "failure";
     case "message":
-      return "failure";
+      return messageReportBudget(classified.report);
   }
 }
 

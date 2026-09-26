@@ -557,6 +557,87 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // PR #3625 review: an add-repository clone/register request that settled after its dialog
+  // already closed. The repository was created but deliberately never activated — not a failure.
+  it("preserves a discarded-succeeded git-client operation settlement", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: add-repository discarded: repository-clone succeeded",
+      clientTs: CLIENT_TS,
+      kind: "other",
+      gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      gitClientOperation: "repository-clone",
+      gitClientOperationOutcome: "discarded-succeeded",
+    });
+  });
+
+  // The failed counterpart: before this fix a discarded failure returned silently client-side and
+  // reached the server not at all — this line is the regression pin for that gap.
+  it("preserves a discarded-failed git-client operation settlement with its correlation id and error kind", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: add-repository discarded: repository-register failed",
+      clientTs: CLIENT_TS,
+      correlationId: "corr-register-discard-1",
+      errorKind: "internal",
+      kind: "other",
+      gitClientOperation: { operation: "repository-register", outcome: "discarded-failed" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      correlationId: "corr-register-discard-1",
+      errorKind: "internal",
+      gitClientOperation: "repository-register",
+      gitClientOperationOutcome: "discarded-failed",
+    });
+  });
+
+  it("rejects a git-client operation whose outcome belongs to the other family, fail-closed", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: add-repository discarded",
+      clientTs: CLIENT_TS,
+      gitClientOperation: { operation: "repository-clone", outcome: "retry-recovered" },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  });
+
+  // A message report is a failure budget by default, except when its `gitClientOperation.outcome`
+  // is not a failure — that spends the routine budget instead, exactly like a binding that resolved
+  // or a session repair that recovered, so a burst of these can never starve a genuine failure
+  // report's own budget (mirrors the session-repair burst test below).
+  it("keeps the failure budget available after a burst of discarded-succeeded settlements", async () => {
+    const sink = captureServerLog();
+    const settled = JSON.stringify({
+      message: "git-client: add-repository discarded: repository-clone succeeded",
+      clientTs: CLIENT_TS,
+      gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(settled));
+    }
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
+
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(
+      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
+    ).toBe(true);
+    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice, and
+    // the failure budget was never touched.
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+  });
+
   it("rejects an invalid correlationId and retains the validated ingest correlation", async () => {
     const sink = captureServerLog();
     // Fails `isValidCorrelationId`'s alphabet (spaces and `!` are not in [A-Za-z0-9._-]), but is a

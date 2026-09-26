@@ -10,6 +10,9 @@ import {
   CLIENT_BINDING_REFERENCE_SHAPES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
   CLIENT_BINDING_DECIDING_LOADS_MAX,
+  CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
+  CLIENT_GIT_CLIENT_OPERATION_KINDS,
+  CLIENT_GIT_CLIENT_OPERATION_OUTCOMES,
   CLIENT_SESSION_REPAIR_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
@@ -228,6 +231,34 @@ describe("isClientDiagnosticIngestRequest", () => {
     ]) {
       expect(
         isClientDiagnosticIngestRequest({ ...validRequest(), workspaceTrustBinding: invalid }),
+      ).toBe(false);
+    }
+  });
+
+  // PR #3625 review: a Git-client operation settling after its own surface (an add-repository
+  // dialog, a manual retry panel) is already gone. The two families — a discarded add-repository
+  // result, a retried read — never mix: an operation from one family can never carry the other
+  // family's outcome.
+  it("accepts only a git-client operation whose outcome matches its operation's family", () => {
+    const discardedClone = { operation: "repository-clone", outcome: "discarded-succeeded" };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: discardedClone }),
+    ).toBe(true);
+    const recoveredRetry = { operation: "status-read", outcome: "retry-recovered" };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: recoveredRetry }),
+    ).toBe(true);
+    for (const invalid of [
+      { operation: "write-file", outcome: "discarded-succeeded" },
+      { operation: "repository-clone", outcome: "exploded" },
+      { operation: "repository-register", outcome: "retry-failed" },
+      { operation: "status-read", outcome: "discarded-failed" },
+      { operation: "branches-read", outcome: "discarded-succeeded" },
+      { operation: "repository-clone" },
+      { outcome: "discarded-succeeded" },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: invalid }),
       ).toBe(false);
     }
   });
@@ -733,6 +764,51 @@ describe("client report budgets", () => {
         CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(outcome),
       ),
     ).toEqual(["replayed", "stream-repaired", "repair-acknowledged"]);
+  });
+
+  it("classifies exactly the discarded-failed and retry-failed outcomes as git-client failures", () => {
+    expect(
+      CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
+        CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome),
+      ),
+    ).toEqual(["discarded-failed", "retry-failed"]);
+  });
+});
+
+describe("git-client operation settlement vocabulary", () => {
+  it("accepts every operation paired with every outcome from its own family", () => {
+    const discardOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter((operation) =>
+      operation.startsWith("repository-"),
+    );
+    const retryOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
+      (operation) => !operation.startsWith("repository-"),
+    );
+    const discardOutcomes = CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
+      outcome.startsWith("discarded-"),
+    );
+    const retryOutcomes = CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
+      outcome.startsWith("retry-"),
+    );
+    for (const operation of discardOperations) {
+      for (const outcome of discardOutcomes) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(true);
+      }
+    }
+    for (const operation of retryOperations) {
+      for (const outcome of retryOutcomes) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(true);
+      }
+    }
   });
 });
 
