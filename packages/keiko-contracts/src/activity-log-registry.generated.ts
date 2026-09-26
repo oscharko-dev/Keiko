@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "cd8a7d41734b263f282da469e77493570c249b5c98b7f577507a8f530109c265" as const;
+  "4da71dad2692f9213d573d9150719131168d599ac303b15f8599ce908d8723b4" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -976,7 +976,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["stream_options", "stream"],
+        values: ["stream_options", "stream", "max_tokens", "max_completion_tokens"],
       },
     },
     causal: "correlation",
@@ -2329,6 +2329,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: false,
         maxLength: 256,
+      },
+      gitClientOperation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "repository-clone",
+          "repository-register",
+          "status-read",
+          "branches-read",
+          "summary-read",
+        ],
+      },
+      gitClientOperationOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["discarded-succeeded", "discarded-failed", "retry-recovered", "retry-failed"],
       },
       historyScopeReason: {
         type: "string",
@@ -30643,6 +30661,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "frames",
               type: "string-array",
               dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "gitClientOperation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "gitClientOperationOutcome",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
