@@ -2,8 +2,11 @@
   background: var(--surface-primary);
 }
 
+/* The Workbench scrolls inside its session stream; the window body only frames it. `clip`, unlike
+   `hidden`, is no scroll container, so a focused composer or a scrolled-to decision can never push
+   the body past its content and leave the window blank (1.1.9 lab). */
 :global(.win-body):has(> .shell) {
-  overflow: hidden;
+  overflow: clip;
 }
 
 .shell {
