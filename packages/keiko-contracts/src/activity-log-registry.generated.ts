@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9774163f13489b2dceeaecd0a44362b344111474941fbe51b8ca4dc36e6302f1" as const;
+  "8820eec32037517def0d8a002700227f9ec942254daffe386a3953da9267a2e1" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2680,6 +2680,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["client-diagnostic"],
     proofIds: ["client.markdown.layout.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.select.dismissed",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientSelectDismissed",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["escape"],
+      },
+      focus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["trigger", "search", "option"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-select"],
+    proofIds: ["client.select.dismissed.line"],
     releaseImpact: "patch",
   },
   {
@@ -28147,8 +28185,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 320,
-  completeClassCount: 320,
+  supportedClassCount: 321,
+  completeClassCount: 321,
   completeness: "complete",
   classes: [
     {
@@ -31391,6 +31429,62 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.git-operation.settled.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-select",
+      requirementContract: "client-select",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["client.select.dismissed"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.select.dismissed",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.select.dismissed"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.select.dismissed",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "focus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.select.dismissed.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -62189,6 +62283,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.git-operation.attempted": "client-diagnostics",
     "client.git-operation.settled": "client-diagnostics",
     "client.markdown.layout": "client-diagnostics",
+    "client.select.dismissed": "client-diagnostics",
     "client.session-repair.acknowledged": "client-diagnostics",
     "client.session-repair.failed": "client-diagnostics",
     "client.session-repair.recovered": "client-diagnostics",
