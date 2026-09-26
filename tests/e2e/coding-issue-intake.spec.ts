@@ -38,6 +38,11 @@ const ISSUE_FIELD = "Issue URL or #number";
 const PREVIEW_ENDPOINT = "/api/coding-workbench/issue/preview";
 const AUTH_ENDPOINT = "/api/coding-workbench/github-authorization";
 const CSRF = { "X-Keiko-CSRF": "1" };
+// PR #3625: the setup card's repository is now chosen from Git's registered checkouts through a
+// combobox, and its selected-option text is the project's registered name. The server entry
+// (servers/coding-issue-intake-server.mts) registers this fixture checkout up front under this
+// exact `fixtureLabel`, because its config sets `issue`, so no extra registration call is needed here.
+const ISSUE_INTAKE_PROJECT_NAME = "Issue intake 3385";
 
 function workbench(page: Page): Locator {
   return page.locator(SURFACE);
@@ -81,7 +86,16 @@ async function openWorkbench(page: Page): Promise<void> {
   await page.goto(`/${fragment}`);
   await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   await expect(workbench(page)).toBeVisible();
-  await expect(page.getByLabel("Repository path")).toHaveValue(repositoryRoot);
+  // PR #3625: the setup card no longer has a "Repository path" input. The window seed's
+  // `cfg.repositoryPath` (above) still selects the repository (CodingWorkbenchWindowHost.tsx), now
+  // shown as the selected-option text of the "Choose coding repository" combobox.
+  await expect(codeSetupRepositoryCombobox(page)).toHaveText(ISSUE_INTAKE_PROJECT_NAME);
+}
+
+function codeSetupRepositoryCombobox(page: Page): Locator {
+  return page
+    .getByRole("region", { name: "Code setup", exact: true })
+    .getByRole("combobox", { name: "Choose coding repository" });
 }
 
 async function snapshot(page: Page): Promise<CodingWorkbenchRuntimeSnapshot> {
@@ -136,7 +150,9 @@ async function rejectedPreview(page: Page, issueRef: string, failure: string): P
     "data-failure",
     failure,
   );
-  await expect(page.getByLabel("Repository path")).toHaveValue(repositoryRoot);
+  // PR #3625: same invariant as openWorkbench -- a rejected preview must not disturb the selected
+  // repository.
+  await expect(codeSetupRepositoryCombobox(page)).toHaveText(ISSUE_INTAKE_PROJECT_NAME);
   await noRunOrWorkspace(page);
 }
 
@@ -305,7 +321,17 @@ async function startBoundIssue(
   resolved: CodingWorkbenchIssuePreviewResponseWire,
 ): Promise<void> {
   await page.getByRole("button", { name: "Use this issue", exact: true }).click();
-  await expect(page.getByLabel("Target branch")).toHaveCount(0);
+  // PR #3625: the old free "Target branch" input (which vanished once an issue was accepted,
+  // because its base branch is then fixed to the issue's own default and no longer an operator
+  // choice) is gone. The same invariant now reads on the "Choose coding branch" combobox: its
+  // selected text must be the issue's own `defaultBaseRef`, taken from the real preview response
+  // rather than restated as a literal (AGENTS.md §7 -- a fixture derives an expectation from the
+  // production entry point instead of re-declaring it).
+  await expect(
+    page
+      .getByRole("region", { name: "Code setup", exact: true })
+      .getByRole("combobox", { name: "Choose coding branch" }),
+  ).toHaveText(resolved.binding.defaultBaseRef);
   await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
   await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
   await expect(page.getByTestId("coding-workbench-composer-issue")).toBeVisible();

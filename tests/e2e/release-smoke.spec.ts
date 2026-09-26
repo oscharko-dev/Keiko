@@ -367,6 +367,60 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   assertNoPageErrors();
 });
 
+test("coding workbench opens its per-window repository selector @smoke", async ({ page }) => {
+  // PR #3625 review: the header's global "workspace context" control is gone (absence pinned
+  // above); repository context now lives in each window's own CodingWorkbenchRepositorySelector.
+  // An absence assertion alone would still pass if that replacement's chunk failed to load or its
+  // trigger went inert, so this interactively opens the real control on the real app path.
+  const assertNoPageErrors = collectPageErrors(page);
+  // One deterministic catalog entry is enough for the trigger to open a real, populated listbox
+  // without depending on the network or a real registered repository.
+  await page.route("**/api/projects**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        projects: [
+          {
+            path: "/e2e/fixture-repo",
+            name: "fixture-repo",
+            favorite: false,
+            createdAt: 1,
+            lastOpenedAt: 1,
+            available: true,
+            workspaceAvailable: true,
+          },
+        ],
+      }),
+    }),
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
+  const workbenchWindow = page.getByRole("region", { name: "Coding Workbench" });
+  await expect(workbenchWindow).toBeVisible();
+
+  // The fresh window has no bound task workspace yet, so it shows the setup form and this is the
+  // "setup" placement of the selector (CodingWorkbenchRepositorySelector, KeikoSelect underneath).
+  const repositorySelector = workbenchWindow.getByRole("combobox", {
+    name: "Choose coding repository",
+  });
+  await expect(repositorySelector).toBeVisible();
+  await expect(repositorySelector).toBeEnabled();
+  await repositorySelector.click();
+
+  // KeikoSelect portals its popup to the document body, so the listbox and its options are
+  // located from `page`, not scoped under `workbenchWindow`.
+  const menu = page.getByRole("listbox", { name: "Choose coding repository" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("option", { name: "fixture-repo" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+
+  assertNoPageErrors();
+});
+
 test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns the contract shape @smoke", async ({
   request,
 }) => {
@@ -536,9 +590,9 @@ test("selected workspace keeps root-relative ids and internal navigation @smoke"
   page,
   request,
 }) => {
-  // The global workspace selector is the one root authority for Files, Editor, and Coding
-  // Workbench. Files still supports in-root navigation and root-relative identifiers, but it does
-  // not expose a second path picker that could appear to override the accepted workspace.
+  // Each window owns its repository context since the per-window repository selector (PR #3625).
+  // Files still supports in-root navigation and root-relative identifiers, but it does not expose a
+  // second path picker that could appear to override the window's accepted root.
   const projectPath = createProjectFixture();
   // A window cfg restores presentation state; it cannot mint server-side workspace authority.
   // Register the fixture through the same project contract a real selected workspace uses.

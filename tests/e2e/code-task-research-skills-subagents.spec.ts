@@ -65,11 +65,34 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
   await expect(page.getByRole("heading", { name: "Coding Workbench", exact: true })).toBeVisible();
 }
 
+const RESEARCH_PROJECT_NAME = "Research Fixture Repository";
+
+// PR #3625: the setup card no longer has "Repository path"/"Target branch" text inputs -- the
+// repository is chosen from Git's REGISTERED checkouts through a combobox. Register the fixture
+// checkout first (mirrors the real "Add repository" dialog / #2386's registerTrustedRepositoryProject)
+// so it appears in that catalog at all.
+async function registerFixtureRepositoryProject(page: Page): Promise<void> {
+  const response = await page.request.post("/api/projects", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: { path: repositoryRoot, name: RESEARCH_PROJECT_NAME },
+  });
+  expect(response.ok()).toBe(true);
+}
+
 async function bindFixtureWorkspace(page: Page): Promise<void> {
+  await registerFixtureRepositoryProject(page);
   const setup = page.getByRole("region", { name: "Code setup" });
   await expect(setup).toBeVisible();
-  await setup.getByLabel("Repository path").fill(repositoryRoot);
-  await setup.getByLabel("Target branch").fill("main");
+  await setup.getByRole("combobox", { name: "Choose coding repository" }).click();
+  await page
+    .getByRole("listbox", { name: "Choose coding repository" })
+    .getByRole("option", { name: RESEARCH_PROJECT_NAME, exact: true })
+    .click();
+  await setup.getByRole("combobox", { name: "Choose coding branch" }).click();
+  await page
+    .getByRole("listbox", { name: "Choose coding branch" })
+    .getByRole("option", { name: "main", exact: true })
+    .click();
   await setup.getByRole("button", { name: "Bind workspace" }).click();
   await expect(setup).toHaveCount(0);
 }

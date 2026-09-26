@@ -362,32 +362,56 @@ export async function openLiveWorkbench(page: Page, repositoryRoot: string): Pro
   await ensureRailToolOpen(page, "Coding Workbench");
   await expect(workbenchSurface(page)).toBeVisible();
   await raiseWorkbench(page);
-  await settleWorkbenchRepositoryPath(page, repositoryRoot);
+  await selectWorkbenchRepository(page, repositoryRoot);
 }
 
 /**
- * Types the repository root into the workbench setup's own "Repository path" input
- * (`CodingWorkbenchSetup.tsx`'s `RepositoryPathField`) exactly as an operator would, and commits it
- * the same way the component does: `onChange` updates the value as it is typed, and leaving the
- * field (`onBlur` -> `onSettled`) fires the base-branch lookup for that path -- a real Tab press,
- * not a synthetic blur call.
+ * PR #3625: the setup card's "Repository path"/"Target branch" text inputs were replaced by a
+ * per-window control (`CodingWorkbenchRepositorySelector`, placement "setup"): two comboboxes over
+ * Git's REGISTERED checkouts, "Choose coding repository" and "Choose coding branch". Selects
+ * `repositoryRoot` in the first and "main" in the second, exactly as an operator would -- open each
+ * combobox, then click its option.
  *
- * Idempotent on purpose. `openLiveWorkbench` runs more than once per flow on the SAME page --
- * the base sync check, the workspace preparation, a resumed run's re-attach, and a cached scenario
+ * No `/api/projects` registration call precedes this, unlike the scripted Code-task journeys: the
+ * production CLI that boots this journey's server (`coding-issue-journey-server.mts`) launches with
+ * `cwd` set to `repositoryRoot`, and production itself connects that launch directory as the current
+ * project (the same auto-connect a real `keiko ui` launch performs) -- registering it again here
+ * would be testing a path no real operator exercises.
+ *
+ * Idempotent on purpose. `openLiveWorkbench` runs more than once per flow on the SAME page -- the
+ * base sync check, the workspace preparation, a resumed run's re-attach, and a cached scenario
  * reuse all call it -- and since #3390's pairing fix redeems a repeat `pairLiveSession` fragment
  * without a page load, a later call finds the SAME document still showing whatever this function
- * left in the field. Retyping an already-correct value would needlessly refire the branch lookup
- * (and, worse, could clobber a path the operator/scenario has since moved on from), so a call that
- * finds the field already holding `repositoryRoot` does nothing further.
+ * left selected. Reopening and reselecting an already-correct option would needlessly repeat the
+ * branch lookup the repository selection triggers (and, worse, could clobber a selection the
+ * operator/scenario has since moved on from), so a call that finds a combobox already showing the
+ * expected text leaves it alone.
  */
-async function settleWorkbenchRepositoryPath(page: Page, repositoryRoot: string): Promise<void> {
-  const pathInput = page.getByLabel("Repository path");
-  await expect(pathInput).toBeVisible();
-  if ((await pathInput.inputValue()) !== repositoryRoot) {
-    await pathInput.fill(repositoryRoot);
-    await pathInput.press("Tab");
+async function selectWorkbenchRepository(page: Page, repositoryRoot: string): Promise<void> {
+  const setup = page.getByRole("region", { name: "Code setup", exact: true });
+  const repositoryCombobox = setup.getByRole("combobox", { name: "Choose coding repository" });
+  await expect(repositoryCombobox).toBeVisible();
+  // Mirrors `repositoryLabel()` in CodingWorkbenchWindow.tsx / `repositoryName()` in
+  // CodingWorkbenchRepositorySelector.tsx: the option label is the registered project's name,
+  // which production's auto-connect sets to the launch directory's own basename.
+  const repositoryLabel = repositoryButtonLabel(repositoryRoot);
+  if ((await repositoryCombobox.textContent()) !== repositoryLabel) {
+    await repositoryCombobox.click();
+    await page
+      .getByRole("listbox", { name: "Choose coding repository" })
+      .getByRole("option", { name: repositoryLabel, exact: true })
+      .click();
   }
-  await expect(pathInput).toHaveValue(repositoryRoot);
+  await expect(repositoryCombobox).toHaveText(repositoryLabel);
+  const branchCombobox = setup.getByRole("combobox", { name: "Choose coding branch" });
+  if ((await branchCombobox.textContent()) !== "main") {
+    await branchCombobox.click();
+    await page
+      .getByRole("listbox", { name: "Choose coding branch" })
+      .getByRole("option", { name: "main", exact: true })
+      .click();
+  }
+  await expect(branchCombobox).toHaveText("main");
 }
 
 /** The chat models the gateway is configured with, read from the Settings Models tab the operator
