@@ -916,6 +916,13 @@ type GitReadOperation = ClientGitRetryOperation;
 // failed read, and — only then — the closed reason it gave. `for-each-ref` or a transient
 // `git status` failing answers HTTP 200 with `available: false`, and that gets the same message and
 // Retry as a rejection (PR #3625 review).
+// A manual retry's read carries its minted id; an automatic read is sent exactly as before.
+function retryReadOptions(
+  correlationId: string | undefined,
+): [] | [{ readonly correlationId: string }] {
+  return correlationId === undefined ? [] : [{ correlationId }];
+}
+
 interface GitReadSpec<T> {
   readonly operation: GitReadOperation;
   // `correlationId` is a manual retry's minted id, sent with its request so the server's lines for
@@ -940,7 +947,8 @@ function safeGitWireUnavailableReason(
 // other unavailable reason is still explained by the changes pane itself, never as a failure.
 const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
   operation: "status-read",
-  fetch: (client, path, correlationId) => client.getStatus(path, { correlationId }),
+  fetch: (client, path, correlationId) =>
+    client.getStatus(path, ...retryReadOptions(correlationId)),
   failureKey: (response) =>
     !response.available && isFailedGitRead(response.reason)
       ? "gitClientWindow.status.loadFailed"
@@ -950,14 +958,16 @@ const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
 
 const BRANCHES_READ: GitReadSpec<GitBranchListResponse> = {
   operation: "branches-read",
-  fetch: (client, path, correlationId) => client.listBranches(path, { correlationId }),
+  fetch: (client, path, correlationId) =>
+    client.listBranches(path, ...retryReadOptions(correlationId)),
   failureKey: (response) => (response.available ? null : "gitClientWindow.branch.loadFailed"),
   reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
 
 const SUMMARY_READ: GitReadSpec<GitRepositorySummary> = {
   operation: "summary-read",
-  fetch: (client, path, correlationId) => client.getSummary(path, { correlationId }),
+  fetch: (client, path, correlationId) =>
+    client.getSummary(path, ...retryReadOptions(correlationId)),
   failureKey: (response) => (response.available ? null : "gitClientWindow.sync.summaryUnavailable"),
   reason: (response) => safeGitWireUnavailableReason(response.reason),
 };

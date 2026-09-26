@@ -2229,7 +2229,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(getStatus).toHaveBeenLastCalledWith(REPO_A.path, {
       correlationId: settlement?.correlationId,
     });
-    expect(getStatus.mock.calls[0]).toEqual([REPO_A.path, { correlationId: undefined }]);
+    expect(getStatus.mock.calls[0]).toEqual([REPO_A.path]);
   });
 
   it("offers no read Retry for a folder that is not a Git repository", async () => {
