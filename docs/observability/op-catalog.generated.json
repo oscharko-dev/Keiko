@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e7dcd276b54bea14ace1b21fbb0e072aac701fa769861d4e735198c7b0b9543a",
+    "catalogDigest": "e52bd4cb79adc531b18d9ef457d210d70c55622ba2c810f77416ccbea8531676",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12354,8 +12354,54 @@
         "failureClasses": ["gateway-chat-provider-call"],
         "proofIds": ["gateway.readiness.compatibility-retry.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:46",
-        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:86"]
+        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:49",
+        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:137"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "gateway.readiness.compatibility-retry.failed",
+        "category": "gateway",
+        "owner": "keiko-model-gateway",
+        "emitter": "readiness-probe.logReadinessCompatibilityRetryFailed",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "endpointDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "modelId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 256
+          },
+          "omittedField": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["stream_options", "max_tokens", "max_completion_tokens"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["gateway-chat-provider-call"],
+        "proofIds": ["gateway.readiness.compatibility-retry.failed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:78",
+        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:156"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32654,19 +32700,21 @@
           "start": ["chat.request.dispatch"],
           "state": ["chat.request.compatibility-retry", "gateway.readiness.compatibility-retry"],
           "end": [],
-          "failure": [],
+          "failure": ["gateway.readiness.compatibility-retry.failed"],
           "loss": []
         },
         "requiredCausalOperations": [
           "chat.request.compatibility-retry",
           "chat.request.dispatch",
-          "gateway.readiness.compatibility-retry"
+          "gateway.readiness.compatibility-retry",
+          "gateway.readiness.compatibility-retry.failed"
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "chat.request.compatibility-retry",
           "chat.request.dispatch",
-          "gateway.readiness.compatibility-retry"
+          "gateway.readiness.compatibility-retry",
+          "gateway.readiness.compatibility-retry.failed"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
@@ -52172,12 +52220,12 @@
           "failureClass": "gateway-chat-provider-call",
           "requirementContract": "gateway-chat-provider-call",
           "productSurfaces": ["keiko-model-gateway"],
-          "lifecycleTransitions": ["start", "state"],
+          "lifecycleTransitions": ["failure", "start", "state"],
           "lifecycleOperations": {
             "start": ["chat.request.dispatch"],
             "state": ["chat.request.compatibility-retry", "gateway.readiness.compatibility-retry"],
             "end": [],
-            "failure": [],
+            "failure": ["gateway.readiness.compatibility-retry.failed"],
             "loss": []
           },
           "causalEdges": [
@@ -52191,6 +52239,10 @@
             },
             {
               "op": "gateway.readiness.compatibility-retry",
+              "mode": "correlation"
+            },
+            {
+              "op": "gateway.readiness.compatibility-retry.failed",
               "mode": "correlation"
             }
           ],
@@ -52382,6 +52434,48 @@
                 "causeChain": false
               },
               "proofIds": ["gateway.readiness.compatibility-retry.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "gateway.readiness.compatibility-retry.failed",
+              "owner": "keiko-model-gateway",
+              "category": "gateway",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "endpointDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "modelId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "omittedField",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "digest",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["gateway.readiness.compatibility-retry.failed.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -73151,7 +73245,13 @@
     {
       "op": "gateway.readiness.compatibility-retry",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:49",
+      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:52",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.readiness.compatibility-retry.failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:81",
       "package": "keiko-model-gateway"
     },
     {
@@ -76975,6 +77075,7 @@
     "gateway.readiness.automatic.joined",
     "gateway.readiness.automatic.started",
     "gateway.readiness.compatibility-retry",
+    "gateway.readiness.compatibility-retry.failed",
     "gateway.readiness.completed",
     "gateway.readiness.started",
     "gateway.retry.budget-exhausted",

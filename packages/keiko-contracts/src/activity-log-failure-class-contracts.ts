@@ -3261,19 +3261,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: ["chat.request.dispatch"],
       state: ["chat.request.compatibility-retry", "gateway.readiness.compatibility-retry"],
       end: [],
-      failure: [],
+      failure: ["gateway.readiness.compatibility-retry.failed"],
       loss: [],
     },
     requiredCausalOperations: [
       "chat.request.compatibility-retry",
       "chat.request.dispatch",
       "gateway.readiness.compatibility-retry",
+      "gateway.readiness.compatibility-retry.failed",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "chat.request.compatibility-retry",
       "chat.request.dispatch",
       "gateway.readiness.compatibility-retry",
+      "gateway.readiness.compatibility-retry.failed",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [

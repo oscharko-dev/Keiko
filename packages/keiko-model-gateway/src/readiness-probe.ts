@@ -1,6 +1,7 @@
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
@@ -11,6 +12,7 @@ import {
 } from "./config.js";
 import { gatewayFetch } from "./http.js";
 import {
+  activityLogErrorKind,
   logEndpointHost,
   logModelId,
   resolveLogSink,
@@ -40,9 +42,10 @@ export interface GatewayReadinessChatCompletionRequest {
   readonly correlationId?: string | undefined;
 }
 
-// PR #3625 review: which field a readiness probe left out on a compatibility retry, the status that
-// made it retry and the status the retry got, joined to the probe by its correlation id. Body-free:
-// an endpoint digest and the safe model id only.
+// PR #3625 review: a readiness probe's compatibility retry, recorded BEFORE it is sent — which field
+// it leaves out and the status that made it retry — so a retry that then throws is still
+// reconstructable; the retry's own answer is the correlated fetch line after it, and a retry that
+// throws adds the failed line below. Body-free: an endpoint digest and the safe model id only.
 const READINESS_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -69,35 +72,133 @@ const READINESS_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// The compatibility retry failed: the gateway rejected it too (with the status it answered) or it
+// threw (a timeout, a transport or egress failure). Which field it had left out and the closed class
+// of the failure, under the probe's correlation id.
+const READINESS_COMPATIBILITY_RETRY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.compatibility-retry.failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "readiness-probe.logReadinessCompatibilityRetryFailed",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    omittedField: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["stream_options", "max_tokens", "max_completion_tokens"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-chat-provider-call"],
+  proofIds: ["gateway.readiness.compatibility-retry.failed.line"],
+  releaseImpact: "patch",
+});
+
 type ReadinessOmittedField = "stream_options" | "max_tokens" | "max_completion_tokens";
 
 function readinessLog(request: GatewayReadinessChatCompletionRequest): ModelGatewayLogSink {
   return withCorrelationId(resolveLogSink(request.log), request.correlationId);
 }
 
+function readinessRetryFields(
+  request: GatewayReadinessChatCompletionRequest,
+  omittedField: ReadinessOmittedField,
+): {
+  readonly endpointDigest: string;
+  readonly modelId: string;
+  readonly omittedField: ReadinessOmittedField;
+} {
+  const url = readinessChatCompletionsUrl(request.provider);
+  return {
+    endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
+    modelId: logModelId(request.provider.modelId),
+    omittedField,
+  };
+}
+
+function correlationOf(request: GatewayReadinessChatCompletionRequest): {
+  readonly correlationId?: string;
+} {
+  return request.correlationId === undefined ? {} : { correlationId: request.correlationId };
+}
+
 function logReadinessCompatibilityRetry(
   request: GatewayReadinessChatCompletionRequest,
   omittedField: ReadinessOmittedField,
   rejectedStatus: number,
-  retry: Response,
 ): void {
-  const url = readinessChatCompletionsUrl(request.provider);
   readinessLog(request).write(
     activityLogEvent(
       READINESS_COMPATIBILITY_RETRY_OPERATION,
-      {
-        level: retry.ok ? "info" : "warn",
-        status: retry.status,
-        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
-      },
-      {
-        endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
-        modelId: logModelId(request.provider.modelId),
-        omittedField,
-        rejectedStatus,
-      },
+      { level: "info", ...correlationOf(request) },
+      { ...readinessRetryFields(request, omittedField), rejectedStatus },
     ),
   );
+}
+
+interface ReadinessRetryFailure {
+  readonly errorKind: ActivityLogErrorKind;
+  readonly status?: number;
+}
+
+function logReadinessCompatibilityRetryFailed(
+  request: GatewayReadinessChatCompletionRequest,
+  omittedField: ReadinessOmittedField,
+  failure: ReadinessRetryFailure,
+): void {
+  readinessLog(request).write(
+    activityLogEvent(
+      READINESS_COMPATIBILITY_RETRY_FAILED_OPERATION,
+      {
+        level: "warn",
+        ...correlationOf(request),
+        errorKind: failure.errorKind,
+        ...(failure.status === undefined ? {} : { status: failure.status }),
+      },
+      readinessRetryFields(request, omittedField),
+    ),
+  );
+}
+
+// The closed class of a status a retried probe was answered with.
+function readinessStatusErrorKind(status: number): ActivityLogErrorKind {
+  if (status === 408 || status === 504) return "timeout";
+  if (status === 429) return "rate-limited";
+  if (status === 401 || status === 403) return "permission-denied";
+  if (status === 409) return "conflict";
+  return status >= 500 ? "unavailable" : "invalid-request";
+}
+
+// Records the retry before sending it, and its failure if it throws, then rethrows.
+async function sendReadinessRetry(
+  request: GatewayReadinessChatCompletionRequest,
+  omittedField: ReadinessOmittedField,
+  rejectedStatus: number,
+  send: () => Promise<Response>,
+): Promise<Response> {
+  logReadinessCompatibilityRetry(request, omittedField, rejectedStatus);
+  let retry: Response;
+  try {
+    retry = await send();
+  } catch (error) {
+    logReadinessCompatibilityRetryFailed(request, omittedField, {
+      errorKind: activityLogErrorKind(error),
+    });
+    throw error;
+  }
+  if (!retry.ok) {
+    logReadinessCompatibilityRetryFailed(request, omittedField, {
+      errorKind: readinessStatusErrorKind(retry.status),
+      status: retry.status,
+    });
+  }
+  return retry;
 }
 
 function providerHeaders(provider: ModelProviderConfig): Record<string, string> {
@@ -193,9 +294,9 @@ async function requestWithStreamFallback(
     return first;
   }
   await first.body?.cancel();
-  const retry = await dispatchReadinessChatCompletion(request, false);
-  logReadinessCompatibilityRetry(request, "stream_options", first.status, retry);
-  return retry;
+  return sendReadinessRetry(request, "stream_options", first.status, () =>
+    dispatchReadinessChatCompletion(request, false),
+  );
 }
 
 // #3639: the default output-token field follows the model family, which a deployment alias hides
@@ -230,9 +331,9 @@ export async function requestGatewayReadinessChatCompletion(
     return answer;
   }
   await answer.body?.cancel();
-  const retry = await requestWithStreamFallback(other);
-  logReadinessCompatibilityRetry(request, sentOutputTokenField(request), answer.status, retry);
-  return retry;
+  return sendReadinessRetry(request, sentOutputTokenField(request), answer.status, () =>
+    requestWithStreamFallback(other),
+  );
 }
 
 function sentOutputTokenField(

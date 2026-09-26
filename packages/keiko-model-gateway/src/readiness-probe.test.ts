@@ -405,7 +405,6 @@ describe("requestGatewayReadinessChatCompletion", () => {
     if (retry === undefined) throw new TypeError("readiness retry evidence missing");
     expect(retry).toMatchObject({
       correlationId: "probe-corr-0001",
-      status: 200,
       extra: { omittedField: "max_tokens", rejectedStatus: 400 },
     });
     expectActivityLogProof(
@@ -415,6 +414,92 @@ describe("requestGatewayReadinessChatCompletion", () => {
     expect(events.length).toBeGreaterThan(1);
     expect(events.every((event) => event.correlationId === "probe-corr-0001")).toBe(true);
     expect(JSON.stringify(events)).not.toContain(PROVIDER.apiKey);
+  });
+
+  // PR #3625 review: the retry is recorded before it is sent, so a retry that then throws still says
+  // which field it left out, and its failure is a structured line of its own.
+  it("records a compatibility retry that throws with its field and error kind", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    let call = 0;
+    const fetchImpl: typeof fetch = () => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { param: "max_tokens" } }), { status: 400 }),
+        );
+      }
+      return Promise.reject(new TypeError("synthetic transport failure"));
+    };
+
+    await expect(
+      requestGatewayReadinessChatCompletion({
+        config: CONFIG,
+        provider: { ...PROVIDER, modelId: "prod-chat" },
+        body: { messages: [] },
+        maxOutputTokens: 17,
+        fetchImpl,
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        correlationId: "probe-corr-0003",
+      }),
+    ).rejects.toThrow();
+
+    const attempt = events.find((event) => event.op === "gateway.readiness.compatibility-retry");
+    const failed = events.find(
+      (event) => event.op === "gateway.readiness.compatibility-retry.failed",
+    );
+    if (attempt === undefined || failed === undefined) {
+      throw new TypeError("readiness retry evidence missing");
+    }
+    expect(attempt).toMatchObject({
+      correlationId: "probe-corr-0003",
+      extra: { omittedField: "max_tokens", rejectedStatus: 400 },
+    });
+    expect(failed).toMatchObject({
+      correlationId: "probe-corr-0003",
+      extra: { omittedField: "max_tokens" },
+    });
+    expect(failed.errorKind).toBeDefined();
+    expect(events.indexOf(attempt)).toBeLessThan(events.indexOf(failed));
+    expectActivityLogProof(
+      "gateway.readiness.compatibility-retry.failed.line",
+      formatActivityLogProofLine(failed),
+    );
+  });
+
+  it("records a compatibility retry the gateway rejects again as a failure", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response(JSON.stringify({ error: { param: "x" } }), { status: 400 }));
+
+    const response = await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: { ...PROVIDER, modelId: "prod-chat" },
+      body: { messages: [] },
+      maxOutputTokens: 17,
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      correlationId: "probe-corr-0004",
+    });
+
+    expect(response.status).toBe(400);
+    const failed = events.find(
+      (event) => event.op === "gateway.readiness.compatibility-retry.failed",
+    );
+    expect(failed).toMatchObject({
+      correlationId: "probe-corr-0004",
+      level: "warn",
+      status: 400,
+      errorKind: "invalid-request",
+      extra: { omittedField: "max_tokens" },
+    });
   });
 
   it("records a stream-options retry of a streamed probe", async () => {
@@ -442,9 +527,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
 
     expect(
       events.filter((event) => event.op === "gateway.readiness.compatibility-retry"),
-    ).toMatchObject([
-      { status: 200, extra: { omittedField: "stream_options", rejectedStatus: 400 } },
-    ]);
+    ).toMatchObject([{ extra: { omittedField: "stream_options", rejectedStatus: 400 } }]);
   });
 
   // User finding #3640: Azure GPT-5.6 tool calls cannot pass Coding Workbench readiness. The
