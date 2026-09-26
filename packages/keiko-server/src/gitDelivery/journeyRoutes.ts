@@ -867,8 +867,13 @@ function confirmedJourneySubject(
 // (PR #3625). The Coding Workbench card starts its own first observation the moment a confirmed
 // draft pull request appears; a click during it used to be answered `observation-in-flight`, so the
 // clicked refresh observed nothing, and the card, whose newest request wins, dropped the running
-// read's result as well.
-const activeJourneyRefreshes = new Map<string, Promise<RouteResult>>();
+// read's result as well. The entry keeps the running observation's request correlation: its reads
+// and outcome are logged under it, and a joined line names it as the parent (PR #3625 review).
+interface ActiveJourneyObservation {
+  readonly correlationId: string;
+  readonly result: Promise<RouteResult>;
+}
+const activeJourneyRefreshes = new Map<string, ActiveJourneyObservation>();
 
 // Owner audit finding b3-20: a request that never reaches the controller (an unbound run) still ran
 // an operation and must leave a body-free activity-log line, on the observation op the controller
@@ -886,13 +891,23 @@ function logJourneyRefreshUnavailable(
   );
 }
 
-// The joining request's own line: it dispatched nothing and answers with the run's running
-// observation, whose lines carry the same runId.
-function logJourneyRefreshJoined(deps: UiHandlerDeps, correlationId: string, runId: string): void {
-  logJourneyObservationActivity(deps.activityLog ?? processServerLogSink(), correlationId, {
-    phase: "joined",
-    runId,
-  });
+// The joining request's own line: it dispatched nothing and answers with the running observation's
+// result, so the line names that observation's correlation as its parent.
+function logJourneyRefreshJoined(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  runId: string,
+  observation: ActiveJourneyObservation,
+): void {
+  logJourneyObservationActivity(
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+    { phase: "joined", runId },
+    undefined,
+    observation.correlationId === correlationId
+      ? undefined
+      : { parentCorrelationId: observation.correlationId },
+  );
 }
 
 async function observeJourney(
@@ -902,10 +917,13 @@ async function observeJourney(
   correlationId: string,
   subject: ConfirmedJourneySubject,
 ): Promise<RouteResult> {
-  const observation = observeJourneyOnce(deps, options, correlationId, subject);
+  const observation: ActiveJourneyObservation = {
+    correlationId,
+    result: observeJourneyOnce(deps, options, correlationId, subject),
+  };
   activeJourneyRefreshes.set(runId, observation);
   try {
-    return await observation;
+    return await observation.result;
   } finally {
     if (activeJourneyRefreshes.get(runId) === observation) activeJourneyRefreshes.delete(runId);
   }
@@ -948,8 +966,8 @@ async function handleJourneyRefresh(
 
   const running = activeJourneyRefreshes.get(runId);
   if (running !== undefined) {
-    logJourneyRefreshJoined(deps, correlationId, runId);
-    return running;
+    logJourneyRefreshJoined(deps, correlationId, runId, running);
+    return running.result;
   }
   const subject = confirmedJourneySubject(deps, runId);
   if (subject === undefined) {

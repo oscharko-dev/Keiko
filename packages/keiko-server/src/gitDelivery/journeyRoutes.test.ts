@@ -71,9 +71,9 @@ function requestWithBody(body: unknown): IncomingMessage {
   return req;
 }
 
-function ctxFor(body: unknown): RouteContext {
+function ctxFor(body: unknown, correlationId = "journey-refresh-1"): RouteContext {
   return {
-    correlationId: "journey-refresh-1",
+    correlationId,
     req: requestWithBody(body),
     res: undefined as never,
     params: {},
@@ -223,13 +223,13 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
   // #3389 handoff journey failed on exactly that race).
   it("lets a concurrent refresh for the same run join the running observation instead of dispatching a second one", async () => {
     const h = harness();
+    let releaseFirst: (() => void) | undefined;
     try {
       let readerCalls = 0;
       let signalEntered: (() => void) | undefined;
       const entered = new Promise<void>((resolve) => {
         signalEntered = resolve;
       });
-      let releaseFirst: (() => void) | undefined;
       const gate = new Promise<void>((resolve) => {
         releaseFirst = resolve;
       });
@@ -247,7 +247,7 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
         outcomes: { get: () => undefined, record: () => true },
       });
       const first = group[0]?.handler(
-        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        ctxFor({ schemaVersion: "1", runId: "run-1" }, "journey-refresh-card"),
         h.deps,
       ) as Promise<RouteResult>;
       // Waits until the first call's observation has actually reached the provider read — by then
@@ -255,15 +255,21 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
       await entered;
 
       const second = group[0]?.handler(
-        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        ctxFor({ schemaVersion: "1", runId: "run-1" }, "journey-refresh-click"),
         h.deps,
       ) as Promise<RouteResult>;
+      // PR #3625 review: the joined line stays under the joiner's own correlation and names the
+      // running observation's correlation as its parent, the one its reads and outcome carry.
       await vi.waitFor(() => {
         expect(
           h.events.find(
             (event) => event.op === "git.journey-observation" && event.extra?.phase === "joined",
           ),
-        ).toMatchObject({ extra: { phase: "joined", runId: "run-1" } });
+        ).toMatchObject({
+          correlationId: "journey-refresh-click",
+          parentCorrelationId: "journey-refresh-card",
+          extra: { phase: "joined", runId: "run-1" },
+        });
       });
 
       releaseFirst?.();
@@ -283,7 +289,65 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
         (event) => event.op === "git.journey-observation" && event.extra?.phase === "joined",
       );
       expect(joined?.errorKind).toBeUndefined();
+      const observed = h.events.filter(
+        (event) => event.op === "git.journey-observation" && event.extra?.phase !== "joined",
+      );
+      expect(observed.map((event) => event.extra?.phase)).toEqual(["started", "observed"]);
+      expect(observed.every((event) => event.correlationId === "journey-refresh-card")).toBe(true);
     } finally {
+      // A failed assertion must not leave run-1's observation parked on the gate: the module-level
+      // join map would hand every later run-1 request that stuck observation.
+      releaseFirst?.();
+      h.cleanup();
+    }
+  });
+
+  // A request without its own correlation id shares the fallback id with the observation it joins;
+  // a parent equal to the line's own correlation would name nothing, so none is written.
+  it("writes no parent on a joined line that carries the running observation's own correlation", async () => {
+    const h = harness();
+    let release: (() => void) | undefined;
+    try {
+      let signalEntered: (() => void) | undefined;
+      const entered = new Promise<void>((resolve) => {
+        signalEntered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const group = createGitDeliveryJourneyRouteGroup({
+        reader: (): GitJourneyReader => ({
+          readJourney: async (): Promise<GitJourneyFactsResult> => {
+            signalEntered?.();
+            await gate;
+            return OBSERVED_FACTS;
+          },
+        }),
+        readiness: () => Promise.resolve(readySnapshot()),
+        description: () => Promise.resolve(null),
+        outcomes: { get: () => undefined, record: () => true },
+      });
+      const first = group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        h.deps,
+      ) as Promise<RouteResult>;
+      await entered;
+      const second = group[0]?.handler(
+        ctxFor({ schemaVersion: "1", runId: "run-1" }),
+        h.deps,
+      ) as Promise<RouteResult>;
+      const joinedLine = (): ServerLogEvent | undefined =>
+        h.events.find(
+          (event) => event.op === "git.journey-observation" && event.extra?.phase === "joined",
+        );
+      await vi.waitFor(() => {
+        expect(joinedLine()).toMatchObject({ correlationId: "journey-refresh-1" });
+      });
+      expect(joinedLine()).not.toHaveProperty("parentCorrelationId");
+      release?.();
+      await Promise.all([first, second]);
+    } finally {
+      release?.();
       h.cleanup();
     }
   });

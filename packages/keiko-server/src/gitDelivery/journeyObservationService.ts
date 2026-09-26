@@ -173,17 +173,21 @@ export interface JourneyObservationActivityFields {
   readonly causeChain?: readonly string[];
 }
 
+// `link` names the observation a joined refresh was answered by: its request correlation becomes the
+// joined line's parent, so the joiner's timeline reaches that observation's reads and outcome.
 export function logJourneyObservationActivity(
   log: ServerLogSink,
   correlationId: string,
   fields: JourneyObservationActivityFields,
   failure?: { readonly errorKind: ActivityLogErrorKind },
+  link?: { readonly parentCorrelationId: string },
 ): void {
   log.write(
     activityLogEvent(
       JOURNEY_OBSERVATION_OPERATION,
       {
         correlationId,
+        ...(link === undefined ? {} : { parentCorrelationId: link.parentCorrelationId }),
         ...(failure === undefined ? {} : { level: "warn", errorKind: failure.errorKind }),
       },
       fields,
