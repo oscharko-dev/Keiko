@@ -2720,7 +2720,7 @@ function emitSandboxAttestationFailureDiagnostic(
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date(now()).toISOString(),
-    operation: "coding-runtime.sandbox-attestation",
+    operation: "coding-runtime.readiness.failed",
     source: "coding-runtime-manager.sandbox-attestation",
     errorClass: contentFreeErrorClass(error),
     message: "runtime-start-failed",
@@ -2737,7 +2737,7 @@ function emitCodexEgressPolicyFailureDiagnostic(
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date(now()).toISOString(),
-    operation: "coding-runtime.egress-policy",
+    operation: "coding-runtime.readiness.failed",
     source: "coding-runtime-manager.egress-policy",
     errorClass: contentFreeErrorClass(error),
     message: "runtime-start-failed",
