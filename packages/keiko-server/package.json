@@ -76,7 +76,7 @@
     "@sigstore/tuf": "^5.0.0",
     "@sigstore/verify": "^4.1.2",
     "smol-toml": "^1.7.1",
-    "typescript": "~6.0.3",
+    "typescript": "~7.0.2",
     "ws": "^8.21.0",
     "yauzl": "^3.4.0"
   },
