@@ -126,6 +126,33 @@ describe("useCodingWorkbenchQuestions", () => {
     view.unmount();
   });
 
+  // #3627: another paired view answered the visible question. Its settlement arrives only as a
+  // content-free runtime event, so a visible question re-lists too instead of staying actionable.
+  it("re-lists a visible question when a runtime event signals it may have settled elsewhere", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(pending)
+        .mockResolvedValue(emptyActive);
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      expect(view.result.current).toMatchObject({ status: "ready", questions: pending.questions });
+
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await flush();
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+      expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #2386 regression: a required question is raised only AFTER the initial listing (the runtime
   // publishes a content-free observation event when it registers). Without the event-driven
   // resync the section stays on "no pending questions" forever and the run hangs on the question.
@@ -354,11 +381,10 @@ describe("useCodingWorkbenchQuestions", () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
 
-      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(3);
-      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenLastCalledWith(
-        "run-2",
-        expect.any(Object),
-        expect.any(AbortSignal),
+      // No run-1 retry outlives the switch. The new run is listed, then resynced once after its
+      // activation — a visible question resyncs too since #3627 (another view may settle it).
+      expect(vi.mocked(listCodingWorkbenchRuntimeQuestions).mock.calls.map(([run]) => run)).toEqual(
+        ["run-1", "run-1", "run-2", "run-2"],
       );
       view.unmount();
     } finally {

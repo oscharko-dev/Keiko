@@ -285,29 +285,25 @@ function useRuntimeRefresh(
   }, [dispatch, sequenceRef, stateRef]);
 }
 
+// #3632: a call while a read is in flight may carry an event newer than that read saw, so it queues
+// one more read after it; further calls in the meantime join that one. Reads never overlap.
 function useRunRefresh(
   runSequence: RefObject<number>,
   runRefresh: RefObject<Promise<void> | null>,
   dispatch: RuntimeDispatch,
 ): () => Promise<void> {
+  const followUp = useRef(false);
   return useCallback((): Promise<void> => {
-    if (runRefresh.current !== null) return runRefresh.current;
-    const sequence = (runSequence.current += 1);
+    if (runRefresh.current !== null) {
+      followUp.current = true;
+      return runRefresh.current;
+    }
     dispatch({ kind: "resource-loading", resource: "run" });
     const pending = (async (): Promise<void> => {
-      try {
-        const snapshot = await getCodingWorkbenchRuntimeStatus();
-        if (runSequence.current === sequence) dispatch({ kind: "run-set", snapshot });
-      } catch (error) {
-        if (runSequence.current !== sequence) return;
-        const mapped = codingWorkbenchRuntimeApiError(error);
-        dispatch({
-          kind: "resource-failed",
-          resource: "run",
-          status: codingWorkbenchFailureStatus(mapped),
-          error: mapped,
-        });
-      }
+      do {
+        followUp.current = false;
+        await readRun((runSequence.current += 1), runSequence, dispatch);
+      } while (followUp.current);
     })();
     runRefresh.current = pending;
     void pending.then(() => {
@@ -315,6 +311,26 @@ function useRunRefresh(
     });
     return pending;
   }, [dispatch, runRefresh, runSequence]);
+}
+
+async function readRun(
+  sequence: number,
+  runSequence: RefObject<number>,
+  dispatch: RuntimeDispatch,
+): Promise<void> {
+  try {
+    const snapshot = await getCodingWorkbenchRuntimeStatus();
+    if (runSequence.current === sequence) dispatch({ kind: "run-set", snapshot });
+  } catch (error) {
+    if (runSequence.current !== sequence) return;
+    const mapped = codingWorkbenchRuntimeApiError(error);
+    dispatch({
+      kind: "resource-failed",
+      resource: "run",
+      status: codingWorkbenchFailureStatus(mapped),
+      error: mapped,
+    });
+  }
 }
 
 export function useCodingWorkbenchRuntimeResources(

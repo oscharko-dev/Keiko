@@ -444,23 +444,31 @@ describe("useCodingWorkbenchRuntimeResources runtime and run refresh", () => {
     );
   });
 
-  it("dedupes concurrent run refreshes and maps a status failure", async () => {
+  // #3632: calls during an in-flight read coalesce into ONE follow-up read after it (never one read
+  // per call, never overlapping reads), so an event that arrived mid-read is not lost.
+  it("coalesces concurrent run refreshes into one follow-up read and maps a status failure", async () => {
     let release: (value: CodingWorkbenchRuntimeSnapshot) => void = () => undefined;
-    vi.mocked(getCodingWorkbenchRuntimeStatus).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
+    vi.mocked(getCodingWorkbenchRuntimeStatus)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(snapshot({ revision: 5 }));
     const { resources, dispatch } = renderResources(runtimeState());
     await act(async () => {
       const first = resources.refreshRun();
       const second = resources.refreshRun();
-      release(snapshot());
-      await Promise.all([first, second]);
+      const third = resources.refreshRun();
+      release(snapshot({ revision: 4 }));
+      await Promise.all([first, second, third]);
     });
-    expect(getCodingWorkbenchRuntimeStatus).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith({ kind: "run-set", snapshot: snapshot() });
+    expect(getCodingWorkbenchRuntimeStatus).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenLastCalledWith({
+      kind: "run-set",
+      snapshot: snapshot({ revision: 5 }),
+    });
 
     vi.mocked(getCodingWorkbenchRuntimeStatus).mockRejectedValueOnce(UNAVAILABLE_ERROR);
     await act(() => resources.refreshRun());

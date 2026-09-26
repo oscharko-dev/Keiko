@@ -149,7 +149,6 @@ export function useCodingWorkbenchQuestions(
     runId,
     runState,
     runtimeEventSignal,
-    questionsVisible: state.questions.length > 0,
     bumpEpoch,
   });
   const context: QuestionContext | null =
@@ -180,19 +179,18 @@ const QUESTION_VISIBILITY_RETRY_DELAYS_MS = [500, 1_500, 3_000] as const;
 /**
  * Question state changes are pushed only as content-free runtime events (a question raised or
  * settled inside the managed runtime), and pausing/resuming can also settle or reveal questions.
- * Re-list shortly after such a signal instead of polling; the debounce coalesces event bursts.
+ * Re-list shortly after such a signal instead of polling; the debounce coalesces event bursts. A
+ * visible question re-lists too (#3627): another paired view may have answered it. Its form keeps
+ * its input across the re-list, keyed by the request id.
  */
 function useQuestionResync(input: {
   readonly active: boolean;
   readonly runId: string | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly runtimeEventSignal: number;
-  readonly questionsVisible: boolean;
   readonly bumpEpoch: () => void;
 }): void {
-  const { active, runId, runState, runtimeEventSignal, questionsVisible, bumpEpoch } = input;
-  const questionsVisibleRef = useRef(questionsVisible);
-  questionsVisibleRef.current = questionsVisible;
+  const { active, runId, runState, runtimeEventSignal, bumpEpoch } = input;
   const seenRef = useRef<
     | {
         readonly count: number;
@@ -215,9 +213,7 @@ function useQuestionResync(input: {
         (previous.count !== runtimeEventSignal || previous.state !== runState));
     seenRef.current = { count: runtimeEventSignal, runId, state: runState };
     if (!active || !changed) return undefined;
-    const timer = setTimeout(() => {
-      if (!questionsVisibleRef.current) bumpEpoch();
-    }, RESYNC_DEBOUNCE_MS);
+    const timer = setTimeout(bumpEpoch, RESYNC_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
     };
