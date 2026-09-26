@@ -178,9 +178,7 @@ describe("scripts/keiko.sh", () => {
       expect(sink).toBeGreaterThan(0);
       expect(lines[sink - 1]).toContain("strict loopback allowlist");
       expect(lines[sink]).toContain("# NOSONAR");
-      expect(lines.find((line) => line.includes('LOOPBACK_ORIGIN="http'))).not.toContain(
-        "NOSONAR",
-      );
+      expect(lines.find((line) => line.includes('LOOPBACK_ORIGIN="http'))).not.toContain("NOSONAR");
     });
   });
 
