@@ -49,11 +49,14 @@ for what each mode allows.
 2. Stop Keiko, then start it again with the ceiling set, for example:
 
    ```bash
-   KEIKO_CODING_DEPLOYMENT_CEILING=supervised-coding keiko ui
+   KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery keiko ui
    ```
 
    Accepted values are `governed-assist`, `supervised-coding` and `autonomous-delivery`; an
-   unrecognized value is ignored and the ceiling stays `governed-assist`.
+   unrecognized value is ignored and the ceiling stays `governed-assist`. Select
+   `autonomous-delivery` when the installation operator explicitly wants all three modes available
+   for new Coding Workbench runs. Carry the setting forward on each restart; repository binding
+   and the composer selection do not raise the installation ceiling.
 
 3. Start a new run. The composer no longer shows the limit notice, and `coding-runtime.run.started`
    reports the selected mode as the effective mode.

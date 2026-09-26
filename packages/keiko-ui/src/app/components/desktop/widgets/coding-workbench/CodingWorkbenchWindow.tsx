@@ -1,6 +1,7 @@
 "use client";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
+import { CodingWorkbenchRepositorySelector } from "./CodingWorkbenchRepositorySelector";
 import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import {
@@ -463,14 +464,13 @@ function idleRepositoryRoot(
   activeWorkspace: WorkbenchWorkspaceApi,
   selectedRoot: string | undefined,
 ): string | null {
-  // Bound instance wins: with #3563 the composer no longer carries its own repository chooser, so
-  // preferring `selectedRoot` first (as the Codex handoff briefly did) would let a stale shell
-  // selection silently discard a validly bound idle session.
+  // An explicit Workbench selection wins while idle. The active binding remains the fallback for
+  // windows that have not selected a repository yet.
+  const selectedRepositoryRoot = repositoryRootOrNull(selectedRoot);
+  if (selectedRepositoryRoot !== null) return selectedRepositoryRoot;
   const activeInstance = activeWorkspace.activeInstance;
   const activeRoot = repositoryRootOrNull(activeInstance?.repositoryRoot);
   if (activeRoot !== null) return activeRoot;
-  const selectedRepositoryRoot = repositoryRootOrNull(selectedRoot);
-  if (selectedRepositoryRoot !== null) return selectedRepositoryRoot;
   const activeBinding = activeWorkspace.activeBinding;
   return repositoryRootOrNull(activeBinding?.activeRoot);
 }
@@ -540,6 +540,53 @@ function boundBaseBranch(
     : undefined;
 }
 
+function selectedBaseBranch(
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+  selectedBranch: string | undefined,
+): string | undefined {
+  return selectedBranch ?? boundBaseBranch(activeWorkspace, repositoryRoot);
+}
+
+function WorkbenchContextControls({
+  repositoryRoot,
+  selectedBranch,
+  runIsActive,
+  runWorkspace,
+  activeWorkspace,
+  mutationPending,
+  onSelectRepository,
+  onSelectBranch,
+  onOpenGit,
+  placement = "composer",
+}: {
+  readonly repositoryRoot: string | null;
+  readonly selectedBranch: string | undefined;
+  readonly runIsActive: boolean;
+  readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
+  readonly activeWorkspace: WorkbenchWorkspaceApi;
+  readonly mutationPending: boolean;
+  readonly onSelectRepository: (root: string) => void;
+  readonly onSelectBranch: (branch: string) => void;
+  readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
+  readonly placement?: "composer" | "setup";
+}): ReactNode {
+  const branch = runIsActive
+    ? (runWorkspace.bound?.baseBranch ?? null)
+    : (selectedBaseBranch(activeWorkspace, repositoryRoot, selectedBranch) ?? null);
+  return (
+    <CodingWorkbenchRepositorySelector
+      root={repositoryRoot}
+      branch={branch}
+      locked={runIsActive || mutationPending || activeWorkspace.switching}
+      onSelect={onSelectRepository}
+      onSelectBranch={onSelectBranch}
+      onOpenGit={() => onOpenGit({ root: repositoryRoot, binding: "repository" })}
+      placement={placement}
+    />
+  );
+}
+
 type WorkbenchWorkspaceApi = UseCodingWorkbenchRuntimeInput["workspace"];
 
 /** The live active root, or null when the read failed — one definition, so the surfaces that
@@ -584,6 +631,7 @@ function liveWorkspaceIdentity(
 ): CodingWorkbenchRunWorkspace {
   return {
     root: liveWorkspaceRootOf(workspace),
+    baseBranch: workspace.activeInstance?.baseBranch ?? null,
     taskBranch: workspace.activeInstance?.taskBranch ?? null,
     workspace: state.workspace.value,
     trust: liveRepositoryTrustBindingOf(workspace, state.workspace.value),
@@ -701,20 +749,23 @@ function welcomeEligible(
 
 export function CodingWorkbenchWindow({
   selectedRoot,
+  selectedBranch,
   onOpenGit = noopOpenGit,
   onSelectRepository = noopSelectRepository,
+  onSelectBranch = noopSelectRepository,
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
 }: {
   readonly selectedRoot?: string | undefined;
+  readonly selectedBranch?: string | undefined;
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
-  /** Persists the parent window's selection after a successful bind (per-window cfg). The composer
-   * itself no longer chooses repositories — the header-wide RepositoryFolderSwitcher does that. */
+  /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
+  readonly onSelectBranch?: ((branch: string) => void) | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
   const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
@@ -750,18 +801,18 @@ export function CodingWorkbenchWindow({
   const authority = useWorkbenchAuthoritySelection(state, actions, t);
   const workbenchLabel = useTranslate()("rail.coding");
   const pendingPermission = runPendingPermission(state);
-  const alert = visibleAlert(
-    state,
-    t,
-    bootstrapSetupVisible(state, activeWorkspace),
-    authority.errorMessage,
-  );
   const runIsActive = runIsActiveFrom(state);
   const repositoryRoot = workbenchRepositoryRoot(
     state,
     runWorkspace,
     activeWorkspace,
     selectedRoot,
+  );
+  const alert = visibleAlert(
+    state,
+    t,
+    bootstrapSetupVisible(state, activeWorkspace, repositoryRoot, selectedBranch, runIsActive),
+    authority.errorMessage,
   );
 
   useEffect(() => {
@@ -782,6 +833,7 @@ export function CodingWorkbenchWindow({
       actions={actions}
       activeWorkspace={activeWorkspace}
       selectedRoot={selectedRoot}
+      selectedBranch={selectedBranch}
       taskIntent={taskIntent}
       onTaskIntentChange={setTaskIntent}
       focusRef={focusRef}
@@ -795,6 +847,7 @@ export function CodingWorkbenchWindow({
       authority={authority}
       onOpenGit={onOpenGit}
       onSelectRepository={onSelectRepository}
+      onSelectBranch={onSelectBranch}
       runWorkspace={runWorkspace}
       repositoryRoot={repositoryRoot}
       runIsActive={runIsActive}
@@ -831,6 +884,7 @@ interface WorkbenchContentProps {
   readonly actions: CodingWorkbenchRuntimeActions;
   readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
   readonly selectedRoot: string | undefined;
+  readonly selectedBranch: string | undefined;
   readonly taskIntent: string;
   readonly onTaskIntentChange: (taskIntent: string) => void;
   readonly focusRef: RefObject<HTMLHeadingElement | null>;
@@ -843,10 +897,8 @@ interface WorkbenchContentProps {
   readonly codingModels: readonly ModelCapability[];
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
-  /** Persists the parent-window selection after a successful bind. Never invoked by the composer,
-   * which no longer chooses repositories on its own — the header-wide RepositoryFolderSwitcher is
-   * the single source of workspace-context truth. */
   readonly onSelectRepository: (root: string) => void;
+  readonly onSelectBranch: (branch: string) => void;
   /** The run's own workspace attribution, independent of the live pointer (#3381 review). */
   readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
   /** One repository projection shared by the information panel and composer. */
@@ -1012,6 +1064,7 @@ function WorkbenchColumns({
   actions,
   activeWorkspace,
   selectedRoot,
+  selectedBranch,
   taskIntent,
   onTaskIntentChange,
   focusRef,
@@ -1022,23 +1075,26 @@ function WorkbenchColumns({
   authority,
   onOpenGit,
   onSelectRepository,
+  onSelectBranch,
   runWorkspace,
   repositoryRoot,
   runIsActive,
 }: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
-  // #3452 F52: the setup card is unmounted whenever a binding or a run workspace arrives, so the
-  // path the operator is typing is held HERE -- this component keeps its instance across that flip
-  // (WorkbenchContent renders it unconditionally and without a key).
-  const [repositoryPathDraft, setRepositoryPathDraft] = useState<string | null>(null);
   const issueIntake = useCodingWorkbenchIssueIntake(
     repositoryRoot ?? "",
     `${activeWorkspace.activeBinding?.workspaceId ?? ""}:${history.conversationId ?? ""}`,
   );
   const issuePending = issueIntake.state.kind === "loading";
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
-  const showSetup = bootstrapSetupVisible(state, activeWorkspace);
+  const showSetup = bootstrapSetupVisible(
+    state,
+    activeWorkspace,
+    repositoryRoot,
+    selectedBranch,
+    runIsActive,
+  );
   const startBlocker = startBlockedReason(state, t, showSetup, authority.errorMessage);
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
@@ -1115,9 +1171,7 @@ function WorkbenchColumns({
     pausedRun?.effectiveMode,
   );
   const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
-  // The composer branch chip was removed with #3563 (header-wide switcher is the single source of
-  // workspace-context truth); the info panel still reads its own branch state through
-  // `SessionContextBar`'s `useRepositoryBranchState`, so no additional subscription is needed here.
+  // Project memory follows the Workbench's own repository selection.
   useEffect(() => {
     setProjectMemoryEnabled(true);
   }, [repositoryRoot]);
@@ -1173,22 +1227,45 @@ function WorkbenchColumns({
       onReasoningEffortChange={actions.setReasoningEffort}
     />
   );
+  const repositorySelector = (
+    <WorkbenchContextControls
+      repositoryRoot={repositoryRoot}
+      selectedBranch={selectedBranch}
+      runIsActive={runIsActive}
+      runWorkspace={runWorkspace}
+      activeWorkspace={activeWorkspace}
+      mutationPending={state.mutation.status === "pending"}
+      onSelectRepository={onSelectRepository}
+      onSelectBranch={onSelectBranch}
+      onOpenGit={onOpenGit}
+    />
+  );
   if (showSetup) {
     return (
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
+          repositoryControls={
+            <WorkbenchContextControls
+              repositoryRoot={repositoryRoot}
+              selectedBranch={selectedBranch}
+              runIsActive={runIsActive}
+              runWorkspace={runWorkspace}
+              activeWorkspace={activeWorkspace}
+              mutationPending={state.mutation.status === "pending"}
+              onSelectRepository={onSelectRepository}
+              onSelectBranch={onSelectBranch}
+              onOpenGit={onOpenGit}
+              placement="setup"
+            />
+          }
           selectedRoot={repositoryRoot ?? undefined}
-          selectedBaseBranch={boundBaseBranch(activeWorkspace, repositoryRoot)}
+          selectedBaseBranch={selectedBaseBranch(activeWorkspace, repositoryRoot, selectedBranch)}
           refreshWorkspace={activeWorkspace.refresh}
           runtimePosture={runtimePosture}
-          repositoryPathDraft={repositoryPathDraft}
-          onRepositoryPathDraftChange={setRepositoryPathDraft}
           onBoundRepository={(boundRoot): void => {
-            // A successful bind flips the shared context back to a bound state; the parent window
-            // persists that selection for the next time this window opens and the setup-owned
-            // draft is released so a later selection change can seed the field again.
+            // A successful bind flips the shared context back to a bound state and persists the
+            // Workbench's own repository selection for the next opening.
             onSelectRepository(boundRoot);
-            setRepositoryPathDraft(null);
           }}
         />
       </div>
@@ -1287,6 +1364,7 @@ function WorkbenchColumns({
         </div>
       )}
       <div className={styles.composerDock}>
+        {repositorySelector}
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}
@@ -1362,16 +1440,32 @@ function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode 
   );
 }
 
-// Single source for "the bootstrap Code setup section is on screen". The setup card only appears
-// on the initial bootstrap (nothing bound yet); every subsequent workspace change flows through
-// the header-wide RepositoryFolderSwitcher and the shared ActiveWorkspaceContext, exactly like
-// every other window (Editor, Git, Local Knowledge). #3563 owner directive: the composer never
-// carries its own chooser — one place for workspace selection, not two.
+// A new repository selection needs its own verified task workspace before a run can start. An
+// active run keeps its original binding and never follows a different idle selection.
 function bootstrapSetupVisible(
   state: CodingWorkbenchRuntimeState,
   activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"],
+  repositoryRoot: string | null,
+  selectedBranch: string | undefined,
+  runIsActive: boolean,
 ): boolean {
-  return activeWorkspace.activeBinding === null && state.workspace.value === null;
+  if (runIsActive) return false;
+  if (activeWorkspace.activeBinding === null && state.workspace.value === null) return true;
+  return bindingSelectionChanged(activeWorkspace, repositoryRoot, selectedBranch);
+}
+
+function bindingSelectionChanged(
+  activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"],
+  repositoryRoot: string | null,
+  selectedBranch: string | undefined,
+): boolean {
+  const boundRoot = activeWorkspace.activeInstance?.repositoryRoot;
+  return (
+    (repositoryRoot !== null && boundRoot !== undefined && repositoryRoot !== boundRoot) ||
+    (selectedBranch !== undefined &&
+      boundRoot === repositoryRoot &&
+      activeWorkspace.activeInstance?.baseBranch !== selectedBranch)
+  );
 }
 
 function workspaceContextValue(

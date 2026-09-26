@@ -51,6 +51,10 @@ const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
 }));
+vi.mock("./codingWorkbenchRepositories", () => ({
+  repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
+  selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
+}));
 // #3389 AC3 mark-ready wiring: the mint/execute pair the propose-ready control performs, and the
 // journey-refresh read the window uses to obtain a real, matching `JourneyOutcome`. `proposePrMarkReady`
 // is replaced with a version that calls THESE mocks directly (not the real module's own approve/execute,
@@ -295,6 +299,7 @@ function renderWorkbench(
   const workbench = (
     <CodingWorkbenchWindow
       selectedRoot={
+        (activeWorkspace === undefined || activeWorkspace.activeBinding === null) &&
         chatCatalogMock.activeProject?.available === true
           ? chatCatalogMock.activeProject.path
           : undefined
@@ -507,7 +512,7 @@ describe("CodingWorkbenchWindow", () => {
 
     renderWorkbench(createInitialCodingWorkbenchRuntimeState());
 
-    expect(screen.getByLabelText("Repository path")).toHaveValue(selectedRoot);
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("Keiko");
   });
 
   function egressApprovalState(
@@ -597,10 +602,7 @@ describe("CodingWorkbenchWindow", () => {
   // The crash-recovery Retry consumes the draft exactly like Start; a successful retry that left
   // the recovery text in the re-enabled composer made it resubmittable as a brand-new follow-up
   // (review of ec04288dc).
-  // #3563: the composer no longer prints the repository/branch chip. The bound workspace identity
-  // still surfaces through the information panel (see the pins that open it via
-  // `openWorkbenchInformation`); this pin only proves the composer does NOT resurrect the chip and
-  // does NOT surface the internal task worktree name to the operator either.
+  // The visible repository is the checkout, never the internal managed worktree.
   it("keeps the internal task worktree name out of the composer", () => {
     renderWorkbench(
       liveState(),
@@ -610,7 +612,7 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.queryByText("e2e-project-task")).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("e2e-project");
   });
 
   it("clears the composer draft once a crash-recovery retry succeeds", async () => {
@@ -690,10 +692,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(taskInput).toHaveValue("");
   });
 
-  // #3563 owner directive: the composer no longer carries its own repository chooser or branch
-  // chip. The header-wide RepositoryFolderSwitcher (mounted outside this window) is the single
-  // source of workspace-context truth. This pin makes sure the composer never renders those chips.
-  it("does not render its own repository chooser or branch chip in the composer", () => {
+  it("shows one repository and branch control above the composer", () => {
     const onOpenGit = vi.fn();
     renderWorkbench(
       liveState(),
@@ -702,13 +701,13 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/keiko-task"),
     );
 
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("keiko");
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent("dev");
     expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  it("uses the bound repository for the composer without exposing its own chip", () => {
+  it("uses the bound repository for the composer context", () => {
     const selectedProject: ProjectWithAvailability = {
       path: "/repos/keiko",
       name: "Keiko",
@@ -729,11 +728,11 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("keiko");
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  it("keeps the composer active during a run without exposing chips or a Git deeplink", () => {
+  it("keeps the composer context visible and locked during a run", () => {
     const onOpenGit = vi.fn();
     chatCatalogMock.activeProject = {
       path: "/repos/keiko",
@@ -758,17 +757,12 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
-    // #3563 owner directive: no Choose-repository combobox and no Manage-branch button in the
-    // composer; the header-wide switcher (mounted outside this window) is the only workspace
-    // selector, and Git navigation happens through its own window pane.
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toBeDisabled();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  // #3563 — a global-selection change alone MUST NOT throw the operator into the setup card while an
-  // active binding exists. The composer stays where it is with the bound workspace; every workspace
-  // change flows through the header-wide RepositoryFolderSwitcher, not through a per-window chip.
+  // A separate project selection must not move a bound Workbench to another repository.
   it("keeps the composer on the bound workspace when the parent selection changes", () => {
     chatCatalogMock.activeProject = {
       path: "/repos/selected-elsewhere",
@@ -787,7 +781,7 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
     );
     expect(screen.queryByLabelText("Repository path")).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("bound");
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
   });
 
@@ -3134,16 +3128,15 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);
 
-    // #3563: no composer-owned chip anymore, so the run's workspace identity is proven through the
-    // information panel (session context bar) that stays keyed to the run, not the live pointer.
+    // Run attribution remains keyed to its original workspace after the live pointer moves.
     const dialog = openWorkbenchInformation();
     expect(screen.getByText(`workspace-a · ${WORKSPACE_A.branch} · healthy`)).toBeInTheDocument();
     const facts = dialog.querySelector(`.${styles.cmpInfoGrid ?? "missing-info-grid"}`);
     expect(facts).not.toBeNull();
     expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(/^a$/u);
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
@@ -3231,8 +3224,8 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(
       screen.queryByText(/This run keeps the authority of the workspace it started in/u),
     ).toBeNull();
-    // #3563: no composer chip, no header-mirror inside the window.
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(/^a$/u);
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
   });
 
   it("binds the editor bridge to the root the run was submitted against", async () => {
