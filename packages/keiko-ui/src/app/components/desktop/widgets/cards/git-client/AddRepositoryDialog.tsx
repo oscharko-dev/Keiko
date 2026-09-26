@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
@@ -115,6 +116,18 @@ export function AddRepositoryDialog({
   useDialogTabTrap(dialogRef);
   useModalInteractionLock({ initialFocusRef: dialogRef });
 
+  // #3646: Cancel/Escape/backdrop close this dialog while a clone/register request is still in
+  // flight (the submit button is the only control `busy` disables). The dialog then unmounts, but
+  // nothing previously cancelled the pending request, so its eventual resolution still called
+  // `onAdded`/`onClose` and silently activated the result the user had already dismissed. Once
+  // this instance is gone, its own settle handlers below become no-ops instead.
+  const closedRef = useRef(false);
+  useEffect((): (() => void) => {
+    return (): void => {
+      closedRef.current = true;
+    };
+  }, []);
+
   // Move initial focus into the dialog (first field, or the dialog container itself when a
   // mode has no field yet) so the Tab trap and Escape handler — both bound to the dialog —
   // start receiving keys immediately. Re-runs on mode switch because the field changes.
@@ -143,11 +156,18 @@ export function AddRepositoryDialog({
         : client.registerRepository({ path: localPath.trim() });
     void op.then(
       (res) => {
+        if (closedRef.current) {
+          reportClientDiagnostic(
+            "git-client: add-repository result discarded (dialog closed before response)",
+          );
+          return;
+        }
         setBusy(false);
         onAdded(res.project);
         onClose();
       },
       (err: unknown) => {
+        if (closedRef.current) return;
         setBusy(false);
         setError(formatGitError(err));
       },

@@ -896,6 +896,9 @@ export function GitClientWindow({
   const [branches, setBranches] = useState<readonly GitBranchListEntry[]>([]);
   const [branchesProjectKey, setBranchesProjectKey] = useState<string | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
+  // #3651: a rejected branch-list read must not be silently mapped to "no branches" — that
+  // disabled both switching and New branch with no explanation and no retry.
+  const [branchesError, setBranchesError] = useState<string | null>(null);
   const [summary, setSummary] = useState<GitRepositorySummary | null>(null);
   const [summaryProjectKey, setSummaryProjectKey] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -909,6 +912,10 @@ export function GitClientWindow({
   const [historyNextSkip, setHistoryNextSkip] = useState(0);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyLoadMoreError, setHistoryLoadMoreError] = useState<string | null>(null);
+  // #3650: set once a Load-more request comes back clamped to the server's bounded skip ceiling
+  // (gitRepositoryReads.ts HISTORY_SKIP_MAX) — the same final page would otherwise repeat forever
+  // with `truncated` legitimately still `true` (a full page always is, further down or not).
+  const [historyLimitReached, setHistoryLimitReached] = useState(false);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   const [status, setStatus] = useState<GitRepositoryStatusResponse | null>(null);
   const [statusProjectKey, setStatusProjectKey] = useState<string | null>(null);
@@ -956,6 +963,11 @@ export function GitClientWindow({
   // the SAME sequence guard the history and sync reads use keeps the older answer from landing.
   const reposRequestSequenceRef = useRef(0);
   const repositoryConnectSeqRef = useRef(0);
+  // #3651/#3653: same stale-guard shape as `reposRequestSequenceRef`, so a manual Retry click and
+  // the ordinary revision-driven refetch can never let an older response land over a newer one.
+  const branchesRequestSequenceRef = useRef(0);
+  const statusRequestSequenceRef = useRef(0);
+  const summaryRequestSequenceRef = useRef(0);
   const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
   const worktreeConfirmationReturnFocusRef = useRef<HTMLElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -1041,67 +1053,79 @@ export function GitClientWindow({
     setHistoryNextSkip(0);
     setHistoryLoadingMore(false);
     setHistoryLoadMoreError(null);
+    setHistoryLimitReached(false);
     setSelectedCommitSha(null);
     setWorktreeConfirmation(null);
   }, [selectedPath, resetStaging, resetCommit, resetBranchActions]);
 
-  useEffect(() => {
+  // Extracted to a callback (rather than an inline effect body) so a manual Retry click after a
+  // rejected read (#3651) can re-run exactly the same load, sharing the same stale-guard the
+  // revision-driven refetch uses.
+  const loadBranches = useCallback((): void => {
     if (selectedPath === null) {
       setBranches([]);
       setBranchesProjectKey(null);
+      setBranchesError(null);
       return;
     }
-    let cancelled = false;
+    branchesRequestSequenceRef.current += 1;
+    const requestSequence = branchesRequestSequenceRef.current;
     setBranchesLoading(true);
     void client.listBranches(selectedPath).then(
       (res) => {
-        if (cancelled) return;
+        if (branchesRequestSequenceRef.current !== requestSequence) return;
         setBranches(res.available ? res.branches : []);
         setBranchesProjectKey(selectedPath);
         setBranchesLoading(false);
+        setBranchesError(null);
       },
-      () => {
-        if (cancelled) return;
+      (err: unknown) => {
+        if (branchesRequestSequenceRef.current !== requestSequence) return;
         setBranches([]);
         setBranchesProjectKey(selectedPath);
         setBranchesLoading(false);
+        setBranchesError(formatGitError(err));
       },
     );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, redemptions, selectedPath, statusRevision]);
+  }, [client, selectedPath]);
 
-  // Repository summary carries upstream/ahead/behind/remotes for the #1576 sync control.
   useEffect(() => {
+    loadBranches();
+  }, [loadBranches, redemptions, statusRevision]);
+
+  // Repository summary carries upstream/ahead/behind/remotes for the #1576 sync control. Extracted
+  // to a callback so a manual Retry click after a rejected read (#3653) re-runs exactly this load.
+  const loadSummary = useCallback((): void => {
     if (selectedPath === null) {
       setSummary(null);
       setSummaryProjectKey(null);
       setSummaryError(null);
       return;
     }
-    let cancelled = false;
+    summaryRequestSequenceRef.current += 1;
+    const requestSequence = summaryRequestSequenceRef.current;
     setSummaryLoading(true);
     setSummaryError(null);
     void client.getSummary(selectedPath).then(
       (res) => {
-        if (cancelled) return;
+        if (summaryRequestSequenceRef.current !== requestSequence) return;
         setSummary(res);
         setSummaryProjectKey(selectedPath);
         setSummaryLoading(false);
       },
       (err: unknown) => {
-        if (cancelled) return;
+        if (summaryRequestSequenceRef.current !== requestSequence) return;
         setSummary(null);
         setSummaryProjectKey(null);
         setSummaryLoading(false);
         setSummaryError(formatGitError(err));
       },
     );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, redemptions, selectedPath, statusRevision]);
+  }, [client, selectedPath]);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary, redemptions, statusRevision]);
 
   // Dedicated remotes data may contain provider URLs for safe owner/repo inference. The compact
   // summary remains alias-only so sync state never needs URL metadata.
@@ -1142,6 +1166,7 @@ export function GitClientWindow({
       setHistoryNextSkip(0);
       setHistoryLoadingMore(false);
       setHistoryLoadMoreError(null);
+      setHistoryLimitReached(false);
       return;
     }
     if (tab !== "history") {
@@ -1158,6 +1183,7 @@ export function GitClientWindow({
     setHistoryNextSkip(0);
     setHistoryLoadingMore(false);
     setHistoryLoadMoreError(null);
+    setHistoryLimitReached(false);
     void client.getHistory({ root: selectedPath, limit: HISTORY_PAGE_SIZE, skip: 0 }).then(
       (res) => {
         if (cancelled || historyRequestSequenceRef.current !== requestSequence) return;
@@ -1199,7 +1225,13 @@ export function GitClientWindow({
   }, [client, initialCommit, optionalT, redemptions, selectedPath, statusRevision, tab]);
 
   const loadMoreHistory = useCallback((): void => {
-    if (selectedPath === null || history === null || !history.truncated || historyLoadingMore) {
+    if (
+      selectedPath === null ||
+      history === null ||
+      !history.truncated ||
+      historyLoadingMore ||
+      historyLimitReached
+    ) {
       return;
     }
     const requestSequence = historyRequestSequenceRef.current;
@@ -1214,6 +1246,16 @@ export function GitClientWindow({
           setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
           return;
         }
+        // #3650: the server clamps `skip` to its bounded ceiling (gitRepositoryReads.ts
+        // HISTORY_SKIP_MAX) and echoes the skip it actually used in `page.skip`. A clamp means
+        // this is the same final page as the previous request — appending it is a costly no-op
+        // (dedup drops every entry) and `truncated` legitimately stays `true` forever, so stop
+        // paging instead of leaving Load more to repeat the identical request indefinitely.
+        if (page.skip < skip) {
+          setHistoryLoadingMore(false);
+          setHistoryLimitReached(true);
+          return;
+        }
         setHistory((current) => (current === null ? null : appendHistoryPage(current, page)));
         setHistoryNextSkip(skip + page.entries.length);
         setHistoryLoadingMore(false);
@@ -1224,40 +1266,51 @@ export function GitClientWindow({
         setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
       },
     );
-  }, [client, history, historyLoadingMore, historyNextSkip, optionalT, selectedPath]);
+  }, [
+    client,
+    history,
+    historyLimitReached,
+    historyLoadingMore,
+    historyNextSkip,
+    optionalT,
+    selectedPath,
+  ]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
-  // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
-  useEffect(() => {
+  // longer exists (e.g. after a commit) so the diff pane returns to its empty state. Extracted to a
+  // callback so a manual Retry click after a rejected read (#3653) re-runs exactly this load.
+  const loadStatus = useCallback((): void => {
     if (selectedPath === null) {
       setStatus(null);
       setStatusProjectKey(null);
       setStatusError(null);
       return;
     }
-    let cancelled = false;
+    statusRequestSequenceRef.current += 1;
+    const requestSequence = statusRequestSequenceRef.current;
     setStatusLoading(true);
     setStatusError(null);
     void client.getStatus(selectedPath).then(
       (res) => {
-        if (cancelled) return;
+        if (statusRequestSequenceRef.current !== requestSequence) return;
         setStatus(res);
         setStatusProjectKey(selectedPath);
         setStatusLoading(false);
         setSelectedChangePath(selectedChangeResolver(res.changes, setDiffScope));
       },
       (err: unknown) => {
-        if (cancelled) return;
+        if (statusRequestSequenceRef.current !== requestSequence) return;
         setStatus(null);
         setStatusProjectKey(null);
         setStatusLoading(false);
         setStatusError(formatGitError(err));
       },
     );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, redemptions, selectedPath, statusRevision]);
+  }, [client, selectedPath]);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus, redemptions, statusRevision]);
 
   useEffect((): (() => void) => {
     const onRepositoryStateInvalidated = (event: Event): void => {
@@ -1311,7 +1364,12 @@ export function GitClientWindow({
 
   const branchOutcome = branchActions.flow.outcome;
   useEffect(() => {
-    if (branchOutcome?.status === "succeeded") {
+    // #3645: the New Branch dialog's job is branch CREATION. Once that succeeded — even if the
+    // follow-on switch (or its editor-buffer reconciliation) then failed — close it instead of
+    // leaving "Create branch" as the only visible action, which would only fail a second time with
+    // an already-exists error. The residual switch problem surfaces through the ordinary
+    // branch-outcome banner below, exactly like any other switch failure.
+    if (branchOutcome?.status === "succeeded" || branchOutcome?.createdBranchName !== undefined) {
       closeNewBranchDialog();
     }
   }, [branchOutcome, closeNewBranchDialog]);
@@ -1590,8 +1648,21 @@ export function GitClientWindow({
           startPointRefHash: baseBranch.headRefHash,
         });
         if (created.status !== "succeeded") return created;
+        // #3645: the branch is durably created from this point on regardless of what the
+        // follow-on switch does below. Announce it immediately rather than only when the
+        // composed outcome's OWN final status happens to be one that triggers an invalidation
+        // (useMutationFlow invalidates on succeeded/failed/recovery-required, but not on a
+        // "blocked" switch — e.g. a dirty worktree) — otherwise the branch list could stay stale
+        // with no event left to ever refresh it.
+        notifyGitRepositoryStateInvalidated(selectedPath, mutationRepositoryRoot);
         const switched = await client.branchSwitch({ projectId: selectedPath, branchName });
-        if (switched.status !== "succeeded") return switched;
+        if (switched.status !== "succeeded") {
+          // The switch's own diagnostic (status/blockReason/executionErrorCode/…) is preserved
+          // as-is; `createdBranchName` only ADDS the fact that creation itself already succeeded,
+          // so the New Branch dialog closes instead of leaving "Create branch" as the only
+          // action — retrying it would just fail again with an already-exists error.
+          return { ...switched, actionKind: "branch-create", createdBranchName: branchName };
+        }
         try {
           await reconcileEditorBuffers(selectedPath);
           return { ...switched, actionKind: "branch-create" };
@@ -1601,11 +1672,19 @@ export function GitClientWindow({
             status: "recovery-required",
             actionKind: "branch-create",
             executionErrorCode: "editor-buffer-reconciliation-failed",
+            createdBranchName: branchName,
           };
         }
       });
     },
-    [activeBranches, branchActions, client, reconcileEditorBuffers, selectedPath],
+    [
+      activeBranches,
+      branchActions,
+      client,
+      mutationRepositoryRoot,
+      reconcileEditorBuffers,
+      selectedPath,
+    ],
   );
 
   const syncView = deriveSyncView(activeSummary, summaryLoading);
@@ -1781,16 +1860,20 @@ export function GitClientWindow({
         repositorySelectionLocked={lockedToActiveRoot}
         branches={activeBranches}
         branchesLoading={branchesLoading}
+        branchesError={branchesError}
         status={activeStatus}
         branchBusy={branchActions.flow.busy}
         syncView={syncViewForDisplay(syncView, summaryError, t)}
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}
+        summaryError={summaryError}
         onSelectRepository={reconnectRepository}
         onSwitchBranch={switchBranch}
         onCreateBranch={openNewBranchDialog}
+        onRetryBranches={loadBranches}
         onRunSync={requestSync}
+        onRetrySummary={loadSummary}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
         onConnectToChat={() => setConnectToChatOpen(true)}
@@ -1802,6 +1885,17 @@ export function GitClientWindow({
           rejection twice. */}
       {showBranchOutcome ? (
         <div style={{ padding: "10px 18px" }}>
+          {branchOutcome?.createdBranchName !== undefined ? (
+            <p
+              data-testid="git-branch-created-notice"
+              role="status"
+              style={{ margin: "0 0 8px", font: "500 12.5px var(--font-ui)", color: "var(--fg)" }}
+            >
+              {optionalT("gitClientWindow.branch.createdPendingSwitch", {
+                branch: branchOutcome.createdBranchName,
+              })}
+            </p>
+          ) : null}
           <MutationOutcome
             outcome={branchOutcome}
             error={branchActions.flow.error}
@@ -1818,6 +1912,7 @@ export function GitClientWindow({
             onSelect={reconnectRepository}
             onConnect={() => openRepositoryDialog("open")}
             onClone={() => openRepositoryDialog("clone")}
+            onRetry={loadRepositories}
           />
         ) : (
           <>
@@ -1828,6 +1923,7 @@ export function GitClientWindow({
                 status={activeStatus}
                 statusLoading={statusLoading}
                 statusError={statusError}
+                onRetryStatus={loadStatus}
                 selectedChangePath={selectedChangePath}
                 onSelectChange={selectChange}
                 onStageFile={stageFile}
@@ -1842,6 +1938,7 @@ export function GitClientWindow({
                 historyError={historyError}
                 historyLoadingMore={historyLoadingMore}
                 historyLoadMoreError={historyLoadMoreError}
+                historyLimitReached={historyLimitReached}
                 onLoadMoreHistory={loadMoreHistory}
                 selectedCommitSha={selectedCommitSha}
                 onSelectCommit={(entry) => setSelectedCommitSha(entry.sha)}

@@ -1093,7 +1093,7 @@
   },
   "src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 6
+      "count": 3
     },
     "complexity": {
       "count": 3

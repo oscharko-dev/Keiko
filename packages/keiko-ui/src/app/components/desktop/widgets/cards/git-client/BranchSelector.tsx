@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../../Icons";
 import {
   COMPACT_BTN,
@@ -27,8 +28,13 @@ interface BranchSelectorProps {
   readonly loading: boolean;
   readonly disabled: boolean;
   readonly busy: boolean;
+  // #3651: a rejected branch-list read used to be mapped to an empty array and disable switching
+  // and New branch as though the repository simply had no branches, with no explanation and no
+  // way back short of an unrelated repository invalidation or reopening the window.
+  readonly branchesError: string | null;
   readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
   readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
+  readonly onRetryBranches: () => void;
 }
 
 function branchMatches(branch: GitBranchListEntry, query: string): boolean {
@@ -55,9 +61,12 @@ export function BranchSelector({
   loading,
   disabled,
   busy,
+  branchesError,
   onSwitchBranch,
   onCreateBranch,
+  onRetryBranches,
 }: BranchSelectorProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const menuId = useId();
@@ -140,6 +149,31 @@ export function BranchSelector({
       window.removeEventListener("blur", onWindowBlur);
     };
   }, [open]);
+
+  // #3651: render the failure and a retry action in place of the switch/New controls instead of
+  // silently presenting an empty branch list (which disabled both with no explanation).
+  if (branchesError !== null) {
+    return (
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span
+          role="alert"
+          title={branchesError}
+          style={{
+            ...SUBTLE_TEXT_STYLE,
+            color: "var(--danger)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {branchesError}
+        </span>
+        <button type="button" style={SECONDARY_BTN} onClick={onRetryBranches}>
+          {t("gitDelivery.action.retry")}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div

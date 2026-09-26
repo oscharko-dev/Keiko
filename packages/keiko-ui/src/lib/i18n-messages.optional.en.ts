@@ -120,6 +120,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Pull remote changes into the working tree? Open editor buffers will be reconciled after Git succeeds.",
   "gitClientWindow.confirm.pull.action": "Pull changes",
   "gitClientWindow.confirm.cancel": "Cancel",
+  "gitClientWindow.branch.createdPendingSwitch":
+    "Branch {branch} was created, but switching to it failed. Resolve the issue, then switch to it from the branch list.",
   "gitClientWindow.addRepository.title": "Add repository",
   "gitClientWindow.addRepository.close": "Close",
   "gitClientWindow.addRepository.mode": "Add mode",
@@ -150,6 +152,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.history.loadingMore": "Loading more commits…",
   "gitClientWindow.history.retryLoadMore": "Retry loading commits",
   "gitClientWindow.history.end": "End of history. {count} commits loaded.",
+  "gitClientWindow.history.limitReached":
+    "Reached the bounded history limit. Earlier commits are not available here.",
   "gitClientWindow.history.paginationStatusAria": "History pagination status",
   "gitClientWindow.history.commitDetailsAria": "Commit details",
   "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
@@ -346,6 +350,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.field.description": "Description",
   "commitComposer.field.descriptionPlaceholder": "Optional — explain the intent and verification",
   "commitComposer.preview.unavailable": "Preview unavailable",
+  "commitComposer.preview.retry": "Retry preview",
   "commitComposer.preview.policyActionNeeded": "Policy: action needed",
   "commitComposer.preview.meetsPolicy": "Meets commit policy",
   "commitComposer.preview.protectedBranchTitle": "Current branch is protected",
@@ -865,6 +870,15 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gatewaySetup.voice.endpointStyle.openaiCompatible": "OpenAI-compatible",
   "gatewaySetup.voice.endpointStyle.azureDeploymentPath": "Azure deployment path",
   "gatewaySetup.voice.apiVersion.azureOnly": "Azure deployment path only",
+  // #3638: the chat/embedding gateway connection's own endpoint protocol — the manual-entry twin
+  // of the audio fields above. Lets an operator select the Azure deployment path and its API
+  // version for the model gateway directly, instead of only through a config-file import.
+  "gatewaySetup.gateway.endpointStyle.label": "Gateway endpoint style",
+  "gatewaySetup.gateway.apiVersion.label": "Gateway API version",
+  "gatewaySetup.gateway.endpointStyle.unstated": "Not stated",
+  "gatewaySetup.gateway.endpointStyle.openaiCompatible": "OpenAI-compatible",
+  "gatewaySetup.gateway.endpointStyle.azureDeploymentPath": "Azure deployment path",
+  "gatewaySetup.gateway.apiVersion.azureOnly": "Azure deployment path only",
   "gatewaySetup.voice.endpointMigrationRequired":
     "Replacing a stored audio endpoint requires a fresh credential, an explicitly selected provider locality, and at least one deployment role to move.",
   "gatewaySetup.voice.semanticTurnDetection": "Semantic turn detection",

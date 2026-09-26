@@ -8,6 +8,7 @@
 
 import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
@@ -41,6 +42,9 @@ interface ConnectPanelProps {
   readonly onSelect: (path: string) => void;
   readonly onConnect: () => void;
   readonly onClone: () => void;
+  // #3652: a transient repository-list failure previously had no way back short of an unrelated
+  // re-pair or a successful add-repository flow, stranding the normal selection path.
+  readonly onRetry: () => void;
 }
 
 interface RecentRepositoriesProps {
@@ -48,6 +52,7 @@ interface RecentRepositoriesProps {
   readonly loading: boolean;
   readonly error: string | null;
   readonly onSelect: (path: string) => void;
+  readonly onRetry: () => void;
 }
 
 function RecentRepositories({
@@ -55,12 +60,19 @@ function RecentRepositories({
   loading,
   error,
   onSelect,
+  onRetry,
 }: RecentRepositoriesProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   if (error !== null) {
     return (
-      <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
-        {error}
-      </p>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+        <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, margin: 0 }}>
+          {error}
+        </p>
+        <button type="button" style={SECONDARY_BTN} onClick={onRetry}>
+          {t("gitDelivery.action.retry")}
+        </button>
+      </div>
     );
   }
   if (loading && repositories.length === 0) {
@@ -130,6 +142,7 @@ export function ConnectPanel({
   onSelect,
   onConnect,
   onClone,
+  onRetry,
 }: ConnectPanelProps): ReactNode {
   const t = useTranslate();
   return (
@@ -160,6 +173,7 @@ export function ConnectPanel({
             loading={loading}
             error={error}
             onSelect={onSelect}
+            onRetry={onRetry}
           />
         </div>
 

@@ -612,6 +612,29 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
   });
 
+  // #3652: a transient repository-list failure left Recent repositories empty with an error and no
+  // way to retry — the list was requested again only after an unrelated re-pair or a successful
+  // add-repository flow, stranding the normal selection path.
+  it("retries a failed repository list from the connect panel", async () => {
+    const user = userEvent.setup();
+    let attempt = 0;
+    const listRepositories = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("repository list unavailable");
+      return { projects: [REPO_A, REPO_B] };
+    });
+    const client = makeClient({ listRepositories });
+    render(<GitClientWindow client={client} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("repository list unavailable");
+    expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
+  });
+
   it("revalidates a repo without registering it again before persisting the path", async () => {
     const updateCfg = vi.fn();
     const client = makeClient();
@@ -1084,6 +1107,42 @@ describe("GitClientWindow — add-repository dialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(client.cloneRepository).not.toHaveBeenCalled();
     expect(connected).not.toHaveBeenCalled();
+  });
+
+  // #3646: unlike cancelling BEFORE submitting (above), this covers a request already in flight
+  // when the dialog closes — Cancel stays enabled while `busy` is true, and the eventual
+  // successful response must not silently reconnect and select the repository after the user has
+  // already dismissed the dialog.
+  it("ignores a clone result that resolves after Cancel closed the dialog mid-request", async () => {
+    const user = userEvent.setup();
+    let resolveClone!: (value: ReturnType<typeof makeProjectResponse>) => void;
+    const clonePromise = new Promise<ReturnType<typeof makeProjectResponse>>((resolve) => {
+      resolveClone = resolve;
+    });
+    const client = makeClient({ cloneRepository: vi.fn(() => clonePromise) });
+    const connected = vi.fn();
+    render(<GitClientWindow client={client} onRepositoryConnected={connected} />);
+    await user.click(await screen.findByRole("button", { name: "Clone from URL" }));
+    const dialog = screen.getByRole("dialog", { name: "Add repository" });
+    await user.type(
+      within(dialog).getByLabelText("Repository URL"),
+      "https://github.com/org/repo.git",
+    );
+    await user.type(within(dialog).getByLabelText("Clone to folder"), "/tmp/repo");
+    const cloneBtns = within(dialog).getAllByRole("button", { name: "Clone repository" });
+    await user.click(cloneBtns[cloneBtns.length - 1]!);
+    await waitFor(() => expect(client.cloneRepository).toHaveBeenCalled());
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveClone(makeProjectResponse(REPO_B));
+      await clonePromise;
+    });
+
+    expect(connected).not.toHaveBeenCalled();
+    expect(client.reconnectRepository).not.toHaveBeenCalled();
   });
 
   it("opens the dialog when the connect-repository button is clicked", async () => {
@@ -1794,6 +1853,66 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(outcome).toHaveTextContent("branch-already-exists");
   });
 
+  // #3645: branch creation can succeed while the automatic switch fails (e.g. a dirty worktree
+  // conflicting with the target branch's version of a file). The dialog must not strand the user
+  // in the branch-creation state, since retrying "Create branch" with the same name can only ever
+  // fail again with an already-exists error.
+  it("closes the New Branch dialog and names the created branch when only the follow-on switch is blocked", async () => {
+    const user = userEvent.setup();
+    const listBranches = vi.fn<GitClientSeam["listBranches"]>(async () => makeBranchList());
+    const client = makeClient({
+      listBranches,
+      branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "branch-switch",
+        preflightFindingCodes: ["dirty-worktree"],
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(listBranches).toHaveBeenCalledWith(REPO_A.path));
+    const branchReadsBeforeCreate = listBranches.mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "New branch" }));
+    const dialog = screen.getByRole("dialog", { name: "New branch" });
+    await user.type(within(dialog).getByLabelText("Branch name"), "feature/new");
+    await user.click(within(dialog).getByRole("button", { name: "Create branch" }));
+
+    await waitFor(() =>
+      expect(client.branchCreate).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        branchName: "feature/new",
+        baseBranchName: "main",
+        startPointRefHash: "aaa",
+      }),
+    );
+    expect(client.branchSwitch).toHaveBeenCalledWith({
+      projectId: REPO_A.path,
+      branchName: "feature/new",
+    });
+
+    // Branch creation succeeded, so the dialog closes instead of leaving a "Create branch" action
+    // that would only fail a second time with an already-exists error.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "New branch" })).not.toBeInTheDocument(),
+    );
+
+    // The residual switch failure surfaces through the ordinary banner, naming the branch that now
+    // durably exists rather than only reporting the switch's own rejection.
+    const notice = await screen.findByTestId("git-branch-created-notice");
+    expect(notice).toHaveTextContent("feature/new");
+    const outcome = screen.getByTestId("git-branch-outcome");
+    expect(outcome).toHaveTextContent("Blocked");
+    expect(outcome).toHaveTextContent("dirty-worktree");
+
+    // A "blocked" switch does not, by itself, invalidate repository state (useMutationFlow only
+    // does that for succeeded/failed/recovery-required) — the branch list must still refresh so
+    // the newly created branch is reachable from the selector as the recovery path.
+    await waitFor(() =>
+      expect(listBranches.mock.calls.length).toBeGreaterThan(branchReadsBeforeCreate),
+    );
+  });
+
   // Sibling-handoff gap: sync-outcome classification was fixed for fetch/pull/push, but a
   // rejected branch switch was never wired to any visible outcome — the busy spinner just turns
   // off and the branch silently stays put with no reason shown (#2841 follow-up).
@@ -1890,6 +2009,56 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     });
 
     expect(screen.queryByTestId("git-branch-outcome")).not.toBeInTheDocument();
+  });
+
+  // #3651: a rejected branch-list read must not be silently treated as "no branches" — both the
+  // branch selector and New branch went from a temporary read failure to permanently disabled,
+  // with no explanation and no way back short of an unrelated invalidation or reopening the window.
+  it("explains a branch-list failure and recovers via Retry instead of disabling branch actions silently", async () => {
+    const user = userEvent.setup();
+    let attempt = 0;
+    const listBranches = vi.fn<GitClientSeam["listBranches"]>(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("branch list unavailable");
+      return makeBranchList();
+    });
+    const client = makeClient({ listBranches });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("branch list unavailable");
+    expect(screen.queryByRole("button", { name: /^Branch:/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New branch" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New branch" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // #3653: a transient summary-read failure disabled Sync and showed its error as the description
+  // of a permanently disabled control, with no way to retry once the connection recovered.
+  it("retries a failed summary read and restores the Sync control", async () => {
+    const user = userEvent.setup();
+    let attempt = 0;
+    const getSummary = vi.fn<GitClientSeam["getSummary"]>(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("Summary fetch failed");
+      return makeSummary();
+    });
+    const client = makeClient({ getSummary });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    // The Sync button exists (in its loading state) before the rejected read has propagated into
+    // state, so wait for the error text itself rather than asserting immediately on the button.
+    expect(await screen.findByText("Summary fetch failed")).toBeInTheDocument();
+    const syncButton = screen.getByRole("button", { name: /Run sync/ });
+    expect(syncButton).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(syncButton).toBeEnabled());
+    expect(screen.queryByText("Summary fetch failed")).not.toBeInTheDocument();
   });
 
   it("renders commit history and selected commit diff metadata", async () => {
@@ -2424,6 +2593,38 @@ describe("GitClientWindow — Changes/History tabs", () => {
     );
   });
 
+  // #3650: the server clamps `skip` to a bounded ceiling (gitRepositoryReads.ts HISTORY_SKIP_MAX)
+  // but still reports `truncated: true` for a full page — a clamped response's OWN `skip` is less
+  // than what was requested, and that mismatch is the only signal that this is the same bounded
+  // final page rather than genuinely new one. Load more must stop instead of repeating the
+  // identical request forever.
+  it("stops Load more once the server reports it clamped the requested skip to its bounded ceiling", async () => {
+    const user = userEvent.setup();
+    const getHistory = vi.fn<GitClientSeam["getHistory"]>(async ({ skip = 0 }) => {
+      if (skip === 0) return makeHistoryPage(0, 50);
+      return makeHistoryPage(10, 50);
+    });
+    const client = makeClient({ getHistory });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await user.click(await screen.findByRole("button", { name: "Load more commits" }));
+
+    await waitFor(() => expect(getHistory).toHaveBeenCalledTimes(2));
+    expect(getHistory).toHaveBeenNthCalledWith(2, { root: REPO_A.path, limit: 50, skip: 50 });
+    expect(
+      await screen.findByText(
+        "Reached the bounded history limit. Earlier commits are not available here.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Load more commits|Retry loading commits/ }),
+    ).not.toBeInTheDocument();
+
+    // Nothing left can trigger a third, identical request merely from time passing.
+    expect(getHistory).toHaveBeenCalledTimes(2);
+  });
+
   it("ArrowRight on Changes tab moves focus and selection to History", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     const changesTab = await screen.findByRole("tab", { name: "Changes" });
@@ -2509,6 +2710,28 @@ describe("GitClientWindow — empty / loading / error states", () => {
 
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Status fetch failed");
+  });
+
+  // #3653: a transient status-read failure disabled Changes/Commit with no way back — the read
+  // was rescheduled only by an unrelated mutation or repository change, never by the user simply
+  // retrying once the outage ended.
+  it("retries a failed status read from its error state", async () => {
+    const user = userEvent.setup();
+    let attempt = 0;
+    const getStatus = vi.fn<GitClientSeam["getStatus"]>(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("Status fetch failed");
+      return makeStatus({ clean: true });
+    });
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Status fetch failed");
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows no-changes empty state when status is clean", async () => {
