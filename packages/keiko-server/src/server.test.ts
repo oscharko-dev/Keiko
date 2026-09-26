@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +19,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { isActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { currentActivityLogReadiness } from "./observability/activity-log-readiness.js";
+import { currentActivityLogReadiness } from "@oscharko-dev/keiko-activity-log";
 import {
   buildRedactor,
   createInMemoryUiStore,
@@ -30,19 +35,11 @@ import {
   type RequestLogContext,
 } from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import {
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/server-logger.js";
+import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 import type { EditorHotExitStore } from "./editor/hotExitStore.js";
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-} from "./observability/index.js";
+import { type ServerLogEvent } from "./observability/index.js";
 
 let server: Server;
 let staticRoot: string;

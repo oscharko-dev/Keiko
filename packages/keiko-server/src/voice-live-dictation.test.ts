@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Unit coverage for the pure request-shape helpers in the live dictation control plane (Keiko
 // Voice P3). The WebSocket upgrade/session machinery itself is exercised end to end elsewhere
 // (voice-control-ws.test.ts); this file targets the small standalone validators.
@@ -18,13 +23,7 @@ import {
 } from "./voice-live-dictation.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

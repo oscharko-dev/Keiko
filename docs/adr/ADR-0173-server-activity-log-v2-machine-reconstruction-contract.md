@@ -241,14 +241,15 @@ limit above applies; the command never guesses at a writable evidence location.
 
 Stack frames and cause chains are added to `extra` as `frames?: readonly string[]` and
 `causeChain?: readonly string[]` (Wave 2, landed:
-`packages/keiko-server/src/observability/stack-frames.ts`). Each frame entry is a single joined
+`packages/keiko-activity-log/src/stack-frames.ts`). Each frame entry is a single joined
 string in one of the following shapes: a workspace-package frame,
 `"packages/keiko-<pkg>/(dist|src)/relative/path.(js|ts):LINE:COL"`, or, for the root `keiko` bin's
 own entrypoint — which lives outside every `packages/*` directory —
 `"(dist|src)/cli/relative/path.(js|ts):LINE:COL"`. Both shapes are pinned together by one pattern,
-`FRAME_SHAPE_PATTERN` (`stack-frames.ts`), which `log-redaction.ts` re-validates structurally at the
-redaction boundary rather than trusting the producer (D4). Production browser failures additionally
-admit only `dist/ui/static/_next/static/chunks/<chunk>.js:LINE:COL`, validated by the shared
+`FRAME_SHAPE_PATTERN` (`packages/keiko-activity-log/src/stack-frames.ts`), which
+`packages/keiko-activity-log/src/log-redaction.ts` re-validates structurally at the redaction
+boundary rather than trusting the producer (D4). Production browser failures additionally admit only
+`dist/ui/static/_next/static/chunks/<chunk>.js:LINE:COL`, validated by the shared
 `isClientDiagnosticFrame` guard; the same existing frame reducer revalidates that narrow shape.
 Chunk IDs and minified line/column coordinates identify the shipped artifact without transmitting
 URL origins, arbitrary paths or enabling source maps.
@@ -281,13 +282,15 @@ built in this epic.
 The redaction side of this decision — why a frame string structurally defeats the existing path
 guards, and the field-name-keyed guard that closes the gap for real rather than resting on an
 accidental non-match — landed in Wave 2 as `redactKeikoFrames`/`redactCauseChain` in
-`log-redaction.ts`; its full shape is D4's scope, not re-litigated here, so this section keeps
+`packages/keiko-activity-log/src/log-redaction.ts`; its full shape is D4's scope, not re-litigated
+here, so this section keeps
 stating the reducer's own shape and its no-source-maps rationale.
 
 ### D4 — Redaction doctrine is unchanged: body-free, fail-closed, structural
 
-Nothing about this contract relaxes `log-redaction.ts`'s existing doctrine: guards are structural,
-not advisory, and do not depend on a caller naming its fields honestly. Every new field this ADR
+Nothing about this contract relaxes `packages/keiko-activity-log/src/log-redaction.ts`'s existing
+doctrine: guards are structural, not advisory, and do not depend on a caller naming its fields
+honestly. Every new field this ADR
 adds is additive to that doctrine, not an exception carved into it. Wave 2 landed all three
 field-name-keyed escape hatches this section anticipated, and all three share one restriction: each
 fires only at the TOP LEVEL of `extra` — `redactLogObject`'s own direct call from
@@ -297,18 +300,21 @@ field name nested inside some unrelated object carries no such promise and takes
 generic path instead.
 
 - `frames`/`causeChain` (D3) are named, typed escape hatches — `redactKeikoFrames`/`redactCauseChain`
-  in `log-redaction.ts`, dispatched by `redactGuardedArrayField` — not a bypass of the generic value
-  guards, but a **dedicated, field-name-keyed validator** for exactly these two fields, because the
-  generic prose/path guards cannot recognize a dist-anchored frame as safe without also being loose
-  enough to leak an unrelated deep path. `frames` is re-checked element-by-element against
-  `stack-frames.ts`'s own `FRAME_SHAPE_PATTERN` and `PACKAGE_DIR_NAMES` (imported from that module,
-  not restated); `causeChain` is re-checked against `DECLARED_ERROR_CLASS_SHAPE`, imported from the
-  leaf `error-classification.ts`. A non-conforming element is dropped, never echoed or replaced in
-  place — the same fail-closed direction the existing `path`-field escape hatch (`redactRoutePath`)
-  already uses — and each guarded array is additionally capped, after filtering, at the reducer's own
-  default element count (8 for `frames`, 5 for `causeChain`), so a forged over-length array cannot
-  push a real element out of the result by padding the front with junk. This is the same escape-hatch
-  architecture extended with two more named cases, not a second choke point.
+  in `packages/keiko-activity-log/src/log-redaction.ts`, dispatched by
+  `redactGuardedArrayField` — not a bypass of the generic value guards, but a **dedicated,
+  field-name-keyed validator** for exactly these two fields, because the generic prose/path guards
+  cannot recognize a dist-anchored frame as safe without also being loose enough to leak an unrelated
+  deep path. `frames` is re-checked element-by-element against
+  `packages/keiko-activity-log/src/stack-frames.ts`'s own `FRAME_SHAPE_PATTERN` and
+  `PACKAGE_DIR_NAMES` (imported from that module, not restated); `causeChain` is re-checked against
+  `DECLARED_ERROR_CLASS_SHAPE`, imported from the leaf
+  `packages/keiko-activity-log/src/error-classification.ts`. A non-conforming element is dropped,
+  never echoed or replaced in place — the same fail-closed direction the existing `path`-field escape
+  hatch (`redactRoutePath`) already uses — and each guarded array is additionally capped, after
+  filtering, at the reducer's own default element count (8 for `frames`, 5 for `causeChain`), so a
+  forged over-length array cannot push a real element out of the result by padding the front with
+  junk. This is the same escape-hatch architecture extended with two more named cases, not a second
+  choke point.
 - `diagnosticSummary` (g29 — `ServerDiagnosticRecord.message` projected under a name other than
   `message`, since `message` is itself a denied field name) needed a THIRD, scalar hatch of the same
   shape — `redactProseAllowedValue`, dispatched by `redactGuardedScalarField` — discovered by a
@@ -673,7 +679,7 @@ coherent noun groups the artifact producer and its own consumer under one verb s
   `storeFingerprint`/`indexingJob`/`stackFrames`/`causeChain`, each with its own honest `warnings`
   entry when it cannot be reconstructed) and a pasteable gateway-replay-script fixture — is
   implemented and exported (`buildReproductionSeed`, `renderGatewayReplayScriptFixture` in
-  `packages/keiko-cli/src/support-analyze.ts`), unit-tested directly, and wired to
+  `packages/keiko-activity-log/src/reader/support-analyze.ts`), unit-tested directly, and wired to
   `support analyze` itself: `--clusters` renders the whole-file `(category, op, errorKind)`
   grouping, `--seed` builds the `ReproductionSeed` for the id named by `--correlation-id`, and
   `--emit-fixture PATH` writes the pasteable gateway-replay-script fixture to `PATH`. Both
@@ -775,16 +781,18 @@ load-bearing:
 - `keiko-model-gateway` and `keiko-local-knowledge` import `classifyErrorKind` from
   `keiko-contracts` directly — literal delegation, so their `code`/`name` gate cannot drift from the
   canonical pattern because there is no local copy of it left to drift.
-- `keiko-server`'s own `errorKindOf` (`server-log.ts`) was rewritten in the same wave to route
-  through `error-classification.ts`'s `machineToken`/`contentFreeErrorClass` instead — a different,
-  purpose-built composition, not a call to `classifyErrorKind`. This still satisfies the invariant
-  `ERROR_KIND_PATTERN` protects (there is no second textual declaration of the pattern anywhere in
-  `keiko-server`), and it closes a gap `classifyErrorKind` alone cannot: that function only judges a
-  string already in hand, while `errorKindOf` also has to safely READ a hostile `code`/`name`
-  property whose accessor may throw, and — when `code` is absent — fall back to a declared class
-  name. `error-classification.ts` bundles exactly that reflective-read hardening
-  (`safeProperty`/`machineToken`/`contentFreeErrorClass`), so `keiko-server` composes from it instead
-  of composing `classifyErrorKind` with a second, hand-rolled hardening layer beside it.
+- `@oscharko-dev/keiko-activity-log`'s `errorKindOf`
+  (`packages/keiko-activity-log/src/server-log.ts`) was rewritten in the same wave to route through
+  `packages/keiko-activity-log/src/error-classification.ts`'s
+  `machineToken`/`contentFreeErrorClass` instead — a different, purpose-built composition, not a call
+  to `classifyErrorKind`. This still satisfies the invariant `ERROR_KIND_PATTERN` protects (there is
+  no second textual declaration of the pattern in `@oscharko-dev/keiko-activity-log`), and it closes
+  a gap `classifyErrorKind` alone cannot: that function only judges a string already in hand, while
+  `errorKindOf` also has to safely READ a hostile `code`/`name` property whose accessor may throw,
+  and — when `code` is absent — fall back to a declared class name.
+  `error-classification.ts` bundles exactly that reflective-read hardening
+  (`safeProperty`/`machineToken`/`contentFreeErrorClass`), so the Activity Log package composes from
+  it instead of composing `classifyErrorKind` with a second, hand-rolled hardening layer beside it.
 
 The relocated pin is `scripts/__tests__/error-kind-pattern-single-source.test.mjs`: instead of
 diffing three declarations against each other, it asserts — by a repository-wide text search over
@@ -1586,7 +1594,7 @@ rather than left implicit across the Decision section:
 
 - [ADR-0010](ADR-0010-audit-ledger-and-evidence-manifests.md) — redacted-by-construction evidence
   manifests; the precedent this contract's support-bundle manifest extends.
-- [ADR-0019](ADR-0019-modular-package-architecture.md) — dependency direction; every new log-port
+- [ADR-0019](ADR-0019-modular-package-architecture.md) and [ADR-0179](ADR-0179-activity-log-package-boundary.md) — dependency direction and the writer/store/reader package boundary; every new log-port
   edge in this contract points inward, and the server composition root is the only place a real sink
   is wired to a domain package's port.
 - [ADR-0048](ADR-0048-evidence-artifact-confidentiality.md) — confidentiality tiers and write-time
@@ -1595,8 +1603,12 @@ rather than left implicit across the Decision section:
 - Epic #3233 — the governing epic; its 12-reader audit is the source of the 36 gaps this contract
   and its later waves close.
 - #3230 — shipped the v1 activity log (`<stateDir>/logs/server.log`) this contract extends.
-- `packages/keiko-server/src/observability/server-log.ts`, `log-redaction.ts`,
-  `server-logger.ts`, `route-template.ts` — the existing choke points every new field in this
-  contract routes through.
-- `packages/keiko-server/src/correlation.ts`, `diagnostics-log.ts` — the existing correlation-id
-  guard and diagnostic-projection machinery this contract wires further rather than replaces.
+- `packages/keiko-activity-log/src/server-log.ts`,
+  `packages/keiko-activity-log/src/log-redaction.ts`, and
+  `packages/keiko-activity-log/src/server-logger.ts` — the Activity Log choke points every new log
+  field in this contract routes through.
+- `packages/keiko-server/src/observability/route-template.ts` — the server-only route-template
+  composition point this contract routes through.
+- `packages/keiko-server/src/correlation.ts` and `packages/keiko-server/src/diagnostics-log.ts` — the
+  existing correlation-id guard and diagnostic-projection machinery this contract wires further
+  rather than replaces.

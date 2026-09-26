@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Issue #539 — relationship handlers tests. The strategy: spin up an in-memory SQLite
 // behind the production factory and drive the handlers directly with synthetic
 // IncomingMessage / RouteContext fixtures. We exercise:
@@ -40,12 +42,7 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 interface FakeReq extends EventEmitter {
   headers: Record<string, string>;

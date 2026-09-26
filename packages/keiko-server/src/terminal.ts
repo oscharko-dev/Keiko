@@ -59,7 +59,7 @@ import type { Project, UiStore } from "./store/index.js";
 import { type ServerDiagnosticSink } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   recordWorkspaceRootDenial,
   resolveRecordedWorkspaceRoot,

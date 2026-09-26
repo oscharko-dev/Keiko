@@ -2,7 +2,7 @@
 // `keiko support export` shares with them.
 //
 // This file owns argv parsing, state-dir resolution, incident lookup through the lazily loaded
-// server module, and Activity Log evidence; the engine itself (`support-query.ts`) and the manifest
+// Activity Log module, and Activity Log evidence; the engine itself (`support-query.ts`) and the manifest
 // store (`support-segment-manifest.ts`, `support-segment-scan.ts`) stay argv-free and are tested on
 // data. Human output is always derived from the versioned machine result.
 
@@ -19,10 +19,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { flagValue } from "./cli-arg-parsing.js";
-import { loadServer } from "./lazy-modules.js";
+import { loadActivityLog } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
-import { activityLogFailureClassesOf } from "./support-analyze-sufficiency.js";
+import { activityLogFailureClassesOf } from "@oscharko-dev/keiko-activity-log/reader";
 import { describeErrorKind } from "./support-export.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
@@ -37,7 +37,7 @@ import {
   type SupportQueryResult,
   type SupportQuerySelection,
   type SupportQueryWindow,
-} from "./support-query.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 import {
   emitSupportManifestEvidence,
   emitSupportQueryEvidence,
@@ -54,7 +54,7 @@ import {
   type ActivityLogScannerDeps,
   type ActivityLogStoreFile,
   type SegmentManifestPassStats,
-} from "./support-segment-scan.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 
 export const SUPPORT_QUERY_USAGE = `Usage:
   keiko support query [--state-dir PATH] [--json]
@@ -276,7 +276,7 @@ export function parseSupportManifestArgs(
 
 // ─── Selection resolution ──────────────────────────────────────────────────────────────────────
 
-type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
+type LoadedActivityLog = Awaited<ReturnType<typeof loadActivityLog>>;
 
 function incidentRoots(record: SupportIncidentRecord): readonly string[] {
   const roots = [...record.correlation.childCorrelationIds];
@@ -287,11 +287,11 @@ function incidentRoots(record: SupportIncidentRecord): readonly string[] {
 }
 
 function incidentWindow(
-  server: LoadedServer,
+  activityLog: LoadedActivityLog,
   stateDir: string,
   record: SupportIncidentRecord,
 ): SupportQueryWindow {
-  const segments = server.supportIncidentSegmentFiles(stateDir, record);
+  const segments = activityLog.supportIncidentSegmentFiles(stateDir, record);
   return {
     fromMs: record.window.fromMs,
     toMs: record.window.toMs,
@@ -315,7 +315,7 @@ interface IncidentSelectionPart {
 // segments stayed pinned. Fall back to the window only then, so a correlated failure keeps
 // selecting precisely its own closure (never a sibling merely sharing the time window).
 function incidentPart(
-  server: LoadedServer,
+  activityLog: LoadedActivityLog,
   stateDir: string,
   record: SupportIncidentRecord,
 ): IncidentSelectionPart {
@@ -324,7 +324,7 @@ function incidentPart(
   const needsWindowFallback = userReport || roots.length === 0;
   return {
     roots,
-    windows: needsWindowFallback ? [incidentWindow(server, stateDir, record)] : [],
+    windows: needsWindowFallback ? [incidentWindow(activityLog, stateDir, record)] : [],
     declaredClasses: userReport ? [] : activityLogFailureClassesOf([record.fingerprint.op]),
     userReport,
   };
@@ -355,30 +355,30 @@ function eventQueryClass(filter: SupportEventFilter): SupportEventSelection["que
   return "time-window";
 }
 
-/** Turns parsed selector flags into one engine selection; incidents resolve through the server. */
+/** Turns parsed selector flags into one engine selection; incidents resolve through Activity Log. */
 export async function resolveSupportSelection(
   selector: SupportSelectorArgs,
   stateDir: string,
-  loadIncidentServer: () => Promise<LoadedServer> = loadServer,
+  loadIncidentActivityLog: () => Promise<LoadedActivityLog> = loadActivityLog,
 ): Promise<SupportQuerySelection> {
   if (selector.incidentId !== undefined) {
-    const server = await loadIncidentServer();
-    const record = server.readSupportIncident(stateDir, selector.incidentId);
+    const activityLog = await loadIncidentActivityLog();
+    const record = activityLog.readSupportIncident(stateDir, selector.incidentId);
     return incidentSelection(
       "incident",
-      record === undefined ? [] : [incidentPart(server, stateDir, record)],
+      record === undefined ? [] : [incidentPart(activityLog, stateDir, record)],
     );
   }
   if (selector.defectFingerprint !== undefined) {
-    const server = await loadIncidentServer();
+    const activityLog = await loadIncidentActivityLog();
     // The record parser admits only DEFECT_FINGERPRINT_ALGORITHM_VERSION, so equal fingerprints
     // are always of the same algorithm version and never compared across versions.
-    const records = server
+    const records = activityLog
       .listSupportIncidents(stateDir)
       .filter((record) => record.fingerprint.defectFingerprint === selector.defectFingerprint);
     return incidentSelection(
       "defect-fingerprint",
-      records.map((record) => incidentPart(server, stateDir, record)),
+      records.map((record) => incidentPart(activityLog, stateDir, record)),
     );
   }
   if (selector.correlationId !== undefined) {
@@ -398,7 +398,7 @@ export async function resolveSupportSelection(
 
 export interface SupportQueryRunDeps {
   readonly scanner?: ActivityLogScannerDeps | undefined;
-  readonly loadServer?: (() => Promise<LoadedServer>) | undefined;
+  readonly loadActivityLog?: (() => Promise<LoadedActivityLog>) | undefined;
 }
 
 export interface SupportQueryRun {
@@ -443,7 +443,7 @@ function activityErrorKind(error: unknown): ActivityLogErrorKind {
 }
 
 interface EvidenceContext {
-  readonly server: LoadedServer;
+  readonly activityLog: LoadedActivityLog;
   readonly stateDir: string;
   readonly correlationId: string;
   readonly io: CliIo;
@@ -462,7 +462,7 @@ function withActivityLog(
   context: EvidenceContext,
   write: (sink: SupportQueryEvidenceSink) => void,
 ): void {
-  const sink = context.server.createFileServerLogSink(context.stateDir);
+  const sink = context.activityLog.createFileServerLogSink(context.stateDir);
   try {
     write(sink);
   } finally {
@@ -524,10 +524,10 @@ async function resolveOrFail(
   args: SupportQueryArgs,
   context: EvidenceContext,
   io: CliIo,
-  loadIncidentServer: () => Promise<LoadedServer>,
+  loadIncidentActivityLog: () => Promise<LoadedActivityLog>,
 ): Promise<SupportQuerySelection | undefined> {
   try {
-    return await resolveSupportSelection(args.selector, context.stateDir, loadIncidentServer);
+    return await resolveSupportSelection(args.selector, context.stateDir, loadIncidentActivityLog);
   } catch (error) {
     io.err(`keiko support query: incident lookup failed (${describeErrorKind(error)})\n`);
     recordSupportQueryFailure(context, {
@@ -547,15 +547,15 @@ export async function runSupportQueryCli(
   deps: SupportQueryCliDeps = {},
 ): Promise<number> {
   const stateDir = resolveStateDir(deps.cwd ?? process.cwd(), env, args.stateDir);
-  const loadIncidentServer = deps.run?.loadServer ?? loadServer;
+  const loadIncidentActivityLog = deps.run?.loadActivityLog ?? loadActivityLog;
   const context: EvidenceContext = {
-    server: await loadIncidentServer(),
+    activityLog: await loadIncidentActivityLog(),
     stateDir,
     correlationId: randomUUID(),
     io,
     command: "query",
   };
-  const selection = await resolveOrFail(args, context, io, loadIncidentServer);
+  const selection = await resolveOrFail(args, context, io, loadIncidentActivityLog);
   if (selection === undefined) return 1;
   let run: SupportQueryRun;
   try {
@@ -658,7 +658,7 @@ export async function runSupportManifestCli(
   deps: SupportQueryCliDeps = {},
 ): Promise<number> {
   const context: EvidenceContext = {
-    server: await (deps.run?.loadServer ?? loadServer)(),
+    activityLog: await (deps.run?.loadActivityLog ?? loadActivityLog)(),
     stateDir: resolveStateDir(deps.cwd ?? process.cwd(), env, args.stateDir),
     correlationId: randomUUID(),
     io,

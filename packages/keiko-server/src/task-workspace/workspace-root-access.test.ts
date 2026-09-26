@@ -1,3 +1,7 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
@@ -30,12 +34,7 @@ import {
   type GroundedAnswerer,
   type OrchestratorInput,
 } from "../grounded-orchestrator.js";
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/index.js";
+import { type ServerLogEvent, type ServerLogSink } from "../observability/index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { assertManagedRootOwned } from "./managed-root.js";
 import {

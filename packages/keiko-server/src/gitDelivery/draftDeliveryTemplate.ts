@@ -28,7 +28,7 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { MAX_LINKED_ISSUES } from "../coding-context/codingRuntimeIssueIntake.js";
 import {
   renderDraftDeliveryChecks,

@@ -7,7 +7,7 @@ import {
 
 import { correlationIdOrUnknown } from "./correlation.js";
 import { errorKindOf, getServerLogger } from "./observability/index.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 // A raw Node header value: absent, a single value, or (for a repeated header) several. Shared by
 // every helper below that reads `Content-Type` off a request, so the union is spelled once.

@@ -54,7 +54,7 @@ import {
   serverHarnessContextCompactor,
 } from "../harness-context-compactor.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";

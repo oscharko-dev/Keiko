@@ -14,7 +14,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatGitChangeScope } from "./store/index.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

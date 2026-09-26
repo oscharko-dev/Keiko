@@ -19,7 +19,7 @@ import type {
   DraftDeliveryRunContext,
 } from "../gitDelivery/draftDeliveryTypes.js";
 import { resolveProjectWorkspace } from "../gitDelivery/execution.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../task-workspace/active-store.js";

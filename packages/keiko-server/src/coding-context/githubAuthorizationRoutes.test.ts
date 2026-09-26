@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,12 +7,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { UiHandlerDeps } from "../deps.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import {

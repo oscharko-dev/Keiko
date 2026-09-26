@@ -107,8 +107,8 @@ import type {
   CodingRepositorySearchRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
   createProductionAuxiliaryPorts,

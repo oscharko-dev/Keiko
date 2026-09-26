@@ -18,7 +18,7 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { LocalVaultKeychainAccess } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
-import { contentFreeErrorClass } from "./observability/error-classification.js";
+import { contentFreeErrorClass } from "@oscharko-dev/keiko-activity-log";
 import { savePrivateJson } from "./private-json.js";
 import {
   hasPlaintextGatewayCredentials,

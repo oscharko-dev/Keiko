@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { Socket } from "node:net";
@@ -26,12 +28,7 @@ import { maybeRunChatAutoMaintenance } from "./chat-handlers.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const DAY = 864e5;
 const RETENTION_NOW = Date.parse("2026-08-02T08:00:00.000Z");

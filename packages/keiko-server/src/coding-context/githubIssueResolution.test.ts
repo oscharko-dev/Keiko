@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createInMemoryUiStore } from "../store/index.js";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { readGitDefaultBranch } from "@oscharko-dev/keiko-tools";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import { GitHubCodeContextPortError } from "./githubCodeContextPort.js";
 import { contentFreeWorkspaceFor } from "./githubIssueReaderAuthorization.js";

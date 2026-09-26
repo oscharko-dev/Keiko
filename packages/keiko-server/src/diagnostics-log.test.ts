@@ -1,3 +1,4 @@
+import { resetServerLogFailureNotices } from "../../../tests/support/activity-log-test-support.js";
 // Unit tests for the RB-6 operator diagnostics sink and correlation-id resolver.
 import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
@@ -18,7 +19,6 @@ import {
 } from "./correlation.js";
 import { ProviderError, RateLimitError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { resetServerLogFailureNotices } from "./observability/server-log.js";
 
 const identity = (message: string): string => message;
 

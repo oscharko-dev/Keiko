@@ -2,7 +2,7 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/te
 import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
 import { describe, expect, it } from "vitest";
 
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   buildCodeContextPack,
   GITHUB_CODE_CONTEXT_OBJECT_JQ,

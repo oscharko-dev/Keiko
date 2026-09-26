@@ -2,6 +2,72 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "path": "packages/keiko-activity-log/src/error-classification.ts",
+      "owner": "contentFreeErrorClass",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/error-classification.ts",
+      "owner": "declaredErrorClassName",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/error-classification.ts",
+      "owner": "safeProperty",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/reader/support-analyze.ts",
+      "owner": "tryParseJsonObject",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/reader/support-tool-catalog.ts",
+      "owner": "lifecycleEvidence",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-log.ts",
+      "owner": "appendDurableServerLogBatch",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-log.ts",
+      "owner": "durableLogDirectory",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-log.ts",
+      "owner": "emitLogNoticeFailedWarning",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-log.ts",
+      "owner": "logDirectoryStillSame",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-log.ts",
+      "owner": "openLogDirectoryGuard",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-activity-log/src/stack-frames.ts",
+      "owner": "safeErrorProperty",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
       "path": "packages/keiko-cli/src/doctor.ts",
       "owner": "readVersion",
       "kind": "unregistered-catch",
@@ -428,20 +494,8 @@
       "count": 2
     },
     {
-      "path": "packages/keiko-cli/src/support-analyze.ts",
-      "owner": "tryParseJsonObject",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-cli/src/support-export.ts",
       "owner": "discoverServerLogFiles",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support-tool-catalog.ts",
-      "owner": "lifecycleEvidence",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -5470,60 +5524,6 @@
     {
       "path": "packages/keiko-server/src/native-file-dialog/route.ts",
       "owner": "normalizeDefaultPath",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/error-classification.ts",
-      "owner": "contentFreeErrorClass",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/error-classification.ts",
-      "owner": "declaredErrorClassName",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/error-classification.ts",
-      "owner": "safeProperty",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/server-log.ts",
-      "owner": "appendDurableServerLogBatch",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/server-log.ts",
-      "owner": "durableLogDirectory",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/server-log.ts",
-      "owner": "emitLogNoticeFailedWarning",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/server-log.ts",
-      "owner": "logDirectoryStillSame",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/server-log.ts",
-      "owner": "openLogDirectoryGuard",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/observability/stack-frames.ts",
-      "owner": "safeErrorProperty",
       "kind": "unregistered-catch",
       "count": 1
     },

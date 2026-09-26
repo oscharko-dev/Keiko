@@ -15,13 +15,13 @@ import {
 import {
   causeChain as productionCauseChain,
   createFileServerLogSink,
+  formatServerLogLine,
   keikoStackFrames,
+  redactLogFields,
   type ServerLogCategory,
   type ServerLogSink,
-} from "@oscharko-dev/keiko-server";
-import { redactLogFields } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
-import { formatServerLogLine } from "../../keiko-server/src/observability/server-log.js";
-import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
+} from "@oscharko-dev/keiko-activity-log";
+import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
 
 import {
   analyzeLogText,
@@ -73,7 +73,7 @@ function line(fields: Record<string, unknown>): string {
 // renamed, recategorised or deleted in production moves this file's INPUTS — the test cannot keep
 // asserting against an op the product no longer emits.
 const OP_CATALOG_PATH = fileURLToPath(
-  new URL("../../../docs/observability/op-catalog.generated.json", import.meta.url),
+  new URL("../../../../docs/observability/op-catalog.generated.json", import.meta.url),
 );
 
 interface OpCatalogDocument {

@@ -7,8 +7,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isAbsolute } from "node:path";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   activityLogEvent,

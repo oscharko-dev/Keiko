@@ -1,3 +1,7 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 // Integration coverage for the #447 controlled repair service (Issue #447, Epic #443). Exercises the
 // real worktree adapter + provisioning re-materialization against disposable git repositories and
 // proves: deterministic repair of recoverable states (AC3) — recreate a missing worktree, re-link a
@@ -43,12 +47,7 @@ import type {
 } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/index.js";
+import { type ServerLogEvent, type ServerLogSink } from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 

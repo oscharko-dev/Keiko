@@ -89,8 +89,22 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
-import { redactRoutePath } from "./route-template.js";
 import { FRAME_SHAPE_PATTERN, PACKAGE_DIR_NAMES } from "./stack-frames.js";
+
+export type ActivityLogRouteRedactor = (pathname: string, maxLength: number) => string | undefined;
+
+const FAIL_CLOSED_ROUTE_REDACTOR: ActivityLogRouteRedactor = () => undefined;
+let activityLogRouteRedactor: ActivityLogRouteRedactor = FAIL_CLOSED_ROUTE_REDACTOR;
+
+/** Installs the server-owned route-template reducer without importing the server graph. */
+export function configureActivityLogRouteRedactor(redactor: ActivityLogRouteRedactor): void {
+  activityLogRouteRedactor = redactor;
+}
+
+/** Restores the package's fail-closed default. Intended for isolated tests. */
+export function resetActivityLogRouteRedactor(): void {
+  activityLogRouteRedactor = FAIL_CLOSED_ROUTE_REDACTOR;
+}
 
 // A log field value is an identifier, a code, a host or a status — never prose. 160 characters is
 // far above every legitimate value in the instrumentation surface and far below any body.
@@ -515,7 +529,7 @@ export function redactLogString(value: string): string {
   // path this server actually serves, reduced to its route template. Anything the reducer declines
   // — an unknown root, a traversal, a template that would not fit the string cap — is refused.
   if (looksLikeFilesystemPath(value)) {
-    return redactRoutePath(value, MAX_LOG_STRING_LENGTH) ?? REDACTED_PATH;
+    return activityLogRouteRedactor(value, MAX_LOG_STRING_LENGTH) ?? REDACTED_PATH;
   }
   return value;
 }
@@ -644,7 +658,7 @@ function redactProseAllowedValue(value: string): string {
   if (looksLikePersonalIdentifier(value)) return REDACTED_PERSONAL;
   if (STRUCTURED_PAYLOAD_PATTERN.test(value)) return REDACTED_SHAPE;
   if (looksLikeFilesystemPath(value)) {
-    return redactRoutePath(value, MAX_LOG_STRING_LENGTH) ?? REDACTED_PATH;
+    return activityLogRouteRedactor(value, MAX_LOG_STRING_LENGTH) ?? REDACTED_PATH;
   }
   return value;
 }

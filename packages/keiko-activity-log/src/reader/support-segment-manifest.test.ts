@@ -38,7 +38,7 @@ import {
   fixtureProcess,
   segmentIdentity,
   writeFixtureSegment,
-} from "./test-support/activity-log-segments.js";
+} from "../../../../tests/support/activity-log-segments.js";
 
 const T0 = Date.UTC(2026, 8, 18, 9, 0, 0);
 const INCIDENT_ID = "0123456789abcdef0123456789abcdef";

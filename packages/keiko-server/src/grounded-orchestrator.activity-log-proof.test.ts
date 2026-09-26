@@ -1,3 +1,7 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Activity Log proofs for connected-context retrieval (#3532).
 //
 // `retrieveConnectedContextPack` is the real, exported orchestrator entry point that drives
@@ -26,7 +30,6 @@ import {
   type OrchestratorDeps,
   type OrchestratorInput,
 } from "./grounded-orchestrator.js";
-import { createBufferedServerLogSink, type BufferedServerLogSink } from "./observability/index.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

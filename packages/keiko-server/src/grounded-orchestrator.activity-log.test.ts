@@ -1,3 +1,8 @@
+import { resetServerLogFailureNotices } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Activity-log contract for connected-context retrieval (#3347). Every invocation emits one start
 // and exactly one body-free terminal line, including failure and cancellation paths.
 
@@ -35,15 +40,12 @@ import {
 } from "./grounded-orchestrator.js";
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
 import {
-  createBufferedServerLogSink,
   createFileServerLogSink,
-  resetServerLogFailureNotices,
-  type BufferedServerLogSink,
   type ServerLogEvent,
   type ServerLogSink,
 } from "./observability/index.js";
 import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
-import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "./observability/server-log.js";
+import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "@oscharko-dev/keiko-activity-log";
 
 const FIXTURE_NOW_MS = 1_700_000_000_000;
 const FIXTURE_ROOT = "/private/customer/connected-context-log-fixture";

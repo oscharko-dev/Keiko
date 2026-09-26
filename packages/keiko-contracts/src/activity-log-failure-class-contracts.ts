@@ -37,17 +37,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-contract",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: [],
       end: [],
       failure: [],
-      loss: ["server-log.line-dropped", "server-log.write-failed"],
+      loss: ["activity-log.writer-rejected", "server-log.line-dropped", "server-log.write-failed"],
     },
     requiredCausalOperations: ["server-log.line-dropped", "server-log.write-failed"],
-    requiredLossOperations: ["server-log.line-dropped", "server-log.write-failed"],
-    requiredProofOperations: ["server-log.line-dropped", "server-log.write-failed"],
+    requiredLossOperations: [
+      "activity-log.writer-rejected",
+      "server-log.line-dropped",
+      "server-log.write-failed",
+    ],
+    requiredProofOperations: [
+      "activity-log.writer-rejected",
+      "server-log.line-dropped",
+      "server-log.write-failed",
+    ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [],
     requiredEvidenceClasses: [
@@ -64,7 +72,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-loss",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: [],
@@ -85,7 +93,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-persistence",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: ["server-log.safe-open"],
@@ -120,7 +128,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-pin",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: ["activity-log.pin.created"],
       state: [],
@@ -155,7 +163,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-policy",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: ["activity-log.policy.conflict"],
@@ -176,7 +184,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-pressure",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: ["activity-log.pressure"],
@@ -197,7 +205,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-readiness",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: ["activity-log.readiness"],
@@ -218,7 +226,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-retention",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: ["activity-log.retention.pruned"],
@@ -239,7 +247,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "activity-log-segment",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: [],
       state: [],
@@ -7310,7 +7318,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "support-incident",
-    requiredProductSurfaces: ["keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: ["support.incident.created"],
       state: ["support.incident.deduplicated"],

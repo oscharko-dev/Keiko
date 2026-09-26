@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
@@ -15,7 +16,6 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
   createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,

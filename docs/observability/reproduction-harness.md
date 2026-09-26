@@ -19,7 +19,7 @@ records why the underlying fields exist and what each one does and does not prom
    it as a machine-readable `LogTimeline`. See [`README.md`](README.md#worked-example-keiko-support-analyze)
    for a worked example of this step.
 3. **Build a reproduction seed.** `buildReproductionSeed(text, correlationId, generatedAt)`
-   (`packages/keiko-cli/src/support-analyze.ts`) assembles everything reconstructable for that
+   (`packages/keiko-activity-log/src/reader/support-analyze.ts`) assembles everything reconstructable for that
    correlation id into one `ReproductionSeed`: the ordered `timeline`, a `gatewayScript` when the
    timeline includes a model-gateway call, an `httpRequest` seed, a `storeFingerprint` (bundle
    only), an `indexingJob` seed, `stackFrames`/`causeChain`, and — always — a `warnings` array
@@ -104,7 +104,7 @@ from the timeline the same way; scaffold the test against the real handler or st
 instead of `Gateway`, seeded with those fields.
 
 **Current scope, stated plainly.** `buildReproductionSeed` and `renderGatewayReplayScriptFixture`
-are implemented, tested, and exported from `packages/keiko-cli/src/support-analyze.ts`, and are
+are implemented, tested, and exported from `packages/keiko-activity-log/src/reader/support-analyze.ts`, and are
 also wired directly onto `support analyze` itself: `keiko support analyze FILE --correlation-id ID
 --seed` prints the `ReproductionSeed` for that id (as text, or as JSON alongside `--json`), and
 `keiko support analyze FILE --correlation-id ID --emit-fixture PATH` writes the pasteable

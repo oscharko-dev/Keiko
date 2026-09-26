@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../../tests/support/buffered-server-log.js";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -8,13 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import { buildCspHeader } from "../../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "../../observability/index.js";
+import { createServerLogger, setServerLogger } from "../../observability/index.js";
 import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
 import {

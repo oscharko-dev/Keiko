@@ -24,10 +24,8 @@ import {
   readableActivityLogFileNames,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
-import {
-  openSafeArtifactFile,
-  SafeArtifactFileError,
-} from "@oscharko-dev/keiko-security/fs-hardening";
+import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
+import { describeErrorKind } from "@oscharko-dev/keiko-activity-log/reader";
 import type { AuditResult } from "./audit.js";
 
 // The one byte that ends a log line in this format (server-log.ts's own file sink writes ASCII
@@ -70,20 +68,7 @@ export interface SkippedLogFile {
   readonly errorKind: string;
 }
 
-const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
-
-// Identifies an unknown error for redacted diagnostics without ever surfacing its `message` (which
-// an fs error uses to quote the absolute path it failed on, AGENTS.md §7): the shared hardened
-// primitives throw a `SafeArtifactFileError` whose closed `kind` is the diagnosis; Node's own fs
-// errors set a short, all-caps `code` (ENOENT, EACCES, EISDIR, EMFILE, EROFS, …); anything else —
-// no `code` at all, or a `code` that is not shaped like one of those short identifiers — falls back
-// to the error's own constructor name.
-export function describeErrorKind(error: unknown): string {
-  if (error instanceof SafeArtifactFileError) return error.kind;
-  const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && ERROR_CODE_PATTERN.test(code)) return code;
-  return error instanceof Error ? error.constructor.name : "Error";
-}
+export { describeErrorKind } from "@oscharko-dev/keiko-activity-log/reader";
 
 // The state directory: the trust root every Activity Log file is read under, so a symlinked `logs`
 // directory is refused here exactly as the writer refuses it.

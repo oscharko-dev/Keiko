@@ -4,12 +4,12 @@ import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { formatActivityLogProofLine } from "../../../tests/support/activity-log-proof.js";
-import { installLayoutOverrideActivityLogEvent } from "./install-layout.js";
+import { formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
+import { installLayoutOverrideActivityLogEvent } from "../../../keiko-cli/src/install-layout.js";
 import {
   processExitingActivityLogEvent,
   processFatalActivityLogEvent,
-} from "./process-activity-log.js";
+} from "../../../keiko-cli/src/process-activity-log.js";
 import {
   analyzeLogText,
   buildReproductionSeed,

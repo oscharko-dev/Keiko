@@ -22,18 +22,18 @@ import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-server";
-import { createFileServerLogSink } from "@oscharko-dev/keiko-server/observability/server-log";
+import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
-import { loadServer } from "./lazy-modules.js";
+import { loadActivityLog } from "./lazy-modules.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
-import { analyzeLogText } from "./support-analyze.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   fixtureLine,
   fixtureProcess,
   segmentIdentity,
   writeFixtureSegment,
-} from "./test-support/activity-log-segments.js";
+} from "../../../tests/support/activity-log-segments.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 const roots: string[] = [];
@@ -99,12 +99,12 @@ function exportDeps(cwd: string): SupportCliDeps {
 
 const AUDIT_ENV = { KEIKO_LOCAL_STATE_AUDITOR: "/opt/keiko/scripts/lib/local-state-audit.mjs" };
 
-// The support commands reach keiko-server through `loadServer()`, the whole server module graph
+// Query and manifest commands reach the Activity Log through `loadActivityLog()`, its isolated graph
 // imported lazily. That first import is the slowest step of this suite and, under coverage or on a
 // slow filesystem, can alone exceed the per-test budget of whichever test runs first. Pay it once
 // here, bounded on the hook as in portable-macos-activation.test.ts, so a real hang still fails.
 beforeAll(async () => {
-  await loadServer();
+  await loadActivityLog();
 }, 60_000);
 describe("keiko support query/manifest argument parsing (#3531)", () => {
   it.each([

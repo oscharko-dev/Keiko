@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   JourneyObservationController,
   type JourneyObservationOptions,

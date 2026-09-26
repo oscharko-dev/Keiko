@@ -22,7 +22,7 @@ import {
 } from "./debugCapsulePlan.js";
 import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
-import { createFileServerLogSink } from "../../observability/server-log.js";
+import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   assertDebugTargetCandidate,
   assertDebugLaunchEnvironment,
@@ -45,7 +45,7 @@ import {
   expectActivityLogProof,
   readPersistedActivityLog,
 } from "../../../../../tests/support/activity-log-proof.js";
-import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "../../observability/server-log.js";
+import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "@oscharko-dev/keiko-activity-log";
 
 describe("opaque debug target parser security boundary", () => {
   it("accepts only plain or null-prototype records", () => {

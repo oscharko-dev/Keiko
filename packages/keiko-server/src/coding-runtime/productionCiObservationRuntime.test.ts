@@ -13,7 +13,7 @@ import {
 import { CHECK, failureFacts } from "../gitDelivery/ciObservationTest/_providerFacts.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";

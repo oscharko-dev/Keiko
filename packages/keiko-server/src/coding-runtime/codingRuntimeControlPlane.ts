@@ -14,7 +14,7 @@ import type {
   GitDeliveryRunAuthorityPort,
 } from "../gitDelivery/runBoundAuthority.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";

@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 
@@ -14,7 +16,7 @@ import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import { createProductionRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
 import { createProductionRuntimeOperationGuard } from "./productionCodingRuntimePorts.js";
-import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
+import { type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 type CodingRuntimePublicSnapshot = Extract<
   CodingRuntimeOrchestratorResult,

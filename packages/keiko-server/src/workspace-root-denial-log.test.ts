@@ -1,8 +1,8 @@
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { describe, expect, it } from "vitest";
-
-import { createBufferedServerLogSink } from "./observability/server-log.js";
 import {
   recordManagedRootRequestDenial,
   recordWorkspaceRootDenial,

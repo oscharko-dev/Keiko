@@ -15,7 +15,7 @@ import {
   expectActivityLogProof,
   persistedActivityLogLines,
   readPersistedActivityLog,
-} from "../../../../tests/support/activity-log-proof.js";
+} from "../../../tests/support/activity-log-proof.js";
 import {
   persistActivityLogLossSummary,
   resetActivityLogLossSummaryForTests,

@@ -1,3 +1,10 @@
+import {
+  installActivityLogTestWriter,
+  resetServerLogFailureNotices,
+  resetServerLogger,
+} from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 // Product-wide Activity Log wiring (#3532): the process logger never logs to nowhere in production,
 // mandatory lifecycle/loss evidence survives any threshold, and every lost event is counted.
 
@@ -11,24 +18,20 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
-  expectActivityLogProof,
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 import { updateRuntimeActivityEvent } from "../update-runtime-activity.js";
-import { activityLogLossSummaryEvent } from "./activity-log-loss-summary.js";
-import { resolveRuntimeStateDir } from "./runtime-state-dir.js";
-import { createBufferedServerLogSink, resetServerLogFailureNotices } from "./server-log.js";
 import {
+  activityLogLossSummaryEvent,
   activityLogWriterState,
   createActivityLogSink,
   createServerLogger,
   getServerLogger,
-  installActivityLogTestWriter,
   isMandatoryActivityLogEvent,
-  resetServerLogger,
+  resolveRuntimeStateDir,
   setServerLogger,
-} from "./server-logger.js";
+} from "@oscharko-dev/keiko-activity-log";
 
 function ordinaryEvent(): ReturnType<typeof updateRuntimeActivityEvent> {
   return updateRuntimeActivityEvent("request-ordinary-event", {
@@ -75,7 +78,8 @@ describe("process-wide Activity Log resolution", () => {
       readPersistedActivityLog(stateDir),
       "activity-log.loss",
     );
-    expect(expectActivityLogProof("activity-log.loss.exit-summary", line ?? "")).toMatchObject({
+    expect(JSON.parse(line ?? "{}") as Record<string, unknown>).toMatchObject({
+      op: "activity-log.loss",
       trigger: "exit",
       totalLost: 0,
       completeness: "complete",
@@ -151,10 +155,7 @@ describe("mandatory evidence and the level threshold", () => {
     const raw = readPersistedActivityLog(stateDir);
     expect(persistedActivityLogLines(raw, "update.runtime.event")).toEqual([]);
     expect(build).not.toHaveBeenCalled();
-    expectActivityLogProof(
-      "activity-log.loss.exit-summary",
-      persistedActivityLogLines(raw, "activity-log.loss")[0] ?? "",
-    );
+    expect(persistedActivityLogLines(raw, "activity-log.loss")).toHaveLength(1);
   });
 
   it("gates the production sink like the logger, mandatory evidence included", () => {

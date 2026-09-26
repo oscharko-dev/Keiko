@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Wiring test for `buildUiHandlerDeps`'s composition of the five keychain key-tier callers that,
 // until this change, could resolve a local vault key (env -> keychain -> keyfile,
 // `@oscharko-dev/keiko-security/secret-vault`'s `resolveLocalVaultKey`) without ever being able to
@@ -33,13 +38,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_HOT_EXIT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
 type ResolveLocalVaultKeyOptions = Parameters<

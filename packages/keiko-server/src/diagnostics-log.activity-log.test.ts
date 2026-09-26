@@ -1,3 +1,4 @@
+import { resetServerLogFailureNotices } from "../../../tests/support/activity-log-test-support.js";
 // What the operator diagnostic sink puts on the ACTIVITY LOG line, as opposed to what it prints
 // to stderr. The record is a caller-supplied object, so the question this suite answers is not
 // "does the redactor work" (log-redaction.test.ts owns that) but "which fields of the record are
@@ -15,11 +16,7 @@ import {
   serverDiagnosticFromError,
 } from "./diagnostics-log.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import {
-  closeFileServerLogSinks,
-  resetServerLogFailureNotices,
-  SERVER_LOG_LEVEL_ENV,
-} from "./observability/index.js";
+import { closeFileServerLogSinks, SERVER_LOG_LEVEL_ENV } from "./observability/index.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
   const raw = readPersistedActivityLog(stateDir).trim();

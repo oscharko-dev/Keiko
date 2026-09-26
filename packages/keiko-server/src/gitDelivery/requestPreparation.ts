@@ -25,8 +25,8 @@ import {
 } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
-import { errorKindOf } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { gitDeliveryActivityErrorKind, resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";

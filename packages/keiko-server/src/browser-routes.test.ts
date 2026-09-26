@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0017 D8 — /api/browser/* route integration tests. A FakeBrowserSessionManager replaces
 // the real CDP-backed manager so these tests never open a real WebSocket. The createUiServer
 // fixture mirrors terminal.test.ts so the CSRF guard, host-check, and SSE framer run live.
@@ -18,12 +20,7 @@ import { handleBrowserEvents, openBrowserSseStream } from "./browser.js";
 import type { SseBackpressureSignal } from "./sse-write.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   BrowserToolError,
   type BrowserEventEmitter,

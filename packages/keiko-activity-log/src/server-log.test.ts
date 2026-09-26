@@ -96,8 +96,8 @@ const TEST_FILE_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "server-log.write-failed",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/server-log.failureNoticeEvent",
+  owner: "keiko-activity-log",
+  emitter: "server-log.failureNoticeEvent",
   fields: {
     failedOp: { type: "string", dataClass: "opaque-id", required: false, maxLength: 160 },
     rejectionKind: {
@@ -532,13 +532,10 @@ function directoryBytes(directory: string): number {
 }
 
 const serverLogDistModule = pathToFileURL(
-  resolve(dirname(fileURLToPath(import.meta.url)), "../../dist/observability/server-log.js"),
+  resolve(dirname(fileURLToPath(import.meta.url)), "../dist/server-log.js"),
 ).href;
 const contractsDistModule = pathToFileURL(
-  resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    "../../../keiko-contracts/dist/observability.js",
-  ),
+  resolve(dirname(fileURLToPath(import.meta.url)), "../../keiko-contracts/dist/observability.js"),
 ).href;
 
 // A forever writer that stops by itself exits with this code, so a test can tell it from a kill.
@@ -1409,8 +1406,8 @@ describe("server activity log line format", () => {
       schemaVersion: 1,
       op: "registry.identity.fixture",
       category: "diagnostic",
-      owner: "keiko-server",
-      emitter: "observability/server-log.test",
+      owner: "keiko-activity-log",
+      emitter: "server-log.test",
       fields: {},
       causal: "none",
       lifecycle: "state",

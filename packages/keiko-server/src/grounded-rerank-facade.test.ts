@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,11 +26,8 @@ import {
   rerankSelection,
 } from "./grounded-rerank-facade.js";
 import {
-  createBufferedServerLogSink,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-  type BufferedServerLogSink,
   type ServerLogThreshold,
 } from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";

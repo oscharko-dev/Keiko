@@ -20,7 +20,7 @@ import {
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 // A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.

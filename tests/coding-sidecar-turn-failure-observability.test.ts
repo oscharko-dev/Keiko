@@ -1,3 +1,4 @@
+import { resetServerLogger } from "./support/activity-log-test-support.js";
 // #3593: a Coding Workbench turn the model provider refuses is never silent. The provider behind a
 // LiteLLM OpenAI-compatible route answers 400 to the first turn. The run gets one closed-code event,
 // and the persisted Activity Log, reconstructed by `keiko support analyze`'s own analyzer, shows the
@@ -16,12 +17,11 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 
-import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
+import { analyzeLogText, findTimeline } from "@oscharko-dev/keiko-activity-log/reader";
 import { mockRequest, mockResponse } from "../packages/keiko-server/src/_support.js";
 import { CodingRuntimeEventHub } from "../packages/keiko-server/src/coding-runtime/codingRuntimeEventHub.js";
 import { handleCodingSidecarGatewayChatCompletions } from "../packages/keiko-server/src/coding-sidecar-gateway.js";
 import { buildRedactor, type UiHandlerDeps } from "../packages/keiko-server/src/deps.js";
-import { resetServerLogger } from "../packages/keiko-server/src/observability/index.js";
 import type { RouteContext } from "../packages/keiko-server/src/routes.js";
 import { createRunRegistry } from "../packages/keiko-server/src/runs.js";
 import { createInMemoryUiStore } from "../packages/keiko-server/src/store/index.js";

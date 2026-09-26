@@ -1,3 +1,7 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 // Integration coverage for the managed task-workspace provisioning + activation service (Issue #445).
 // Exercises the real worktree adapter against disposable git repositories and proves every Acceptance
 // Criterion and the enumerated negative paths: success (AC1), reject unsafe/unmanaged/conflict (AC2),
@@ -93,12 +97,7 @@ function failProofFor(worktreePath: string, cause: Error): void {
 }
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/index.js";
+import { type ServerLogEvent, type ServerLogSink } from "../observability/index.js";
 import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const __twMutex = createWorkspaceMutexRegistry();

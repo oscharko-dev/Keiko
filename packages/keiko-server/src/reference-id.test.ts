@@ -8,6 +8,8 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 
 // The failing WebKit smoke run's chat id: its digits across the last hyphen are Luhn-valid.
 const FLAGGED_ID = "1404206d-9ab6-4bca-8853-813867352087";
@@ -24,8 +26,7 @@ vi.mock("node:crypto", async (importOriginal) => {
 const { MAX_REFERENCE_ID_DRAWS, ReferenceIdExhaustedError, newReferenceId } =
   await import("./reference-id.js");
 const { createInMemoryUiStore } = await import("./store/index.js");
-const { createBufferedServerLogSink, createServerLogger, resetServerLogger, setServerLogger } =
-  await import("./observability/index.js");
+const { createServerLogger, setServerLogger } = await import("./observability/index.js");
 
 function draws(...ids: string[]): () => string {
   const queue = [...ids];

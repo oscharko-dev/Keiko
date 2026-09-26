@@ -23,10 +23,13 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
-import type { SupportIncidentSegmentFile } from "@oscharko-dev/keiko-server";
-import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
+import type { SupportIncidentSegmentFile } from "@oscharko-dev/keiko-activity-log";
+import {
+  ActivityLogReadError,
+  readActivityLogFileLines,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { flagValue } from "./cli-arg-parsing.js";
-import { loadServer } from "./lazy-modules.js";
+import { loadActivityLog } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
 import {
@@ -35,11 +38,11 @@ import {
   type ActivityLogEvidenceSummary,
   type ActivityLogTextLine,
   type AnalyzeAllResult,
-} from "./support-analyze.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 import {
   activityLogFailureClassesOf,
   restrictActivityLogSufficiency,
-} from "./support-analyze-sufficiency.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 
 export const SUPPORT_INCIDENT_USAGE = `Usage:
   keiko support incident list [--state-dir PATH] [--json]
@@ -302,10 +305,10 @@ export function renderSupportIncidentShow(incident: SupportIncident): string {
 
 // ─── Command execution ─────────────────────────────────────────────────────────────────────────
 
-type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
+type LoadedActivityLog = Awaited<ReturnType<typeof loadActivityLog>>;
 
 interface IncidentContext {
-  readonly server: LoadedServer;
+  readonly activityLog: LoadedActivityLog;
   readonly stateDir: string;
   readonly io: CliIo;
   readonly json: boolean;
@@ -316,7 +319,7 @@ function printJson(io: CliIo, value: unknown): void {
 }
 
 function runList(context: IncidentContext): number {
-  const records = context.server.listSupportIncidents(context.stateDir);
+  const records = context.activityLog.listSupportIncidents(context.stateDir);
   if (context.json) printJson(context.io, { incidents: records });
   else context.io.out(renderSupportIncidentList(records));
   return 0;
@@ -326,7 +329,7 @@ function findRecord(
   context: IncidentContext,
   incidentId: string,
 ): SupportIncidentRecord | undefined {
-  const record = context.server.readSupportIncident(context.stateDir, incidentId);
+  const record = context.activityLog.readSupportIncident(context.stateDir, incidentId);
   if (record === undefined) {
     context.io.err(`keiko support incident: no open incident ${incidentId}\n`);
   }
@@ -339,7 +342,7 @@ function resolveOrReport(
 ): SupportIncident | undefined {
   const record = findRecord(context, incidentId);
   if (record === undefined) return undefined;
-  const segments = context.server.supportIncidentSegmentFiles(context.stateDir, record);
+  const segments = context.activityLog.supportIncidentSegmentFiles(context.stateDir, record);
   try {
     return resolveSupportIncident(record, segments, context.stateDir);
   } catch (error) {
@@ -370,7 +373,7 @@ function runShow(context: IncidentContext, incidentId: string, publicOnly: boole
 }
 
 function runReport(context: IncidentContext): number {
-  const result = context.server.recordUserReportedIncident(context.stateDir);
+  const result = context.activityLog.recordUserReportedIncident(context.stateDir);
   if (context.json) {
     printJson(
       context.io,
@@ -391,7 +394,7 @@ function runReport(context: IncidentContext): number {
 }
 
 function runDismiss(context: IncidentContext, incidentId: string): number {
-  const outcome = context.server.dismissSupportIncident(context.stateDir, incidentId);
+  const outcome = context.activityLog.dismissSupportIncident(context.stateDir, incidentId);
   if (outcome === "dismissed") {
     context.io.out(`Dismissed incident ${incidentId}.\n`);
     return 0;
@@ -436,6 +439,6 @@ export async function runSupportIncidentCli(
     return 2;
   }
   const stateDir = resolveStateDir(deps.cwd ?? process.cwd(), env, parsed.value.stateDir);
-  const server = await loadServer();
-  return dispatch({ server, stateDir, io, json: parsed.value.json }, parsed.value);
+  const activityLog = await loadActivityLog();
+  return dispatch({ activityLog, stateDir, io, json: parsed.value.json }, parsed.value);
 }

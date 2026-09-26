@@ -8,16 +8,16 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-import { createFileServerLogSink } from "@oscharko-dev/keiko-server";
+import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   validateToolLifecycleEvent,
   redactLogFields,
 } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
-import * as lazyModules from "./lazy-modules.js";
-import { runSupportCli } from "./support.js";
+import * as lazyModules from "../../../keiko-cli/src/lazy-modules.js";
+import { runSupportCli } from "../../../keiko-cli/src/support.js";
 import type { ToolCatalogLogEvidence } from "./support-tool-catalog.js";
 import { defaultServerDiagnosticSink } from "@oscharko-dev/keiko-server/diagnostics-log";
-import { formatServerLogLine } from "@oscharko-dev/keiko-server/observability/server-log";
+import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
 import { createCatalogToolBinder } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolDispatch";
 import type { CatalogToolBinderInput } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolPorts";
 // B3-24: catalogToolFixture.ts lives under packages/keiko-server/src/tool-catalog/__fixtures__/,
@@ -25,8 +25,8 @@ import type { CatalogToolBinderInput } from "@oscharko-dev/keiko-server/tool-cat
 // output exists to export), and keiko-server/src/tool-catalog is outside this package's ownership
 // for this repair pass, so this one import stays a relative deep path. The other four imports
 // above now resolve through keiko-server's own declared exports map instead of reaching past it.
-import { catalogToolFixture } from "../../keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.js";
-import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
+import { catalogToolFixture } from "../../../keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.js";
+import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
 import {
   analyzeLogText,
   buildReproductionSeed,

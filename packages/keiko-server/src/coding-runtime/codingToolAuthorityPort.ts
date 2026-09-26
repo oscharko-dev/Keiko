@@ -46,7 +46,7 @@ import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegist
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { defaultServerDiagnosticSink, type ServerDiagnosticSink } from "../diagnostics-log.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const CODING_RUNTIME_TOOL_AUTHORITY_DENIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",

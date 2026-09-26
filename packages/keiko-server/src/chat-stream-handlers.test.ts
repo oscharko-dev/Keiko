@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Behavioural tests for the desktop chat SSE streaming handler (#152). The regression these guard:
 // the streamed prompt previously built the gateway messages BEFORE persisting the current user turn,
 // so prompt assembly omitted it — a fresh chat sent `[system]`
@@ -32,13 +34,8 @@ import type { ConversationMemoryRuntimeContext } from "./memory-conversation-con
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";

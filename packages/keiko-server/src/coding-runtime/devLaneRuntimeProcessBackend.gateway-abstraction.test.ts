@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 // #2951: devLaneRuntimeProcessBackend.ts now spawns through keiko-sandbox's shared
 // planIsolatedRun/selectGatewayBackend core instead of calling buildRuntimeGatewaySeatbeltCommand
 // directly, so a host with no confining backend fails the launch closed rather than spawning the
@@ -16,7 +17,6 @@ import {
   LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   type BackendAvailability,
 } from "@oscharko-dev/keiko-sandbox";
-import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
   createDevLaneRuntimeProcessBackend,

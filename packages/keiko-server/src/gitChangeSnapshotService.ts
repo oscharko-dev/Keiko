@@ -46,7 +46,7 @@ import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   GitSnapshotReadError,
   GitSnapshotUnavailableError,

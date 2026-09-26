@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   mkdirSync,
   mkdtempSync,
@@ -30,7 +31,6 @@ import {
   type GroundedAnswerer,
   type OrchestratorInput,
 } from "./grounded-orchestrator.js";
-import { createBufferedServerLogSink } from "./observability/index.js";
 
 const NOW = 1_700_000_000_000;
 const CORRELATION_ID = "denied-root-correlation-0001";

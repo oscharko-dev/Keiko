@@ -49,7 +49,7 @@ import {
   type SkillStaticFacts,
 } from "./skillDiscovery.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   createSkillInvocationPort,
   type SkillReevaluationDecision,

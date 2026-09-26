@@ -4,8 +4,8 @@ import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { GIT_CI_REPAIR_BUDGET_OPERATION } from "./codingRuntimeActivityOperations.js";
 import type {
   CodingRuntimeSnapshot,

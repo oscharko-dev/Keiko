@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // #3390 (ADR-0043 D11-D14): the coding-sidecar tool facade rides the SAME attested loopback BFF
 // port as `/api/coding-sidecar/gateway/*` instead of a second ephemeral listener the Seatbelt
 // `keiko-gateway` egress profile denies (packages/keiko-sandbox/src/backends.ts
@@ -13,13 +18,7 @@ import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runt
 
 import type { UiHandlerDeps } from "./deps.js";
 import type { CodingRuntimeToolFacadeBridge } from "./coding-runtime/codingRuntimeControlPlane.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { API_ROUTES, matchRoute, type RouteContext } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";

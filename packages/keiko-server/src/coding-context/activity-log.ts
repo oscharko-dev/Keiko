@@ -4,7 +4,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodeContextBlockReason, CodeContextReadStatus } from "./codeContextConnector.js";
 
 const CODING_CONTEXT_PACK_OPERATION = defineActivityLogOperation({

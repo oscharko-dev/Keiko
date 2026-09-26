@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -5,7 +7,7 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
-import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
+import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { emitToolLifecycleEvent, validateToolLifecycleEvent } from "./catalogToolLifecycle.js";
 import {
   expectActivityLogProof,

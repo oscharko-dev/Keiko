@@ -49,7 +49,7 @@ import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntime
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { matchRoute, type RouteContext } from "../routes.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 
 // Spies on the default PR-adapter factory the F1 fix threads runCommand termination-evidence

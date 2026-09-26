@@ -10,8 +10,11 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { SupportQueryClass, SupportQueryResult } from "./support-query.js";
-import type { SegmentManifestPassStats } from "./support-segment-scan.js";
+import type {
+  SupportQueryClass,
+  SupportQueryResult,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import type { SegmentManifestPassStats } from "@oscharko-dev/keiko-activity-log/reader";
 
 const SURFACE_FIELD = {
   type: "string",

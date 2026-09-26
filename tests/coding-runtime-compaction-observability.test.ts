@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
+import { analyzeLogText, findTimeline } from "@oscharko-dev/keiko-activity-log/reader";
 import { recordCompactionActivity } from "../packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.js";
-import { createFileServerLogSink } from "../packages/keiko-server/src/observability/server-log.js";
+import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { readPersistedActivityLog } from "./support/activity-log-proof.js";
 
 describe("native coding-runtime compaction support reconstruction", () => {

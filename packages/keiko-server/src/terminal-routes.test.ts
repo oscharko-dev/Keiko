@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0018 D8 — /api/terminal/* route integration tests. A FakeTerminalExecutionManager replaces
 // the real spawn-backed manager so these tests never spawn a real child. The createUiServer
 // fixture mirrors browser-routes.test.ts so CSRF guard, host-check, and SSE framer run live.
@@ -30,12 +32,7 @@ import {
   type TerminalExecutionManager,
   type TerminalExecutionResult,
 } from "./index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 interface FakeOptions {
   readonly executeShouldThrow?: TerminalToolError;

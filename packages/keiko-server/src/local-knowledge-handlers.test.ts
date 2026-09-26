@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -66,7 +67,6 @@ import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-regis
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import {
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
   type ServerLogEvent,
   type ServerLogSink,

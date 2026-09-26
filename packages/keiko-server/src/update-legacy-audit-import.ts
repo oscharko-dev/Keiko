@@ -9,7 +9,7 @@ import {
   serverLogLevelEnabled,
   type ServerLogEvent,
   type ServerLogThreshold,
-} from "./observability/server-log.js";
+} from "@oscharko-dev/keiko-activity-log";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   updateLegacySnapshotImportedEvent,

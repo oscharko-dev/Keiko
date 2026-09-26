@@ -32,7 +32,7 @@ import {
 } from "./containerRunner.js";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 // ── Fake spawn helpers (mirrors command-runner.test.ts) ──────────────────────────
 

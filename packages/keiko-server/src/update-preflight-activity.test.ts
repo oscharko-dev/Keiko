@@ -5,7 +5,7 @@ import {
   recordReleaseTrustFailure,
   recordReleaseTrustSuccess,
 } from "./update-preflight-activity.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

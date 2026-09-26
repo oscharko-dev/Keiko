@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,14 +21,10 @@ import { createLspFrameReader, writeLspFrame } from "./lspFrameCodec.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import type { FakeLspBehavior, FakeLspController } from "./testing/fakeLspProcess.js";
 import { writeExecutableFixture } from "./testing/executableFixture.js";
-import type { ServerLogEvent } from "../../observability/server-log.js";
-import {
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../../observability/server-logger.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
-import { redactLogFields } from "../../observability/log-redaction.js";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

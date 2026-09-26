@@ -25,7 +25,7 @@ import {
   segmentIdentity,
   writeFixtureSegment,
   type FixtureProcess,
-} from "./test-support/activity-log-segments.js";
+} from "../../../../tests/support/activity-log-segments.js";
 
 // A deterministic causal graph across two processes and several segments:
 //

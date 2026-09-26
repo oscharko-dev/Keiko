@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { describe, expect, it, vi } from "vitest";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -6,7 +8,6 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
   createCodingSafeActivityProjection,
   type CodingSafeActivityContent,

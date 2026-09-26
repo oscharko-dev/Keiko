@@ -6,7 +6,7 @@ import {
   activityLogEventRegistration,
   validateRegisteredActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   createServerHarnessContextCompactor,
   logHarnessContextCompactionEvents,

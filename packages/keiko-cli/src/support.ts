@@ -60,7 +60,7 @@ import {
 // local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
 // is a leaf consumer and must not import keiko-local-knowledge directly) and reached through the
 // same lazily-loaded server module, via `server.collectStoreFingerprints`.
-import { loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
+import { loadActivityLog, loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
@@ -85,8 +85,11 @@ import {
   type ActivityLogTextLine,
   type ReproductionSeed,
   type ReproductionSeedSource,
-} from "./support-analyze.js";
-import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  ActivityLogReadError,
+  readActivityLogFileLines,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { runSupportIncidentCli } from "./support-incident.js";
 import {
   parseSupportManifestArgs,
@@ -867,6 +870,7 @@ function acknowledgeSupportPublication(
 }
 
 type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
+type LoadedActivityLog = Awaited<ReturnType<typeof loadActivityLog>>;
 
 const SUPPORT_EXPORT_PUBLICATION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -1531,11 +1535,11 @@ async function collectExportLogContent(
   args: ExportArgs,
   stateDir: string,
   io: CliIo,
-  server: LoadedServer,
+  activityLog: LoadedActivityLog,
 ): Promise<LogContent | number> {
   const maxBytes = args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES;
   if (args.selector === undefined) return collectLogContent(join(stateDir, "logs"), maxBytes);
-  return collectSelectedLogContent(args.selector, stateDir, maxBytes, io, server);
+  return collectSelectedLogContent(args.selector, stateDir, maxBytes, io, activityLog);
 }
 
 async function collectFreshSupportData(
@@ -1545,8 +1549,8 @@ async function collectFreshSupportData(
   deps: SupportCliDeps,
   context: FreshSupportExportContext,
 ): Promise<FreshSupportData | number> {
-  const server = await loadServer();
-  const logContent = await collectExportLogContent(args, context.stateDir, io, server);
+  const [server, activityLog] = await Promise.all([loadServer(), loadActivityLog()]);
+  const logContent = await collectExportLogContent(args, context.stateDir, io, activityLog);
   if (typeof logContent === "number") return logContent;
   const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(context.stateDir, "evidence");
   const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
@@ -1663,7 +1667,7 @@ async function runSupportExport(
 // wrote stays exactly the evidence that existed when it was taken. This command inspects a state
 // directory it does not serve, so its own logger's wiring is not part of that directory's answer.
 async function reportSupportReadiness(stateDir: string, env: EnvSource, io: CliIo): Promise<void> {
-  const snapshot = (await loadServer()).checkActivityLogReadiness({
+  const snapshot = (await loadActivityLog()).checkActivityLogReadiness({
     stateDir,
     env,
     scope: "directory",

@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Server-side composition tests for `openKnowledgeStoreForDeps` (Issue #2632 / ADR-0152 D3).
 //
 // The store-open funnel is where the `knowledge` namespace is bound to `VectorIndexPort`.
@@ -25,12 +27,7 @@ import {
   openKnowledgeStoreForDeps,
   type OpenKnowledgeStoreForDeps,
 } from "./local-knowledge-store-open.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/db.js";
 

@@ -18,7 +18,7 @@ import type {
   CodingWorkbenchAuthorityEnvelope,
 } from "@oscharko-dev/keiko-contracts";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import type { SkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts";
 import type { ExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";

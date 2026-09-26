@@ -58,6 +58,7 @@ import { contentFreeErrorClass } from "./error-classification.js";
 // One entry per `packages/*` directory name (root `package.json`'s `"workspaces": ["packages/*"]`).
 // Pinned by the drift test in `stack-frames.test.ts` against the real directory listing.
 export const PACKAGE_DIR_NAMES: ReadonlySet<string> = new Set([
+  "keiko-activity-log",
   "keiko-cli",
   "keiko-connectors",
   "keiko-contracts",

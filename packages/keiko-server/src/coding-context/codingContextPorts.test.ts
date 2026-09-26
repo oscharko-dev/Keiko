@@ -10,7 +10,7 @@ import { createGovernedJiraCodeContextHttpPort } from "./jiraCodeContextPort.js"
 import { GOVERNED_GIT_REMOTE_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

@@ -10,7 +10,7 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import { REDACTED_KEY } from "./log-redaction.js";
 import {
   LOG_FAILURE_NOTICE_WINDOW_MS,
@@ -29,7 +29,7 @@ import {
   setServerLogger,
   startLogTimer,
 } from "./server-logger.js";
-import { updateRuntimeActivityEvent } from "../update-runtime-activity.js";
+import { updateRuntimeActivityEvent } from "../../keiko-server/src/update-runtime-activity.js";
 
 function throwingSink(): ServerLogSink {
   return {
@@ -93,8 +93,8 @@ describe("server logger bound context", () => {
       schemaVersion: 1,
       op: "test.server-logger.registered",
       category: "diagnostic",
-      owner: "keiko-server",
-      emitter: "observability/server-logger.test",
+      owner: "keiko-activity-log",
+      emitter: "server-logger.test",
       fields: {
         outcome: {
           type: "string",

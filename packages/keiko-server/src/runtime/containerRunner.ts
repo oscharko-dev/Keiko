@@ -50,7 +50,7 @@ import type { Project, UiStore } from "../store/index.js";
 import { type ServerDiagnosticSink } from "../diagnostics-log.js";
 import { evidenceRetentionObserver } from "../evidence-retention-log.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 // Tight cap — a container run is a high-trust surface, so a small number of concurrent runs.
 const MAX_CONCURRENT_CONTAINER_RUNS = 2;

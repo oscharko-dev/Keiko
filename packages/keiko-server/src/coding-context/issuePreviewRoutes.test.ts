@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +14,6 @@ import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js"
 import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { createBufferedServerLogSink } from "../observability/index.js";
 import type { RouteContext } from "../routes.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import type { GitHubIssueResolver } from "./githubIssueResolution.js";

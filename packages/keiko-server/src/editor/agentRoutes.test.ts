@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 import {
   editorAgentPathBoundaryReason,
   type EditorAgentResolvedRoot,
@@ -90,11 +95,8 @@ import {
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
-  createBufferedServerLogSink,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-  type BufferedServerLogSink,
   type ServerLogEvent,
 } from "../observability/index.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";

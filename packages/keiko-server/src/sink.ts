@@ -24,7 +24,7 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
-import { machineToken } from "./observability/error-classification.js";
+import { machineToken } from "@oscharko-dev/keiko-activity-log";
 
 // The structural event envelope every harness/workflow event satisfies. Extra members vary per
 // event type and are not accessed here (the sink only needs `seq` for replay and `type` for SSE

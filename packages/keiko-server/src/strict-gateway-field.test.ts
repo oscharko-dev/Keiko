@@ -9,7 +9,7 @@ import type { ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps } from "./deps.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   codingWorkbenchProbesSettledForTests,

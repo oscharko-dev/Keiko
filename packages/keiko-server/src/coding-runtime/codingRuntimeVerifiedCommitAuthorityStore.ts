@@ -9,7 +9,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 class VerifiedCommitRuntimeBindingError extends TypeError {}

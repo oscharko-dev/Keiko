@@ -53,10 +53,12 @@ as owner, a technical reason, a linked tracking issue, an unavoidable platform o
 boundary, and an expiry at most 180 days ahead. It cannot permit unknown fields, prohibited data,
 silent loss, or incomplete evidence.
 
-Keep this contract converged in one change. A runtime change that affects Activity Log behavior
-updates the owning implementation, its failure-first regression, emitted-line and analyzer/replay
-proof, ADR-0173, AGENTS.md, this contributor contract, and directly affected operator documentation
-as applicable. Saved support reports remain local artifacts written to a user-selected destination;
+Keep this contract converged in one change. The writer, segmented store, and reader engine belong to
+`@oscharko-dev/keiko-activity-log`, which depends only on contracts and security; server and CLI
+compose it while domain packages continue to use injected ports (ADR-0179). A runtime change that
+affects Activity Log behavior updates the owning implementation, its failure-first regression,
+emitted-line and analyzer/replay proof, ADR-0173, ADR-0179, AGENTS.md, this contributor contract,
+and directly affected operator documentation as applicable. Saved support reports remain local artifacts written to a user-selected destination;
 publishing or attaching one to GitHub or another external system requires separate explicit user
 authority and is never part of logging or export.
 

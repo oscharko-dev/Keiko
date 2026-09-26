@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { redactLogFields } from "../../packages/keiko-server/dist/observability/log-redaction.js";
+import { redactLogFields } from "../../packages/keiko-activity-log/dist/log-redaction.js";
 import {
   compileToolCatalogOperations,
   generateToolCatalogOperations,

@@ -12,8 +12,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { createGitChangeSnapshotService } from "./gitChangeSnapshotService.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
-import { formatServerLogLine } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 import {
   expectActivityLogProof,

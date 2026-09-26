@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
@@ -15,13 +15,16 @@ import {
   REDACTED_SECRET,
   REDACTED_SHAPE,
   closeReasonVocabulary,
+  configureActivityLogRouteRedactor,
   isDeniedLogFieldName,
   normalizeLogFieldName,
   OPAQUE_TOKEN_RUN_LENGTH,
   redactLogFields,
   redactLogString,
+  resetActivityLogRouteRedactor,
 } from "./log-redaction.js";
 import { ACTIVITY_LOG_FRAME_FIELD_NAME } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { redactRoutePath } from "../../keiko-server/src/observability/route-template.js";
 
 // Credential-shaped fixtures are ASSEMBLED at runtime, never written as literals. A literal here
 // is a genuine finding for the repository secret scanner, and silencing that scanner to keep a
@@ -34,6 +37,14 @@ const JSON_WEB_TOKEN = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "abcdef"].joi
 const AWS_ACCESS_KEY_ID = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
 
 describe("log field redaction", () => {
+  beforeEach(() => {
+    configureActivityLogRouteRedactor(redactRoutePath);
+  });
+
+  afterEach(() => {
+    resetActivityLogRouteRedactor();
+  });
+
   it("keeps the evidence fields the instrumentation surface is built from", () => {
     const fields = redactLogFields({
       endpoint: "https://gateway.internal:8443",

@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,7 +66,7 @@ import type { CiObservationService } from "../gitDelivery/ciObservationService.j
 import { readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import {
   createVerificationRunnerManager,
@@ -77,12 +79,7 @@ import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 const DIGEST = "a".repeat(64);
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({

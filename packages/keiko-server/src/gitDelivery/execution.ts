@@ -58,8 +58,8 @@ import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPreflight.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
-import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { errorKindOf, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 
 const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [

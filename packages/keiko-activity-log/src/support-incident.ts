@@ -68,6 +68,7 @@ import {
 } from "./activity-log-store.js";
 import type { ServerLogEnv } from "./log-level.js";
 import {
+  claimActivityLogWriterOwnership,
   createFileServerLogSink,
   pinActivityLogWindow,
   releaseActivityLogPin,
@@ -157,8 +158,8 @@ const SUPPORT_INCIDENT_CREATED_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "support.incident.created",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/support-incident.createdEvidence",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.createdEvidence",
   fields: {
     incidentId: INCIDENT_ID_FIELD,
     defectFingerprint: FINGERPRINT_FIELD,
@@ -195,8 +196,8 @@ const SUPPORT_INCIDENT_DEDUPLICATED_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "support.incident.deduplicated",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/support-incident.deduplicatedEvidence",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.deduplicatedEvidence",
   fields: {
     incidentId: INCIDENT_ID_FIELD,
     defectFingerprint: FINGERPRINT_FIELD,
@@ -217,8 +218,8 @@ const SUPPORT_INCIDENT_REJECTED_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "support.incident.rejected",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/support-incident.rejectedEvidence",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.rejectedEvidence",
   fields: {
     rejectionReason: {
       type: "string",
@@ -249,8 +250,8 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "support.incident.dismissed",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/support-incident.dismissedEvidence",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.dismissedEvidence",
   fields: {
     incidentId: INCIDENT_ID_FIELD,
     defectFingerprint: FINGERPRINT_FIELD,
@@ -283,8 +284,8 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "support.incident.expired",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/support-incident.expiredEvidence",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.expiredEvidence",
   fields: {
     incidentId: INCIDENT_ID_FIELD,
     expiryReason: {
@@ -1003,6 +1004,7 @@ function createCandidate(
   draft: CandidateDraft,
   options: SupportIncidentOptions,
 ): SupportIncidentCreation {
+  claimActivityLogWriterOwnership(stateDir);
   const context: CandidateContext = {
     stateDir,
     nowMs: options.nowMs ?? Date.now(),
@@ -1182,6 +1184,7 @@ function sweepExpiredEntries(
   nowMs: number,
   correlationId: string,
 ): readonly SupportIncidentStoreEntry[] {
+  claimActivityLogWriterOwnership(stateDir);
   const entries = listSupportIncidentEntries(stateDir);
   const open = entries.filter((entry) => openEntry(entry, nowMs));
   for (const entry of entries) {

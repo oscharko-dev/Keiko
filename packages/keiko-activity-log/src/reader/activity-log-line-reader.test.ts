@@ -8,7 +8,7 @@ import {
   type ActivityLogReadLine,
 } from "./activity-log-line-reader.js";
 import { analyzeLogLines, analyzeLogText } from "./support-analyze.js";
-import { fixtureLine, fixtureProcess } from "./test-support/activity-log-segments.js";
+import { fixtureLine, fixtureProcess } from "../../../../tests/support/activity-log-segments.js";
 
 let directory: string;
 

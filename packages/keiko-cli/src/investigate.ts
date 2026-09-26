@@ -50,7 +50,7 @@ import {
   loadWorkspaceModule,
 } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import type { LogTimeline, ServerLogLineView } from "./support-analyze.js";
+import type { LogTimeline, ServerLogLineView } from "@oscharko-dev/keiko-activity-log/reader";
 type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
 type WorkspacePackage = typeof import("@oscharko-dev/keiko-workspace");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");

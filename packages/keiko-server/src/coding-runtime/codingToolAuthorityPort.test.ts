@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -24,7 +26,6 @@ import {
   codingRuntimeNetworkPolicyForMode,
   type CodingRuntimeCapabilityDelegationInput,
 } from "./runtimeAuthorityService.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

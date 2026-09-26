@@ -9,7 +9,7 @@ import {
 } from "../gitDelivery/verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler } from "../gitDelivery/execution.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type { VerifiedCommitRuntimeDependencies } from "./productionVerifiedCommitRuntime.js";
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";

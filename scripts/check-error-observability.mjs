@@ -121,7 +121,7 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
-    "packages/keiko-cli/src/support-analyze.ts:registeredRecordClassification",
+    "packages/keiko-activity-log/src/reader/support-analyze.ts:registeredRecordClassification",
     "The catch deterministically classifies hostile persisted evidence as incomplete or corrupt.",
   ],
   [
@@ -169,11 +169,11 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "The caught hook failure returns as its closed kind, which the process.exiting line records.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-readiness.ts:activityLogCatalogCoherent",
+    "packages/keiko-activity-log/src/activity-log-readiness.ts:activityLogCatalogCoherent",
     "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
   ],
   [
-    "packages/keiko-server/src/observability/server-logger.ts:isMandatoryActivityLogEvent",
+    "packages/keiko-activity-log/src/server-logger.ts:isMandatoryActivityLogEvent",
     "A hostile registration accessor makes the event ordinary instead of failing the emitting call.",
   ],
   [
@@ -257,37 +257,37 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A hostile error classifier is reduced to the closed unknown kind before the failure event.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:safeArtifactErrorKind",
+    "packages/keiko-activity-log/src/server-log.ts:safeArtifactErrorKind",
     "A hostile prototype trap is reduced to absent data inside the last-resort log sink.",
   ],
   // #3530 segmented Activity Log store: fail-closed probes, and failure outcomes that a registered
   // storage event persists.
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:regularFileStat",
+    "packages/keiko-activity-log/src/activity-log-store.ts:regularFileStat",
     "A vanished or unreadable entry is classified as absent from the Activity Log listing.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:readPinRecord",
+    "packages/keiko-activity-log/src/activity-log-store.ts:readPinRecord",
     "An unreadable pin record protects nothing; the caller removes it and persists pin.expired invalid-record.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:processIsAlive",
+    "packages/keiko-activity-log/src/activity-log-store.ts:processIsAlive",
     "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:lastCompleteLineOp",
+    "packages/keiko-activity-log/src/activity-log-store.ts:lastCompleteLineOp",
     "An unparsable tail line is classified as carrying no seal line.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:lineSeq",
+    "packages/keiko-activity-log/src/activity-log-store.ts:lineSeq",
     "An unparsable line is classified as carrying no sequence number.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogSegmentSeqSpan",
+    "packages/keiko-activity-log/src/activity-log-store.ts:activityLogSegmentSeqSpan",
     "An unreadable span is reported as unknown in the registered quota-exhaustion marker.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogFreeBytes",
+    "packages/keiko-activity-log/src/activity-log-store.ts:activityLogFreeBytes",
     "Free space that cannot be measured is reported as absent, never as plenty.",
   ],
   // #3554 store policy (review comment 4050604711 on PR #3554): every outcome below is one branch
@@ -295,147 +295,147 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   // governs the store is reported through the registered activity-log.policy.conflict line the very
   // next time this process writes.
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:readActivityLogPolicyRecord",
+    "packages/keiko-activity-log/src/activity-log-store.ts:readActivityLogPolicyRecord",
     "An unreadable or corrupt policy record is treated as absent; the caller republishes it, or " +
       "adopts a live peer's record and persists activity-log.policy.conflict when it still differs.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:publishPolicy",
+    "packages/keiko-activity-log/src/activity-log-store.ts:publishPolicy",
     "A failed publish — including the expected exclusive-create race loss — is reported false; the " +
       "caller re-reads the record and persists activity-log.policy.conflict when its own values differ.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:repairPolicy",
+    "packages/keiko-activity-log/src/activity-log-store.ts:repairPolicy",
     "A failed removal of an already-corrupt or already-gone record is not retried; the publish that " +
       "follows, or a peer's own resolution, is what actually decides the store's governing policy.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:replacePolicy",
+    "packages/keiko-activity-log/src/activity-log-store.ts:replacePolicy",
     "A failed removal of the stale record does not block the replacement publish that follows; " +
       "whether it lands or a racing peer's does, the outcome is what activity-log.policy.conflict reports.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-store.ts:resolveActivityLogStorePolicy",
+    "packages/keiko-activity-log/src/activity-log-store.ts:resolveActivityLogStorePolicy",
     "Any unexpected filesystem failure falls back to this process's own requested values, " +
       "unpersisted — the same ungoverned behavior the store had before this policy existed.",
   ],
   // #3531 segment-manifest store: derived, rebuildable metadata. Every outcome below is counted in
   // the registered support.manifest.rebuilt event, and nothing is ever trusted after a failure.
   [
-    "packages/keiko-cli/src/support-segment-manifest.ts:parseSegmentManifest",
+    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:parseSegmentManifest",
     "A stored manifest that is not JSON is invalid; it is rebuilt from its sealed segment, never trusted.",
   ],
   [
-    "packages/keiko-cli/src/support-segment-manifest.ts:ensureSegmentManifestDirectory",
+    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:ensureSegmentManifestDirectory",
     "A store that cannot be created keeps manifests in memory; support.manifest.rebuilt persists persisted=false.",
   ],
   [
-    "packages/keiko-cli/src/support-segment-manifest.ts:readStoredSegmentManifest",
+    "packages/keiko-activity-log/src/reader/support-segment-manifest.ts:readStoredSegmentManifest",
     "An unreadable or invalid stored manifest is rebuilt from its segment; support.manifest.rebuilt counts it.",
   ],
   [
-    "packages/keiko-cli/src/support-segment-scan.ts:persistManifest",
+    "packages/keiko-activity-log/src/reader/support-segment-scan.ts:persistManifest",
     "A manifest that cannot be written serves the pass from memory; support.manifest.rebuilt counts the failure.",
   ],
   [
-    "packages/keiko-cli/src/support-segment-scan.ts:removeOrphanManifests",
+    "packages/keiko-activity-log/src/reader/support-segment-scan.ts:removeOrphanManifests",
     "An orphan manifest that cannot be removed is counted by support.manifest.rebuilt and retried next pass.",
   ],
   // #3533 SupportIncident store: the same fail-closed probes as the Activity Log pin records.
   [
-    "packages/keiko-server/src/observability/support-incident-store.ts:regularFileState",
+    "packages/keiko-activity-log/src/support-incident-store.ts:regularFileState",
     "A vanished or unreadable entry is classified as absent from the incident store listing.",
   ],
   [
-    "packages/keiko-server/src/observability/support-incident-store.ts:readRecord",
+    "packages/keiko-activity-log/src/support-incident-store.ts:readRecord",
     "An unreadable incident record describes nothing; the next sweep removes it and persists support.incident.expired invalid-record.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:activeLogKey",
+    "packages/keiko-activity-log/src/server-log.ts:activeLogKey",
     "A directory that cannot be resolved is keyed by its lexical path; opening it still fails closed.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:closeQuietly",
+    "packages/keiko-activity-log/src/server-log.ts:closeQuietly",
     "Best-effort close of a descriptor the writer has already stopped using.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:currentSegmentSize",
+    "packages/keiko-activity-log/src/server-log.ts:currentSegmentSize",
     "A failed identity read makes the caller treat the segment as mutated and fail closed.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:sharesInode",
+    "packages/keiko-activity-log/src/server-log.ts:sharesInode",
     "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:pathMissing",
+    "packages/keiko-activity-log/src/server-log.ts:pathMissing",
     "The catch classifies the closed ENOENT result of an existence probe.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:readSealedTail",
+    "packages/keiko-activity-log/src/server-log.ts:readSealedTail",
     "An unreadable tail is persisted as tailState unknown in the registered recovery event.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:finishInterruptedSeal",
+    "packages/keiko-activity-log/src/server-log.ts:finishInterruptedSeal",
     "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:settleOrphanDescriptor",
+    "packages/keiko-activity-log/src/server-log.ts:settleOrphanDescriptor",
     "Best-effort fsync and read-only mode on a recovered segment; the sealing rename still decides.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:recoverOrphanedSegment",
+    "packages/keiko-activity-log/src/server-log.ts:recoverOrphanedSegment",
     "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:removePinRecordQuietly",
+    "packages/keiko-activity-log/src/server-log.ts:removePinRecordQuietly",
     "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
   ],
   [
-    "packages/keiko-server/src/observability/activity-log-readiness.ts:storageCheck",
+    "packages/keiko-activity-log/src/activity-log-readiness.ts:storageCheck",
     "A throwing storage check becomes the closed storage-check-failed reason the readiness line persists.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:listingOrUndefined",
+    "packages/keiko-activity-log/src/server-log.ts:listingOrUndefined",
     "An unlistable directory becomes a storage-unavailable outcome the registered pin events persist.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:tightenLegacyFile",
+    "packages/keiko-activity-log/src/server-log.ts:tightenLegacyFile",
     "A legacy file that cannot be narrowed stays in place; the retention event persists the failure.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:removeRetentionTarget",
+    "packages/keiko-activity-log/src/server-log.ts:removeRetentionTarget",
     "A failed deletion is persisted by the registered retention event and retried after a backoff.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:withdrawSegment",
+    "packages/keiko-activity-log/src/server-log.ts:withdrawSegment",
     "A segment left in place is this process's abandoned segment; maintenance seals it with evidence.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:restrictSealedMode",
+    "packages/keiko-activity-log/src/server-log.ts:restrictSealedMode",
     "Best-effort read-only mode after a successful seal; the segment stays owner-private.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:descriptorAtPath",
+    "packages/keiko-activity-log/src/server-log.ts:descriptorAtPath",
     "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:persistPostWriteMutation",
+    "packages/keiko-activity-log/src/server-log.ts:persistPostWriteMutation",
     "The mutation evidence stays queued; the caller reports the event whose location is unknown.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:createPin",
+    "packages/keiko-activity-log/src/server-log.ts:createPin",
     "The catch returns the closed storage-unavailable rejection the registered pin.created event persists.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:ownedDirectory",
+    "packages/keiko-activity-log/src/server-log.ts:ownedDirectory",
     "A failed ownership read is the fail-closed false result of this trust-boundary predicate.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:batchIsWritable",
+    "packages/keiko-activity-log/src/server-log.ts:batchIsWritable",
     "An unformattable batch is deferred to its caller before any line is written.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:syncActiveSegment",
+    "packages/keiko-activity-log/src/server-log.ts:syncActiveSegment",
     "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
   ],
 ]);

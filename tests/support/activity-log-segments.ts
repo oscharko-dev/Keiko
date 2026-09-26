@@ -16,7 +16,7 @@ import {
 import {
   formatRegisteredServerLogLine,
   serverLogProcessIdentity,
-} from "@oscharko-dev/keiko-server/observability/server-log";
+} from "@oscharko-dev/keiko-activity-log";
 
 export interface FixtureProcess {
   readonly pid: number;

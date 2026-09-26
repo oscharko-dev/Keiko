@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   keikoStackFrames,
   causeChain,
-} from "../../packages/keiko-server/dist/observability/stack-frames.js";
+} from "../../packages/keiko-activity-log/dist/stack-frames.js";
 import { checkGovernedToolContractNegatives } from "../check-governed-tool-contract.mjs";
 import {
   checkInventoryProbes,

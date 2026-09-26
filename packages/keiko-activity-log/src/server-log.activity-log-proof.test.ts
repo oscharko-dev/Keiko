@@ -34,8 +34,8 @@ import {
   expectActivityLogStderrProof,
   persistedActivityLogLines,
   readPersistedActivityLog,
-} from "../../../../tests/support/activity-log-proof.js";
-import { logGitChangeApply } from "../chat-activity.js";
+} from "../../../tests/support/activity-log-proof.js";
+import { logGitChangeApply } from "../../keiko-server/src/chat-activity.js";
 import { writeActivityLogPolicyRecord } from "./activity-log-store.js";
 import {
   DEFAULT_ACTIVITY_LOG_PIN_QUOTA_BYTES,

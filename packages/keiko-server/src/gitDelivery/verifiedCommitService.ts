@@ -23,7 +23,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { errorKindOf } from "../observability/server-log.js";
+import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
   GIT_DELIVERY_LOCAL_OPERATOR_ID,

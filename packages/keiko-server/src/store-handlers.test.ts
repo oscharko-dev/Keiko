@@ -1,3 +1,8 @@
+import {
+  resetServerLogger,
+  resetServerLogFailureNotices,
+} from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0013 D7 — Route handler tests for the 10 additive UI-store routes (13–22). The full set of
 // happy and error paths goes through routeRequest dispatch and the SECURITY_HEADERS surface via the
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
@@ -64,14 +69,7 @@ import {
   type CreateCapsuleInput,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type ServerLogEvent,
-} from "./observability/index.js";
-import { resetServerLogFailureNotices } from "./observability/server-log.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 
 // One persisted assistant turn whose grounded answer carries an `indexLifecycle` block — the only
 // shape that makes the messages route open the local-knowledge store at all. Returns the assistant

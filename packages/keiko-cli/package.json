@@ -25,6 +25,7 @@
     "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
+    "@oscharko-dev/keiko-activity-log": "1.1.9",
     "@oscharko-dev/keiko-contracts": "1.1.9",
     "@oscharko-dev/keiko-security": "1.1.9",
     "@oscharko-dev/keiko-model-gateway": "1.1.9",

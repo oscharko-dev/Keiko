@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // The adapter every BFF composition site hands to a domain package. Two properties are
 // load-bearing and both are invisible at the call sites that depend on them: the sink must reach
 // whichever logger is installed AT WRITE TIME, and its level predicate must answer from that same
@@ -10,13 +12,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  nullServerLogSink,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, nullServerLogSink, setServerLogger } from "./observability/index.js";
 import {
   consolidationLogSinkFor,
   logCommandTermination,

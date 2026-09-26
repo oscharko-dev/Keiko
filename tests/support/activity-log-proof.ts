@@ -38,7 +38,7 @@ import {
   listActivityLogFiles,
   serverLogProcessIdentity,
   type ServerLogEvent,
-} from "@oscharko-dev/keiko-server/observability/server-log";
+} from "@oscharko-dev/keiko-activity-log";
 
 // Envelope and identity members of a persisted line; everything else is a registered field.
 const PERSISTED_ENVELOPE_KEYS: ReadonlySet<string> = new Set([

@@ -45,7 +45,7 @@ import { errorBody } from "./routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 import {

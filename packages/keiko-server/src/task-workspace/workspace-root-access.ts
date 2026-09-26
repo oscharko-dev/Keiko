@@ -11,7 +11,7 @@ import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime
 import type { UiHandlerDeps } from "../deps.js";
 import { pathIsDenied } from "../files-deny.js";
 import { errorKindOf, type ServerLogSink } from "../observability/index.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import {
   recordWorkspaceRootDenied,
   type WorkspaceRootDenialReason,

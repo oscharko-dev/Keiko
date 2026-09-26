@@ -12,7 +12,7 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { CodingToolEditBaseRead } from "./codingToolFacadePorts.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";

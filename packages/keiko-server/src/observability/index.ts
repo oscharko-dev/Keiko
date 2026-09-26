@@ -4,11 +4,12 @@
 // sites should import from here so the layering stays an implementation detail — and so the modules
 // never need to import each other in both directions.
 
-// `server-log.js` already re-exports the level and redaction surfaces, so no name is exported
-// twice. The readiness, loss-summary and persistence modules own the #3532 health evidence.
-export * from "./server-log.js";
-export * from "./server-logger.js";
-export * from "./activity-log-persistence.js";
-export * from "./activity-log-readiness.js";
-export * from "./activity-log-loss-summary.js";
-export * from "./runtime-state-dir.js";
+import { configureActivityLogRouteRedactor } from "@oscharko-dev/keiko-activity-log";
+import { redactRoutePath } from "./route-template.js";
+
+// The route vocabulary stays in the BFF. The package defaults to refusing every path until the
+// server composition root supplies this narrow reducer.
+configureActivityLogRouteRedactor(redactRoutePath);
+
+export * from "@oscharko-dev/keiko-activity-log";
+export { redactRoutePath } from "./route-template.js";

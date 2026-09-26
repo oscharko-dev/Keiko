@@ -36,7 +36,7 @@ import { assertRealpathContained } from "./launcher-paths.js";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   isSegmentManifestFileName,
-} from "./support-segment-manifest-names.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { LauncherError } from "./launcher-platforms.js";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";

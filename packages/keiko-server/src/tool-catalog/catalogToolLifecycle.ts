@@ -25,8 +25,8 @@ import {
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isValidCorrelationId } from "../correlation.js";
-import { redactLogFields } from "../observability/log-redaction.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -767,4 +767,4 @@ export function emitToolLifecycleEvent(port: CatalogLifecycleLogPort, source: un
     writeToSink(port.auxiliary, event, port.diagnostics, "tool-catalog-lifecycle-auxiliary");
 }
 
-export { redactLogFields } from "../observability/log-redaction.js";
+export { redactLogFields } from "@oscharko-dev/keiko-activity-log";

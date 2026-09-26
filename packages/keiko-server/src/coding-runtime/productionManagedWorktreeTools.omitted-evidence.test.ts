@@ -10,7 +10,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { resolveChildModelForRun } from "./productionManagedWorktreeTools.js";
 
 const RUN_ID = "run-availability-omitted-evidence";

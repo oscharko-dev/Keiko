@@ -508,7 +508,7 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
     },
     {
       id: "activity-redaction",
-      path: "packages/keiko-server/src/observability/log-redaction.ts",
+      path: "packages/keiko-activity-log/src/log-redaction.ts",
       probe: "redact",
       ownerIssue: 3413,
       disposition: "retain owner",
@@ -564,7 +564,7 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
     },
     {
       id: "support-analyzer",
-      path: "packages/keiko-cli/src/support-analyze.ts",
+      path: "packages/keiko-activity-log/src/reader/support-analyze.ts",
       probe: "analyzeLogText",
       ownerIssue: 3413,
       disposition: "retain owner",

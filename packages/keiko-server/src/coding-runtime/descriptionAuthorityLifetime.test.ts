@@ -1,10 +1,12 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { describe, expect, it } from "vitest";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
-import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
+import { type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 
 const NOW = "2026-07-11T12:00:00.000Z";

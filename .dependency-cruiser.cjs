@@ -45,6 +45,38 @@ const PRODUCTION_SOURCE_PATH_NOT = "\\.(test|spec)\\.[cm]?[jt]sx?$";
 module.exports = {
   forbidden: [
     {
+      name: "adr-0179-domain-not-activity-log",
+      comment:
+        "ADR-0179: only server and CLI compose keiko-activity-log; domain packages retain " +
+        "injected log ports and may not import its implementation.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors|local-knowledge|memory-vault|memory-capture|memory-consolidation|memory-governance|memory-retrieval|sandbox|sdk|tool-catalog|editor)/src/|tests/architecture/fixtures/(activity-log-domain|editor-browser)/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path: "^(packages/keiko-activity-log/|node_modules/@oscharko-dev/keiko-activity-log|@oscharko-dev/keiko-activity-log)",
+      },
+    },
+    {
+      name: "adr-0179-activity-log-only-contracts-security",
+      comment:
+        "ADR-0179: the Activity Log writer, segmented store, and reader engine are a leaf " +
+        "package that may depend only on contracts and security. The dedicated fixture keeps " +
+        "the restriction live in arch:check:negative.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-activity-log/src/|tests/architecture/fixtures/activity-log/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|activity-log)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|activity-log)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|activity-log))",
+      },
+    },
+    {
       name: "adr-0019-direction-2c-tool-catalog-only-contracts-security",
       comment:
         "ADR-0175 D1: concrete descriptors and their compiler are pure catalog metadata. " +
@@ -688,7 +720,7 @@ module.exports = {
       name: "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
       comment:
         "ADR-0019 direction rule 6 (server boundary): keiko-server may depend on " +
-        "keiko-contracts, keiko-git, keiko-security, keiko-model-gateway, " +
+        "keiko-activity-log, keiko-contracts, keiko-git, keiko-security, keiko-model-gateway, " +
         "keiko-workspace, keiko-sandbox, keiko-tools, keiko-harness, keiko-workflows, " +
         "keiko-verification, keiko-evidence, " +
         "keiko-sdk, keiko-local-knowledge, keiko-memory-vault, keiko-memory-governance, " +
@@ -722,9 +754,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "^((\\.\\./)*packages/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "node_modules/@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },
@@ -742,7 +774,7 @@ module.exports = {
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
+          "^(packages/keiko-(activity-log|contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
           "tests/architecture/fixtures/domain-not-server/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
@@ -764,7 +796,7 @@ module.exports = {
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
+          "^(packages/keiko-(activity-log|contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
           "tests/architecture/fixtures/domain-not-cli/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
@@ -777,7 +809,7 @@ module.exports = {
       name: "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evaluations-evidence-server-verification",
       comment:
         "ADR-0019 direction rule 7 (cli boundary): keiko-cli and the src/cli/ bin shim " +
-        "may depend on keiko-contracts, keiko-security, keiko-model-gateway, keiko-workspace, " +
+        "may depend on keiko-activity-log, keiko-contracts, keiko-security, keiko-model-gateway, keiko-workspace, " +
         "keiko-tools, keiko-harness, keiko-workflows, keiko-evaluations, keiko-evidence, " +
         "keiko-sdk, keiko-server, keiko-memory-vault, keiko-quality-intelligence, " +
         "and keiko-verification only, and must reach " +
@@ -797,9 +829,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
+          "^((\\.\\./)*packages/keiko-(?!activity-log|contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|memory-vault|quality-intelligence)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations))",
         pathNot: "^src/cli/",
       },
@@ -831,6 +863,21 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-8a-ui-no-activity-log",
+      comment:
+        "ADR-0019 keeps the Node-only Activity Log package entirely outside the browser-tier " +
+        "keiko-ui graph. Unlike shared browser-safe contract shapes, neither value nor type-only " +
+        "imports from keiko-activity-log are allowed; UI reaches diagnostics through its BFF API.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-ui/src/|tests/architecture/fixtures/ui-browser/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path: "^(packages/keiko-activity-log/|node_modules/@oscharko-dev/keiko-activity-log|@oscharko-dev/keiko-activity-log)",
+      },
+    },
+    {
       name: "adr-0042-editor-not-node-domain-values",
       comment:
         "ADR-0042 (browser-tier editor boundary): the browser-tier @oscharko-dev/keiko-editor " +
@@ -851,9 +898,9 @@ module.exports = {
       },
       to: {
         path:
-          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)/|" +
-          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
-          "@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
+          "^(packages/keiko-(activity-log|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)/|" +
+          "node_modules/@oscharko-dev/keiko-(activity-log|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
+          "@oscharko-dev/keiko-(activity-log|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|verification|evaluations))",
         dependencyTypesNot: ["type-only"],
       },

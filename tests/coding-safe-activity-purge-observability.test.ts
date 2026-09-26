@@ -1,20 +1,18 @@
+import { setSupportIncidentTriggerForTests } from "./support/activity-log-test-support.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
+import { analyzeLogText, findTimeline } from "@oscharko-dev/keiko-activity-log/reader";
 import { createCodingSafeActivityProjection } from "../packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.js";
 import {
   closeFileServerLogSinks,
   createFileServerLogSink,
-} from "../packages/keiko-server/src/observability/server-log.js";
-import {
-  drainSupportIncidentCandidates,
   listSupportIncidents,
-  setSupportIncidentTriggerForTests,
-} from "../packages/keiko-server/src/observability/support-incident.js";
+} from "@oscharko-dev/keiko-activity-log";
+import { drainSupportIncidentCandidates } from "../packages/keiko-activity-log/src/support-incident.js";
 import { readPersistedActivityLog } from "./support/activity-log-proof.js";
 
 describe("safe activity purge support reconstruction", () => {

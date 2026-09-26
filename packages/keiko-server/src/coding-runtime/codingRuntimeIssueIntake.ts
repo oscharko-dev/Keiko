@@ -13,8 +13,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
-import type { ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 
 export interface CodingRuntimeIssueAttachment {

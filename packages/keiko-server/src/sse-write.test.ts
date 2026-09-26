@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // GEN-PERF-CHAT-006: a backpressure kill (res.write -> false) must emit a distinct, observable signal
 // exactly once BEFORE the socket is destroyed, so a slow-client termination is not silently relabeled
 // as a user cancel. The signal must carry only non-secret counts (no body bytes) and an observer throw
@@ -18,13 +23,7 @@ import {
   writeOrDestroy,
   type SseBackpressureSignal,
 } from "./sse-write.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 function fakeRes(writeReturns: boolean): {

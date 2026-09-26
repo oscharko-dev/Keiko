@@ -3,15 +3,15 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "3803a5ba31a2f59d9b6ed48159af80c032a2897891322c1493355b622ca7f78a" as const;
+  "f42340830c4b452a64fb7e1a8c508c49486008b0e78908cbb97c9f5346a8454a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
     op: "activity-log.loss",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/activity-log-loss-summary.activityLogLossSummaryEvent",
+    owner: "keiko-activity-log",
+    emitter: "activity-log-loss-summary.activityLogLossSummaryEvent",
     fields: {
       completeness: {
         type: "string",
@@ -127,8 +127,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.pin.created",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.pinCreatedEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.pinCreatedEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -209,8 +209,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.pin.expired",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.pinExpiredEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.pinExpiredEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -263,8 +263,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.pin.quota-exhausted",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.pinQuotaExhaustedEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.pinQuotaExhaustedEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -334,8 +334,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.policy.conflict",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.policyConflictEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.policyConflictEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -403,8 +403,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.pressure",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.pressureEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.pressureEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -473,8 +473,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.readiness",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/activity-log-readiness.readinessEvent",
+    owner: "keiko-activity-log",
+    emitter: "activity-log-readiness.readinessEvent",
     fields: {
       completeness: {
         type: "string",
@@ -537,8 +537,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.retention.pruned",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.retentionPrunedEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.retentionPrunedEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -624,8 +624,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.segment.recovered",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.segmentRecoveredEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.segmentRecoveredEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -695,8 +695,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "activity-log.segment.sealed",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.segmentSealedEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.segmentSealedEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -765,6 +765,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "capability",
     failureClasses: ["activity-log-segment"],
     proofIds: ["activity-log.segment.sealed.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "activity-log.writer-rejected",
+    category: "diagnostic",
+    owner: "keiko-activity-log",
+    emitter: "server-log.writerOwnershipRejectedEvent",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["process-writer-owned"],
+      },
+    },
+    causal: "none",
+    lifecycle: "loss",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["activity-log-contract"],
+    proofIds: ["server-log.writer-ownership-rejected.registered-line"],
     releaseImpact: "patch",
   },
   {
@@ -23634,8 +23666,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "server-log.line-dropped",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.oversizedLine",
+    owner: "keiko-activity-log",
+    emitter: "server-log.oversizedLine",
     fields: {
       completeness: {
         type: "string",
@@ -23671,8 +23703,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "server-log.safe-open",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.safeOpenEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.safeOpenEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -23721,8 +23753,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "server-log.target-mutated",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.mutationEvidence",
+    owner: "keiko-activity-log",
+    emitter: "server-log.mutationEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -23771,8 +23803,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "server-log.write-failed",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/server-log.failureNoticeEvent",
+    owner: "keiko-activity-log",
+    emitter: "server-log.failureNoticeEvent",
     fields: {
       completeness: {
         type: "string",
@@ -25040,8 +25072,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "support.incident.created",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/support-incident.createdEvidence",
+    owner: "keiko-activity-log",
+    emitter: "support-incident.createdEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -25135,8 +25167,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "support.incident.deduplicated",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/support-incident.deduplicatedEvidence",
+    owner: "keiko-activity-log",
+    emitter: "support-incident.deduplicatedEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -25189,8 +25221,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "support.incident.dismissed",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/support-incident.dismissedEvidence",
+    owner: "keiko-activity-log",
+    emitter: "support-incident.dismissedEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -25255,8 +25287,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "support.incident.expired",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/support-incident.expiredEvidence",
+    owner: "keiko-activity-log",
+    emitter: "support-incident.expiredEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -25310,8 +25342,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     schemaVersion: 1,
     op: "support.incident.rejected",
     category: "diagnostic",
-    owner: "keiko-server",
-    emitter: "observability/support-incident.rejectedEvidence",
+    owner: "keiko-activity-log",
+    emitter: "support-incident.rejectedEvidence",
     fields: {
       completeness: {
         type: "string",
@@ -27839,16 +27871,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-contract",
       requirementContract: "activity-log-contract",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["loss"],
       lifecycleOperations: {
         start: [],
         state: [],
         end: [],
         failure: [],
-        loss: ["server-log.line-dropped", "server-log.write-failed"],
+        loss: [
+          "activity-log.writer-rejected",
+          "server-log.line-dropped",
+          "server-log.write-failed",
+        ],
       },
       causalEdges: [
+        {
+          op: "activity-log.writer-rejected",
+          mode: "none",
+        },
         {
           op: "server-log.line-dropped",
           mode: "correlation",
@@ -27858,13 +27898,41 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["server-log.line-dropped", "server-log.write-failed"],
+      lossSignals: [
+        "activity-log.writer-rejected",
+        "server-log.line-dropped",
+        "server-log.write-failed",
+      ],
       resourceSignals: [],
       replayReferences: [],
       operations: [
         {
+          op: "activity-log.writer-rejected",
+          owner: "keiko-activity-log",
+          category: "diagnostic",
+          lifecycle: "loss",
+          causal: "none",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["server-log.writer-ownership-rejected.registered-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
           op: "server-log.line-dropped",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "correlation",
@@ -27894,7 +27962,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "server-log.write-failed",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "correlation",
@@ -27947,7 +28015,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-loss",
       requirementContract: "activity-log-loss",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["loss"],
       lifecycleOperations: {
         start: [],
@@ -27968,7 +28036,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "activity-log.loss",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "none",
@@ -28099,7 +28167,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-persistence",
       requirementContract: "activity-log-persistence",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["loss", "state"],
       lifecycleOperations: {
         start: [],
@@ -28128,7 +28196,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "server-log.safe-open",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "state",
           causal: "correlation",
@@ -28170,7 +28238,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "server-log.target-mutated",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "correlation",
@@ -28212,7 +28280,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "server-log.write-failed",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "correlation",
@@ -28265,7 +28333,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-pin",
       requirementContract: "activity-log-pin",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["end", "loss", "start"],
       lifecycleOperations: {
         start: ["activity-log.pin.created"],
@@ -28294,7 +28362,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "activity-log.pin.created",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "start",
           causal: "correlation",
@@ -28378,7 +28446,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "activity-log.pin.expired",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "end",
           causal: "correlation",
@@ -28432,7 +28500,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "activity-log.pin.quota-exhausted",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "correlation",
@@ -28509,7 +28577,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-policy",
       requirementContract: "activity-log-policy",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
@@ -28530,7 +28598,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "activity-log.policy.conflict",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "state",
           causal: "correlation",
@@ -28601,7 +28669,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-pressure",
       requirementContract: "activity-log-pressure",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
@@ -28622,7 +28690,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "activity-log.pressure",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "state",
           causal: "correlation",
@@ -28687,7 +28755,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-readiness",
       requirementContract: "activity-log-readiness",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
@@ -28708,7 +28776,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "activity-log.readiness",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "state",
           causal: "none",
@@ -28764,7 +28832,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-retention",
       requirementContract: "activity-log-retention",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
@@ -28785,7 +28853,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "activity-log.retention.pruned",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "state",
           causal: "correlation",
@@ -28880,7 +28948,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "activity-log-segment",
       requirementContract: "activity-log-segment",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["end", "loss"],
       lifecycleOperations: {
         start: [],
@@ -28905,7 +28973,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "activity-log.segment.recovered",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "correlation",
@@ -28977,7 +29045,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "activity-log.segment.sealed",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "end",
           causal: "correlation",
@@ -56872,7 +56940,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "support-incident",
       requirementContract: "support-incident",
-      productSurfaces: ["keiko-server"],
+      productSurfaces: ["keiko-activity-log"],
       lifecycleTransitions: ["end", "loss", "start", "state"],
       lifecycleOperations: {
         start: ["support.incident.created"],
@@ -56914,7 +56982,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       operations: [
         {
           op: "support.incident.created",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "start",
           causal: "correlation",
@@ -57018,7 +57086,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "support.incident.deduplicated",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "state",
           causal: "correlation",
@@ -57074,7 +57142,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "support.incident.dismissed",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "end",
           causal: "correlation",
@@ -57142,7 +57210,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "support.incident.expired",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "end",
           causal: "correlation",
@@ -57197,7 +57265,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "support.incident.rejected",
-          owner: "keiko-server",
+          owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
           causal: "correlation",
@@ -61497,6 +61565,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "activity-log.retention.pruned": "lifecycle-crash",
     "activity-log.segment.recovered": "lifecycle-crash",
     "activity-log.segment.sealed": "lifecycle-crash",
+    "activity-log.writer-rejected": "lifecycle-crash",
     "atlassian.credential.rejected": "bff",
     "chat.compaction.facts.classified": "bff",
     "chat.creation.rejected": "bff",

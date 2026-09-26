@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local port fixtures are contextually typed. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,12 +17,7 @@ import type { GitDeliveryDescriptionAuthorityPort } from "../gitDelivery/runBoun
 import type { PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import {
   createCodexRuntimeTurnPort,
   createOpenCodeRuntimeTurnPort,

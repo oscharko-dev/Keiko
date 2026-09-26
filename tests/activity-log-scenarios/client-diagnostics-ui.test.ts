@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the client-diagnostics ingest route and the UI
 // launcher/process-lifecycle surfaces.
 //
@@ -42,7 +43,6 @@ import {
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
 } from "../../packages/keiko-server/src/client-diagnostics-routes.js";
-import { resetServerLogger } from "../../packages/keiko-server/src/observability/index.js";
 import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
 import { writeExclusivePidFile } from "../../packages/keiko-cli/src/state-paths.js";
 import { terminateUiProcess } from "../../packages/keiko-cli/src/ui-process-stop.js";

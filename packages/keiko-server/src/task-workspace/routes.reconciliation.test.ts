@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 // Route integration tests for the #447 reconciliation + repair endpoints. Drives the live
 // createUiServer (real CSRF guard + host check) against real services over a disposable git
 // repository: GET (read-only report), POST reconciliation (live pass, CSRF-gated), and POST repair
@@ -24,12 +26,7 @@ import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";

@@ -62,6 +62,9 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-model-gateway", emitterPrefix: "", surface: "model-gateway" },
   { owner: "keiko-model-gateway", emitterPrefix: "prDescription", surface: "editor-delivery" },
   { owner: "keiko-security", emitterPrefix: "", surface: "runtime-packages" },
+  // ADR-0179: this package owns the one writer/store implementation and its reader engine. Its
+  // registered lifecycle evidence remains one closed surface regardless of module filename.
+  { owner: "keiko-activity-log", emitterPrefix: "", surface: "lifecycle-crash" },
   { owner: "keiko-server", emitterPrefix: "atlassian", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "bounded-request-body", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-activity", surface: "bff" },
@@ -125,7 +128,6 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "local-knowledge-handlers", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "memory-embedding", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "native-file-dialog", surface: "ui" },
-  { owner: "keiko-server", emitterPrefix: "observability", surface: "lifecycle-crash" },
   { owner: "keiko-server", emitterPrefix: "process-log-sink", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "reference-id", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "run-handlers", surface: "bff" },
@@ -162,7 +164,8 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
 // the CLI write through the process-wide server logger; every domain package receives its own
 // port from the server (AGENTS.md §8).
 export const ACTIVITY_LOG_OWNER_PORTS = {
-  "keiko-cli": { port: "ServerLogSink", declaredIn: "keiko-server" },
+  "keiko-activity-log": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
+  "keiko-cli": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
   "keiko-local-knowledge": { port: "KnowledgeLogSink", declaredIn: "keiko-local-knowledge" },
   "keiko-memory-consolidation": {
     port: "ConsolidationLogSink",
@@ -171,7 +174,7 @@ export const ACTIVITY_LOG_OWNER_PORTS = {
   "keiko-memory-vault": { port: "MemoryVaultLogSink", declaredIn: "keiko-memory-vault" },
   "keiko-model-gateway": { port: "ModelGatewayLogSink", declaredIn: "keiko-model-gateway" },
   "keiko-security": { port: "SecurityLogSink", declaredIn: "keiko-security" },
-  "keiko-server": { port: "ServerLogSink", declaredIn: "keiko-server" },
+  "keiko-server": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
 };
 
 // Checked in order: the first mode whose token appears in a member operation's name wins, after a

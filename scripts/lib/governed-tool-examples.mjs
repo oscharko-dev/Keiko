@@ -4,7 +4,7 @@ import {
 } from "../../packages/keiko-contracts/dist/governed-tool-lifecycle.js";
 import { Buffer } from "node:buffer";
 import { isErrorKind } from "../../packages/keiko-contracts/dist/observability.js";
-import { redactLogFields } from "../../packages/keiko-server/dist/observability/log-redaction.js";
+import { redactLogFields } from "../../packages/keiko-activity-log/dist/log-redaction.js";
 // Validation of documentation examples. Runtime validation stays with #3406/#3413.
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[a-zA-Z0-9_.-]{1,128}$/;

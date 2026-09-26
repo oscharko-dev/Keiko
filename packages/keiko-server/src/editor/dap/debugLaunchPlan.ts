@@ -40,7 +40,7 @@ import {
 } from "./debugLaunchCatalog.js";
 import { isSafeDapSocketBasename, isSha256Digest } from "./debugLaunchSecurityPredicates.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
-import type { ServerLogSink } from "../../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 
 const CAPSULE_ROOT = "/keiko-execution-root" as const;

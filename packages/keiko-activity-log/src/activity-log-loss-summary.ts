@@ -32,8 +32,8 @@ const ACTIVITY_LOG_LOSS_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "activity-log.loss",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/activity-log-loss-summary.activityLogLossSummaryEvent",
+  owner: "keiko-activity-log",
+  emitter: "activity-log-loss-summary.activityLogLossSummaryEvent",
   fields: {
     trigger: {
       type: "string",

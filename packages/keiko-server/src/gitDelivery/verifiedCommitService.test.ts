@@ -10,7 +10,7 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { LINE_DIFF_MAX_EDIT_DISTANCE } from "./lineDiff.js";
-import { redactLogFields } from "../observability/log-redaction.js";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { GIT_STAGE_FILE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { RuntimeGitService } from "./runtimeGitService.js";
@@ -48,7 +48,7 @@ import type {
   VerifiedCommitService,
   VerifiedCommitServiceOptions,
 } from "./verifiedCommitTypes.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

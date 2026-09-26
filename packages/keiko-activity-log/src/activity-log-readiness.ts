@@ -63,8 +63,8 @@ const ACTIVITY_LOG_READINESS_OPERATION = defineActivityLogOperation({
   schemaVersion: 1,
   op: "activity-log.readiness",
   category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/activity-log-readiness.readinessEvent",
+  owner: "keiko-activity-log",
+  emitter: "activity-log-readiness.readinessEvent",
   fields: {
     readiness: {
       type: "string",

@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Wave 5 ACCEPTANCE TEST (epic #3233, ADR-0173 SS9/SS11) — end-to-end proof, against the REAL
 // `createUiServer` (a genuine bound loopback socket, real route dispatch, real SSE framing), that
 // this wave's four deliverables actually work together:
@@ -41,14 +46,7 @@ import {
   type StreamEvent,
   type UiHandlerDeps,
 } from "./index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import { UI_HOST } from "./server.js";
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 

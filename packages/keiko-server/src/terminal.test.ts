@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0018 — TerminalExecutionManager unit tests. Each test composes a fake SpawnFn so the
 // manager exercises the real allowlist + cwd containment + redaction passthrough without a real
 // child process. Route-level coverage lives in terminal-routes.test.ts.
@@ -27,13 +29,8 @@ import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/k
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import {
   grantedWorkspaceRootAccess,

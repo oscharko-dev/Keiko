@@ -46,7 +46,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { describeError } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";

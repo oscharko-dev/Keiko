@@ -47,7 +47,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "./process-log-sink.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const NOTICE_KIND = "keiko.compactedHistoryNotice";
 

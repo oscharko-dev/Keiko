@@ -12,7 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { localDraftDeliverySource } from "../coding-runtime/codingRuntimeDraftDeliverySource.js";
 import { describeError } from "../diagnostics-log.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import type { GitDeliveryMutationDeps } from "./execution.js";
 import {

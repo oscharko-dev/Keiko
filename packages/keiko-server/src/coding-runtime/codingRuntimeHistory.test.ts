@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { createHash } from "node:crypto";
@@ -14,7 +16,6 @@ import {
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
 import { createCodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

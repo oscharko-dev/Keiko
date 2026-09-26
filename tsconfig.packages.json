@@ -17,6 +17,9 @@
       "path": "./packages/keiko-security/tsconfig.json"
     },
     {
+      "path": "./packages/keiko-activity-log/tsconfig.json"
+    },
+    {
       "path": "./packages/keiko-tool-catalog/tsconfig.json"
     },
     {

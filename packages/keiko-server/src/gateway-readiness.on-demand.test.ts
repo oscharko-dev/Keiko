@@ -6,7 +6,7 @@ import {
   ensureOnDemandConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";

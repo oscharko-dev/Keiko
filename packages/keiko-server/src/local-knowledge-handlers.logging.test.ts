@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // The field incident this whole log exists for: a Knowledge Pod indexing run sits at
 // "0 of 1 documents, 0 of 36 vectors" for six minutes and is then cancelled. No error, no
 // evidence. The instrumentation that would have explained it lives in `keiko-local-knowledge`
@@ -40,14 +45,7 @@ import {
   localKnowledgeEmbeddingAdapterForProvider,
 } from "./local-knowledge-handlers.js";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import { createRunRegistry } from "./runs.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";

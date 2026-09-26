@@ -1,14 +1,25 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  resetActivityLogReadinessForTests,
+  resetServerLogger,
+} from "../../../tests/support/activity-log-test-support.js";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { isActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  recordActivityLogLoss,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
-import { currentActivityLogReadiness } from "./observability/activity-log-readiness.js";
+import {
+  checkActivityLogReadiness,
+  currentActivityLogReadiness,
+} from "@oscharko-dev/keiko-activity-log";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type ChatGitChangeScope } from "./store/index.js";
 
@@ -654,6 +665,59 @@ describe("health handler", () => {
     expect(isActivityLogReadinessSnapshot(Reflect.get(result.body as object, "diagnostics"))).toBe(
       true,
     );
+  });
+
+  it("keeps a cold unreadable Activity Log body-free and explicitly unavailable", async (ctx) => {
+    if (process.platform === "win32" || process.getuid?.() === 0) ctx.skip();
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-health-unreadable-"));
+    const logs = join(stateDir, "logs");
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    chmodSync(logs, 0o000);
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    resetServerLogger();
+    resetActivityLogReadinessForTests();
+    try {
+      const route = API_ROUTES.find((entry) => entry.pattern === "/api/health");
+      const result = await route?.handler(emptyCtx, stubDeps);
+      if (result === undefined || result === STREAMING) throw new Error("expected a RouteResult");
+      const diagnostics: unknown = Reflect.get(result.body as object, "diagnostics");
+      expect(isActivityLogReadinessSnapshot(diagnostics)).toBe(true);
+      expect(diagnostics).toMatchObject({
+        readiness: expect.not.stringMatching(/^ready$/u) as unknown,
+        reasons: expect.arrayContaining(["storage-check-failed"]) as unknown,
+      });
+      expect(JSON.stringify(result.body)).not.toContain(stateDir);
+    } finally {
+      chmodSync(logs, 0o700);
+      resetServerLogger();
+      resetActivityLogReadinessForTests();
+      vi.unstubAllEnvs();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the live Activity Log loss count in the closed diagnostics block", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-health-loss-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    resetServerLogger();
+    resetActivityLogReadinessForTests();
+    resetActivityLogLossCountersForTests();
+    try {
+      checkActivityLogReadiness({ stateDir });
+      recordActivityLogLoss("client-rejected", 2);
+      const route = API_ROUTES.find((entry) => entry.pattern === "/api/health");
+      const result = await route?.handler(emptyCtx, stubDeps);
+      if (result === undefined || result === STREAMING) throw new Error("expected a RouteResult");
+      const diagnostics: unknown = Reflect.get(result.body as object, "diagnostics");
+      expect(isActivityLogReadinessSnapshot(diagnostics)).toBe(true);
+      expect(diagnostics).toMatchObject({ readiness: "ready", lostEvents: 2 });
+    } finally {
+      resetServerLogger();
+      resetActivityLogReadinessForTests();
+      resetActivityLogLossCountersForTests();
+      vi.unstubAllEnvs();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import { resetCodingWorkbenchContextWindowProbesForTests } from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -58,11 +63,8 @@ import {
 } from "./coding-runtime/opencodeToolSchemas.js";
 import { proposalIdPattern } from "./gitDelivery/proposalId.js";
 import {
-  createBufferedServerLogSink,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-  type BufferedServerLogSink,
   type ServerLogThreshold,
 } from "./observability/index.js";
 import { createRunRegistry } from "./runs.js";

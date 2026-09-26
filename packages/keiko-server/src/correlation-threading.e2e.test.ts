@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Wave 3 ACCEPTANCE TEST (epic #3233, ADR-0173 D5, final-design.md §7) — proves, against the REAL
 // `createUiServer` route handler (never a bare handler function call), that ONE correlation id
 // threads end to end: from an inbound HTTP/WS header, through the BFF, through the model gateway's
@@ -40,14 +45,7 @@ import { buildCspHeader } from "./csp.js";
 import { CORRELATION_HEADER } from "./correlation.js";
 import { VOICE_LIVE_TRANSCRIBE_PATH } from "./voice-live-dictation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 
 const OFFER_SDP =

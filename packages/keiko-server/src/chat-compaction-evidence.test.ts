@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 // ADR-0057 D3 (integration): the chat send paths persist the discarded ContextCompactionRecord as
 // regulated evidence. Drives the REAL buffered (handleSendDesktopChat) and streaming
 // (handleSendDesktopChatStream) handlers against an in-memory UI store + a real in-memory evidence
@@ -29,12 +30,8 @@ import { handleSendDesktopChat } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
-import {
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/server-logger.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
 import type { RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";

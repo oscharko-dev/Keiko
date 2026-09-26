@@ -27,7 +27,7 @@ import type {
   ReadOnlyChildToolAttempt,
 } from "./readOnlyChildOrchestrator.js";
 import type { ReadOnlyChildEnvelope } from "./readOnlyChildEnvelope.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 const CHILD_RUN_ID = "chr_child-1" as CodeTaskChildRunId;
 const READ: ReadOnlyChildToolAttempt = { toolClass: "workspace-read" };

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { closeFileServerLogSinks } from "@oscharko-dev/keiko-server";
+import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import { DEFAULT_SUPPORT_QUERY_LIMITS, runSupportQuery } from "./support-query.js";
 import {
@@ -31,7 +31,7 @@ import {
   manifestMayContainAnyKey,
   parentCorrelationKey,
 } from "./support-segment-manifest.js";
-import { fixtureLine, fixtureProcess } from "./test-support/activity-log-segments.js";
+import { fixtureLine, fixtureProcess } from "../../../../tests/support/activity-log-segments.js";
 
 const SEGMENT_COUNT = 40;
 const SEGMENT_BYTES = 2 * 1024 * 1024;
@@ -42,7 +42,9 @@ const CHILD_SEGMENT = 29;
 const ROOT_ID = "corr-lh-target-root-00001";
 const CHILD_ID = "corr-lh-target-child-0001";
 const T0 = Date.UTC(2026, 8, 1, 0, 0, 0);
-const BUILT_SUPPORT_MODULE = fileURLToPath(new URL("../dist/support.js", import.meta.url));
+const BUILT_SUPPORT_MODULE = fileURLToPath(
+  new URL("../../../keiko-cli/dist/support.js", import.meta.url),
+);
 
 // Template tokens: every variable part of a line is a unique, fixed placeholder.
 const TOKEN_TS = "2026-01-01T00:00:00.000Z";

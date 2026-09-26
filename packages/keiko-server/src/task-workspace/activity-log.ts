@@ -48,8 +48,8 @@ import {
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type {
   TaskWorkspaceDriftMarker,
   WorkspaceCleanupRefusalReason,

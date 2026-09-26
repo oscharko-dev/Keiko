@@ -1,7 +1,8 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { describe, expect, it, vi } from "vitest";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

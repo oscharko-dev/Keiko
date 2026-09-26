@@ -59,7 +59,7 @@ import { gatewayRouteDeadlineMs } from "../gateway-route-deadline.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
 import {

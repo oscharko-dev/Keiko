@@ -50,7 +50,7 @@ import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchIssueBinding,

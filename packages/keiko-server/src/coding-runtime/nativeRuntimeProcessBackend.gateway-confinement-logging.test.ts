@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 // #2951 residual finding: the native (Windows Job Object) gateway-confinement refusal path threw
 // GATEWAY_UNSUPPORTED_ON_HOST_REASON with no body-free activity-log line, unlike the macOS dev-lane
 // path's `runtime.confinement.failed` (devLaneRuntimeProcessBackend.ts's `recordConfinementFailure`).
@@ -14,8 +15,6 @@ import {
   createRuntimeGatewayConfinement,
   GATEWAY_UNSUPPORTED_ON_HOST_REASON,
 } from "@oscharko-dev/keiko-sandbox";
-
-import { createBufferedServerLogSink } from "../observability/index.js";
 import {
   createNativeRuntimeProcessBackend,
   type NativeRuntimeHelperProcess,

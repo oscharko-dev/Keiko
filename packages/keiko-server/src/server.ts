@@ -27,11 +27,12 @@ import {
 } from "./routes.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import {
+  configureActivityLogRouteRedactor,
   MAX_LOG_STRING_LENGTH,
   REDACTED_PATH,
-  redactRoutePath,
   type ServerLogSink,
-} from "./observability/server-log.js";
+} from "@oscharko-dev/keiko-activity-log";
+import { redactRoutePath } from "./observability/route-template.js";
 import { CORRELATION_RESPONSE_HEADER, resolveCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
@@ -40,6 +41,8 @@ import { createVoiceLiveDictationPlane } from "./voice-live-dictation.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
+
+configureActivityLogRouteRedactor(redactRoutePath);
 
 // Canonical values live in the contracts leaf (GEN-PERF-CLI-001) so the CLI can
 // read them without loading this module graph; imported and re-exported here so

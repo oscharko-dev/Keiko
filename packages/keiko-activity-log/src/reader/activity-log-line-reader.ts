@@ -10,7 +10,7 @@
 
 import { closeSync, readSync } from "node:fs";
 import type { ActivityLogTextLine } from "./support-analyze.js";
-import { describeErrorKind } from "./support-export.js";
+import { describeErrorKind } from "./error-kind.js";
 
 export const ACTIVITY_LOG_READ_CHUNK_BYTES = 64 * 1024;
 export const MAX_ACTIVITY_LOG_READ_LINE_BYTES = 1024 * 1024;

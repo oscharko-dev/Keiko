@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 // #3610: a governed ask ends in exactly one closed outcome. Before this, the registry answered a
 // bare boolean, so the tool facade route could not tell a denied or expired human decision from a
 // browser-origin refusal and logged every one of them as `origin-not-allowed`.
@@ -8,7 +10,7 @@ import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contra
 
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
+import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

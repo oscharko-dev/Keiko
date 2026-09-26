@@ -1,0 +1,36 @@
+{
+  "name": "@oscharko-dev/keiko-activity-log",
+  "version": "1.1.9",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal Activity Log writer, segmented store, and support reader engine (ADR-0179). Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./reader": {
+      "types": "./dist/reader/index.d.ts",
+      "import": "./dist/reader/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.18.0 <25 || >=26.3.0 <27"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "1.1.9",
+    "@oscharko-dev/keiko-security": "1.1.9"
+  },
+  "private": true
+}

@@ -15,7 +15,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   createInMemoryRuntimeCapabilityStore,
   type RuntimeCapabilityBinding,

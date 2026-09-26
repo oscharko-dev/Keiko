@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 // Route integration tests for the #446 active-binding routes. Drives the live createUiServer (CSRF +
 // host check run for real) against the real lifecycle service composed over the real instance +
 // active-pointer stores and a real provisioning service against a disposable git repository, so the
@@ -24,12 +26,7 @@ import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";

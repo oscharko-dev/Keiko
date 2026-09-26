@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../../../../../../tests/support/activity-log-test-support.js";
 import {
   chmodSync,
   existsSync,
@@ -30,13 +31,9 @@ import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { LspSpawnPreparationInput } from "../lspProcessManager.js";
 import { JAVA_PROVIDER_SPEC, javaProtocolConfiguration, prepareJavaSpawn } from "./javaProvider.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
-import { redactLogFields } from "../../../observability/log-redaction.js";
-import type { ServerLogEvent } from "../../../observability/server-log.js";
-import {
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../../../observability/server-logger.js";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

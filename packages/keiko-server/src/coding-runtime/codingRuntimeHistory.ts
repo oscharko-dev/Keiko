@@ -1,7 +1,7 @@
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { CODING_HISTORY_MESSAGE_MAX_CHARS } from "../store/codingHistory.js";
 import { contentFreeErrorClass } from "../diagnostics-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
 import type {
   CodingSafeActivityMessage,
@@ -17,7 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { UiStore } from "../store/types.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingSafeActivityContent } from "./codingSafeActivityProjection.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
 

@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,16 +14,9 @@ import {
   resetClientDiagnosticsIngestStateForTests,
 } from "./client-diagnostics-routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
-import { redactLogFields } from "./observability/log-redaction.js";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 
 const CORRELATION_ID = "diagnostics-route-test";
 const CLIENT_TS = "2026-08-21T10:00:00.000Z";

@@ -23,7 +23,7 @@ import {
   keikoStackFrames,
 } from "./stack-frames.js";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 function sorted(values: Iterable<string>): readonly string[] {
   return [...values].sort((left, right) => left.localeCompare(right, "en-US"));

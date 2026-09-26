@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Remediation reindexes every Local Knowledge capsule after a failed upgrade. It runs unattended,
 // with no route, no progress stream and no UI — the path an operator is LEAST able to watch, and
 // therefore the one where a silent stall reproduces the original field incident inside the tool
@@ -25,13 +30,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 import { createLocalKnowledgeRemediationPort } from "./local-knowledge-remediation.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const MODEL_ID = "text-embedding-3-small";
 const DIMENSIONS = 1536;

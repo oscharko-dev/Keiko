@@ -14,7 +14,7 @@ import type {
   GitJourneyFactsResult,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { describeError } from "../diagnostics-log.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { captureJourneyFacts, produceJourneyOutcome } from "./journeyOutcome.js";

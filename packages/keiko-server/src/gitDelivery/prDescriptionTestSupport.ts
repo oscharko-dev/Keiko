@@ -15,7 +15,7 @@ import type {
   GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
 import { createGitChangeSnapshotService } from "../gitChangeSnapshotService.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";

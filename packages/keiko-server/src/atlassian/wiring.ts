@@ -18,7 +18,7 @@ import type {
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { openAtlassianCredentialVault } from "./credentialVault.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
 import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } from "./httpPort.js";

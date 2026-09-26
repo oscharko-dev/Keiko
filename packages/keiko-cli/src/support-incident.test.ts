@@ -1,3 +1,4 @@
+import { resetServerLogFailureNotices } from "../../../tests/support/activity-log-test-support.js";
 // `keiko support incident` (#3533): argument parsing, the canonical descriptor resolution from the
 // pinned window, the public/private projections the CLI prints, and the report/dismiss actions,
 // all through the production server module (no mocks of the store or the analyzer).
@@ -16,13 +17,13 @@ import {
 import {
   closeFileServerLogSinks,
   createFileServerLogSink,
-  resetServerLogFailureNotices,
-} from "@oscharko-dev/keiko-server/observability/server-log";
+  recordRegisteredFailureIncident,
+} from "@oscharko-dev/keiko-activity-log";
 import type { CliIo } from "./runner.js";
-import { ACTIVITY_LOG_READ_CHUNK_BYTES } from "./activity-log-line-reader.js";
-import { loadServer } from "./lazy-modules.js";
+import { ACTIVITY_LOG_READ_CHUNK_BYTES } from "@oscharko-dev/keiko-activity-log/reader";
+import { loadActivityLog } from "./lazy-modules.js";
 import { runSupportCli } from "./support.js";
-import { analyzeLogText } from "./support-analyze.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   MAX_SUPPORT_INCIDENT_WINDOW_BYTES,
   SupportIncidentWindowError,
@@ -34,7 +35,7 @@ import {
   fixtureProcess,
   segmentIdentity,
   writeFixtureSegment,
-} from "./test-support/activity-log-segments.js";
+} from "../../../tests/support/activity-log-segments.js";
 
 const INCIDENT_ID = "0123456789abcdef0123456789abcdef";
 // A registered failure whose class requires nothing but the failure line itself.
@@ -65,12 +66,12 @@ async function run(
   return { code, out: capture.out(), err: capture.err() };
 }
 
-// The support commands reach keiko-server through `loadServer()`, the whole server module graph
+// Incident commands reach the Activity Log through `loadActivityLog()`, its isolated graph
 // imported lazily. That first import is the slowest step of this suite and, under coverage or on a
 // slow filesystem, can alone exceed the per-test budget of whichever test runs first. Pay it once
 // here, bounded on the hook as in portable-macos-activation.test.ts, so a real hang still fails.
 beforeAll(async () => {
-  await loadServer();
+  await loadActivityLog();
 }, 60_000);
 describe("parseSupportIncidentArgs", () => {
   it("parses every subcommand and its flags", () => {
@@ -180,8 +181,7 @@ describe("keiko support incident", () => {
         registration,
       ),
     );
-    const server = await import("@oscharko-dev/keiko-server");
-    const recorded = server.recordRegisteredFailureIncident(stateDir, {
+    const recorded = recordRegisteredFailureIncident(stateDir, {
       op: FAILURE_OP,
       errorKind: "unavailable",
       correlationId: "failed-export-1",

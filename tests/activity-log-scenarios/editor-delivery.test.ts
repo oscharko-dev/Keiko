@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the editor-delivery surface.
 //
 // Each scenario drives a production entry point of the editor-delivery surface — the governed LSP
@@ -29,7 +30,6 @@ import { runtimeGitDiff } from "../../packages/keiko-server/src/gitDelivery/runt
 import type { GitDeliveryExecutionSeams } from "../../packages/keiko-server/src/gitDelivery/execution.js";
 import type { VerifiedCommitRunContext } from "../../packages/keiko-server/src/gitDelivery/verifiedCommitTypes.js";
 import { processServerLogSink } from "../../packages/keiko-server/src/process-log-sink.js";
-import { resetServerLogger } from "../../packages/keiko-server/src/observability/index.js";
 import {
   expectActivityLogProof,
   persistedActivityLogLines,

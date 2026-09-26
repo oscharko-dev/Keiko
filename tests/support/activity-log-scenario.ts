@@ -36,16 +36,16 @@ import {
 import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
-} from "../../packages/keiko-server/src/observability/support-incident.js";
+} from "@oscharko-dev/keiko-activity-log";
 import {
   analyzeLogText,
   type AnalyzeAllResult,
   type OpCluster,
-} from "../../packages/keiko-cli/src/support-analyze.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   type SupportQueryResult,
-} from "../../packages/keiko-cli/src/support-query.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 import {
   executeSupportQuery,
   resolveSupportSelection,

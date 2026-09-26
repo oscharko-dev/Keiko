@@ -7,7 +7,7 @@ import {
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import type { CodingRuntimeSnapshot } from "../coding-runtime/codingRuntimeSnapshotStore.js";
-import { formatServerLogLine, type ServerLogEvent } from "../observability/server-log.js";
+import { formatServerLogLine, type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   readDraftDeliveryChecks,
   renderDraftDeliveryChecks,
