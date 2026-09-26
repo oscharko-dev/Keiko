@@ -340,7 +340,13 @@ function useSessionSelection(
   selectionHandled.current = input.onSelectionHandled;
   const lastSelection = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (selection === undefined || lastSelection.current === selection || active) return;
+    // #3631: the host consumes a selection by clearing it, so picking the same task again is a new
+    // pick — a failed activation can be retried from Coding History without choosing another task.
+    if (selection === undefined) {
+      lastSelection.current = undefined;
+      return;
+    }
+    if (lastSelection.current === selection || active) return;
     lastSelection.current = selection;
     selectionHandled.current?.();
     if (selection.startsWith("new:")) void newTask();

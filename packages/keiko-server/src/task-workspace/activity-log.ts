@@ -129,6 +129,10 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
     eventId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     attempt: { type: "integer", dataClass: "count", required: false },
     worktreeCount: { type: "integer", dataClass: "count", required: false },
+    // The branch a provisioned workspace was cut from, as a domain-separated digest: the Workbench's
+    // repository and branch choice takes effect here, so support can check it without the name
+    // (PR #3625 review).
+    baseBranchDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     driftMarker: {
       type: "string",
       dataClass: "closed-enum",
@@ -259,6 +263,8 @@ export interface WorkspaceLifecycleLogInput {
   // proving a different identity (`gitdir-mismatch`) and a missing or corrupt pointer
   // (`pointer-stale`) apart without the evidence store (#3376 review P2).
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
+  // The branch a provisioned workspace was cut from. Only its digest reaches `extra`.
+  readonly baseBranch?: string | undefined;
 }
 
 export interface WorkspaceLifecycleFailureInput {
@@ -279,6 +285,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly errorCode?: string | undefined;
   readonly error?: unknown;
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
+  readonly baseBranch?: string | undefined;
 }
 
 interface WorkspaceErrorTrace {
@@ -403,6 +410,9 @@ export function logWorkspaceLifecycle(
       attempt: input.attempt,
       worktreeCount: input.worktreeCount,
       ...(input.driftMarker === undefined ? {} : { driftMarker: input.driftMarker }),
+      ...(input.baseBranch === undefined
+        ? {}
+        : { baseBranchDigest: baseBranchDigest(input.baseBranch) }),
       ...(input.error === undefined ? {} : errorTrace(input.error)),
     },
   });
@@ -415,6 +425,11 @@ function errorTrace(error: unknown): WorkspaceErrorTrace {
     ...(frames.length === 0 ? {} : { frames }),
     ...(causes.length === 0 ? {} : { causeChain: causes }),
   };
+}
+
+/** The digest a support reader compares a known branch name against; never the name itself. */
+export function baseBranchDigest(baseBranch: string): string {
+  return sha256Hex(`task-workspace-base-branch-v1\0${baseBranch}`);
 }
 
 function workspaceLogIdentity(workspaceId: string): string {
@@ -465,6 +480,7 @@ export function recordWorkspaceLifecycle(
     errorCode: input.errorCode,
     error: input.error,
     driftMarker: input.driftMarker,
+    baseBranch: input.baseBranch,
   });
 }
 

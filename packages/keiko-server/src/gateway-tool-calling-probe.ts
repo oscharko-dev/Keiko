@@ -10,8 +10,20 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
+import { processServerLogSink } from "./process-log-sink.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 const MAX_PROVIDER_RESPONSE_BYTES = 500_000;
+
+// The stack-frame port a readiness probe gets for a failure the model gateway records itself
+// instead of rethrowing (an unreadable rejection, PR #3625 review): dist-anchored frames and the
+// cause chain, never the error's message.
+export function gatewayProbeErrorEvidence(error: unknown): {
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+} {
+  return { frames: keikoStackFrames(error), causeChain: causeChain(error) };
+}
 
 // `transient`: the gateway answered with an overload or timeout status (`transientGatewayStatus`),
 // which proves nothing about the model either way and must not be stored as a verdict.
@@ -179,6 +191,10 @@ async function executeGatewayToolCallingProbe(
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
+      // Every attempt and compatibility retry of this probe is recorded under its correlation.
+      log: processServerLogSink(),
+      ...(spend === undefined ? {} : { correlationId: spend.correlationId }),
+      errorEvidence: gatewayProbeErrorEvidence,
     });
   } catch (error) {
     settleGatewayProbeSpend(reservation, undefined);

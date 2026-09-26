@@ -725,6 +725,14 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
       expect(results[0]?.status).toBe("failed");
       expect(screen.queryByRole("group", { name: "Agent changeset review" })).toBeNull();
     });
+    // PR #3625 review: the Reject says so, so the server reads it as the human's decision and
+    // never mistakes a failure the editor reports itself for one.
+    expect(
+      vi
+        .mocked(postEditorAgentActionResult)
+        .mock.calls.map(([body]) => body)
+        .find((body) => body.result.actionId === action.actionId),
+    ).toMatchObject({ reviewDecision: "rejected" });
     expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
     expect(disk.has("src/deleted.ts")).toBe(true);
     expect(disk.has("src/created.ts")).toBe(false);

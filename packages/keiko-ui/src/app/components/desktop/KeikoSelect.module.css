@@ -1,0 +1,30 @@
+/* The searchable menu's own chrome. Component-scoped, so globals.css and its pinned visual proof
+   (#1300) stay untouched (AGENTS.md §9). */
+
+.cmpMenuSearch {
+  padding: 7px 8px 5px;
+}
+
+.cmpMenuSearch input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: 0 8px;
+  color: var(--text-primary);
+  background: var(--button-secondary-surface);
+  font: inherit;
+}
+
+.cmpMenuSearch input:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.cmpMenuEmpty {
+  margin: 0;
+  padding: 8px;
+  color: var(--text-tertiary);
+  font-size: 0.86em;
+}

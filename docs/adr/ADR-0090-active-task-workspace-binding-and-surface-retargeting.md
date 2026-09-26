@@ -115,6 +115,12 @@ to the existing `cfg`/`linkedRoot` chain **only** in unbound mode. The ordinary 
 window is the repository-control exception: a concrete `projectPath`/`workspaceRoot`
 or the global selected repository root is repository truth for that window, for
 any repository, and `ctx.activeRoot` remains an internal task-worktree detail.
+The Coding Workbench keeps its selected repository and target branch in its own
+window configuration. Its setup form selects only repositories already registered
+by Git and revalidates membership and availability before binding a managed task
+workspace. Once bound, compact repository and branch controls sit above its
+composer. Changing the Git window's repository or the Chat project never silently
+retargets an existing Coding Workbench window.
 Repository Files/Editor windows opened from Git carry `rootBinding:
 "coding-repository"` and preserve the same configured repository root. Legacy
 repository windows that already persisted a `.keiko/.../task-workspaces/...`

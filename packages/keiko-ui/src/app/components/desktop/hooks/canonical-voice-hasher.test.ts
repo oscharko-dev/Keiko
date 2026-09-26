@@ -1,3 +1,4 @@
+import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalVoiceHasherIsReady,
@@ -38,6 +39,16 @@ describe("canonical voice hasher", () => {
     expect(canonicalVoiceSha256Hex("abc")).toBe(
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     );
+  });
+
+  // The Voice FIFO capacity test hashes through a stand-in, so the real runtime's one guarantee it
+  // used to exercise, a maximum-size transcript, is pinned here once instead of 128 times.
+  it("hashes a maximum-size transcript with the real runtime", async () => {
+    await prepareCanonicalVoiceHasher();
+
+    const digest = canonicalVoiceSha256Hex("q".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS));
+    expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(digest).not.toBe(canonicalVoiceSha256Hex("q".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS - 1)));
   });
 
   it("remains unprepared and retryable after a redacted load failure", async () => {

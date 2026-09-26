@@ -24,6 +24,11 @@ await runCodingRuntimeJourneyServer({
   runtime: "scripted",
   includeQuestion: false,
   holdAfterVerification: true,
+  // #3385 wave: makes the run's own `keiko_verification` call genuinely refuse
+  // WORKSPACE_TRUST_REQUIRED against this fixture's freshly bound (never-granted) repository, so the
+  // journey can drive the real workspace-script-trust pause/grant/resume cycle instead of the
+  // fixture's usual always-trusted stand-in.
+  requireVerificationScriptTrust: true,
   defaultPort: ISSUE_INTAKE_PORT,
   originalContent: ISSUE_INTAKE_ORIGINAL,
   editedContent: ISSUE_INTAKE_EDITED,

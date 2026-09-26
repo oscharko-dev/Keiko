@@ -51,6 +51,7 @@ import {
   type CodingToolVerificationResult,
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
+  GOVERNED_ASK_DECLINED_REASON_CODE,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import type {
@@ -594,6 +595,9 @@ function projectGovernedFailure(
   value: Record<string, unknown>,
 ): CodingToolResult {
   const reasonCode = value.reasonCode;
+  // The operator declined a server-raised ask (a Git stage, commit, push or pull-request proposal):
+  // the same decision as a declined step, so the model reads why and goes on (ADR-0124 D6).
+  if (reasonCode === GOVERNED_ASK_DECLINED_REASON_CODE) return humanDecisionToolResult("denied");
   if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
     return projected("failed");
   }
@@ -811,6 +815,9 @@ function projectEditFailure(
 ): CodingToolResult | undefined {
   if (request.action !== "edit" || value.outcome !== "failed") return undefined;
   const reasonCode = value.reasonCode;
+  // The human rejected the change in its review, the only approval an edit asks for: the same
+  // decision as a declined step, so the model reads why and goes on without it (ADR-0124 D6).
+  if (reasonCode === "CHANGE_REJECTED") return humanDecisionToolResult("denied");
   const safeReasonCode =
     typeof reasonCode === "string" && EDIT_FAILURE_REASON_CODES.has(reasonCode)
       ? reasonCode
@@ -838,18 +845,26 @@ function editFailureCoaching(
   };
 }
 
-/**
- * The result of a changeset whose base digest is already stale when it asks the human (#3612): the
- * same refusal and re-read guidance the editor route gives after an approval, before any human is
- * asked. A path outside the detail's printable bound is left out, as for every edit refusal.
- */
-export function staleEditBaseToolResult(staleFile: string): CodingToolResult {
+// Owner decision 2026-09-26 (ADR-0124 D6): a human's "no" rejects one step, not the run. The model
+// reads why the step did not happen and goes on without it.
+const HUMAN_DECISION_GUIDANCE = {
+  denied:
+    "The user declined this step, so it was not performed. Do not repeat it; continue with the rest of the task without it, or ask the user how to proceed.",
+  expired:
+    "Nobody decided this approval in time, so the step was not performed. Continue with the rest of the task without it, or ask the user before trying it again.",
+} as const;
+
+/** The feedback a declined or expired step gives the model in place of the call (ADR-0124 D6). */
+export function humanDecisionFeedback(outcome: "denied" | "expired"): string {
+  return HUMAN_DECISION_GUIDANCE[outcome];
+}
+
+/** The result a declined or expired governed ask answers in place of its call (ADR-0124 D6). */
+export function humanDecisionToolResult(outcome: "denied" | "expired"): CodingToolResult {
   return {
-    ...projected("failed", "CONTENT_HASH_MISMATCH"),
-    ...editFailureCoaching(
-      "CONTENT_HASH_MISMATCH",
-      `The file changed after its read: ${staleFile}`,
-    ),
+    status: outcome === "denied" ? "denied" : "cancelled",
+    evidence: [],
+    guidance: HUMAN_DECISION_GUIDANCE[outcome],
   };
 }
 

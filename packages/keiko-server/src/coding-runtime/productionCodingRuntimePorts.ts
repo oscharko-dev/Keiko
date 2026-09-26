@@ -285,6 +285,7 @@ function buildProductionRuntimeManager(
     start: (request) => startProductionRuntime(runs, context, request),
     issueApproval: (request) =>
       context.slot.manager()?.issueApproval(request) ?? stoppedApprovalIssue(),
+    declineApproval: (request) => context.slot.manager()?.declineApproval?.(request) ?? false,
     pause: (runId) => pauseProductionRuntime(context, runId),
     resume: (runId, requestedMode) => resumeProductionRuntime(context, runId, requestedMode),
     stop: (runId, resultStatus) => stopProductionRuntime(context, runId, resultStatus),

@@ -1798,6 +1798,77 @@ describe("files API helpers", () => {
     expect(init.signal?.aborted).toBe(true);
   });
 
+  // PR #3625 review: a manual Git read Retry sends the id its attempt line carries, so the server's
+  // lines for that request join the retry's attempt and settlement lines.
+  it("sends a caller's correlation id with each Git read", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo",
+          repositoryRoot: "/repo",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          clean: true,
+          stagedCount: 0,
+          unstagedCount: 0,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          changes: [],
+          truncated: false,
+          maxChanges: 500,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo",
+          repositoryRoot: "/repo",
+          available: true,
+          state: "available",
+          branches: [],
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          stagedCount: 0,
+          unstagedCount: 0,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          clean: true,
+          remotes: [],
+          truncated: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitStatus("/repo", { correlationId: "ui_retry-status-0001" });
+    await fetchGitBranches("/repo", { correlationId: "ui_retry-branches-0001" });
+    await fetchGitSummary("/repo", { correlationId: "ui_retry-summary-0001" });
+
+    const sent = fetchMock.mock.calls.map(
+      (call) =>
+        (call[1] as { readonly headers: Record<string, string> }).headers[CORRELATION_HEADER],
+    );
+    expect(sent).toEqual([
+      "ui_retry-status-0001",
+      "ui_retry-branches-0001",
+      "ui_retry-summary-0001",
+    ]);
+  });
+
   it("encodes Git summary, history, and remotes requests", async () => {
     const fetchMock = vi
       .fn()

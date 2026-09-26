@@ -1,7 +1,7 @@
 import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { journeyFixture } from "./_journeyOutcomeTestSupport";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  ModelCapability,
   WorkspaceBinding,
   WorkspaceInstance,
   WorkspaceTrustStatus,
@@ -50,6 +51,20 @@ const repositoryBranchHookMock = vi.hoisted(() =>
 const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
+  // #3642: mutable so a test can simulate a catalog refresh (chat's own
+  // `clearSessionModelsForPendingRefresh`, useChatSession.ts) publishing an empty list mid-flight.
+  models: [] as ModelCapability[],
+}));
+// PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
+// published mid-refresh from one a successful refresh settled on.
+const catalogRefreshMock = vi.hoisted(() => ({ settled: false }));
+vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/useChatSession")>()),
+  useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
+}));
+vi.mock("./codingWorkbenchRepositories", () => ({
+  repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
+  selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
 }));
 // #3389 AC3 mark-ready wiring: the mint/execute pair the propose-ready control performs, and the
 // journey-refresh read the window uses to obtain a real, matching `JourneyOutcome`. `proposePrMarkReady`
@@ -148,7 +163,7 @@ vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
     useOptionalChatSessionCatalog: (): unknown => ({
       activeProject: chatCatalogMock.activeProject,
       projects: chatCatalogMock.projects,
-      models: [],
+      models: chatCatalogMock.models,
       noEligibleModels: true,
     }),
   };
@@ -295,6 +310,7 @@ function renderWorkbench(
   const workbench = (
     <CodingWorkbenchWindow
       selectedRoot={
+        (activeWorkspace === undefined || activeWorkspace.activeBinding === null) &&
         chatCatalogMock.activeProject?.available === true
           ? chatCatalogMock.activeProject.path
           : undefined
@@ -400,6 +416,8 @@ function trustStatus(
 beforeEach(() => {
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
+  chatCatalogMock.models = [];
+  catalogRefreshMock.settled = false;
   // Every other suite in this file leaves the journey read unmocked-in-spirit: it never sets up an
   // observed outcome, so it must keep resolving to a valid "nothing observed" envelope rather than
   // silently reusing whatever a mark-ready test configured last (AGENTS.md §7: hermetic tests, no
@@ -507,7 +525,9 @@ describe("CodingWorkbenchWindow", () => {
 
     renderWorkbench(createInitialCodingWorkbenchRuntimeState());
 
-    expect(screen.getByLabelText("Repository path")).toHaveValue(selectedRoot);
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "Keiko",
+    );
   });
 
   function egressApprovalState(
@@ -597,10 +617,7 @@ describe("CodingWorkbenchWindow", () => {
   // The crash-recovery Retry consumes the draft exactly like Start; a successful retry that left
   // the recovery text in the re-enabled composer made it resubmittable as a brand-new follow-up
   // (review of ec04288dc).
-  // #3563: the composer no longer prints the repository/branch chip. The bound workspace identity
-  // still surfaces through the information panel (see the pins that open it via
-  // `openWorkbenchInformation`); this pin only proves the composer does NOT resurrect the chip and
-  // does NOT surface the internal task worktree name to the operator either.
+  // The visible repository is the checkout, never the internal managed worktree.
   it("keeps the internal task worktree name out of the composer", () => {
     renderWorkbench(
       liveState(),
@@ -610,7 +627,9 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.queryByText("e2e-project-task")).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "e2e-project",
+    );
   });
 
   it("clears the composer draft once a crash-recovery retry succeeds", async () => {
@@ -690,10 +709,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(taskInput).toHaveValue("");
   });
 
-  // #3563 owner directive: the composer no longer carries its own repository chooser or branch
-  // chip. The header-wide RepositoryFolderSwitcher (mounted outside this window) is the single
-  // source of workspace-context truth. This pin makes sure the composer never renders those chips.
-  it("does not render its own repository chooser or branch chip in the composer", () => {
+  it("shows one repository and branch control above the composer", () => {
     const onOpenGit = vi.fn();
     renderWorkbench(
       liveState(),
@@ -702,13 +718,15 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/keiko-task"),
     );
 
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "keiko",
+    );
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent("dev");
     expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  it("uses the bound repository for the composer without exposing its own chip", () => {
+  it("uses the bound repository for the composer context", () => {
     const selectedProject: ProjectWithAvailability = {
       path: "/repos/keiko",
       name: "Keiko",
@@ -729,11 +747,13 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "keiko",
+    );
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  it("keeps the composer active during a run without exposing chips or a Git deeplink", () => {
+  it("keeps the composer context visible and locked during a run", () => {
     const onOpenGit = vi.fn();
     chatCatalogMock.activeProject = {
       path: "/repos/keiko",
@@ -758,17 +778,12 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
-    // #3563 owner directive: no Choose-repository combobox and no Manage-branch button in the
-    // composer; the header-wide switcher (mounted outside this window) is the only workspace
-    // selector, and Git navigation happens through its own window pane.
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toBeDisabled();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  // #3563 — a global-selection change alone MUST NOT throw the operator into the setup card while an
-  // active binding exists. The composer stays where it is with the bound workspace; every workspace
-  // change flows through the header-wide RepositoryFolderSwitcher, not through a per-window chip.
+  // A separate project selection must not move a bound Workbench to another repository.
   it("keeps the composer on the bound workspace when the parent selection changes", () => {
     chatCatalogMock.activeProject = {
       path: "/repos/selected-elsewhere",
@@ -787,7 +802,9 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
     );
     expect(screen.queryByLabelText("Repository path")).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "bound",
+    );
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
   });
 
@@ -3134,16 +3151,17 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);
 
-    // #3563: no composer-owned chip anymore, so the run's workspace identity is proven through the
-    // information panel (session context bar) that stays keyed to the run, not the live pointer.
+    // Run attribution remains keyed to its original workspace after the live pointer moves.
     const dialog = openWorkbenchInformation();
     expect(screen.getByText(`workspace-a · ${WORKSPACE_A.branch} · healthy`)).toBeInTheDocument();
     const facts = dialog.querySelector(`.${styles.cmpInfoGrid ?? "missing-info-grid"}`);
     expect(facts).not.toBeNull();
     expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      /^a$/u,
+    );
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
@@ -3231,8 +3249,10 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(
       screen.queryByText(/This run keeps the authority of the workspace it started in/u),
     ).toBeNull();
-    // #3563: no composer chip, no header-mirror inside the window.
-    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      /^a$/u,
+    );
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
   });
 
   it("binds the editor bridge to the root the run was submitted against", async () => {
@@ -3435,9 +3455,16 @@ describe("CodingWorkbenchWindow #3389 mark-ready propose control", () => {
     journeyRefreshMock.mockResolvedValue({ status: "unavailable", reason: "no-observation" });
     renderWithJourney(journeyFixture().snapshot);
 
-    await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Issue handoff" })).not.toBeInTheDocument(),
-    );
+    // #3633: the card stays with its Refresh (the only way to read the status again), but it offers
+    // no ready-for-review control and calls no mutation endpoint.
+    const card = await screen.findByRole("region", { name: "Issue handoff" });
+    expect(
+      within(card).getByText("The handoff status of this pull request has not been observed yet."),
+    ).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Refresh observed status" })).toBeEnabled();
+    expect(
+      within(card).queryByRole("button", { name: "Review ready-for-review request" }),
+    ).not.toBeInTheDocument();
     expect(markReadyApproveMock).not.toHaveBeenCalled();
     expect(markReadyExecuteMock).not.toHaveBeenCalled();
   });
@@ -3514,5 +3541,111 @@ describe("CodingWorkbenchWindow approved-skills channel state (#3417)", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+});
+
+// #3642: a catalog refresh (opening the model picker, a gateway settings change) must never
+// silently replace an operator's selected model or reasoning effort merely because the shared
+// chat catalog reports empty mid-refresh (useChatSession.ts `clearSessionModelsForPendingRefresh`).
+describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
+  const MODEL_A: ModelCapability = {
+    id: "model-a",
+    kind: "chat",
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
+    toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "fingerprint-1",
+    },
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "standard",
+    preferredUseCases: ["Coding"],
+    knownLimitations: [],
+    reasoningEfforts: ["low", "medium"],
+  };
+  const MODEL_B: ModelCapability = {
+    ...MODEL_A,
+    id: "model-b",
+    reasoningEfforts: ["medium", "high"],
+  };
+
+  it("preserves the selected model and effort across a transient empty-catalog refresh", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    // Baseline: the mocked state already matches the catalog, so there is nothing to reconcile.
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+
+    // The refresh goes pending: the shared catalog reports an empty list, exactly as it does
+    // while the fetch is in flight. The operator's choice must not be wiped by this alone.
+    chatCatalogMock.models = [];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+
+    // The refresh succeeds and returns the SAME models: the selection must still be there,
+    // rather than falling back to models[0] because the mid-refresh empty list already cleared it.
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+  });
+
+  it("still falls back once the refreshed catalog genuinely no longer offers the selected model", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    chatCatalogMock.models = [MODEL_A];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+  });
+
+  // A catalog that answers with models but no coding-capable one is conclusive: the stale choice
+  // goes, only an empty catalog (a refresh in flight) keeps it.
+  it("clears the selection when the catalog lists models but no coding-capable one", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    chatCatalogMock.models = [{ ...MODEL_A, id: "model-no-tools", toolCalling: false }];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+  });
+
+  // PR #3625 review: an empty catalog a SUCCESSFUL refresh settled on is conclusive — the gateway
+  // offers no model any more, so Start must not carry the stale choice to an avoidable refusal.
+  it("clears the selection when a settled refresh leaves the catalog empty", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    chatCatalogMock.models = [];
+    catalogRefreshMock.settled = true;
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+    expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
   });
 });

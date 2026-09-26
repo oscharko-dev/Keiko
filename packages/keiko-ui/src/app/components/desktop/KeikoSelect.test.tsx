@@ -1,7 +1,23 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import KeikoSelect from "./KeikoSelect";
+
+interface CapturedDiagnostic {
+  readonly message: string;
+  readonly meta: ClientDiagnosticMeta | undefined;
+}
+
+function captureDiagnostics(): CapturedDiagnostic[] {
+  const diagnostics: CapturedDiagnostic[] = [];
+  setClientDiagnosticWriter((message, meta) => diagnostics.push({ message, meta }));
+  return diagnostics;
+}
 
 describe("KeikoSelect menu geometry", () => {
   it("matches the trigger width and exposes trigger-height option sizing", async () => {
@@ -296,6 +312,109 @@ describe("KeikoSelect menu geometry", () => {
   });
 });
 
+describe("KeikoSelect searchable menus", () => {
+  it("keeps exact matches ahead of partial branch matches", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Branch"
+        onValueChange={vi.fn()}
+        searchPlaceholder="Search branches"
+        sections={[
+          {
+            options: [
+              { value: "task", label: "keiko/task/master-work" },
+              { value: "master", label: "master" },
+              { value: "dev", label: "dev" },
+            ],
+          },
+        ]}
+        value="master"
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search branches" }), "master");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "master",
+      "keiko/task/master-work",
+    ]);
+  });
+
+  // PR #3625 review: a query whose first match is disabled activates the first enabled match.
+  it("activates the first enabled match after a query", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Repository"
+        onValueChange={vi.fn()}
+        searchPlaceholder="Search repositories"
+        sections={[
+          {
+            options: [
+              { value: "other", label: "other" },
+              { value: "repo-a", label: "repo-a", disabled: true },
+              { value: "repo-b", label: "repo-b" },
+            ],
+          },
+        ]}
+        value="other"
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "repo");
+    const options = screen.getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual(["repo-a", "repo-b"]);
+    expect(options[0]).not.toHaveClass("ksel-option-active");
+    expect(options[1]).toHaveClass("ksel-option-active");
+  });
+
+  it("says in the caller's copy when a search matches nothing", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Branch"
+        onValueChange={vi.fn()}
+        searchPlaceholder="Search branches"
+        searchEmptyLabel="No matching branches."
+        sections={[{ options: [{ value: "dev", label: "dev" }] }]}
+        value="dev"
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search branches" }), "zzz");
+    expect(screen.queryAllByRole("option")).toEqual([]);
+    expect(screen.getByText("No matching branches.")).toBeInTheDocument();
+  });
+
+  it("closes the previous menu when another select opens", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <KeikoSelect
+          ariaLabel="Repository"
+          onValueChange={vi.fn()}
+          sections={[{ options: [{ value: "repo", label: "Repository" }] }]}
+          value="repo"
+        />
+        <KeikoSelect
+          ariaLabel="Branch"
+          onValueChange={vi.fn()}
+          sections={[{ options: [{ value: "dev", label: "dev" }] }]}
+          value="dev"
+        />
+      </>,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    expect(screen.queryByRole("listbox", { name: "Repository" })).toBeNull();
+    expect(screen.getByRole("listbox", { name: "Branch" })).toBeInTheDocument();
+  });
+});
+
 describe("KeikoSelect interactions", () => {
   const sections = [
     {
@@ -333,6 +452,145 @@ describe("KeikoSelect interactions", () => {
     expect(onValueChange).toHaveBeenCalledWith("files");
     expect(screen.queryByRole("option", { name: "Live Files context" })).toBeNull();
     expect(trigger).toHaveFocus();
+  });
+
+  // The release smoke caught this: with focus still on the trigger, the workspace's Escape shortcut
+  // (which stops propagation once it clears a window selection) swallowed the key before the
+  // menu's window listener saw it, so the open menu never closed. An open menu owns the key.
+  it("closes an open menu on Escape from the trigger and keeps the key from its ancestors", async () => {
+    const ancestorKeyDown = vi.fn();
+    document.body.addEventListener("keydown", ancestorKeyDown);
+    try {
+      render(
+        <KeikoSelect
+          ariaLabel="Strategy"
+          menuTitle="Strategy"
+          onValueChange={vi.fn()}
+          sections={sections}
+          value="model"
+        />,
+      );
+
+      const trigger = screen.getByRole("combobox", { name: "Strategy" });
+      fireEvent.click(trigger);
+      await screen.findByRole("option", { name: "Model only" });
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Escape" });
+
+      expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+      expect(trigger).toHaveFocus();
+      expect(ancestorKeyDown).not.toHaveBeenCalled();
+    } finally {
+      document.body.removeEventListener("keydown", ancestorKeyDown);
+    }
+  });
+
+  it("leaves Escape to its ancestors while the menu is closed, and reports nothing", () => {
+    const diagnostics = captureDiagnostics();
+    const ancestorKeyDown = vi.fn();
+    document.body.addEventListener("keydown", ancestorKeyDown);
+    try {
+      render(
+        <KeikoSelect
+          ariaLabel="Strategy"
+          menuTitle="Strategy"
+          onValueChange={vi.fn()}
+          sections={sections}
+          value="model"
+        />,
+      );
+
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Strategy" }), { key: "Escape" });
+
+      expect(ancestorKeyDown).toHaveBeenCalledTimes(1);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      document.body.removeEventListener("keydown", ancestorKeyDown);
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  // PR #3625 review: the changed Escape behaviour above (which surface stays open) has no other
+  // trace in the log, so each of the three reachable call sites must report body-free evidence of
+  // the dismissal — never a label or option text — and only when it actually closed an open menu.
+  describe("Escape dismissal evidence", () => {
+    afterEach(() => {
+      resetClientDiagnosticWriter();
+    });
+
+    it("reports the trigger focus location when Escape closes the menu from the trigger", async () => {
+      const diagnostics = captureDiagnostics();
+      render(
+        <KeikoSelect
+          ariaLabel="Strategy"
+          menuTitle="Strategy"
+          onValueChange={vi.fn()}
+          sections={sections}
+          value="model"
+        />,
+      );
+
+      const trigger = screen.getByRole("combobox", { name: "Strategy" });
+      fireEvent.click(trigger);
+      await screen.findByRole("option", { name: "Model only" });
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Escape" });
+
+      expect(diagnostics).toEqual([
+        {
+          message: "[keiko] select menu dismissed by Escape (focus=trigger)",
+          meta: { kind: "other", selectDismissal: { reason: "escape", focus: "trigger" } },
+        },
+      ]);
+    });
+
+    it("reports the option focus location when Escape closes the menu from an option", async () => {
+      const diagnostics = captureDiagnostics();
+      render(
+        <KeikoSelect
+          ariaLabel="Strategy"
+          menuTitle="Strategy"
+          onValueChange={vi.fn()}
+          sections={sections}
+          value="model"
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Strategy" }));
+      const option = await screen.findByRole("option", { name: "Model only" });
+      fireEvent.keyDown(option, { key: "Escape" });
+
+      expect(diagnostics).toEqual([
+        {
+          message: "[keiko] select menu dismissed by Escape (focus=option)",
+          meta: { kind: "other", selectDismissal: { reason: "escape", focus: "option" } },
+        },
+      ]);
+    });
+
+    it("reports the search focus location when Escape closes the menu from the search field", async () => {
+      const diagnostics = captureDiagnostics();
+      render(
+        <KeikoSelect
+          ariaLabel="Branch"
+          onValueChange={vi.fn()}
+          searchPlaceholder="Search branches"
+          sections={[{ options: [{ value: "dev", label: "dev" }] }]}
+          value="dev"
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Branch" }));
+      const search = await screen.findByRole("searchbox", { name: "Search branches" });
+      fireEvent.keyDown(search, { key: "Escape" });
+
+      expect(diagnostics).toEqual([
+        {
+          message: "[keiko] select menu dismissed by Escape (focus=search)",
+          meta: { kind: "other", selectDismissal: { reason: "escape", focus: "search" } },
+        },
+      ]);
+    });
   });
 
   it("notifies callers for each deliberate opening, including keyboard operation", async () => {

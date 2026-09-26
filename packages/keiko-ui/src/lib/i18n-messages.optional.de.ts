@@ -123,6 +123,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Remote-Änderungen in den Arbeitsbaum übernehmen? Offene Editor-Puffer werden nach erfolgreichem Git-Vorgang abgeglichen.",
   "gitClientWindow.confirm.pull.action": "Änderungen übernehmen",
   "gitClientWindow.confirm.cancel": "Abbrechen",
+  "gitClientWindow.branch.createdPendingSwitch":
+    "Der Branch {branch} wurde erstellt, aber der Wechsel dorthin ist fehlgeschlagen. Beheben Sie das Problem und wechseln Sie anschließend über die Branch-Liste dorthin.",
   "gitClientWindow.addRepository.title": "Repository hinzufügen",
   "gitClientWindow.addRepository.close": "Schließen",
   "gitClientWindow.addRepository.mode": "Hinzufügemodus",
@@ -147,6 +149,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.history.commitUnavailable":
     "Der angeforderte Commit ist im begrenzten Verlauf nicht verfügbar.",
   "gitClientWindow.history.loadFailed": "Der Commit-Verlauf konnte nicht geladen werden.",
+  "gitClientWindow.status.loadFailed": "Der Repository-Status konnte nicht geladen werden.",
+  "gitClientWindow.branch.loadFailed": "Die Branches konnten nicht geladen werden.",
+  "gitClientWindow.sync.summaryUnavailable": "Der Sync-Status konnte nicht gelesen werden.",
   "gitClientWindow.history.loadMoreFailed": "Weitere Commits konnten nicht geladen werden.",
   "gitClientWindow.history.truncated":
     "Es werden die neuesten {count} Commits angezeigt; der Verlauf ist gekürzt.",
@@ -154,6 +159,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.history.loadingMore": "Weitere Commits werden geladen…",
   "gitClientWindow.history.retryLoadMore": "Commits erneut laden",
   "gitClientWindow.history.end": "Ende des Verlaufs. {count} Commits geladen.",
+  "gitClientWindow.history.limitReached":
+    "Die Grenze des begrenzten Verlaufs wurde erreicht. Ältere Commits sind hier nicht verfügbar.",
   "gitClientWindow.history.paginationStatusAria": "Status der Verlaufsseiten",
   "gitClientWindow.history.commitDetailsAria": "Commit-Details",
   "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
@@ -356,6 +363,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.field.description": "Beschreibung",
   "commitComposer.field.descriptionPlaceholder": "Optional — Absicht und Verifikation erläutern",
   "commitComposer.preview.unavailable": "Vorschau nicht verfügbar",
+  "commitComposer.preview.retry": "Vorschau erneut versuchen",
   "commitComposer.preview.policyActionNeeded": "Richtlinie: Aktion erforderlich",
   "commitComposer.preview.meetsPolicy": "Erfüllt die Commit-Richtlinie",
   "commitComposer.preview.protectedBranchTitle": "Aktueller Branch ist geschützt",
@@ -900,6 +908,13 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gatewaySetup.voice.endpointStyle.openaiCompatible": "OpenAI-kompatibel",
   "gatewaySetup.voice.endpointStyle.azureDeploymentPath": "Azure-Deployment-Pfad",
   "gatewaySetup.voice.apiVersion.azureOnly": "nur beim Azure-Deployment-Pfad",
+  // #3638: manuelles Pendant der Audio-Felder oben, für die Chat-/Embedding-Gateway-Verbindung.
+  "gatewaySetup.gateway.endpointStyle.label": "Gateway-Endpunkt-Stil",
+  "gatewaySetup.gateway.apiVersion.label": "Gateway-API-Version",
+  "gatewaySetup.gateway.endpointStyle.unstated": "Nicht angegeben",
+  "gatewaySetup.gateway.endpointStyle.openaiCompatible": "OpenAI-kompatibel",
+  "gatewaySetup.gateway.endpointStyle.azureDeploymentPath": "Azure-Deployment-Pfad",
+  "gatewaySetup.gateway.apiVersion.azureOnly": "nur beim Azure-Deployment-Pfad",
   "gatewaySetup.voice.endpointMigrationRequired":
     "Zum Ersetzen eines gespeicherten Audio-Endpunkts sind neue Zugangsdaten, eine ausdrücklich gewählte Anbieter-Lokalität und mindestens eine zu verschiebende Deployment-Rolle erforderlich.",
   "gatewaySetup.voice.semanticTurnDetection": "Semantische Turn-Ende-Erkennung (Semantic VAD)",

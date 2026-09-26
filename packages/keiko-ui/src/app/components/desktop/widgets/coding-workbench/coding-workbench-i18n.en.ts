@@ -40,6 +40,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.staleHelp":
     "These are dated observations. Refresh the status before relying on current readiness or issue closure.",
   "codingWorkbench.journey.refresh": "Refresh observed status",
+  "codingWorkbench.journey.unavailable":
+    "The handoff status of this pull request has not been observed yet.",
   "codingWorkbench.journey.proposeReady": "Review ready-for-review request",
   "codingWorkbench.journey.readyHelp":
     "Review the change from draft to ready for review before approving it once.",
@@ -351,19 +353,32 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.multipleHint": "Select all that apply.",
   "codingWorkbench.questions.customLabel": "Custom answer for {header}",
   "codingWorkbench.setup.eyebrow": "Workspace",
+  "codingWorkbench.repository.choose": "Choose coding repository",
+  "codingWorkbench.repository.chooseBranch": "Choose coding branch",
+  "codingWorkbench.repository.label": "Repository",
+  "codingWorkbench.repository.branchLabel": "Branch",
+  "codingWorkbench.repository.search": "Search repositories",
+  "codingWorkbench.repository.searchBranch": "Search branches",
+  "codingWorkbench.repository.noMatches": "No matching repositories.",
+  "codingWorkbench.repository.noBranchMatches": "No matching branches.",
+  "codingWorkbench.repository.noBranch": "No branch",
+  "codingWorkbench.repository.loading": "Loading repositories…",
+  "codingWorkbench.repository.none": "Select a repository",
+  "codingWorkbench.repository.unavailable": "unavailable",
+  "codingWorkbench.repository.unavailableHelp":
+    "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
+  "codingWorkbench.repository.gitUnavailableHelp":
+    "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
+  "codingWorkbench.repository.loadError":
+    "Repositories could not be loaded. Refresh the list and try again.",
+  "codingWorkbench.repository.retryLoad": "Retry",
+  "codingWorkbench.repository.manage": "Open Git",
   "codingWorkbench.setup.title": "Code setup",
-  "codingWorkbench.setup.help":
-    "Bind an existing local Git checkout so the coding run starts inside a governed task workspace.",
-  "codingWorkbench.setup.repositoryPath": "Repository path",
-  "codingWorkbench.setup.repositoryPathPlaceholder": "/absolute/path/to/repository",
-  "codingWorkbench.setup.browse": "Browse…",
-  "codingWorkbench.setup.browseError": "The folder picker could not open. Enter the path manually.",
-  "codingWorkbench.setup.branchesLoading": "Loading branches…",
-  "codingWorkbench.setup.branchesUnavailable": "Branches unavailable",
-  "codingWorkbench.setup.branchSelect": "Select a branch",
-  "codingWorkbench.setup.branchesRetry": "Reload branches",
-  "codingWorkbench.setup.targetBranch": "Target branch",
-  "codingWorkbench.setup.targetBranchPlaceholder": "main",
+  "codingWorkbench.setup.help": "Prepare a governed task workspace for the selected repository.",
+  "codingWorkbench.setup.repositoryNotConnected":
+    "This repository is not available in Git. Reconnect it there, then choose it again.",
+  "codingWorkbench.setup.repositoryCatalogUnavailable":
+    "Keiko could not verify this repository in Git. Try again.",
   "codingWorkbench.setup.submit": "Bind workspace",
   "codingWorkbench.setup.binding": "Binding…",
   "codingWorkbench.setup.verifying": "Verifying…",
@@ -461,6 +476,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.empty": "No text diff is available for this changed file.",
   "codingWorkbench.changes.diff.error":
     "The selected file diff is unavailable. No stale diff is shown.",
+  "codingWorkbench.changes.diff.retry": "Retry diff",
   "codingWorkbench.changes.diff.truncated":
     "This bounded file diff is incomplete because it reached the server limit.",
   "codingWorkbench.changes.diff.addedLine": "Added line",

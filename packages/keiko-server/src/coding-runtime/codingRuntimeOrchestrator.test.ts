@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshot,
@@ -352,6 +352,7 @@ function fixture(
       approvalDigest: "d",
       expiresAtMs: 1,
     })),
+    declineApproval: vi.fn<NonNullable<CodingRuntimeManager["declineApproval"]>>(() => true),
     pause: vi.fn<CodingRuntimeManager["pause"]>(() => ({ ok: true, paused: true })),
     resume: vi.fn<CodingRuntimeManager["resume"]>(() => ({ ok: true, paused: false })),
     reconcile: vi.fn<CodingRuntimeManager["reconcile"]>(() =>
@@ -586,6 +587,29 @@ function verificationPermission(requestId: string, expiresAt = "2026-01-01T00:01
       actionKind: "verification-command" as const,
       commandLabel: "test",
       expiresAt,
+    },
+  };
+}
+
+// A server-raised delivery-substrate ask, the shape requestDraftDeliveryApproval and the verified
+// commit port emit (requestId = the proposal id).
+function deliveryPermission(requestId: string, actionKind: "commit" | "push" | "pull-request") {
+  return {
+    schemaVersion: "1" as const,
+    eventId: `event-${requestId}`,
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "permission-requested" as const,
+    permissionRequest: {
+      requestId,
+      kind: "delivery-substrate" as const,
+      actionClass: "delivery-substrate" as const,
+      actionKind,
+      reasonCode: `${actionKind}-approval-required`,
+      scopeLabel: "workspace-scope",
+      risk: "high" as const,
+      policyReason: "approval-required" as const,
+      expiresAt: "2026-01-01T00:01:00.000Z",
     },
   };
 }
@@ -2606,57 +2630,125 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
-  it("records structured diagnostics when stopping a denied run fails", async () => {
-    const captured = captureDiagnostics();
-    const f = fixture(undefined, undefined, [], captured.diagnostics);
-    await f.orchestrator.start(start);
-    await f.orchestrator.ingest({
-      schemaVersion: "1",
-      eventId: "task-denied-stop-failure",
-      runId: "run-1",
-      occurredAt: "2026-01-01T00:00:00.000Z",
-      kind: "task-submitted",
-    });
-    await f.orchestrator.ingest({
-      schemaVersion: "1",
-      eventId: "permission-denied-stop-failure",
-      runId: "run-1",
-      occurredAt: "2026-01-01T00:00:00.000Z",
-      kind: "permission-requested",
-      permissionRequest: {
-        requestId: "permission-denied",
-        kind: "workspace-write",
-        actionClass: "workspace-write",
-        reasonCode: "approval-required",
-        actionKind: "file-edit",
-        expiresAt: "2026-01-01T00:01:00.000Z",
-      },
-    });
-    f.manager.stop.mockRejectedValueOnce(
-      new TypeError("private stop detail", { cause: new RangeError("private cause detail") }),
-    );
+  // Owner decision 2026-09-26 (ADR-0124 D6): a denial rejects only the step it was asked for. Before
+  // 1.1.10 it stopped the whole run as failed/revoked; the runtime has already told the model, so the
+  // run goes on with its next queued ask, or running, and the decision leaves its own line.
+  describe("a denied step", () => {
+    it("rejects only that step and gives the next queued ask the card", async () => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      await f.orchestrator.start(start);
+      const first = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      await f.orchestrator.ingest(verificationPermission("permission-2"));
 
-    const result = await f.orchestrator.decideApproval("run-1", {
-      requestId: "permission-denied",
-      decision: "denied",
-      expectedRevision: 5,
+      const result = await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "denied",
+        expectedRevision: first.revision,
+      });
+
+      expect(successfulSnapshot(result).state).toBe("awaiting-approval");
+      expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-2");
+      expect(f.manager.stop).not.toHaveBeenCalled();
+      expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+        runId: "run-1",
+        requestId: "permission-1",
+        decision: "denied",
+      });
+      const decided = requireLoggedEvent(
+        captured.records.find((event) => event.op === "coding-runtime.approval.decided"),
+        "expected the denial to be logged",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.approval.decided.emitted-line",
+          formatActivityLogProofLine(decided),
+        ),
+      ).toMatchObject({ runId: "run-1", requestId: "permission-1", decision: "denied" });
     });
 
-    expect(successfulSnapshot(result)).toMatchObject({
-      state: "recovery-required",
-      failureCode: "recovery-required",
+    it("returns the run to running when nothing else waits", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+
+      const result = await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "denied",
+        expectedRevision: waiting.revision,
+      });
+
+      expect(successfulSnapshot(result)).toMatchObject({ state: "running" });
+      expect(successfulSnapshot(result)).not.toHaveProperty("failureCode");
+      expect(f.orchestrator.status().pendingPermission).toBeUndefined();
+      expect(f.manager.stop).not.toHaveBeenCalled();
     });
-    expect(captured.records).toContainEqual(
-      expect.objectContaining({
-        correlationId: UNKNOWN_CORRELATION_ID,
-        operation: "coding-runtime.stop",
-        source: "coding-runtime-orchestrator.permission-denied",
-        errorClass: "TypeError",
-        causeChain: ["RangeError"],
-      }),
-    );
-    expect(JSON.stringify(captured.records)).not.toContain("private stop detail");
-    expect(JSON.stringify(captured.records)).not.toContain("private cause detail");
+
+    // PR #3625: a commit, push or pull-request proposal is raised by the server itself, so the
+    // permission port has no child to reply to. Its own wait is released by the manager's decline;
+    // without it the waiting delivery call held until the approval ceiling.
+    it("declines a denied server-raised commit proposal through the manager", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(deliveryPermission("commit-3625", "commit")),
+      );
+
+      const result = await f.orchestrator.decideApproval("run-1", {
+        requestId: "commit-3625",
+        decision: "denied",
+        expectedRevision: waiting.revision,
+      });
+
+      expect(f.manager.declineApproval).toHaveBeenCalledExactlyOnceWith({
+        runId: "run-1",
+        requestId: "commit-3625",
+        actionKind: "commit",
+      });
+      expect(f.manager.issueApproval).not.toHaveBeenCalled();
+      expect(successfulSnapshot(result)).toMatchObject({ state: "running" });
+      expect(f.manager.stop).not.toHaveBeenCalled();
+    });
+
+    it("never declines an approved proposal", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(deliveryPermission("delivery-3625", "push")),
+      );
+
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "delivery-3625",
+        decision: "approved",
+        expectedRevision: waiting.revision,
+      });
+
+      expect(f.manager.declineApproval).not.toHaveBeenCalled();
+      expect(f.manager.issueApproval).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: "delivery-3625", actionKind: "push" }),
+      );
+    });
+
+    it("logs an approval with the same decision line", async () => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: waiting.revision,
+      });
+      expect(
+        captured.records.find((event) => event.op === "coding-runtime.approval.decided")?.extra,
+      ).toMatchObject({ requestId: "permission-1", decision: "approved" });
+    });
   });
 
   it("queues concurrent permission asks without orphaning the operator-visible challenge", async () => {
@@ -2761,7 +2853,36 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
-  it("contains an expired queued challenge instead of exposing an undecidable approval", async () => {
+  // Relocated pin (PR #3625 review): an expired queued ask is still never exposed as an undecidable
+  // approval, but it no longer ends the run. Its governed ask already ended as expired on its own, so
+  // it is retired like an expired active ask (ADR-0124 D6) and the next live ask takes the card.
+  it("retires an expired queued challenge instead of exposing an undecidable approval", async () => {
+    let nowMs = FIXTURE_NOW_MS;
+    const captured = captureActivityLog();
+    const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    const first = await f.orchestrator.ingest(
+      verificationPermission("permission-1", "2026-01-01T00:04:00.000Z"),
+    );
+    await f.orchestrator.ingest(verificationPermission("permission-2", "2026-01-01T00:01:00.000Z"));
+    await f.orchestrator.ingest(verificationPermission("permission-3", "2026-01-01T00:05:00.000Z"));
+    nowMs += 2 * 60 * 1_000;
+
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: successfulSnapshot(first).revision,
+      }),
+    ).toMatchObject({ ok: true, snapshot: { state: "awaiting-approval" } });
+    expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-3");
+    expect(f.manager.stop).not.toHaveBeenCalled();
+    expect(
+      captured.records.find((event) => event.op === "coding-runtime.approval.retired")?.extra,
+    ).toMatchObject({ requestId: "permission-2", reason: "expired", replaced: false });
+  });
+
+  it("returns the run to running when every queued challenge has expired", async () => {
     let nowMs = FIXTURE_NOW_MS;
     const f = fixture(undefined, () => new Date(nowMs));
     await f.orchestrator.start(start);
@@ -2777,11 +2898,153 @@ describe("CodingRuntimeOrchestrator", () => {
         decision: "approved",
         expectedRevision: successfulSnapshot(first).revision,
       }),
-    ).toMatchObject({
-      ok: true,
-      snapshot: { state: "failed", failureCode: "authority-expired" },
+    ).toMatchObject({ ok: true, snapshot: { state: "running" } });
+    expect(f.orchestrator.status().pendingPermission).toBeUndefined();
+    expect(f.manager.stop).not.toHaveBeenCalled();
+  });
+
+  // 1.1.9 lab: the active approval's wait ran out while nobody decided it. Its governed ask ended as
+  // expired at that instant, yet the run kept the card on screen, queued the model's next ask
+  // behind it, and a human saw neither; approving the expired card failed as invalid-intent.
+  describe("an active approval whose wait ran out", () => {
+    afterEach(() => {
+      vi.useRealTimers();
     });
-    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+
+    it("stops the run waiting on it the instant the wait runs out", async () => {
+      vi.useFakeTimers();
+      let nowMs = FIXTURE_NOW_MS;
+      const captured = captureActivityLog();
+      const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      expect(waiting.state).toBe("awaiting-approval");
+
+      nowMs += 60_000;
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const status = f.orchestrator.status();
+      expect(status).toMatchObject({ state: "running" });
+      expect(status.pendingPermission).toBeUndefined();
+      expect(status.revision).toBeGreaterThan(waiting.revision);
+      const retired = requireLoggedEvent(
+        captured.records.find((event) => event.op === "coding-runtime.approval.retired"),
+        "expected the expired approval to be retired",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.approval.retired.emitted-line",
+          formatActivityLogProofLine(retired),
+        ),
+      ).toMatchObject({ runId: "run-1", requestId: "permission-1" });
+      expect(retired.extra).toMatchObject({
+        revision: status.revision,
+        reason: "expired",
+        replaced: false,
+      });
+    });
+
+    // PR #3625 review: an approval that is decided, or whose run stops, takes its expiry timer with
+    // it instead of leaving a stale serialized callback until the old deadline.
+    it("clears the expiry timer once the approval is decided or the run stops", async () => {
+      vi.useFakeTimers();
+      const f = fixture(undefined, () => new Date(FIXTURE_NOW_MS));
+      await f.orchestrator.start(start);
+      const baseline = vi.getTimerCount();
+      const first = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      expect(vi.getTimerCount()).toBe(baseline + 1);
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: first.revision,
+      });
+      expect(vi.getTimerCount()).toBe(baseline);
+
+      await f.orchestrator.ingest(verificationPermission("permission-2"));
+      expect(vi.getTimerCount()).toBe(baseline + 1);
+      await f.orchestrator.stop("run-1", { requestId: "run-1" });
+      expect(vi.getTimerCount()).toBe(baseline);
+    });
+
+    it("gives the model's next ask the approval instead of a queue slot", async () => {
+      vi.useFakeTimers();
+      let nowMs = FIXTURE_NOW_MS;
+      const captured = captureActivityLog();
+      const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
+      await f.orchestrator.start(start);
+      const first = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      nowMs += 60_000;
+
+      const next = successfulSnapshot(
+        await f.orchestrator.ingest(
+          verificationPermission("permission-2", "2026-01-01T00:06:00.000Z"),
+        ),
+      );
+
+      expect(next.state).toBe("awaiting-approval");
+      expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-2");
+      const waits = captured.records.filter(
+        (event) => event.op === "coding-runtime.approval.waiting",
+      );
+      expect(waits.at(-1)?.extra).toMatchObject({ requestId: "permission-2" });
+      expect(waits.at(-1)?.extra).not.toHaveProperty("queuePosition");
+      expect(
+        captured.records.find((event) => event.op === "coding-runtime.approval.retired")?.extra,
+      ).toMatchObject({ requestId: "permission-1", reason: "expired", replaced: true });
+      expect(
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "permission-1",
+          decision: "approved",
+          expectedRevision: first.revision,
+        }),
+      ).toEqual({ ok: false, failureCode: "invalid-intent" });
+      expect(
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "permission-2",
+          decision: "approved",
+          expectedRevision: next.revision,
+        }),
+      ).toMatchObject({ ok: true, snapshot: { state: "running" } });
+    });
+
+    // PR #3625 review: a live queued ask is promoted before the late ask is considered, so the late
+    // ask queues behind it and did not take the expired one's place; only an ask that finds no live
+    // queued ask does. The retired line says which happened.
+    it.each([
+      ["a live queued ask is promoted first", "2026-01-01T00:06:00.000Z", false, "permission-2"],
+      ["every queued ask has expired too", "2026-01-01T00:00:30.000Z", true, "permission-3"],
+    ] as const)(
+      "records the late ask as the replacement only when no live queued ask waits: %s",
+      async (_label, queuedExpiresAt, replaced, shown) => {
+        vi.useFakeTimers();
+        let nowMs = FIXTURE_NOW_MS;
+        const captured = captureActivityLog();
+        const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
+        await f.orchestrator.start(start);
+        await f.orchestrator.ingest(verificationPermission("permission-1"));
+        await f.orchestrator.ingest(verificationPermission("permission-2", queuedExpiresAt));
+        nowMs += 60_000;
+
+        await f.orchestrator.ingest(
+          verificationPermission("permission-3", "2026-01-01T00:06:00.000Z"),
+        );
+
+        expect(f.orchestrator.status().pendingPermission?.requestId).toBe(shown);
+        expect(
+          captured.records.find(
+            (event) =>
+              event.op === "coding-runtime.approval.retired" &&
+              event.extra?.requestId === "permission-1",
+          )?.extra,
+        ).toMatchObject({ reason: "expired", replaced });
+      },
+    );
   });
 
   it("queues a second permission received while paused and promotes it after resume", async () => {

@@ -97,3 +97,15 @@ export function impliedSuccessTraps(workflow) {
   }
   return traps;
 }
+
+/**
+ * The jobs a cancellation cannot stop. To cancel a run, GitHub re-evaluates the `if:` of every
+ * running job and keeps the job when it is still true — which `always()` always is. `!cancelled()`
+ * runs a job after a failed need exactly as `always()` does and lets cancellation through
+ * (ADR-0157).
+ */
+export function cancellationImmuneJobIds(workflow) {
+  return Object.entries(workflow?.jobs ?? {})
+    .filter(([, job]) => typeof job?.if === "string" && /\balways\(\)/u.test(job.if))
+    .map(([jobId]) => jobId);
+}

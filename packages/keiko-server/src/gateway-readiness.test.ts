@@ -22,6 +22,7 @@ import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 // A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
 const CODING_CHAT_DIGEST = modelIdEvidence("coding-chat").modelIdDigest;
@@ -263,8 +264,13 @@ describe("gateway readiness route", () => {
     );
 
     expect(result).toMatchObject({ status: 200, body: { modelId: "coding-chat" } });
-    expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
+    // Exactly one start and one completion of the run; its provider attempts (PR #3625 review) are
+    // recorded under the same correlation id, so the whole run joins on it.
+    const runEvents = events.filter((event) => event.op.startsWith("gateway.readiness.automatic."));
+    expect(runEvents).toHaveLength(2);
+    expect(events.length).toBeGreaterThan(runEvents.length);
+    expect(events.every((event) => event.correlationId === "coding-readiness-0001")).toBe(true);
+    expect(runEvents[0]).toMatchObject({
       op: "gateway.readiness.automatic.started",
       correlationId: "coding-readiness-0001",
       // #3591: the bound the automatic probes ran under — the Workbench floor, not the 30 s configured.
@@ -274,8 +280,8 @@ describe("gateway readiness route", () => {
         chatProbeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
       },
     });
-    expect(events[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
-    expect(events[1]).toMatchObject({
+    expect(runEvents[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
+    expect(runEvents[1]).toMatchObject({
       op: "gateway.readiness.automatic.completed",
       correlationId: "coding-readiness-0001",
       extra: {
@@ -287,7 +293,7 @@ describe("gateway readiness route", () => {
     });
     const startedProof = expectActivityLogProof(
       "gateway.readiness.automatic.started.line",
-      formatActivityLogProofLine(events[0] ?? {}),
+      formatActivityLogProofLine(runEvents[0] ?? {}),
     );
     expect(startedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
@@ -296,7 +302,7 @@ describe("gateway readiness route", () => {
     });
     const completedProof = expectActivityLogProof(
       "gateway.readiness.automatic.completed.line",
-      formatActivityLogProofLine(events[1] ?? {}),
+      formatActivityLogProofLine(runEvents[1] ?? {}),
     );
     expect(completedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
@@ -429,9 +435,10 @@ describe("gateway readiness route", () => {
     expect("status" in result).toBe(false);
     if ("status" in result) return;
     expect(result.modelId).toBe(modelId);
-    expect(events).toHaveLength(2);
-    expect(events.map((event) => event.extra?.modelId)).toEqual([undefined, undefined]);
-    const digests = events.map((event) => event.extra?.modelIdDigest);
+    const runEvents = events.filter((event) => event.op.startsWith("gateway.readiness.automatic."));
+    expect(runEvents).toHaveLength(2);
+    expect(runEvents.map((event) => event.extra?.modelId)).toEqual([undefined, undefined]);
+    const digests = runEvents.map((event) => event.extra?.modelIdDigest);
     expect(digests[0]).toMatch(/^[a-f0-9]{16}$/u);
     expect(digests[1]).toBe(digests[0]);
     expect(JSON.stringify(events)).not.toContain("xxxxxxxxxx");
@@ -1542,6 +1549,69 @@ describe("gateway readiness route", () => {
 
     expect(recorded).toEqual(["failed"]);
     deps.store.close();
+  });
+
+  // PR #3625 review: a 400 whose body cannot be read comes back to this route as a bare 400, so no
+  // later probe failure recovers the read error. The model gateway's skipped line carries its
+  // dist-anchored frames and cause chain through the server's stack-frame port instead.
+  it("records the frames and cause chain of a probe rejection whose body cannot be read", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-readiness-unreadable-"));
+    const readFailure = new TypeError("terminated", { cause: new Error("other side closed") });
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start: (controller): void => {
+              controller.error(readFailure);
+            },
+          }),
+          { status: 400 },
+        ),
+      ),
+    ) as unknown as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) =>
+        capability.kind === "chat"
+          ? {
+              ...capability,
+              maxOutputTokens: 20,
+              pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+            }
+          : capability,
+      ),
+    };
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl, undefined, {
+        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "1",
+        [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+      }),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+    try {
+      await runGatewayReadiness({ options: { probes: ["chat"] } }, deps, "readiness-corr-3625");
+
+      expect(requestBodyAt(fetchImpl, 0).max_tokens).toBe(20);
+      const skipped = events.find(
+        (event) => event.op === "gateway.readiness.compatibility-retry.skipped",
+      );
+      const frames = keikoStackFrames(readFailure);
+      expect(frames.length).toBeGreaterThan(0);
+      expect(skipped).toMatchObject({
+        level: "warn",
+        correlationId: "readiness-corr-3625",
+        extra: { reason: "unreadable-rejection", frames, causeChain: causeChain(readFailure) },
+      });
+      expect(causeChain(readFailure)).toEqual(["Error"]);
+      // Body-free: neither error message reaches the line.
+      expect(JSON.stringify(skipped)).not.toContain("terminated");
+      expect(JSON.stringify(skipped)).not.toContain("other side closed");
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 

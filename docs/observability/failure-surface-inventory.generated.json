@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3803a5ba31a2f59d9b6ed48159af80c032a2897891322c1493355b622ca7f78a"
+    "catalogDigest": "a9b3a9ee86385d1ecd1fa9ae594a9d99164f91685ada87feccea7ed5fac6f203"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 457,
-    "proofCount": 465,
-    "resolvedProofCount": 465,
-    "failureClassCount": 319,
+    "operationCount": 464,
+    "proofCount": 472,
+    "resolvedProofCount": 472,
+    "failureClassCount": 321,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -120,7 +120,10 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.git-operation.attempted",
+        "client.git-operation.settled",
         "client.markdown.layout",
+        "client.select.dismissed",
         "client.session-repair.acknowledged",
         "client.session-repair.failed",
         "client.session-repair.recovered",
@@ -172,6 +175,9 @@
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
+        "gateway.readiness.compatibility-retry",
+        "gateway.readiness.compatibility-retry.failed",
+        "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
         "gateway.readiness.started",
         "gateway.retry.budget-exhausted",
@@ -239,7 +245,8 @@
         "coding-context.pack",
         "coding-repository-handler.settled",
         "coding-repository-handler.started",
-        "coding-runtime.approval.base-checked",
+        "coding-runtime.approval.decided",
+        "coding-runtime.approval.retired",
         "coding-runtime.approval.waiting",
         "coding-runtime.authority.mint-failed",
         "coding-runtime.authority.minted",
@@ -646,6 +653,8 @@
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
+    "client-git-operation": ["client-diagnostics.dependency-failure"],
+    "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
     "coding-app-session-channel": ["tools-workflows.dependency-failure"],
@@ -1055,7 +1064,14 @@
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.git-operation.attempted.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.git-operation.settled.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.markdown.layout.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.select.dismissed.line": ["packages/keiko-server/src/client-diagnostics-routes.test.ts"],
     "client.session-repair.acknowledged.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
@@ -1109,8 +1125,11 @@
     "coding-repository-handler.started.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.test.ts"
     ],
-    "coding-runtime.approval.base-checked.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/opencodeV2ApprovalRequests.test.ts"
+    "coding-runtime.approval.decided.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+    ],
+    "coding-runtime.approval.retired.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
     ],
     "coding-runtime.approval.waiting.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
@@ -1490,6 +1509,15 @@
     ],
     "gateway.readiness.automatic.started.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
+    ],
+    "gateway.readiness.compatibility-retry.line": [
+      "packages/keiko-model-gateway/src/readiness-probe.test.ts"
+    ],
+    "gateway.readiness.compatibility-retry.failed.line": [
+      "packages/keiko-model-gateway/src/readiness-probe.test.ts"
+    ],
+    "gateway.readiness.compatibility-retry.skipped.line": [
+      "packages/keiko-model-gateway/src/readiness-probe.test.ts"
     ],
     "gateway.readiness.completed.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],

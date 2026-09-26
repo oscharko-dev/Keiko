@@ -37,8 +37,8 @@ rules:
       - ci.yml:706
       - ci.yml:777
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:877
-      - ci.yml:975
+      - ci.yml:879
+      - ci.yml:977
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and

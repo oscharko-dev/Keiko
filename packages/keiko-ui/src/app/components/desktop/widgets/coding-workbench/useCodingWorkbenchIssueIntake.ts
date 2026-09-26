@@ -67,7 +67,8 @@ function promptReference(prompt: string): PromptReference {
     refs.add(
       `https://github.com/${reference.ownerAndRepo.toLowerCase()}/issues/${String(reference.issueNumber)}`,
     );
-  for (const [, number] of prompt.matchAll(/(?:^|\s)#(\d{1,10})(?=$|[\s.,:;!?])/gu)) {
+  // #3629: a bare reference may sit in parentheses, "(#13)", like any other prose reference.
+  for (const [, number] of prompt.matchAll(/(?:^|[\s(])#(\d{1,10})(?=$|[\s.,:;!?)])/gu)) {
     refs.add(`#${number}`);
   }
   if (refs.size > 1) return mixedReference(refs);

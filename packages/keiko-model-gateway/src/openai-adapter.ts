@@ -30,6 +30,7 @@ import {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   MAX_TIMER_DELAY_MS,
+  trimTrailingAzureOpenAiSegment,
   trimTrailingSlash,
 } from "./config.js";
 import {
@@ -47,7 +48,13 @@ import {
 import { bindNormalizedToolCalls, normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
-import { providerOutputTokenLimit } from "./output-token-limit.js";
+import {
+  OTHER_OUTPUT_TOKEN_FIELD,
+  providerOutputTokenLimit,
+  rejectsOutputTokenField,
+  requiresNoReasoningWithTools,
+  type OutputTokenField,
+} from "./output-token-limit.js";
 import {
   openAiCompatiblePromptMessage,
   openAiCompatiblePromptTools,
@@ -71,12 +78,20 @@ import type {
   GatewayRequest,
   GatewayStreamChunk,
   ModelProviderConfig,
+  ModelReasoningEffort,
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
   StreamReadBounds,
   ToolDefinition,
 } from "./types.js";
+
+// #3640: "none" is a WIRE-only value — the override reasoningEffortField applies once tools are
+// attached to a GPT-5.6 deployment. It is never added to the product-wide, user-selectable
+// ModelReasoningEffort union (packages/keiko-contracts): the provider's requirement is a hard
+// constraint whenever tools are present, not a preference to expose in the Coding Workbench's
+// reasoning-effort picker.
+type DispatchedReasoningEffort = "none" | ModelReasoningEffort;
 
 const PROVIDER_EMPTY_ASSISTANT_STATUS = 200;
 
@@ -112,6 +127,17 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
     // spent a small budget on reasoning" (finish_reason "length", ProviderOutputExhaustedError)
     // apart from "no budget was ever declared".
     maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+    // #3640: the reasoning effort actually placed on the wire — absent when the request declared
+    // none and no override applied. "none" can only ever appear here as the tool-calling override
+    // (reasoningEffortField): it is not a selectable value anywhere the operator chooses one, so an
+    // operator reading this line can tell "the provider's own tool-calling requirement replaced the
+    // selected effort" apart from every value the product actually offers a Coding Workbench turn.
+    reasoningEffort: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -131,11 +157,13 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
   fields: {
     endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    // The field the retry left out: the optional stream fields, or the output-token field the
+    // deployment rejected in favour of the other one (#3639).
     omittedField: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["stream_options", "stream"],
+      values: ["stream_options", "stream", "max_tokens", "max_completion_tokens"],
     },
   },
   causal: "correlation",
@@ -155,6 +183,46 @@ interface ChatCompatibilityMemo {
 }
 
 let chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
+
+// #3639: the output-token field a deployment turned out to accept when its name led to the other
+// one (a GPT-5 deployment named "prod-chat" gets max_tokens by default and rejects it). Scoped and
+// bounded like the stream memo; an operator's explicit outputTokenParameter always wins.
+let outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
+
+function rememberedOutputTokenField(scope: object, url: string): OutputTokenField | undefined {
+  return outputTokenFieldEndpoints.get(scope)?.get(url);
+}
+
+function rememberOutputTokenField(scope: object, url: string, field: OutputTokenField): void {
+  const endpoints = outputTokenFieldEndpoints.get(scope) ?? new Map<string, OutputTokenField>();
+  endpoints.delete(url);
+  if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
+    const oldest = endpoints.keys().next().value;
+    if (oldest !== undefined) endpoints.delete(oldest);
+  }
+  endpoints.set(url, field);
+  outputTokenFieldEndpoints.set(scope, endpoints);
+}
+
+// The output-token field this request sends, if it sends one at all.
+function sentOutputTokenField(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): OutputTokenField | undefined {
+  const limit = providerOutputTokenLimit(request.maxOutputTokens, config);
+  if ("max_completion_tokens" in limit) return "max_completion_tokens";
+  return "max_tokens" in limit ? "max_tokens" : undefined;
+}
+
+// The config one dispatch sends with, pinned to the output-token field the fallback chose.
+function withOutputTokenField(
+  config: ModelProviderConfig,
+  field: OutputTokenField | undefined,
+): ModelProviderConfig {
+  return field === undefined ? config : { ...config, outputTokenParameter: field };
+}
+
+type OutputTokenSend = (field: OutputTokenField | undefined) => Promise<DispatchedResponse>;
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
@@ -192,6 +260,7 @@ function rememberChatCompatibility(
 
 export function resetChatCompatibilityMemoForTests(): void {
   chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
+  outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
 }
 
 const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
@@ -286,6 +355,9 @@ interface ChatDispatchFields {
   // #3591: the output-token budget actually sent, so a spent-on-reasoning failure
   // (ProviderOutputExhaustedError) can be told apart from "no budget was ever declared".
   readonly maxOutputTokens?: number;
+  // #3640: the reasoning effort actually sent, once reasoningEffortField's tool-calling override
+  // is applied — never simply request.reasoningEffort, which can silently disagree with the wire.
+  readonly reasoningEffort?: DispatchedReasoningEffort;
 }
 
 // `info`, not `debug`: a line that only appears once the operator has already reproduced the hang
@@ -330,6 +402,7 @@ function chatDispatchFields(
   bounds?: StreamReadBounds,
 ): ChatDispatchFields {
   const maxOutputTokens = dispatchedMaxOutputTokens(request, config);
+  const reasoningEffort = reasoningEffortField(request, config).reasoning_effort;
   return {
     endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
     modelId: logModelId(config.modelId),
@@ -341,6 +414,7 @@ function chatDispatchFields(
     toolCount: request.tools?.length ?? 0,
     ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   };
 }
 
@@ -475,18 +549,19 @@ function requestDeadline(
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
 // misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
 // joinAzureDeploymentUrl. `apiVersion` is guaranteed present for the azure style by config-time
-// validation (assertProviderEndpointVersion enforces the biconditional). Both branches trim a
-// trailing slash first, exactly like the sibling adapters — a file/env-authored base URL ending in
-// "/" otherwise yields '//chat/completions', which LiteLLM answers with a 404 (LiteLLM production
-// audit).
+// validation (assertProviderEndpointVersion enforces the biconditional). The OpenAI-compatible
+// branch trims a trailing slash, exactly like the sibling adapters — a file/env-authored base URL
+// ending in "/" otherwise yields '//chat/completions', which LiteLLM answers with a 404 (LiteLLM
+// production audit). The Azure branch additionally strips a base URL's own trailing "/openai"
+// segment before appending one (#3643) — see trimTrailingAzureOpenAiSegment.
 function chatCompletionsUrl(config: ModelProviderConfig): string {
-  const trimmed = trimTrailingSlash(config.baseUrl);
   if (config.endpointStyle === "azure-openai-deployment") {
+    const trimmed = trimTrailingAzureOpenAiSegment(config.baseUrl);
     return `${trimmed}/openai/deployments/${encodeURIComponent(
       config.modelId,
     )}/chat/completions?api-version=${encodeURIComponent(config.apiVersion ?? "")}`;
   }
-  return `${trimmed}/chat/completions`;
+  return `${trimTrailingSlash(config.baseUrl)}/chat/completions`;
 }
 
 // Always returns the array shape: the plain-string case is handled at the call site so this
@@ -517,17 +592,32 @@ function responseFormatField(
   };
 }
 
-// The four scalar sampling knobs the provider accepts unchanged from the gateway request; grouped
-// so buildBody's own complexity stays under the repository ceiling (AGENTS.md §6).
+// The three scalar sampling knobs the provider accepts unchanged from the gateway request;
+// grouped so buildBody's own complexity stays under the repository ceiling (AGENTS.md §6).
+// `reasoning_effort` is NOT one of them — see reasoningEffortField below.
 function samplingFields(
   request: GatewayRequest,
-): Pick<ChatRequestBody, "temperature" | "top_p" | "seed" | "reasoning_effort"> {
+): Pick<ChatRequestBody, "temperature" | "top_p" | "seed"> {
   return {
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
-    ...(request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {}),
   };
+}
+
+// #3640: a GPT-5.6 deployment rejects a Chat Completions request that attaches function tools
+// unless `reasoning_effort` is exactly "none"; the model's own default effort is not "none", so
+// omitting the field does not help (Microsoft's documented contract). This OVERRIDES whatever
+// effort a Coding Workbench turn selected once tools are attached to such a model: "none" is the
+// one value the provider accepts then. Every other model keeps the selected effort.
+function reasoningEffortField(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): { readonly reasoning_effort?: DispatchedReasoningEffort } {
+  if (request.tools !== undefined && requiresNoReasoningWithTools(config.modelId)) {
+    return { reasoning_effort: "none" };
+  }
+  return request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {};
 }
 
 function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
@@ -538,6 +628,7 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
     ...toolsField(request.tools),
     ...responseFormatField(request),
     ...samplingFields(request),
+    ...reasoningEffortField(request, config),
     ...providerOutputTokenLimit(request.maxOutputTokens, config),
   };
 }
@@ -856,6 +947,10 @@ function isModelRefusal(payload: unknown): boolean {
   return MODEL_REFUSAL_SIGNAL.test(errorSignal(payload));
 }
 
+// Exported for readiness-probe.ts (#3641): the raw readiness/setup probe shares this exact
+// detection with the production stream adapter's own compatibility retry below, so a strict
+// OpenAI-compatible gateway that rejects the optional `stream_options` field is retried the same
+// way in both places instead of being recorded as "streaming unsupported" by the probe alone.
 function isOptionalStreamFieldRejection(payload: unknown): boolean {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
   if (!isRecord(error)) return false;
@@ -1244,10 +1339,12 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     const start = this.now();
     const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
-    const dispatched = await this.dispatch(
-      { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
-      config,
-      secrets,
+    const toolRequest = {
+      ...request,
+      tools: catalog.tools.length === 0 ? undefined : catalog.tools,
+    };
+    const dispatched = await this.dispatchWithOutputTokenFallback(toolRequest, config, (field) =>
+      this.dispatch(toolRequest, withOutputTokenField(config, field), secrets),
     );
     try {
       const { response } = dispatched;
@@ -1582,9 +1679,22 @@ export class OpenAiAdapter implements ProviderAdapter {
       url,
     };
     const mode = chatCompatibilityMode(memoScope, url, this.now);
-    if (mode === "whole-body") return this.dispatch(request, config, secrets, false, bounds);
+    if (mode === "whole-body") {
+      return this.dispatchWithOutputTokenFallback(request, config, (field) =>
+        this.dispatch(request, withOutputTokenField(config, field), secrets, false, bounds),
+      );
+    }
     const includeUsage = mode !== "omit-usage";
-    const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
+    const first = await this.dispatchWithOutputTokenFallback(request, config, (field) =>
+      this.dispatch(
+        request,
+        withOutputTokenField(config, field),
+        secrets,
+        true,
+        bounds,
+        includeUsage,
+      ),
+    );
     if (first.response.ok || !isStrictChatShapeRejection(first.response.status)) return first;
     if (!includeUsage) return this.retryWithoutStreamingIfNamed(first, context);
     const retry = await this.retryWithoutUsage(first, context);
@@ -1599,7 +1709,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     failed: DispatchedResponse,
     context: ChatCompatibilityContext,
   ): Promise<DispatchedResponse> {
-    const { request, config, secrets, bounds, startedAt, url } = context;
+    const { request, config, secrets, url } = context;
     try {
       const payload = await this.readErrorBody(failed.response, config, secrets, failed.signal);
       if (shouldPreserveProviderRejection(failed.response.status, payload)) {
@@ -1608,6 +1718,25 @@ export class OpenAiAdapter implements ProviderAdapter {
     } finally {
       failed.dispose();
     }
+    this.logChatCompatibilityRetry(url, config, failed.response.status, "stream_options");
+    // A deployment can reject the output-token field only once the stream shape is accepted, so the
+    // field fallback wraps every compatibility dispatch, not only the first (PR #3625 review).
+    return this.dispatchWithOutputTokenFallback(request, config, (field) =>
+      this.dispatchWithinBudget(context, { stream: true, includeUsage: false, field }),
+    );
+  }
+
+  // One compatibility retry, bounded by what the original request's budget has left at the moment
+  // it is sent.
+  private dispatchWithinBudget(
+    context: ChatCompatibilityContext,
+    shape: {
+      readonly stream: boolean;
+      readonly includeUsage: boolean;
+      readonly field: OutputTokenField | undefined;
+    },
+  ): Promise<DispatchedResponse> {
+    const { request, config, secrets, bounds, startedAt } = context;
     const remainingMs = remainingCompatibilityBudgetMs(
       bounds,
       startedAt,
@@ -1617,15 +1746,21 @@ export class OpenAiAdapter implements ProviderAdapter {
     );
     const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
     const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
-    this.logChatCompatibilityRetry(url, config, failed.response.status, "stream_options");
-    return this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
+    return this.dispatch(
+      request,
+      withOutputTokenField(retryConfig, shape.field),
+      secrets,
+      shape.stream,
+      retryBounds,
+      shape.includeUsage,
+    );
   }
 
   private async retryWithoutStreamingIfNamed(
     failed: DispatchedResponse,
     context: ChatCompatibilityContext,
   ): Promise<DispatchedResponse> {
-    const { request, config, secrets, bounds, startedAt, memoScope, url } = context;
+    const { request, config, secrets, memoScope, url } = context;
     if (!isStrictChatShapeRejection(failed.response.status)) return failed;
     try {
       const payload = await this.readErrorBody(failed.response, config, secrets, failed.signal);
@@ -1638,26 +1773,73 @@ export class OpenAiAdapter implements ProviderAdapter {
     } finally {
       failed.dispose();
     }
-    const remainingMs = remainingCompatibilityBudgetMs(
-      bounds,
-      startedAt,
-      Date.now,
-      config,
-      secrets,
-    );
-    const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
-    const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
     this.logChatCompatibilityRetry(url, config, failed.response.status, "stream");
-    const retry = await this.dispatch(request, retryConfig, secrets, false, retryBounds);
+    const retry = await this.dispatchWithOutputTokenFallback(request, config, (field) =>
+      this.dispatchWithinBudget(context, { stream: false, includeUsage: true, field }),
+    );
     if (retry.response.ok) rememberChatCompatibility(memoScope, url, "whole-body", this.now());
     return retry;
+  }
+
+  // The output-token field a request sends: an operator's explicit field, else the one this endpoint
+  // turned out to accept (#3639), else the model-family default; none without an output bound.
+  private outputTokenFieldFor(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+  ): OutputTokenField | undefined {
+    if (request.maxOutputTokens === undefined) return undefined;
+    const remembered = rememberedOutputTokenField(
+      this.deps.compatibilityMemoScope ?? config,
+      chatCompletionsUrl(config),
+    );
+    return config.outputTokenParameter ?? remembered ?? sentOutputTokenField(request, config);
+  }
+
+  // #3639: a deployment whose name hides its model family gets the wrong output-token field — a
+  // GPT-5 deployment named "prod-chat" is sent max_tokens and rejects it. A strict-shape rejection
+  // that says the field sent is unsupported is answered once with the other field; the endpoint
+  // keeps that field only once it was accepted, so no other rejection can poison its later
+  // requests. Any other rejection comes back unread, and an explicit outputTokenParameter wins.
+  private async dispatchWithOutputTokenFallback(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    send: OutputTokenSend,
+  ): Promise<DispatchedResponse> {
+    const field = this.outputTokenFieldFor(request, config);
+    const first = await send(field);
+    if (!this.mayRetryOutputTokenField(first, field, config)) return first;
+    const secrets = [config.apiKey, config.baseUrl];
+    const payload = await this.readErrorBody(first.response.clone(), config, secrets, first.signal);
+    if (field === undefined || !rejectsOutputTokenField(payload, field)) return first;
+    first.dispose();
+    const url = chatCompletionsUrl(config);
+    const other = OTHER_OUTPUT_TOKEN_FIELD[field];
+    this.logChatCompatibilityRetry(url, config, first.response.status, field);
+    const retry = await send(other);
+    if (retry.response.ok) {
+      rememberOutputTokenField(this.deps.compatibilityMemoScope ?? config, url, other);
+    }
+    return retry;
+  }
+
+  private mayRetryOutputTokenField(
+    first: DispatchedResponse,
+    field: OutputTokenField | undefined,
+    config: ModelProviderConfig,
+  ): boolean {
+    return (
+      field !== undefined &&
+      config.outputTokenParameter === undefined &&
+      !first.response.ok &&
+      isStrictChatShapeRejection(first.response.status)
+    );
   }
 
   private logChatCompatibilityRetry(
     url: string,
     config: ModelProviderConfig,
     status: number,
-    omittedField: "stream_options" | "stream",
+    omittedField: "stream_options" | "stream" | OutputTokenField,
   ): void {
     this.log.write(
       activityLogEvent(

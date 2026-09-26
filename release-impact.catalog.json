@@ -2784,6 +2784,82 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.10",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.10",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-26-keiko-1.1.10-coding-workbench-approval-expiry-and-window",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Coding Workbench approvals take fewer steps and never end a run by themselves. Denying a step now rejects only that step: the coding agent is told and continues, where before the whole run stopped. In Ask for approval, a file change needs one decision, Apply or Reject in the change review, instead of an approval followed by the same review, and rejecting a change is that decision: the agent is told and the run can still succeed. An approval request that is not answered within its five minutes is removed at once and the next request is shown, where before the expired card stayed on screen and blocked the next one. A turn the model provider rejects outright now ends once instead of being retried without end, a stopped run no longer leaves its change review on screen, and the Workbench window no longer turns blank after an approval. The task history, the question list, issue references, run refreshes and the information popover behave as expected again.",
+      "affectedStateStores": ["activity-log"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "1.1.10 adds and removes activity-log operations and closed values (see the review rationale), so the records it writes carry a new registry catalog digest. Records written before 1.1.10 stay on disk unchanged under normal age-based retention; nothing is rewritten or migrated. The 1.1.10 support analyzer classifies those older records as unsupported, because their catalog digest differs, instead of reconstructing them; the analyzer of the version that wrote them still reads them.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Coding Workbench: denying a step rejects only that step; the coding agent is told and the run continues instead of stopping.",
+        "Coding Workbench (Ask for approval): a file change needs one decision, Apply or Reject in the change review; the separate approval before it is gone.",
+        "Coding Workbench (Ask for approval): an approval that expires unanswered is removed at once, and the next approval request is shown and can be approved or denied.",
+        "Coding Workbench: the window no longer turns blank after an approval or when a pending decision is opened.",
+        "Coding Workbench: when the model provider rejects a turn outright (for example HTTP 400 or a refused credential), the turn ends once with the failure instead of being retried every few seconds until the run is stopped.",
+        "Coding Workbench: a stopped run no longer leaves its change review on screen, and a second browser tab on the same run no longer re-registers several times a second.",
+        "Coding Workbench (Ask for approval): rejecting a change in its review rejects only that change; the coding agent is told it was declined and the run can still finish successfully, where before it was told its edit had failed and the run could end as failed.",
+        "Coding Workbench: a turn refused because the model spend limit is reached ends once, also while streaming, instead of being retried.",
+        "Coding Workbench task history: Rename opens with the current title and Cancel discards the draft, an older refresh no longer overwrites a newer one, repository names read correctly for Windows paths and trailing slashes, and selecting a task again retries an activation that failed.",
+        "Coding Workbench: a shown question is listed again after a refresh, an issue reference in parentheses such as (#13) is recognised, concurrent run refreshes keep the newest state, Escape in the information popover returns focus to its button, and a draft pull request whose handoff status is not yet known says so instead of offering to propose it again.",
+        "Coding Workbench: each window keeps its own repository and branch, chosen in the window's setup card; the header no longer carries a global workspace switch that every window inherited.",
+        "Coding Workbench: a failed change diff offers Retry, Start becomes available once a Codex sign-in connects, a progress decision moves keyboard focus to it, a history read failure no longer hides the run's changes, a ready-for-review handoff refreshes the pull request state, the model choice survives a catalog refresh, and a model the gateway no longer offers is cleared instead of being sent with Start.",
+        "Coding Workbench: the repository and branch cannot be changed while a workspace bind is in progress, and a folder that is not a Git repository is explained in the setup card.",
+        "Git: every failed read in the Git window (repository list, status, branches, sync state, commit preview, history) says what failed and offers Retry, including reads Git answered as unavailable; a branch created before a failed switch says so, History stops at its 100,000-commit limit, and closing Add repository during a request no longer activates its result.",
+        "Git: Sync reflects a finished commit, fetch, pull, push, merge or branch change immediately instead of replaying the state from before it.",
+        "Coding Workbench issue handoff: Refresh observed status pressed while the card's own first status read is still running shows the observed pull request state instead of leaving the card without one.",
+        "Model gateway (Azure OpenAI): manual chat gateway setup can choose the Azure deployment endpoint style and API version, a base URL ending in /openai no longer doubles the deployment path, and GPT-5.6 deployments pass the tool-calling readiness check.",
+        "Model gateway: a deployment whose name does not reveal its model family, such as a GPT-5 deployment named prod-chat, is retried once with the other output-token field when it rejects max_tokens or max_completion_tokens, and that endpoint keeps the accepted field; an explicitly configured field is never changed.",
+        "Model gateway: a LiteLLM or vLLM gateway that rejects the optional stream usage field no longer fails the streaming readiness check."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-26",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
+        "rationale": "The release owner ordered the lab verification of the published package and the completion of epic #3591 without follow-ups. The published 1.1.9 lab run (issue #3610) found two defects in Ask for approval mode: an expired approval blocked the next one, and the Workbench window could turn blank after an approval. 1.1.10 ships both repairs and the owner's approval decisions of 2026-09-26 (a denial rejects only that step; the change review is a file edit's one approval). It adds the activity-log operations coding-runtime.approval.retired, coding-runtime.approval.decided, gateway.readiness.compatibility-retry, gateway.readiness.compatibility-retry.failed, gateway.readiness.compatibility-retry.skipped, client.git-operation.attempted, client.git-operation.settled and client.select.dismissed, removes coding-runtime.approval.base-checked with the pre-ask base check it recorded and the reasons approval-authority-denied and approval-stale from coding-sidecar.tool-facade.rejected, adds a runtimeRetry field to coding-sidecar.gateway.turn-failed, adds the state rejected to coding-runtime.editor-mutation.settled, the reason CHANGE_REJECTED to coding-runtime.edit.refused, the reason denied to coding-runtime.tool-result and the phase joined to git.journey-observation, adds the field reasoningEffort to chat.request.dispatch, the omitted fields max_tokens and max_completion_tokens to chat.request.compatibility-retry, the field baseBranchDigest to task-workspace.lifecycle and the closed fields gitClientOperation, gitClientOperationOutcome and gitClientOperationReason to client.diagnostic, and adds no export, route or configuration key. It also ships the per-window repository context and the fixes for the user findings #3626 to #3653 of the same lab.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }

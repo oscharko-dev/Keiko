@@ -38,6 +38,11 @@ If a proxy closes an SSE response after partial text without a recognized finish
 `data: [DONE]`, the turn reports `stream-incomplete` rather than accepting the partial reply.
 Check the correlated `chat.response.streamed` and `coding-sidecar.gateway.turn-failed` lines for
 the failed read and run event; they contain counts and closed reasons, not model text.
+A provider that rejects the turn itself — HTTP 400 or another 4xx other than 408, 409 and 429, or
+a refused credential — ends the turn once with `provider-failed` and `runtimeRetry: refused`; the
+coding agent does not retry it (before 1.1.10 it retried the same rejected turn every few seconds
+until the run was stopped). Fix the route or credential the rejection names in the gateway's own
+log, then send the task again.
 
 ---
 

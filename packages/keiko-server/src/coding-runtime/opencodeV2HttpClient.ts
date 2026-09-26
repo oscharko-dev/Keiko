@@ -52,10 +52,15 @@ export interface OpenCodeV2HttpClient {
     signal?: AbortSignal,
   ): Promise<void>;
   cancelForm(sessionId: string, formId: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * `message` rides with a `reject`: OpenCode 2.0.10 hands it to the model as the correction for that
+   * one call and its loop goes on, where a bare reject ends the turn (ADR-0124 D6).
+   */
   replyPermission(
     sessionId: string,
     requestId: string,
     decision: "once" | "reject",
+    message?: string,
     signal?: AbortSignal,
   ): Promise<void>;
 }
@@ -361,11 +366,11 @@ export function createOpenCodeV2HttpClient(
         signal,
       );
     },
-    replyPermission: async (sessionId, requestId, decision, signal): Promise<void> => {
+    replyPermission: async (sessionId, requestId, decision, message, signal): Promise<void> => {
       await request(
         "POST",
         `/api/session/${safeSessionId(sessionId)}/permission/${safeRequestId(requestId)}/reply`,
-        { decision },
+        message === undefined ? { decision } : { decision, message },
         signal,
       );
     },

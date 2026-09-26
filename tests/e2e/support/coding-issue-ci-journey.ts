@@ -4,6 +4,10 @@ import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contrac
 import type { CodingToolResult } from "../../../packages/keiko-server/src/coding-runtime/codingToolIpc.js";
 import { openCodingIssueWorkbench, selectCodingIssueMode } from "./coding-issue-browser.js";
 import {
+  issueResolutionTaskInstructions,
+  startStructuredDeliveryRun,
+} from "./coding-issue-journey-live.js";
+import {
   DELIVERY_LAUNCHER_SECRET,
   deliveryRepository,
   type DeliveryFixtureOperation,
@@ -71,29 +75,48 @@ function requireDeliveryProposalId(result: CodingToolResult | undefined, intent:
     throw new Error(`Expected ready CI ${intent} proposal`);
   return result.draftDelivery.record.proposalId;
 }
-async function bind(page: Page, number: number): Promise<void> {
+/**
+ * PR #3625 retired the setup card's own "Issue URL or #number" field and its "Preview issue" /
+ * "Use this issue" / "Bind workspace" controls: binding a workspace is now unrelated to resolving
+ * any issue (coding-issue-journey-live.ts's `previewAndBindIssue` comment). This provisions the
+ * plain repository/branch task workspace directly through the same real API
+ * `coding-issue-commit.spec.ts`'s own `provision` and `coding-issue-delivery.spec.ts`'s
+ * `provisionDeliveryWorkspace` already rely on for a fresh workspace per draft, rather than
+ * reimplementing the "Code setup" combobox flow a third time. The GitHub issue-reader grant this
+ * fixture's repository needs is settled directly too (`startStructuredDeliveryRun`,
+ * coding-issue-journey-live.ts, #3625 review) -- this lane starts its run through the structured
+ * runtime start API rather than the Workbench prompt, so there is no "Enable GitHub issue access"
+ * refusal-triggered retry control to settle it through.
+ */
+async function provisionCiWorkspace(page: Page, taskId: string): Promise<void> {
   const clear = await page.request.delete("/api/task-workspaces/active", {
     headers: { "X-Keiko-CSRF": "1" },
     data: {},
   });
   expect(clear.ok()).toBe(true);
-  await page.reload();
-  const endpoint = "/api/coding-workbench/github-authorization";
-  const current = await page.request.get(
-    `${endpoint}?${new URLSearchParams({ repositoryPath: repository }).toString()}`,
-  );
-  const { revision } = (await current.json()) as { readonly revision: number };
-  const grant = await page.request.put(endpoint, {
+  const response = await page.request.post("/api/task-workspaces", {
     headers: { "X-Keiko-CSRF": "1" },
-    data: { repositoryPath: repository, authorized: true, expectedRevision: revision },
+    data: { root: repository, taskId, baseBranch: "main", requestedBy: "ci-browser-fixture" },
   });
-  expect(grant.ok(), await grant.text()).toBe(true);
-  await page.getByLabel("Issue URL or #number").fill(`#${String(number)}`);
-  await page.getByRole("button", { name: "Preview issue", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Issue preview", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Use this issue", exact: true }).click();
-  await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
+  expect(response.ok(), await response.text()).toBe(true);
+  const { instance } = (await response.json()) as {
+    readonly instance: { readonly workspaceId: string };
+  };
+  const repaired = await page.request.post("/api/task-workspaces/reconciliation", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: { requestedBy: "ci-browser-fixture" },
+  });
+  expect(repaired.ok()).toBe(true);
+  const activated = await page.request.post("/api/task-workspaces/active", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: {
+      workspaceId: instance.workspaceId,
+      requestedBy: "ci-browser-fixture",
+      acquireLock: false,
+    },
+  });
+  expect(activated.ok(), await activated.text()).toBe(true);
+  await page.reload();
 }
 export async function commitCiCandidate(page: Page): Promise<void> {
   const proposal = await ciControl("propose");
@@ -124,18 +147,19 @@ export async function startCiDraft(page: Page, issue: number): Promise<void> {
     windowId: CI_WINDOW_ID,
     launcherSecret: DELIVERY_LAUNCHER_SECRET,
   });
-  await bind(page, issue);
+  await provisionCiWorkspace(page, `ci-${String(issue)}`);
   await selectCodingIssueMode(page, "autonomous-delivery");
-  await page
-    .getByLabel("Task instructions")
-    .fill("Implement, verify, deliver and observe CI for the accepted issue.");
-  const started = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/coding-workbench/runtime/runs"),
-  );
-  await page.getByRole("button", { name: "Start coding run", exact: true }).click();
-  expect((await started).ok()).toBe(true);
+  // ADR-0137 D3 / #3625 review: a Workbench prompt's issue link is task CONTEXT ONLY -- the prompt
+  // path always sends `issuePurpose: "context"` by design, so a run started that way never gets the
+  // delivery binding this lane's real push/PR draft delivery requires. Start through the structured
+  // runtime start API with `issuePurpose: "delivery"` instead (also settles the per-repository
+  // GitHub issue-reader grant this freshly-provisioned repository needs).
+  await startStructuredDeliveryRun(page, {
+    repositoryPath: repository,
+    requestedMode: "autonomous-delivery",
+    issueRef: `#${String(issue)}`,
+    taskIntent: issueResolutionTaskInstructions(`#${String(issue)}`),
+  });
   await expect.poll(() => ciObservation().phase, { timeout: 120_000 }).toBe("verified-turn-ready");
   await commitCiCandidate(page);
   await pushCiCandidate(page);

@@ -9,6 +9,7 @@ import type {
   GitRepositoryStatusResponse,
 } from "@/lib/types";
 import { useTranslate } from "@/lib/i18n";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import type { GitMutationOutcome } from "./git-client-seam";
@@ -24,6 +25,7 @@ import {
   FILE_PATH_STYLE,
   fileRowStyle,
   LOADING_STATE_STYLE,
+  SECONDARY_BTN,
   stageBoxStyle,
   STAGING_SCOPE_HINT_STYLE,
   statusSquareStyle,
@@ -91,6 +93,7 @@ interface ChangesPaneProps {
   readonly status: GitRepositoryStatusResponse | null;
   readonly statusLoading: boolean;
   readonly statusError: string | null;
+  readonly onRetryStatus: () => void;
   readonly selectedChangePath: string | null;
   readonly onSelectChange: (path: string) => void;
   readonly onStageFile: (change: GitChangedFile) => void;
@@ -105,6 +108,9 @@ interface ChangesPaneProps {
   readonly historyError: string | null;
   readonly historyLoadingMore: boolean;
   readonly historyLoadMoreError: string | null;
+  // #3650: the server bounds how far history can page; once a Load-more request comes back
+  // clamped to that ceiling, further clicks would only replay the same final page forever.
+  readonly historyLimitReached: boolean;
   readonly onLoadMoreHistory: () => void;
   readonly selectedCommitSha: string | null;
   readonly onSelectCommit: (entry: GitHistoryEntry) => void;
@@ -123,6 +129,7 @@ export function ChangesPane({
   status,
   statusLoading,
   statusError,
+  onRetryStatus,
   selectedChangePath,
   onSelectChange,
   onStageFile,
@@ -137,6 +144,7 @@ export function ChangesPane({
   historyError,
   historyLoadingMore,
   historyLoadMoreError,
+  historyLimitReached,
   onLoadMoreHistory,
   selectedCommitSha,
   onSelectCommit,
@@ -215,6 +223,7 @@ export function ChangesPane({
           status={status}
           statusLoading={statusLoading}
           statusError={statusError}
+          onRetryStatus={onRetryStatus}
           selectedChangePath={selectedChangePath}
           onSelectChange={onSelectChange}
           onStageFile={onStageFile}
@@ -245,6 +254,7 @@ export function ChangesPane({
           error={historyError}
           loadingMore={historyLoadingMore}
           loadMoreError={historyLoadMoreError}
+          limitReached={historyLimitReached}
           onLoadMore={onLoadMoreHistory}
           selectedSha={selectedCommitSha}
           onSelect={onSelectCommit}
@@ -258,6 +268,7 @@ function ChangesList({
   status,
   statusLoading,
   statusError,
+  onRetryStatus,
   selectedChangePath,
   onSelectChange,
   onStageFile,
@@ -271,6 +282,7 @@ function ChangesList({
   readonly status: GitRepositoryStatusResponse | null;
   readonly statusLoading: boolean;
   readonly statusError: string | null;
+  readonly onRetryStatus: () => void;
   readonly selectedChangePath: string | null;
   readonly onSelectChange: (path: string) => void;
   readonly onStageFile: (change: GitChangedFile) => void;
@@ -282,7 +294,14 @@ function ChangesList({
   readonly stagingError: string | null;
 }): ReactNode {
   const t = useTranslate();
-  const unavailableState = changesListUnavailableState(status, statusLoading, statusError);
+  const optionalT = useOptionalWidgetTranslate();
+  const unavailableState = changesListUnavailableState(
+    status,
+    statusLoading,
+    statusError,
+    onRetryStatus,
+    optionalT,
+  );
   if (unavailableState !== null) return unavailableState;
   if (status === null) return null;
 
@@ -396,17 +415,45 @@ function ChangesList({
   );
 }
 
+// #3653: a rejected status read used to render as a plain, dead-end error paragraph with no way
+// to retry. Extracted so `changesListUnavailableState` stays under the repo's line budget.
+function StatusErrorState({
+  statusError,
+  onRetryStatus,
+  t,
+}: {
+  readonly statusError: string;
+  readonly onRetryStatus: () => void;
+  readonly t: ReturnType<typeof useOptionalWidgetTranslate>;
+}): ReactNode {
+  return (
+    <div
+      className="rv-empty"
+      style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}
+    >
+      <p role="alert" style={{ margin: 0 }}>
+        {statusError}
+      </p>
+      <button
+        type="button"
+        style={{ ...SECONDARY_BTN, alignSelf: "flex-start" }}
+        onClick={onRetryStatus}
+      >
+        {t("gitDelivery.action.retry")}
+      </button>
+    </div>
+  );
+}
+
 function changesListUnavailableState(
   status: GitRepositoryStatusResponse | null,
   statusLoading: boolean,
   statusError: string | null,
+  onRetryStatus: () => void,
+  t: ReturnType<typeof useOptionalWidgetTranslate>,
 ): ReactNode | null {
   if (statusError !== null) {
-    return (
-      <p className="rv-empty" role="alert" style={{ padding: 14 }}>
-        {statusError}
-      </p>
-    );
+    return <StatusErrorState statusError={statusError} onRetryStatus={onRetryStatus} t={t} />;
   }
   if (statusLoading && status === null) {
     return (

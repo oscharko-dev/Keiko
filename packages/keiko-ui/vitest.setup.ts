@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, beforeEach, expect } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
 import { setClientDiagnosticWriter } from "./src/lib/client-diagnostics";
@@ -24,6 +24,13 @@ beforeEach(() => {
   // every other locale lazy), so a test that needs German must establish that precondition itself
   // — by awaiting `loadLocaleMessages("de")` or by awaiting the rendered German copy.
   resetLoadedMessageCatalogs();
+  // Mock call history is a cross-test input too. This file's `cleanup()` below is registered first,
+  // so it runs AFTER every suite's own `afterEach`, including a suite's `vi.clearAllMocks()`. React
+  // runs an effect a test left pending while it unmounts, so a call that effect makes counted toward
+  // the NEXT test. A settings test saw `fetchModels` 3 times instead of 2 on a busy CI runner
+  // (PR #3625). Clearing here starts every test from zero recorded calls. Implementations stay, as
+  // with `vi.clearAllMocks()` anywhere.
+  vi.clearAllMocks();
 });
 
 // The persisted UI locale is process-global state, so one test choosing a language decided what the

@@ -32,7 +32,7 @@ function status(
 }
 
 function response(body: unknown): Response {
-  return { ok: true, json: async () => body } as Response;
+  return { ok: true, headers: new Headers(), json: async () => body } as Response;
 }
 
 afterEach(() => {

@@ -300,6 +300,31 @@ function voiceEndpointStyleSections(
   ];
 }
 
+// #3638: the model gateway (chat/embedding) connection's own protocol selector — the manual-entry
+// twin of voiceEndpointStyleSections above, so an Azure deployment-path chat gateway can be
+// configured by hand instead of only through a config-file import (packages/keiko-server's setup
+// route already accepts `endpointStyle`/`apiVersion` on the generic connection unconditionally;
+// see setupEndpointProtocol in gateway-setup.ts).
+function gatewayEndpointStyleSections(
+  t: GatewaySetupTranslate,
+): readonly [{ readonly options: readonly { readonly value: string; readonly label: string }[] }] {
+  return [
+    {
+      options: [
+        { value: "", label: t("gatewaySetup.gateway.endpointStyle.unstated") },
+        {
+          value: "openai-compatible",
+          label: t("gatewaySetup.gateway.endpointStyle.openaiCompatible"),
+        },
+        {
+          value: "azure-openai-deployment",
+          label: t("gatewaySetup.gateway.endpointStyle.azureDeploymentPath"),
+        },
+      ],
+    },
+  ];
+}
+
 function voiceProviderLocalitySections(t: GatewaySetupTranslate): readonly [
   {
     readonly options: readonly { readonly value: VoiceProviderLocality; readonly label: string }[];
@@ -672,7 +697,11 @@ interface GatewayFormFields {
   readonly importedVoiceRealtimeAuthMode: string;
   /** The uploaded endpoint URL the imported protocol is bound to. */
   readonly importedVoiceEndpointBaseUrl: string;
-  /** Generic endpoint protocol imported from a config upload, bound to its gateway URL (#3042). */
+  /**
+   * Generic endpoint protocol: the operator's own statement (#3638, via gatewayEndpointStyleSections
+   * / GatewayApiVersionField) or one imported from a config upload, bound to its gateway URL
+   * (#3042) — see importedEndpointPayload.
+   */
   readonly importedEndpointStyle: string;
   readonly importedApiVersion: string;
   readonly importedEndpointBaseUrl: string;
@@ -753,12 +782,26 @@ function canonicalEndpointIdentity(raw: string): string {
   }
 }
 
-// The imported GENERIC protocol rides only on a submit that still points at the uploaded gateway
-// endpoint — a manually retyped URL must not inherit the file's protocol (#3042), while an edit
-// that does not change the endpoint's identity keeps it (#3046).
+// The GENERIC protocol — hand-stated (#3638) or imported — rides only on a submit that still
+// points at the endpoint it applies to: an UPLOADED protocol rides only while the form still
+// points at the uploaded gateway endpoint (a manually retyped URL must not inherit the file's
+// protocol, #3042; an edit that does not change the endpoint's identity keeps it, #3046). A
+// HAND-STATED protocol (importedEndpointBaseUrl still empty — nothing was ever uploaded, OR the
+// operator's own statement released a prior upload's binding, see setChatEndpointStyle /
+// setChatApiVersion below) carries no such binding and rides with whatever endpoint is currently
+// entered — including a preserve-mode blank Base URL, which means "keep the stored endpoint" and
+// is therefore an endpoint too (PR #3625 review).
 function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   const submittedBaseUrl = fields.baseUrl.trim();
-  if (submittedBaseUrl === "") return {};
+  // A blank URL in preserve mode means "keep the stored endpoint" (mirrors
+  // statedVoiceEndpointPayload's twin rule): a hand-stated protocol applies to that endpoint and
+  // must still submit. An UPLOADED protocol stays bound to its own uploaded URL, which a blank
+  // field can no longer match, so it is dropped exactly like any other endpoint mismatch below.
+  if (submittedBaseUrl === "") {
+    return fields.preserveExisting && fields.importedEndpointBaseUrl === ""
+      ? statedEndpointProtocolFields(fields)
+      : {};
+  }
   // An empty binding means the file declared a protocol but left the URL to the operator, so it
   // applies to whatever endpoint is entered — the same "unbound" rule the voice twin uses. The
   // imported values always come from the CURRENT file, so this can never resurrect an earlier
@@ -770,6 +813,10 @@ function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetu
   ) {
     return {};
   }
+  return statedEndpointProtocolFields(fields);
+}
+
+function statedEndpointProtocolFields(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   return {
     ...(fields.importedEndpointStyle === "" ? {} : { endpointStyle: fields.importedEndpointStyle }),
     ...(fields.importedApiVersion === "" ? {} : { apiVersion: fields.importedApiVersion }),
@@ -1204,6 +1251,41 @@ function GatewayApiKeyHeaderField({
   );
 }
 
+interface GatewayApiVersionFieldProps {
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: Dispatch<SetStateAction<string>>;
+}
+
+// #3638: manual twin of VoiceApiVersionField for the generic (chat/embedding) connection. A
+// single base URL field does not remove the need for identity binding — importedEndpointStyle
+// and importedApiVersion also carry an UPLOADED protocol, so typing here must still release that
+// binding (onChange is wired to setChatApiVersion, not the raw state setter), or a value stated
+// after the Base URL was edited away from the uploaded one stayed gated on the stale upload
+// (review findings on PR #3625).
+function GatewayApiVersionField({
+  value,
+  disabled,
+  onChange,
+}: GatewayApiVersionFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
+  return (
+    <label className="gw-field">
+      <span>
+        {t("gatewaySetup.gateway.apiVersion.label")}{" "}
+        <span className="dlg-opt">{t("gatewaySetup.gateway.apiVersion.azureOnly")}</span>
+      </span>
+      <input
+        className="gw-input"
+        value={value}
+        disabled={disabled}
+        placeholder="2025-04-01-preview"
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 interface GatewayTimeoutFieldProps {
   readonly preserveExisting: boolean;
   readonly value: string;
@@ -1317,6 +1399,39 @@ function GatewayWorkflowEligibleModelsField({
   );
 }
 
+// #3638: the generic (chat/embedding) connection's own endpoint protocol, split out of
+// GatewayFieldsSection so that function stays under the repository's max-lines-per-function
+// ceiling (AGENTS.md §6) — the same reason most of this dialog's fields are their own component.
+// Picks its slice directly from GatewayFieldsSectionProps (rather than its own free-standing
+// shape) so the two can never drift apart; GatewayFieldsSection spreads its whole `props`.
+type GatewayEndpointProtocolFieldsProps = Pick<
+  GatewayFieldsSectionProps,
+  "endpointStyleLabelId" | "endpointStyle" | "setEndpointStyle" | "apiVersion" | "setApiVersion"
+> & { readonly disabled: boolean };
+
+function GatewayEndpointProtocolFields({
+  endpointStyleLabelId,
+  endpointStyle,
+  setEndpointStyle,
+  apiVersion,
+  setApiVersion,
+  disabled,
+}: GatewayEndpointProtocolFieldsProps): ReactNode {
+  return (
+    <>
+      <VoiceProtocolSelectField
+        labelId={endpointStyleLabelId}
+        labelKey="gatewaySetup.gateway.endpointStyle.label"
+        sections={gatewayEndpointStyleSections}
+        value={endpointStyle}
+        disabled={disabled}
+        onChange={setEndpointStyle}
+      />
+      <GatewayApiVersionField value={apiVersion} disabled={disabled} onChange={setApiVersion} />
+    </>
+  );
+}
+
 interface GatewayFieldsSectionProps {
   readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
@@ -1329,6 +1444,12 @@ interface GatewayFieldsSectionProps {
   readonly setApiKey: Dispatch<SetStateAction<string>>;
   readonly apiKeyHeaderName: string;
   readonly setApiKeyHeaderName: Dispatch<SetStateAction<string>>;
+  /** #3638: the generic connection's own endpoint protocol — see gatewayEndpointStyleSections. */
+  readonly endpointStyleLabelId: string;
+  readonly endpointStyle: string;
+  readonly setEndpointStyle: (next: string) => void;
+  readonly apiVersion: string;
+  readonly setApiVersion: Dispatch<SetStateAction<string>>;
   readonly timeoutMs: string;
   readonly setTimeoutMs: Dispatch<SetStateAction<string>>;
   readonly deploymentNames: string;
@@ -1362,6 +1483,7 @@ function GatewayFieldsSection(props: GatewayFieldsSectionProps): ReactNode {
         disabled={disabled}
         onChange={props.setApiKeyHeaderName}
       />
+      <GatewayEndpointProtocolFields {...props} disabled={disabled} />
       <GatewayTimeoutField
         preserveExisting={props.preserveExisting}
         value={props.timeoutMs}
@@ -2509,6 +2631,7 @@ export function GatewaySetupDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const voiceProviderLocalityLabelId = useId();
   const voiceEndpointStyleLabelId = useId();
+  const endpointStyleLabelId = useId();
   const voiceRealtimeAuthModeLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
@@ -2564,9 +2687,37 @@ export function GatewaySetupDialog({
   };
   const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
   const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
+  // #3638: also the operator's OWN manual statement now, not import-only — see
+  // gatewayEndpointStyleSections / GatewayApiVersionField. Kept under its original "imported"
+  // name (rather than renamed across every call site): importedEndpointPayload's gating makes a
+  // hand-typed value ride the setup payload unconditionally whenever importedEndpointBaseUrl is
+  // empty — nothing was ever uploaded, OR a hand statement released the binding below — and
+  // otherwise only while the form still points at the endpoint an upload declared it for
+  // (#3042/#3046).
   const [importedEndpointStyle, setImportedEndpointStyle] = useState("");
   const [importedApiVersion, setImportedApiVersion] = useState("");
   const [importedEndpointBaseUrl, setImportedEndpointBaseUrl] = useState("");
+  // A hand statement is never bound to the last upload's URL, unlike an import (review findings on
+  // PR #3625): editing the imported URL and only THEN picking a style left the binding pointed at
+  // the old upload, so importedEndpointPayload compared it against the new URL and silently
+  // dropped the operator's own choice. Releasing the binding — rather than rebinding it to
+  // whatever the Base URL field holds right now, like bindStatedVoiceProtocol does — also covers
+  // the reverse order (stating the protocol, then editing the URL): once released, the statement
+  // rides unconditionally, exactly like a dialog that never saw an upload at all, including a
+  // preserve-mode blank Base URL (blank = keep the stored endpoint).
+  const releaseImportedEndpointBinding = (): void => setImportedEndpointBaseUrl("");
+  // An api version pairs only with the Azure deployment path (server-enforced,
+  // GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT) — clearing it when the operator switches away
+  // mirrors stateVoiceEndpointStyle so a stale version never blocks an otherwise valid submit.
+  const setChatEndpointStyle = (next: string): void => {
+    setImportedEndpointStyle(next);
+    if (next !== "azure-openai-deployment") setImportedApiVersion("");
+    releaseImportedEndpointBinding();
+  };
+  const setChatApiVersion: Dispatch<SetStateAction<string>> = (value): void => {
+    setImportedApiVersion(value);
+    releaseImportedEndpointBinding();
+  };
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
@@ -3177,6 +3328,11 @@ export function GatewaySetupDialog({
       setApiKey={setApiKey}
       apiKeyHeaderName={apiKeyHeaderName}
       setApiKeyHeaderName={setApiKeyHeaderName}
+      endpointStyleLabelId={endpointStyleLabelId}
+      endpointStyle={importedEndpointStyle}
+      setEndpointStyle={setChatEndpointStyle}
+      apiVersion={importedApiVersion}
+      setApiVersion={setChatApiVersion}
       timeoutMs={timeoutMs}
       setTimeoutMs={setTimeoutMs}
       deploymentNames={deploymentNames}
