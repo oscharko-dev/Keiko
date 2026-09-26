@@ -21,6 +21,7 @@ import {
   generateActivityLogFailureSurfaceInventory,
   generateOpCatalog,
   generateTypedActivityLogRegistry,
+  isTypedRegistrySourceFile,
   validateActivityLogFailureClassContracts,
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
@@ -598,6 +599,26 @@ describe("op catalog drift", () => {
     expect(activityLogSchemaDigest()).toBe(
       "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
     );
+  });
+
+  it("keeps typed registry package discovery stable across path separators", () => {
+    const root = "C:\\fixture\\root";
+
+    expect(
+      isTypedRegistrySourceFile(root, {
+        fileName: "C:\\fixture\\root\\packages\\fixture\\src\\operation.ts",
+      }),
+    ).toBe(true);
+    expect(
+      isTypedRegistrySourceFile(root, {
+        fileName: "C:/fixture/root/packages/fixture/src/operation.ts",
+      }),
+    ).toBe(true);
+    expect(
+      isTypedRegistrySourceFile(root, {
+        fileName: "C:\\fixture\\root\\package-snapshots\\fixture.ts",
+      }),
+    ).toBe(false);
   });
 
   it("discovers a typed registration and emission with its exact owning source sites", () => {

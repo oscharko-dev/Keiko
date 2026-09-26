@@ -770,6 +770,11 @@ function typedRegistryProgram(repoRoot) {
   });
 }
 
+export function isTypedRegistrySourceFile(repoRoot, sourceFile) {
+  const packagesRoot = `${join(repoRoot, "packages").replaceAll("\\", "/")}/`;
+  return sourceFile.fileName.replaceAll("\\", "/").startsWith(packagesRoot);
+}
+
 function relevantRegistrySource(sourceFile) {
   return (
     sourceFile.text.includes("defineActivityLogOperation") ||
@@ -1561,10 +1566,9 @@ export function generateTypedActivityLogRegistry(
   const operations = [];
   const bySymbol = new Map();
   const violations = typedRegistryDiagnostics(program, repoRoot);
-  const packagesRoot = join(repoRoot, "packages").replaceAll("\\", "/");
   const sourceFiles = program
     .getSourceFiles()
-    .filter((sourceFile) => sourceFile.fileName.replaceAll("\\", "/").startsWith(packagesRoot));
+    .filter((sourceFile) => isTypedRegistrySourceFile(repoRoot, sourceFile));
   const context = { repoRoot, checker, operations, bySymbol, violations };
   collectTypedSites(context, sourceFiles, collectTypedRegistration);
   collectTypedSites(context, sourceFiles, collectTypedEmission);
