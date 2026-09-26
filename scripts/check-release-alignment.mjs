@@ -308,7 +308,8 @@ export function printAlignmentReport(result, { log = console.log, logError = con
   }
 }
 
-function spawnResult(command, args) {
+/** Exported for the hermetic suite: the real seam must hold a full GitHub API page. */
+export function spawnResult(command, args) {
   return spawnSync(command, args, { encoding: "utf8", maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES });
 }
 

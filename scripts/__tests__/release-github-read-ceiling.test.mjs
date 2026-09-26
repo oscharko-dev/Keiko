@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { spawnResult } from "../check-release-alignment.mjs";
 import { readFound, readGithub } from "../lib/github-api.mjs";
 import { HOST_COMMAND_MAX_BUFFER_BYTES, spawnHostExecutable } from "../lib/host-executable.mjs";
 import { readReleaseDispatchRuns } from "../lib/release-candidate.mjs";
@@ -46,6 +47,16 @@ describe("gh output ceiling of the release chain", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toHaveLength(2 * MIB);
     expect(HOST_COMMAND_MAX_BUFFER_BYTES).toBeGreaterThanOrEqual(32 * MIB);
+  });
+
+  it("holds a full answer in the release-alignment gate's real seam", () => {
+    const result = spawnResult(process.execPath, [
+      "-e",
+      `process.stdout.write("x".repeat(${String(2 * MIB)}))`,
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.stdout).toHaveLength(2 * MIB);
   });
 
   it("reads a release-dispatch history whose one page is larger than 1 MiB", () => {
@@ -104,6 +115,7 @@ describe("a failed GitHub read names its cause", () => {
     [{ status: 1, stdout: "", stderr: "gh: API rate limit exceeded (HTTP 403)" }, "HTTP 403"],
     [{ status: 1, stdout: "", stderr: "gh: connection reset" }, "exit 1"],
     [{ status: 0, stdout: "not json", stderr: "" }, "unparseable answer"],
+    [{ status: 2, stdout: "" }, "exit 2"],
   ])("reports %j as %s", (result, reason) => {
     expect(readGithub(() => result, PATH)).toEqual({ kind: "error", reason });
     expect(() => readFound(() => result, PATH, "the release workflow runs")).toThrow(
