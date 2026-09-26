@@ -915,4 +915,160 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies).toHaveLength(4);
     expect(bodies[2]).toHaveProperty("stream_options.include_usage", true);
   });
+
+  // #3639: an Azure deployment alias hides its model family, so a GPT-5 deployment named
+  // "prod-chat" is sent max_tokens by default and rejects it as an unsupported parameter.
+  describe("output-token field fallback (#3639)", () => {
+    const ALIAS: ModelProviderConfig = { ...CONFIG, modelId: "prod-chat" };
+
+    function fieldRejection(field: string): Response {
+      return Response.json(
+        {
+          error: {
+            message: `Unsupported parameter: '${field}' is not supported with this model.`,
+            type: "invalid_request_error",
+            param: field,
+            code: "unsupported_parameter",
+          },
+        },
+        { status: 400 },
+      );
+    }
+
+    // A GPT-5 deployment: max_tokens is refused, max_completion_tokens is answered.
+    function gpt5Deployment(bodies: Record<string, unknown>[], stream: boolean): typeof fetch {
+      return (_url, init) => {
+        const body = requestBody(init);
+        bodies.push(body);
+        if ("max_tokens" in body) return Promise.resolve(fieldRejection("max_tokens"));
+        return Promise.resolve(stream ? streamedAnswer() : bufferedAnswer());
+      };
+    }
+
+    function tokenFields(bodies: readonly Record<string, unknown>[]): string[][] {
+      return bodies.map((body) => Object.keys(body).filter((key) => key.startsWith("max_")));
+    }
+
+    function ask(adapter: OpenAiAdapter, config: ModelProviderConfig): Promise<NormalizedResponse> {
+      return adapter.call(
+        {
+          modelId: config.modelId,
+          messages: [{ role: "user", content: "Synthetic prompt" }],
+          maxOutputTokens: 256,
+        },
+        config,
+      );
+    }
+
+    it("retries once with the other field and keeps it for the endpoint", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const events: ModelGatewayLogEvent[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field",
+        costClass: "low",
+        fetchImpl: gpt5Deployment(bodies, false),
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        logContext: { correlationId: "run-token-field" },
+      });
+
+      await expect(ask(adapter, ALIAS)).resolves.toMatchObject({ content: "Synthetic answer." });
+      await expect(ask(adapter, ALIAS)).resolves.toMatchObject({ content: "Synthetic answer." });
+
+      expect(tokenFields(bodies)).toEqual([
+        ["max_tokens"],
+        ["max_completion_tokens"],
+        ["max_completion_tokens"],
+      ]);
+      expect(bodies[1]?.max_completion_tokens).toBe(256);
+      const retries = events.filter((event) => event.op === "chat.request.compatibility-retry");
+      expect(retries).toHaveLength(1);
+      expect(retries[0]).toMatchObject({
+        correlationId: "run-token-field",
+        status: 400,
+        extra: { omittedField: "max_tokens" },
+      });
+      expect(JSON.stringify(events)).not.toContain(CONFIG.apiKey);
+    });
+
+    it("retries a streamed turn with the other field too", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field-stream",
+        costClass: "low",
+        fetchImpl: gpt5Deployment(bodies, true),
+      });
+
+      const answer = await answerOf(
+        adapter.callStream(
+          {
+            modelId: ALIAS.modelId,
+            messages: [{ role: "user", content: "Synthetic prompt" }],
+            maxOutputTokens: 256,
+          },
+          ALIAS,
+        ),
+      );
+
+      expect(answer.content).toBe("Synthetic answer.");
+      expect(tokenFields(bodies)).toEqual([["max_tokens"], ["max_completion_tokens"]]);
+      expect(bodies[1]).toHaveProperty("stream_options.include_usage", true);
+    });
+
+    it("never second-guesses an operator's explicit output-token field", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field-explicit",
+        costClass: "low",
+        fetchImpl: gpt5Deployment(bodies, false),
+      });
+
+      await expect(
+        ask(adapter, { ...ALIAS, outputTokenParameter: "max_tokens" }),
+      ).rejects.toThrow();
+      expect(tokenFields(bodies)).toEqual([["max_tokens"]]);
+    });
+
+    it("leaves a rejection of any other field unchanged", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field-other",
+        costClass: "low",
+        fetchImpl: (_url, init): Promise<Response> => {
+          bodies.push(requestBody(init));
+          return Promise.resolve(fieldRejection("temperature"));
+        },
+      });
+
+      await expect(ask(adapter, ALIAS)).rejects.toThrow();
+      expect(bodies).toHaveLength(1);
+    });
+
+    it("recognizes a rejection that names the field only in its message", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field-message",
+        costClass: "low",
+        fetchImpl: (_url, init): Promise<Response> => {
+          const body = requestBody(init);
+          bodies.push(body);
+          return Promise.resolve(
+            "max_completion_tokens" in body
+              ? Response.json(
+                  { error: { message: "Unrecognized request argument: max_completion_tokens" } },
+                  { status: 422 },
+                )
+              : bufferedAnswer(),
+          );
+        },
+      });
+      const older: ModelProviderConfig = { ...CONFIG, modelId: "gpt-5-compatible-proxy" };
+
+      await expect(ask(adapter, older)).resolves.toMatchObject({ content: "Synthetic answer." });
+      expect(tokenFields(bodies)).toEqual([["max_completion_tokens"], ["max_tokens"]]);
+    });
+  });
 });

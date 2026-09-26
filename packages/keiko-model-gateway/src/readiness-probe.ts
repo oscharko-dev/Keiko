@@ -101,18 +101,13 @@ function dispatchReadinessChatCompletion(
   });
 }
 
-// Gateway-owned raw chat-completions probe for operational readiness checks. The server needs a raw
-// provider-shaped response to verify streaming/tool/schema/multimodal capabilities, but credentialed
-// HTTP egress still stays inside the model-gateway package and uses the central config-level egress
-// policy instead of a caller-selected provider-local policy.
-//
 // #3641: a streamed probe that a strict gateway rejects (400/422) is retried once without the
 // optional `stream_options` field, like the production adapter's own compatibility fallback
 // (OpenAiAdapter.dispatchCompatibleStream); otherwise a gateway whose production traffic streams
 // after that fallback was recorded as "streaming unsupported" by this probe alone. Every such
 // rejection is retried, not only one naming the field, so the probe never parses an untrusted
 // error body: a rejection for any other reason comes back unchanged and keeps its verdict.
-export async function requestGatewayReadinessChatCompletion(
+async function requestWithStreamFallback(
   request: GatewayReadinessChatCompletionRequest,
 ): Promise<Response> {
   const first = await dispatchReadinessChatCompletion(request, true);
@@ -121,4 +116,39 @@ export async function requestGatewayReadinessChatCompletion(
   }
   await first.body?.cancel();
   return dispatchReadinessChatCompletion(request, false);
+}
+
+// #3639: the default output-token field follows the model family, which a deployment alias hides
+// (a GPT-5 deployment named "prod-chat" is sent max_tokens and rejects it). The same request with
+// the other field, when the probe sent one it chose itself; an operator's explicit field stays.
+function withOtherOutputTokenField(
+  request: GatewayReadinessChatCompletionRequest,
+): GatewayReadinessChatCompletionRequest | undefined {
+  const { provider, maxOutputTokens } = request;
+  if (maxOutputTokens === undefined || provider.outputTokenParameter !== undefined) {
+    return undefined;
+  }
+  const sent = providerOutputTokenLimit(maxOutputTokens, provider);
+  const other = "max_completion_tokens" in sent ? "max_tokens" : "max_completion_tokens";
+  return { ...request, provider: { ...provider, outputTokenParameter: other } };
+}
+
+// Gateway-owned raw chat-completions probe for operational readiness checks. The server needs a raw
+// provider-shaped response to verify streaming/tool/schema/multimodal capabilities, but credentialed
+// HTTP egress still stays inside the model-gateway package and uses the central config-level egress
+// policy instead of a caller-selected provider-local policy.
+//
+// A strict rejection is also retried once with the other output-token field (#3639), like the
+// production adapter's fallback (OpenAiAdapter.dispatchWithOutputTokenFallback) but, as above,
+// without parsing the error body: any other rejection comes back again and keeps its verdict.
+export async function requestGatewayReadinessChatCompletion(
+  request: GatewayReadinessChatCompletionRequest,
+): Promise<Response> {
+  const answer = await requestWithStreamFallback(request);
+  const other = withOtherOutputTokenField(request);
+  if (other === undefined || answer.ok || !isStrictChatShapeRejectionStatus(answer.status)) {
+    return answer;
+  }
+  await answer.body?.cancel();
+  return requestWithStreamFallback(other);
 }

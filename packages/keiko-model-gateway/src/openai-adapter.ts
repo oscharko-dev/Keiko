@@ -151,11 +151,13 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
   fields: {
     endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    // The field the retry left out: the optional stream fields, or the output-token field the
+    // deployment rejected in favour of the other one (#3639).
     omittedField: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["stream_options", "stream"],
+      values: ["stream_options", "stream", "max_tokens", "max_completion_tokens"],
     },
   },
   causal: "correlation",
@@ -175,6 +177,52 @@ interface ChatCompatibilityMemo {
 }
 
 let chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
+
+// #3639: the output-token field a deployment turned out to accept when its name led to the other
+// one (a GPT-5 deployment named "prod-chat" gets max_tokens by default and rejects it). Scoped and
+// bounded like the stream memo; an operator's explicit outputTokenParameter always wins.
+type OutputTokenField = "max_tokens" | "max_completion_tokens";
+let outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
+const OTHER_OUTPUT_TOKEN_FIELD: Readonly<Record<OutputTokenField, OutputTokenField>> = {
+  max_tokens: "max_completion_tokens",
+  max_completion_tokens: "max_tokens",
+};
+
+function rememberedOutputTokenField(scope: object, url: string): OutputTokenField | undefined {
+  return outputTokenFieldEndpoints.get(scope)?.get(url);
+}
+
+function rememberOutputTokenField(scope: object, url: string, field: OutputTokenField): void {
+  const endpoints = outputTokenFieldEndpoints.get(scope) ?? new Map<string, OutputTokenField>();
+  endpoints.delete(url);
+  if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
+    const oldest = endpoints.keys().next().value;
+    if (oldest !== undefined) endpoints.delete(oldest);
+  }
+  endpoints.set(url, field);
+  outputTokenFieldEndpoints.set(scope, endpoints);
+}
+
+// The output-token field this request sends, if it sends one at all.
+function sentOutputTokenField(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): OutputTokenField | undefined {
+  const limit = providerOutputTokenLimit(request.maxOutputTokens, config);
+  if ("max_completion_tokens" in limit) return "max_completion_tokens";
+  return "max_tokens" in limit ? "max_tokens" : undefined;
+}
+
+// A provider rejection that names the output-token field as unsupported: Azure answers a GPT-5
+// deployment's max_tokens with param "max_tokens" and code "unsupported_parameter"; an older model
+// names max_completion_tokens as an unrecognized argument.
+function rejectsOutputTokenField(payload: unknown, field: OutputTokenField): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error)) return false;
+  if (error.param === field) return true;
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  return message.includes(field) && /unsupported|not supported|unrecognized|unknown/.test(message);
+}
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
@@ -212,6 +260,7 @@ function rememberChatCompatibility(
 
 export function resetChatCompatibilityMemoForTests(): void {
   chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
+  outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
 }
 
 const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
@@ -1290,10 +1339,12 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     const start = this.now();
     const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
-    const dispatched = await this.dispatch(
-      { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
-      config,
-      secrets,
+    const toolRequest = {
+      ...request,
+      tools: catalog.tools.length === 0 ? undefined : catalog.tools,
+    };
+    const dispatched = await this.dispatchWithOutputTokenFallback(toolRequest, config, () =>
+      this.dispatch(toolRequest, config, secrets),
     );
     try {
       const { response } = dispatched;
@@ -1578,8 +1629,9 @@ export class OpenAiAdapter implements ProviderAdapter {
     includeUsage = true,
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
+    const bodyConfig = this.outputTokenConfig(config);
     const body = JSON.stringify(
-      stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
+      stream ? buildStreamBody(request, bodyConfig, includeUsage) : buildBody(request, bodyConfig),
     );
     const headers = {
       "content-type": "application/json",
@@ -1628,9 +1680,15 @@ export class OpenAiAdapter implements ProviderAdapter {
       url,
     };
     const mode = chatCompatibilityMode(memoScope, url, this.now);
-    if (mode === "whole-body") return this.dispatch(request, config, secrets, false, bounds);
+    if (mode === "whole-body") {
+      return this.dispatchWithOutputTokenFallback(request, config, () =>
+        this.dispatch(request, config, secrets, false, bounds),
+      );
+    }
     const includeUsage = mode !== "omit-usage";
-    const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
+    const first = await this.dispatchWithOutputTokenFallback(request, config, () =>
+      this.dispatch(request, config, secrets, true, bounds, includeUsage),
+    );
     if (first.response.ok || !isStrictChatShapeRejection(first.response.status)) return first;
     if (!includeUsage) return this.retryWithoutStreamingIfNamed(first, context);
     const retry = await this.retryWithoutUsage(first, context);
@@ -1699,11 +1757,57 @@ export class OpenAiAdapter implements ProviderAdapter {
     return retry;
   }
 
+  // The config a request body is built from: an operator's explicit output-token field, else the
+  // one this endpoint turned out to accept (#3639), else the model-family default.
+  private outputTokenConfig(config: ModelProviderConfig): ModelProviderConfig {
+    if (config.outputTokenParameter !== undefined) return config;
+    const remembered = rememberedOutputTokenField(
+      this.deps.compatibilityMemoScope ?? config,
+      chatCompletionsUrl(config),
+    );
+    return remembered === undefined ? config : { ...config, outputTokenParameter: remembered };
+  }
+
+  // #3639: a deployment whose name hides its model family gets the wrong output-token field — a
+  // GPT-5 deployment named "prod-chat" is sent max_tokens and rejects it. A strict-shape rejection
+  // that names the field sent is answered once with the other field, which this endpoint then
+  // keeps; any other rejection comes back unread. An explicit outputTokenParameter always wins.
+  private async dispatchWithOutputTokenFallback(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    send: () => Promise<DispatchedResponse>,
+  ): Promise<DispatchedResponse> {
+    const first = await send();
+    const sent =
+      config.outputTokenParameter === undefined
+        ? sentOutputTokenField(request, this.outputTokenConfig(config))
+        : undefined;
+    if (
+      sent === undefined ||
+      first.response.ok ||
+      !isStrictChatShapeRejection(first.response.status)
+    ) {
+      return first;
+    }
+    const secrets = [config.apiKey, config.baseUrl];
+    const payload = await this.readErrorBody(first.response.clone(), config, secrets, first.signal);
+    if (!rejectsOutputTokenField(payload, sent)) return first;
+    first.dispose();
+    const url = chatCompletionsUrl(config);
+    rememberOutputTokenField(
+      this.deps.compatibilityMemoScope ?? config,
+      url,
+      OTHER_OUTPUT_TOKEN_FIELD[sent],
+    );
+    this.logChatCompatibilityRetry(url, config, first.response.status, sent);
+    return send();
+  }
+
   private logChatCompatibilityRetry(
     url: string,
     config: ModelProviderConfig,
     status: number,
-    omittedField: "stream_options" | "stream",
+    omittedField: "stream_options" | "stream" | OutputTokenField,
   ): void {
     this.log.write(
       activityLogEvent(

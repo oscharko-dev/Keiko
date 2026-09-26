@@ -25,6 +25,11 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+function probeBody(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== "string") throw new TypeError("expected a JSON probe body");
+  return JSON.parse(init.body) as Record<string, unknown>;
+}
+
 describe("requestGatewayReadinessChatCompletion", () => {
   it("overrides raw body defaults with the admitted provider-specific output bound", async () => {
     const bodies: Record<string, unknown>[] = [];
@@ -282,6 +287,88 @@ describe("requestGatewayReadinessChatCompletion", () => {
 
     expect(response.status).toBe(400);
     expect(call).toBe(1);
+  });
+
+  // User finding #3639: a deployment alias hides its model family, so a GPT-5 deployment named
+  // "prod-chat" is probed with max_tokens and rejects it; the probe retries with the other field.
+  it("retries a rejected probe once with the other output-token field (#3639)", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl: typeof fetch = (_url, init) => {
+      const body = probeBody(init);
+      bodies.push(body);
+      return Promise.resolve(
+        "max_tokens" in body
+          ? new Response(JSON.stringify({ error: { param: "max_tokens" } }), { status: 400 })
+          : jsonResponse({ choices: [] }),
+      );
+    };
+
+    const response = await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: { ...PROVIDER, modelId: "prod-chat" },
+      body: { messages: [] },
+      maxOutputTokens: 17,
+      fetchImpl,
+    });
+
+    expect(response.status).toBe(200);
+    expect(bodies).toEqual([
+      { model: "prod-chat", messages: [], max_tokens: 17 },
+      { model: "prod-chat", messages: [], max_completion_tokens: 17 },
+    ]);
+  });
+
+  it("keeps an operator's explicit output-token field and its verdict (#3639)", async () => {
+    let call = 0;
+    const fetchImpl: typeof fetch = () => {
+      call += 1;
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: { param: "max_tokens" } }), { status: 400 }),
+      );
+    };
+
+    const response = await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: { ...PROVIDER, outputTokenParameter: "max_tokens" },
+      body: { messages: [] },
+      maxOutputTokens: 17,
+      fetchImpl,
+    });
+
+    expect(response.status).toBe(400);
+    expect(call).toBe(1);
+  });
+
+  it("bounds a streamed probe rejected for every shape to both fields and both stream shapes", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl: typeof fetch = (_url, init) => {
+      bodies.push(probeBody(init));
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: { param: "messages" } }), { status: 400 }),
+      );
+    };
+
+    const response = await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: PROVIDER,
+      body: { messages: [] },
+      stream: true,
+      maxOutputTokens: 17,
+      fetchImpl,
+    });
+
+    expect(response.status).toBe(400);
+    expect(
+      bodies.map((body) => [
+        Object.keys(body).find((key) => key.startsWith("max_")),
+        "stream_options" in body,
+      ]),
+    ).toEqual([
+      ["max_tokens", true],
+      ["max_tokens", false],
+      ["max_completion_tokens", true],
+      ["max_completion_tokens", false],
+    ]);
   });
 
   // User finding #3640: Azure GPT-5.6 tool calls cannot pass Coding Workbench readiness. The
