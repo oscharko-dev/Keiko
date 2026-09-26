@@ -228,7 +228,7 @@ export function* readDescriptorLines(
 }
 
 /** Consumes every line while reusing the callback value for the manifest-only drain path. */
-export function consumeDescriptorLines(
+function consumeDescriptorLines(
   descriptor: number,
   consume: (line: ActivityLogReadLine) => void,
   options: ActivityLogReadOptions = {},
