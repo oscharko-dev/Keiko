@@ -438,6 +438,59 @@ describe("KeikoSelect interactions", () => {
     expect(trigger).toHaveFocus();
   });
 
+  // The release smoke caught this: with focus still on the trigger, the workspace's Escape shortcut
+  // (which stops propagation once it clears a window selection) swallowed the key before the
+  // menu's window listener saw it, so the open menu never closed. An open menu owns the key.
+  it("closes an open menu on Escape from the trigger and keeps the key from its ancestors", async () => {
+    const ancestorKeyDown = vi.fn();
+    document.body.addEventListener("keydown", ancestorKeyDown);
+    try {
+      render(
+        <KeikoSelect
+          ariaLabel="Strategy"
+          menuTitle="Strategy"
+          onValueChange={vi.fn()}
+          sections={sections}
+          value="model"
+        />,
+      );
+
+      const trigger = screen.getByRole("combobox", { name: "Strategy" });
+      fireEvent.click(trigger);
+      await screen.findByRole("option", { name: "Model only" });
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Escape" });
+
+      expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+      expect(trigger).toHaveFocus();
+      expect(ancestorKeyDown).not.toHaveBeenCalled();
+    } finally {
+      document.body.removeEventListener("keydown", ancestorKeyDown);
+    }
+  });
+
+  it("leaves Escape to its ancestors while the menu is closed", () => {
+    const ancestorKeyDown = vi.fn();
+    document.body.addEventListener("keydown", ancestorKeyDown);
+    try {
+      render(
+        <KeikoSelect
+          ariaLabel="Strategy"
+          menuTitle="Strategy"
+          onValueChange={vi.fn()}
+          sections={sections}
+          value="model"
+        />,
+      );
+
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Strategy" }), { key: "Escape" });
+
+      expect(ancestorKeyDown).toHaveBeenCalledTimes(1);
+    } finally {
+      document.body.removeEventListener("keydown", ancestorKeyDown);
+    }
+  });
+
   it("notifies callers for each deliberate opening, including keyboard operation", async () => {
     const onOpen = vi.fn();
     render(
