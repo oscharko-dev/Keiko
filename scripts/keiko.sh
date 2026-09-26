@@ -98,30 +98,33 @@ read_option_value() {
 }
 
 parse_lifecycle_options() {
+  local option
+  local value
   while [[ "$#" -gt 0 ]]; do
-    case "$1" in
+    option="$1"
+    case "$option" in
       --port)
-        value="$(read_option_value "$1" "${2:-}")" || return 2
+        value="$(read_option_value "$option" "${2:-}")" || return 2
         PORT="$value"
         shift 2
         ;;
       --host)
-        value="$(read_option_value "$1" "${2:-}")" || return 2
+        value="$(read_option_value "$option" "${2:-}")" || return 2
         HOST="$value"
         shift 2
         ;;
       --state-dir)
-        value="$(read_option_value "$1" "${2:-}")" || return 2
+        value="$(read_option_value "$option" "${2:-}")" || return 2
         STATE_DIR="$value"
         shift 2
         ;;
       --start-timeout)
-        value="$(read_option_value "$1" "${2:-}")" || return 2
+        value="$(read_option_value "$option" "${2:-}")" || return 2
         START_TIMEOUT_SECS="$value"
         shift 2
         ;;
       --stop-timeout)
-        value="$(read_option_value "$1" "${2:-}")" || return 2
+        value="$(read_option_value "$option" "${2:-}")" || return 2
         STOP_TIMEOUT_SECS="$value"
         shift 2
         ;;
@@ -130,7 +133,7 @@ parse_lifecycle_options() {
         return 3
         ;;
       *)
-        echo "keiko.sh: unknown option: $1" >&2
+        echo "keiko.sh: unknown option: ${option}" >&2
         usage >&2
         return 2
         ;;
@@ -303,6 +306,8 @@ main() {
       if [[ "$parse_status" -ne 0 ]]; then
         return "$parse_status"
       fi
+      ;;
+    *)
       ;;
   esac
   case "$command" in
