@@ -71,7 +71,12 @@ function completed(overall: string): Record<string, unknown> {
 }
 
 function response(body: unknown, ok = true): Response {
-  return { ok, status: ok ? 200 : 500, json: () => Promise.resolve(body) } as Response;
+  return {
+    ok,
+    status: ok ? 200 : 500,
+    headers: new Headers(),
+    json: () => Promise.resolve(body),
+  } as Response;
 }
 
 function catalog(projectId = "/ws"): Record<string, unknown> {
