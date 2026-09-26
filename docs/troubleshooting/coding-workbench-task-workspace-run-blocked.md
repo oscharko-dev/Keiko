@@ -111,8 +111,11 @@ did not name that reason.
 2. `GET /api/editor/agent/audit` lists the refused `applyChangeset` with its `denyReason` or
    `conflictCode`.
 3. `GET /api/coding-sidecar/gateway/profile` answers `{ "status": "unavailable", "reason":
-"no-tool-calling" }` when the chat model has no current tool-calling verification; the Coding
-   Workbench setup card and the source card now print that reason.
+"no-tool-calling" }` when no chat model has passed Keiko's forced tool-call probe, or when the
+   probe refuted it; the Coding Workbench setup card and the source card now print that reason. A
+   proof that passed and then aged out is not this case: since 1.1.9 the profile read renews it
+   itself (see "Coding Workbench finds no coding model after a restart the day after setup" in
+   [`litellm-production-gateway.md`](litellm-production-gateway.md)).
 
 **Resolution**
 
