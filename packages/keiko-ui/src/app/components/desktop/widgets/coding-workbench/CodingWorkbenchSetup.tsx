@@ -90,7 +90,10 @@ type SetupStatus =
   { readonly kind: "idle" } | { readonly kind: "pending"; readonly phase: SetupPhase } | SetupError;
 
 export interface CodingWorkbenchSetupProps {
-  readonly repositoryControls?: ReactNode;
+  // The repository and branch controls, rendered locked while a bind is in flight: a selection made
+  // then could start an overlapping bind whose late completion re-selects the older repository over
+  // the newer choice (PR #3625 review).
+  readonly renderRepositoryControls?: (bindPending: boolean) => ReactNode;
   // Selected from Git's registered local repositories. It becomes execution authority only after
   // the existing provision → verify → activate flow succeeds.
   readonly selectedRoot: string | undefined;
@@ -616,7 +619,7 @@ function targetBranchAvailable(branches: RepositoryBranchState, value: string): 
 }
 
 export function CodingWorkbenchSetup({
-  repositoryControls,
+  renderRepositoryControls,
   selectedRoot,
   selectedBaseBranch,
   refreshWorkspace,
@@ -640,7 +643,7 @@ export function CodingWorkbenchSetup({
 
   return (
     <SetupCard
-      repositoryControls={repositoryControls}
+      repositoryControls={renderRepositoryControls?.(pending)}
       repositoryPath={repositoryPath}
       targetBranch={targetBranch}
       branches={branches}

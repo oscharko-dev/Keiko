@@ -107,6 +107,7 @@ import {
   useOptionalChatSessionCatalog,
   type ChatSessionCatalog,
 } from "../../context/ChatSessionContext";
+import { useGatewayModelCatalogSettled } from "../../hooks/useChatSession";
 import {
   useRepositoryBranchState,
   type RepositoryBranchState,
@@ -787,8 +788,15 @@ export function CodingWorkbenchWindow({
     () => chatCatalog?.models.filter(isCodingWorkbenchModel) ?? [],
     [chatCatalog?.models],
   );
+  // Subscribed before the refresh below is requested, so that refresh's own outcome is observed.
+  const catalogSettled = useGatewayModelCatalogSettled();
   useEffect(() => requestGatewayModelCatalogRefresh(), []);
-  useCodingModelSelection(state, actions, codingModels, (chatCatalog?.models.length ?? 0) === 0);
+  useCodingModelSelection(
+    state,
+    actions,
+    codingModels,
+    catalogInconclusive(chatCatalog, catalogSettled),
+  );
   const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
@@ -861,8 +869,14 @@ export function CodingWorkbenchWindow({
 // `restorableModelId` memo the Workbench cannot see. Without a guard, an empty list read as "no
 // eligible models" made this effect fall back to `null` immediately and then, once the SAME
 // catalog came back, re-elect `models[0]` instead of the operator's own choice. An empty CATALOG is
-// never conclusive by itself (it is indistinguishable from "still refreshing" or "not loaded yet");
-// a catalog that lists models but no coding-capable one is, so the check reads the whole catalog.
+// not conclusive by itself (it is indistinguishable from "still refreshing" or "not loaded yet");
+// a catalog that lists models but no coding-capable one is, and so is an empty one a successful
+// refresh settled on (PR #3625 review) — that clears the stale choice instead of sending it on.
+// An empty catalog says nothing until a successful refresh settled on it (PR #3625 review).
+function catalogInconclusive(catalog: ChatSessionCatalog | null, settled: boolean): boolean {
+  return (catalog?.models.length ?? 0) === 0 && !settled;
+}
+
 function useCodingModelSelection(
   state: CodingWorkbenchRuntimeState,
   actions: CodingWorkbenchRuntimeActions,
@@ -1254,20 +1268,20 @@ function WorkbenchColumns({
     return (
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
-          repositoryControls={
+          renderRepositoryControls={(bindPending): ReactNode => (
             <WorkbenchContextControls
               repositoryRoot={repositoryRoot}
               selectedBranch={selectedBranch}
               runIsActive={runIsActive}
               runWorkspace={runWorkspace}
               activeWorkspace={activeWorkspace}
-              mutationPending={state.mutation.status === "pending"}
+              mutationPending={state.mutation.status === "pending" || bindPending}
               onSelectRepository={onSelectRepository}
               onSelectBranch={onSelectBranch}
               onOpenGit={onOpenGit}
               placement="setup"
             />
-          }
+          )}
           selectedRoot={repositoryRoot ?? undefined}
           selectedBaseBranch={selectedBaseBranch(activeWorkspace, repositoryRoot, selectedBranch)}
           refreshWorkspace={activeWorkspace.refresh}

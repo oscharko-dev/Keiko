@@ -78,10 +78,19 @@ function useGitRepositoryCatalog(): CatalogState {
   return { repositories, loading, error, reload };
 }
 
-function repositoryName(root: string): string {
-  const parts = root.replaceAll(/[/\\]+$/gu, "").split(/[/\\]/u);
-  return parts.at(-1) ?? root;
+// The folder name of a POSIX or a Windows path, ignoring trailing separators (#3630): the last
+// non-empty segment, found by a plain scan rather than a backtracking trailing-separator pattern.
+export function repositoryName(root: string): string {
+  const parts = root.split(/[\\/]/u);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part !== undefined && part.length > 0) return part;
+  }
+  return root;
 }
+
+const FolderIcon = Icons.folder;
+const BranchIcon = Icons.branch;
 
 function controlWidth(label: string): string {
   return `${Math.min(Math.max(label.length + 10, 17), 36)}ch`;
@@ -168,7 +177,7 @@ function RepositoryChip({
       disabled={locked || (catalog.loading && options.length === 0) || catalog.error}
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.choose")}
-      leadingVisual={<Icons.folder size={15} aria-hidden="true" />}
+      leadingVisual={<FolderIcon size={15} aria-hidden="true" />}
       {...chipTrigger(placement, label)}
       showMenuHeader={false}
       menuPopoverMinWidth={280}
@@ -204,6 +213,12 @@ export function branchOptions(
   ];
 }
 
+// The branch read failed, or answered that Git cannot serve this root: a rejected read sets `error`,
+// while an ordinary folder answers HTTP 200 with `available: false` (PR #3625 review).
+function branchReadUnavailable(branchState: RepositoryBranchState): boolean {
+  return branchState.error !== null || branchState.response?.available === false;
+}
+
 function BranchChip({
   root,
   branch,
@@ -222,7 +237,8 @@ function BranchChip({
   readonly placement: SelectorPlacement;
 }): ReactNode {
   const current = branch ?? branchState.currentBranch ?? "";
-  const loaded = !branchState.loading && branchState.error === null;
+  const unreadable = branchState.loading || branchReadUnavailable(branchState);
+  const loaded = !unreadable;
   const options = branchOptions(
     current,
     branchState.branches,
@@ -230,7 +246,6 @@ function BranchChip({
     t("codingWorkbench.repository.unavailable"),
   );
   const label = current || t("codingWorkbench.repository.noBranch");
-  const unreadable = branchState.loading || branchState.error !== null;
   return (
     <KeikoSelect
       value={current}
@@ -239,7 +254,7 @@ function BranchChip({
       disabled={locked || root === null || unreadable || options.length === 0}
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.chooseBranch")}
-      leadingVisual={<Icons.branch size={15} aria-hidden="true" />}
+      leadingVisual={<BranchIcon size={15} aria-hidden="true" />}
       {...chipTrigger(placement, label)}
       showMenuHeader={false}
       menuPopoverMinWidth={340}
@@ -260,8 +275,8 @@ function repositoryUnavailable(root: string | null, catalog: CatalogState): bool
 
 // #B review: a registered, workspace-available root that is not (or no longer) a Git repository —
 // `repositoryUnavailable` above says nothing about this, since it only checks catalog membership.
-// The branch read failing IS the signal: `useRepositoryBranchState`'s error means Git itself
-// refused this root. Gated the same way the branch chip locks itself (never while already flagged
+// The branch read IS the signal: a rejected read, or a resolved one that says Git cannot serve this
+// root (`branchReadUnavailable`). Gated the same way the branch chip locks itself (never while already flagged
 // unavailable, or while either read is still settling), so the two notices stay mutually exclusive.
 function repositoryBranchUnavailable(
   root: string | null,
@@ -275,7 +290,7 @@ function repositoryBranchUnavailable(
     !catalog.loading &&
     !catalog.error &&
     !branchState.loading &&
-    branchState.error !== null
+    branchReadUnavailable(branchState)
   );
 }
 
@@ -298,6 +313,16 @@ function SelectorField({
       {children}
     </div>
   );
+}
+
+// The help for a repository Git no longer lists, or for a folder whose Git status could not be read.
+function selectorNoticeKey(
+  unavailable: boolean,
+  branchUnavailable: boolean,
+): Parameters<CodingWorkbenchTranslate>[0] | undefined {
+  if (unavailable) return "codingWorkbench.repository.unavailableHelp";
+  if (branchUnavailable) return "codingWorkbench.repository.gitUnavailableHelp";
+  return undefined;
 }
 
 // #D review: a catalog-error notice with no way back — the repository KeikoSelect disables itself
@@ -328,11 +353,7 @@ function SelectorNotice({
       />
     );
   }
-  const key = unavailable
-    ? "codingWorkbench.repository.unavailableHelp"
-    : branchUnavailable
-      ? "codingWorkbench.repository.gitUnavailableHelp"
-      : undefined;
+  const key = selectorNoticeKey(unavailable, branchUnavailable);
   if (key === undefined) return null;
   return (
     <p className={styles.cmpRepositorySelectorNotice} role="alert">

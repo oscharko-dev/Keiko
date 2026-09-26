@@ -680,6 +680,21 @@ describe("CodingWorkbenchSetup", () => {
   // moves the path field while the fields themselves are disabled, so the deferred sequence could
   // land a repair offer answered for `/repos/selected` beside a card showing `/repos/other` —
   // "Repair and bind" one click away from repairing and activating the wrong workspace.
+  // PR #3625 review: a selection made during a bind could start an overlapping bind whose late
+  // completion re-selects the older repository, so the controls lock while a bind is in flight.
+  it("locks the repository selection while a bind is in flight", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockImplementation(() => new Promise(() => undefined));
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    const repository = screen.getByRole("combobox", { name: "Choose coding repository" });
+    await waitFor(() => expect(repository).toBeEnabled());
+
+    await user.click(await bindable());
+
+    expect(screen.getByRole("button", { name: "Binding…" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
+  });
+
   it("publishes nothing from a pending bind whose inputs changed while it ran", async () => {
     const user = userEvent.setup();
     const api = workspaceApi();

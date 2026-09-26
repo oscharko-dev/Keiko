@@ -46,6 +46,7 @@ import {
   type SendMessageOutcome,
   type ChatSessionApi,
   useChatSession,
+  useGatewayModelCatalogSettled,
 } from "./useChatSession";
 import {
   resetConversationMemorySettingsForTests,
@@ -332,6 +333,39 @@ describe("useChatSession bootstrap", () => {
     // Pinned invalidation: no stale id is sendable mid-refresh — restoration is the success
     // path's job (see the restore pin below).
     expect(result.current.selectedModel).toBeUndefined();
+  });
+
+  // PR #3625 review: a consumer must tell a refresh in flight (empty catalog) from a settled one.
+  it("reports the model catalog settled only after a successful refresh", async () => {
+    let settle: (value: Awaited<ReturnType<typeof fetchModels>>) => void = () => undefined;
+    let fail: (error: unknown) => void = () => undefined;
+    vi.mocked(fetchModels).mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          settle = resolve;
+          fail = reject;
+        }),
+    );
+    const { result } = renderHook(() => useGatewayModelCatalogSettled());
+    expect(result.current).toBe(false);
+
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    expect(result.current).toBe(false);
+    await act(async () => {
+      settle({ models: [] });
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    expect(result.current).toBe(false);
+    await act(async () => {
+      fail(new Error("gateway unreachable"));
+    });
+    expect(result.current).toBe(false);
   });
 
   it("restores a non-default model selection once the refreshed catalog confirms it", async () => {

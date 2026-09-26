@@ -2,6 +2,11 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
 import { ApiError } from "@/lib/api";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 
 const { proposePrMarkReadyMock } = vi.hoisted(() => ({ proposePrMarkReadyMock: vi.fn() }));
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -235,6 +240,41 @@ describe("observed issue journey handoff", () => {
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
     await act(async () => {});
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+  // PR #3625 review: the failure line carries the refresh request's correlation id (not the run
+  // id) and body-free evidence, so it joins the server's 503 for that request.
+  it("reports a failed post-success refresh under the refresh request's correlation id", async () => {
+    const writes: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => writes.push({ message, meta }));
+    try {
+      const refusal = new ApiError("SERVICE_UNAVAILABLE", "journey refresh unavailable", 503);
+      refusal.correlationId = "refresh-request-0001";
+      const onRefresh = vi.fn().mockRejectedValue(refusal);
+      const fixture = journeyFixture();
+      render(
+        <CodingWorkbenchJourneyOutcome
+          {...fixture}
+          onRefresh={onRefresh}
+          onProposeReady={vi.fn().mockResolvedValue(undefined)}
+          markReadyAvailable
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Review ready-for-review request" }));
+      await waitFor(() =>
+        expect(writes.map((write) => write.message)).toContain(
+          "[keiko] journey action: post-propose-ready refresh failed",
+        ),
+      );
+      const line = writes.find((write) => write.message.includes("post-propose-ready"));
+      expect(line?.meta).toMatchObject({
+        kind: "other",
+        correlationId: "refresh-request-0001",
+        parentCorrelationId: fixture.outcome.binding.runId,
+      });
+      expect(line?.meta?.errorEvidence).toBeDefined();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
   it("replaces expired readiness with observed history and offers an explicit refresh", () => {
     const fixture = journeyFixture();

@@ -55,6 +55,13 @@ const chatCatalogMock = vi.hoisted(() => ({
   // `clearSessionModelsForPendingRefresh`, useChatSession.ts) publishing an empty list mid-flight.
   models: [] as ModelCapability[],
 }));
+// PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
+// published mid-refresh from one a successful refresh settled on.
+const catalogRefreshMock = vi.hoisted(() => ({ settled: false }));
+vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/useChatSession")>()),
+  useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
+}));
 vi.mock("./codingWorkbenchRepositories", () => ({
   repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
   selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
@@ -410,6 +417,7 @@ beforeEach(() => {
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
   chatCatalogMock.models = [];
+  catalogRefreshMock.settled = false;
   // Every other suite in this file leaves the journey read unmocked-in-spirit: it never sets up an
   // observed outcome, so it must keep resolving to a valid "nothing observed" envelope rather than
   // silently reusing whatever a mark-ready test configured last (AGENTS.md §7: hermetic tests, no
@@ -3622,5 +3630,22 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
     expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+  });
+
+  // PR #3625 review: an empty catalog a SUCCESSFUL refresh settled on is conclusive — the gateway
+  // offers no model any more, so Start must not carry the stale choice to an avoidable refusal.
+  it("clears the selection when a settled refresh leaves the catalog empty", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    chatCatalogMock.models = [];
+    catalogRefreshMock.settled = true;
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+    expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
   });
 });

@@ -6,6 +6,8 @@ import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-j
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { ApiError, proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { RetryMessage } from "./CodingWorkbenchChanges";
@@ -254,10 +256,15 @@ async function proposeReadyThenRefresh(
   try {
     await refreshJourney();
   } catch (error) {
+    // PR #3625 review: the refresh request's own correlation id and body-free evidence, so this line
+    // joins the server's refusal of that request; the run is linked as the parent operation.
+    const correlationId = correlationIdOf(error);
     reportClientDiagnostic("[keiko] journey action: post-propose-ready refresh failed", {
       kind: "other",
       errorKind: bffRequestErrorKind(error),
-      correlationId: runId,
+      errorEvidence: clientErrorEvidence(error),
+      ...(correlationId === undefined ? {} : { correlationId }),
+      parentCorrelationId: runId,
     });
   }
 }

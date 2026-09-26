@@ -9,6 +9,7 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { repositoryName } from "./CodingWorkbenchRepositorySelector";
 import styles from "./CodingHistory.module.css";
 import type { WindowRenderContext } from "../../windows/WindowsRegistry";
 
@@ -187,16 +188,6 @@ function HistoryItem({
       </button>
       <RenameTask task={task} />
     </li>
-  );
-}
-
-// #3630: the folder name of a POSIX or a Windows path, ignoring trailing separators.
-function repositoryName(projectPath: string): string {
-  return (
-    projectPath
-      .split(/[\\/]/u)
-      .filter((part) => part.length > 0)
-      .at(-1) ?? projectPath
   );
 }
 

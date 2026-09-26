@@ -147,7 +147,7 @@ describe("CodingWorkbenchWindowHost", () => {
 
   it("selecting a branch emits no client diagnostic either (#A)", () => {
     diagnostics.writes = [];
-    const context = renderHost({ repositoryPath: "/repos/cfg" });
+    renderHost({ repositoryPath: "/repos/cfg" });
     const props = windowRendered.mock.calls.at(-1)?.[0];
 
     props?.onSelectBranch?.("feature/x");
