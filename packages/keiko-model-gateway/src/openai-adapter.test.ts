@@ -243,49 +243,34 @@ describe("OpenAiAdapter.call", () => {
   // deployment (gpt-5.6 here) that attaches function tools unless reasoning_effort is exactly
   // "none" — the Coding Workbench's selected effort (e.g. "medium") is not a value the provider
   // accepts once tools are attached, so it must be overridden on the wire rather than forwarded.
-  it("RB-4 (#3640): forces reasoning_effort 'none' for a reasoning-model-family deployment once tools are attached", async () => {
-    let seenBody: Record<string, unknown> = {};
-    const adapter = adapterWith((_url, init) => {
-      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
-        string,
-        unknown
-      >;
-      return Promise.resolve(
-        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
-      );
-    });
-    await adapter.call(
-      {
-        ...REQUEST,
-        reasoningEffort: "medium",
-        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
-      },
-      { ...CONFIG, modelId: "gpt-5.6" },
-    );
-    expect(seenBody.reasoning_effort).toBe("none");
-  });
-
-  it("RB-4 (#3640): leaves the selected reasoning effort alone for a reasoning-model-family deployment with no tools attached", async () => {
-    let seenBody: Record<string, unknown> = {};
-    const adapter = adapterWith((_url, init) => {
-      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
-        string,
-        unknown
-      >;
-      return Promise.resolve(
-        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
-      );
-    });
-    await adapter.call(
-      { ...REQUEST, reasoningEffort: "medium" },
-      { ...CONFIG, modelId: "gpt-5.6" },
-    );
-    expect(seenBody.reasoning_effort).toBe("medium");
-  });
-
   // Only GPT-5.6 carries that contract: the rest of the gpt-5 family keeps its selected effort with
   // tools, so its Coding Workbench turns still reason.
-  it("RB-4 (#3640): keeps the selected effort for a gpt-5.4 deployment with tools attached", async () => {
+  it.each([
+    {
+      name: "forces 'none' for a GPT-5.6 deployment once tools are attached",
+      modelId: "gpt-5.6",
+      tools: true,
+      expected: "none",
+    },
+    {
+      name: "leaves the selected effort alone for a GPT-5.6 deployment with no tools attached",
+      modelId: "gpt-5.6",
+      tools: false,
+      expected: "medium",
+    },
+    {
+      name: "keeps the selected effort for a gpt-5.4 deployment with tools attached",
+      modelId: "gpt-5.4",
+      tools: true,
+      expected: "medium",
+    },
+    {
+      name: "does not force the effort for a non-reasoning-family deployment with tools attached",
+      modelId: "gpt-4o",
+      tools: true,
+      expected: "medium",
+    },
+  ])("RB-4 (#3640): $name", async ({ modelId, tools, expected }) => {
     let seenBody: Record<string, unknown> = {};
     const adapter = adapterWith((_url, init) => {
       seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
@@ -300,33 +285,11 @@ describe("OpenAiAdapter.call", () => {
       {
         ...REQUEST,
         reasoningEffort: "medium",
-        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
+        ...(tools ? { toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]) } : {}),
       },
-      { ...CONFIG, modelId: "gpt-5.4" },
+      { ...CONFIG, modelId },
     );
-    expect(seenBody.reasoning_effort).toBe("medium");
-  });
-
-  it("RB-4 (#3640): does not force reasoning_effort for a non-reasoning-family deployment with tools attached", async () => {
-    let seenBody: Record<string, unknown> = {};
-    const adapter = adapterWith((_url, init) => {
-      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
-        string,
-        unknown
-      >;
-      return Promise.resolve(
-        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
-      );
-    });
-    await adapter.call(
-      {
-        ...REQUEST,
-        reasoningEffort: "medium",
-        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
-      },
-      { ...CONFIG, modelId: "gpt-4o" },
-    );
-    expect(seenBody.reasoning_effort).toBe("medium");
+    expect(seenBody.reasoning_effort).toBe(expected);
   });
 
   it("RB-4 (GEN-AI-GATEWAY-001): preserves a truncated finishReason so callers can detect an incomplete answer", async () => {

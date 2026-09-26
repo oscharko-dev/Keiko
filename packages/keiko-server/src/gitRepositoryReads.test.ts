@@ -1240,11 +1240,11 @@ describe("git summary response cache partitioning", () => {
     await handleGitSummary(ctx(path), dependencies);
     const firstRun = runner.mock.calls.length;
     await handleGitSummary(ctx(path), dependencies);
-    expect(runner.mock.calls.length).toBe(firstRun);
+    expect(runner.mock.calls).toHaveLength(firstRun);
 
     invalidateGitSummaryCache(dependencies);
     await handleGitSummary(ctx(path), dependencies);
-    expect(runner.mock.calls.length).toBe(firstRun * 2);
+    expect(runner.mock.calls).toHaveLength(firstRun * 2);
   });
 
   it("still partitions the cache by runner, so two fake runners never share an entry", async () => {

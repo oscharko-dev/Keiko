@@ -304,7 +304,8 @@ function useRunRefresh(
     const pending = (async (): Promise<void> => {
       do {
         followUp.current = false;
-        await readRun((runSequence.current += 1), runSequence, dispatch);
+        runSequence.current += 1;
+        await readRun(runSequence.current, runSequence, dispatch);
       } while (followUp.current);
     })();
     runRefresh.current = pending;

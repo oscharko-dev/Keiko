@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -632,11 +633,12 @@ export default function KeikoSelect({
   const visibleDescription = selectedOption?.description ?? null;
   const menuLabel = menuTitle ?? ariaLabel ?? resolvedPlaceholder;
 
-  const closeMenu = (): void => {
+  // Stable, so it doubles as the listener that closes this menu when another select opens.
+  const closeMenu = useCallback((): void => {
     setOpen(false);
     setActiveIndex(-1);
     setSearchQuery("");
-  };
+  }, []);
 
   const openMenu = (preferredIndex?: number): void => {
     if (disabled || flatOptions.length === 0) return;
@@ -649,16 +651,11 @@ export default function KeikoSelect({
   };
 
   useEffect(() => {
-    const onOtherSelectOpen = (): void => {
-      setOpen(false);
-      setActiveIndex(-1);
-      setSearchQuery("");
-    };
-    window.addEventListener(SELECT_OPEN_EVENT, onOtherSelectOpen);
+    window.addEventListener(SELECT_OPEN_EVENT, closeMenu);
     return (): void => {
-      window.removeEventListener(SELECT_OPEN_EVENT, onOtherSelectOpen);
+      window.removeEventListener(SELECT_OPEN_EVENT, closeMenu);
     };
-  }, []);
+  }, [closeMenu]);
 
   useEffect(() => {
     if (!open) return;
@@ -681,7 +678,7 @@ export default function KeikoSelect({
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("blur", onWindowBlur);
     };
-  }, [open]);
+  }, [closeMenu, open]);
 
   useLayoutEffect(() => {
     if (!open || triggerRef.current === null) return;
@@ -879,7 +876,7 @@ export default function KeikoSelect({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, activeIndex, flatOptions, selectedIndex]);
+  }, [open, activeIndex, closeMenu, flatOptions, selectedIndex]);
 
   const triggerClasses = buildTriggerClasses({
     disabled,
