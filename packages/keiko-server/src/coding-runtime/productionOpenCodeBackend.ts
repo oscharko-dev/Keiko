@@ -14,7 +14,10 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
+import {
+  createRuntimeGatewayConfinement,
+  type LongLivedRuntimeSandboxAttestation,
+} from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
@@ -234,21 +237,28 @@ function composeOpenCodeRun(
     diagnostics: input.diagnostics,
     activityLog: input.activityLog,
     onRuntimeEvent: run.onRuntimeEvent,
-    onSandboxAttestation: (runId, attestation): void => {
-      if (runId !== run.minted.authorityRef.runId) {
-        throw new Error("sandbox-attestation-run-mismatch");
-      }
-      input.runtimeEvidence.observe(runId, {
-        kind: "sandbox-attestation",
-        state: "starting",
-        authorityDigest: run.minted.authorityRef.envelopeDigest,
-        sandboxAttestation: attestation,
-      });
-    },
+    onSandboxAttestation: observeOpenCodeSandboxAttestation(input, run),
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
     resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
   });
+}
+
+function observeOpenCodeSandboxAttestation(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): (runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void {
+  return (runId, attestation): void => {
+    if (runId !== run.minted.authorityRef.runId) {
+      throw new Error("sandbox-attestation-run-mismatch");
+    }
+    input.runtimeEvidence.observe(runId, {
+      kind: "sandbox-attestation",
+      state: "starting",
+      authorityDigest: run.minted.authorityRef.envelopeDigest,
+      sandboxAttestation: attestation,
+    });
+  };
 }
 
 const MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS = 2_048;
