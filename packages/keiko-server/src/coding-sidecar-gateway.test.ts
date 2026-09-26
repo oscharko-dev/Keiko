@@ -4681,6 +4681,116 @@ describe("coding sidecar gateway turn failure projection", () => {
       expect(response.body()).not.toContain('"finish_reason":"error"');
       expect(turnFailedLine(sink.events)?.extra).toMatchObject({ runtimeRetry: "refused" });
     });
+
+    // PR #3625 review: a turn the gateway refused itself carries no error, and its line said
+    // `allowed` although the runtime received a 403 that ends the turn.
+    const promptBudgetDenied = {
+      authenticate: (capabilityValue: string, audience: "model-gateway" | "tool-facade") =>
+        capabilityValue === "gateway-capability-material-0000000001" && audience === "model-gateway"
+          ? { ok: true, binding: { runId: "run-gateway-test" } }
+          : { ok: false },
+      reservePromptTokens: () => ({ ok: false }),
+    } as unknown as UiHandlerDeps["runtimeCapabilityAuthenticator"];
+    it.each([
+      [
+        "a tool contract the run was not given",
+        (): UiHandlerDeps =>
+          runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-gateway-test" } })),
+        (): RouteContext =>
+          authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "synthetic" }],
+            tools: modelVisibleTools().slice(0, 2),
+          }),
+        403,
+        "refused",
+      ],
+      [
+        "an exhausted runtime prompt budget",
+        (): UiHandlerDeps => ({
+          ...depsValue(configValue(provider(), capability())),
+          runtimeCapabilityAuthenticator: promptBudgetDenied,
+        }),
+        (): RouteContext => routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+        403,
+        "refused",
+      ],
+      [
+        "an exhausted spend budget",
+        (): UiHandlerDeps =>
+          depsValue(
+            configValue(provider(), capability()),
+            () => () => Promise.reject(new ConfigInvalidError("spend-budget-exceeded")),
+          ),
+        (): RouteContext => routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+        403,
+        "refused",
+      ],
+      [
+        "an unavailable gateway profile",
+        (): UiHandlerDeps =>
+          depsValue(configValue(provider(), capability()), undefined, {
+            KEIKO_CODING_SIDECAR_DISABLED: "1",
+          }),
+        (): RouteContext => routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+        503,
+        "allowed",
+      ],
+    ] as const)(
+      "logs %s as the retry disposition its answer gives the runtime",
+      async (_label, deps, context, status, runtimeRetry) => {
+        const sink = captureServerLog("warn");
+        const result = await handleCodingSidecarGatewayChatCompletions(context(), {
+          ...deps(),
+          codingRuntimeOrchestrator: runningOrchestrator,
+        });
+        expect(result).toMatchObject({ status });
+        expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+          failureCode: "turn-rejected",
+          runtimeRetry,
+        });
+      },
+    );
+
+    // A spend rejection no retry can change ended a streamed turn with `finish_reason: "error"`,
+    // which the runtime retries without end, like the lab's rejected turn.
+    it("ends a streamed turn the spend budget refused with the rejection chunk", async () => {
+      const sink = captureServerLog("warn");
+      const stream = (): AsyncIterable<GatewayStreamChunk> => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.reject(new ConfigInvalidError("spend-budget-exceeded")),
+        }),
+      });
+      const response = mockResponse({ captureBody: true });
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-spend" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "synthetic" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        },
+        deps,
+      );
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain(rejectionChunk);
+      expect(response.body()).not.toContain('"finish_reason":"error"');
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+        failureCode: "turn-rejected",
+        runtimeRetry: "refused",
+      });
+    });
   });
 
   // PR #3617 review: a model-answer failure skips its error-level diagnostic only because the warn
@@ -4880,41 +4990,55 @@ describe("coding sidecar gateway no-silent-turn matrix (#3593)", () => {
     throw new TimeoutError("synthetic chunk timeout");
   }
 
+  // The last column is what the answer the runtime receives lets it do. PR #3625 review: a request
+  // the gateway refused itself answers 413 or 400, which ends the turn, yet its line said `allowed`.
   const FAILURE_CLASSES: readonly (readonly [
     string,
     CodingWorkbenchTurnFailureCode,
     () => TurnFault,
+    "allowed" | "refused",
   ])[] = [
     [
       "a gateway 4xx",
       "provider-failed",
       (): TurnFault => bufferedFault(new ProviderError("synthetic bad request", 400)),
+      "refused",
     ],
     [
       "a gateway 5xx",
       "provider-failed",
       (): TurnFault => bufferedFault(new ProviderError("synthetic unavailable", 503)),
+      "allowed",
     ],
     [
       "a mid-stream error frame",
       "stream-incomplete",
       (): TurnFault => streamedFault(midStreamErrorFrame),
+      "allowed",
     ],
     [
       "an empty stream without a finish",
       "stream-incomplete",
       (): TurnFault => streamedFault(emptyStream),
+      "allowed",
     ],
-    ["a chunk timeout", "stream-incomplete", (): TurnFault => streamedFault(chunkTimeout)],
+    [
+      "a chunk timeout",
+      "stream-incomplete",
+      (): TurnFault => streamedFault(chunkTimeout),
+      "allowed",
+    ],
     [
       "a request over the transport cap",
       "turn-rejected",
       (): TurnFault => refusedRequest("private-overflow".repeat(100_000)),
+      "refused",
     ],
     [
       "a prompt over the model's window",
       "turn-rejected",
       (): TurnFault => refusedRequest("private-window".repeat(40), 16),
+      "refused",
     ],
   ];
 
@@ -4922,7 +5046,7 @@ describe("coding sidecar gateway no-silent-turn matrix (#3593)", () => {
     describe.each(MODES)("in %s", (mode) => {
       it.each(FAILURE_CLASSES)(
         "reports %s as one %s run event and one log line",
-        async (_label, code, fault) => {
+        async (_label, code, fault, runtimeRetry) => {
           const sink = captureServerLog("warn");
           const eventHub = new CodingRuntimeEventHub();
           const turn = fault();
@@ -4955,7 +5079,7 @@ describe("coding sidecar gateway no-silent-turn matrix (#3593)", () => {
           );
           expect(failed).toHaveLength(1);
           expect(failed[0]).toMatchObject({
-            extra: { runId: RUN_ID, revision: 5, failureCode: code, published: true },
+            extra: { runId: RUN_ID, revision: 5, failureCode: code, published: true, runtimeRetry },
           });
           expect([failed[0]?.correlationId, failed[0]?.parentCorrelationId]).toContain(RUN_ID);
           expect(JSON.stringify({ replay, events: sink.events })).not.toMatch(
@@ -4970,7 +5094,7 @@ describe("coding sidecar gateway no-silent-turn matrix (#3593)", () => {
 // #3390 closeout: every 400/403 rejection the gateway route hands back must leave a body-free
 // activity-log line carrying the REASON (AGENTS.md §8) — before this the only evidence was the
 // generic `http`/`request` line's opaque status. These pin the two rejection classes the task
-// names explicitly; `classifyBadRequestReason`/`emitGatewayToolContractDiagnostic` cover the rest.
+// names explicitly; `classifyBadRequestReason`/`refuseGatewayToolContract` cover the rest.
 describe("coding sidecar gateway rejection activity log", () => {
   afterEach(() => {
     resetServerLogger();

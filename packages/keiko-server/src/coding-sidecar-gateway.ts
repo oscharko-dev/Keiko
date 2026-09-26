@@ -1641,21 +1641,41 @@ function emitGatewayFailureDiagnostic(
   );
 }
 
-/** Writes the run's turn-failed line; false for a run that is no longer running or paused. */
+/**
+ * Writes the run's turn-failed line; false for a run that is no longer running or paused.
+ * `runtimeRetry` is what the answer the runtime receives lets it do (PR #3625 review): the caller
+ * names it from that answer, so the line never states the opposite of what the runtime got.
+ */
 function reportGatewayTurnFailure(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
-  failureCode: CodingWorkbenchTurnFailureCode,
-  error?: unknown,
+  failure: {
+    readonly failureCode: CodingWorkbenchTurnFailureCode;
+    readonly runtimeRetry: RuntimeRetry;
+    readonly error?: unknown;
+  },
 ): boolean {
+  const { failureCode, runtimeRetry, error } = failure;
   const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
   if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
   const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
   const run = { revision: snapshot.revision, state: snapshot.state };
-  const outcome = { publicationReason, runtimeRetry: runtimeRetryFor(error, failureCode) };
-  logGatewayTurnFailure(ctx, runId, run, failureCode, outcome, error);
+  logGatewayTurnFailure(ctx, runId, run, failureCode, { publicationReason, runtimeRetry }, error);
   return true;
+}
+
+/** A turn the gateway refused itself, with no error: its answer's status decides the retry. */
+function reportGatewayTurnRejection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  answer: RouteResult,
+): void {
+  reportGatewayTurnFailure(ctx, deps, runId, {
+    failureCode: "turn-rejected",
+    runtimeRetry: runtimeRetryForStatus(answer.status),
+  });
 }
 
 type GatewayFailurePublicationReason =
@@ -1769,13 +1789,16 @@ function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCod
 
 type RuntimeRetry = "allowed" | "refused";
 
-// A provider rejection no retry can change — a 4xx other than 408/409/429, a refused credential, an
-// invalid configuration — which the gateway's own retry policy already treats as terminal. A
-// breaker's cooldown and a cancellation are no verdict on the turn, so they stay retryable.
+// A rejection no retry can change — a provider 4xx other than 408/409/429, a refused credential, an
+// invalid configuration, an exhausted spend budget — which the gateway's own retry policy already
+// treats as terminal. A breaker's cooldown and a cancellation are no verdict on the turn, so they
+// stay retryable. A spend rejection is final on every path: answered retryable on a stream, it was
+// retried by the runtime without end, the same way as the lab's rejected turn (PR #3625 review).
 function runtimeRetryFor(
   error: unknown,
   failureCode: CodingWorkbenchTurnFailureCode,
 ): RuntimeRetry {
+  if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
   const final =
     failureCode === "provider-failed" &&
     error instanceof GatewayError &&
@@ -1791,6 +1814,12 @@ function runtimeRetryFor(
 // a LiteLLM 409 is not retryable for Keiko's gateway, yet the runtime must still retry it).
 function runtimeRetriesStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+// What the runtime does with an HTTP answer of this status: it retries the statuses above and ends
+// the turn on any other 4xx.
+function runtimeRetryForStatus(status: number): RuntimeRetry {
+  return runtimeRetriesStatus(status) ? "allowed" : "refused";
 }
 
 // OpenCode 2.0.10 reads an error chunk whose numeric `code` is an HTTP status as that status (its
@@ -1987,12 +2016,12 @@ function toolContractMismatch(
   };
 }
 
-function emitGatewayToolContractDiagnostic(
+function refuseGatewayToolContract(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   parsed: CodingSidecarGatewayChatCompletionRequest,
-): void {
+): RouteResult {
   const { tools } = parsed;
   const { code, reason } = toolContractRejectionReason(tools);
   emitServerDiagnostic(deps.diagnostics, {
@@ -2005,9 +2034,11 @@ function emitGatewayToolContractDiagnostic(
     message: "coding-sidecar-gateway-tool-contract-rejected",
     code,
   });
-  logGatewayRejection(ctx, runId, 403, reason, toolContractMismatch(tools));
+  const answer = forbiddenGatewayRequest();
+  logGatewayRejection(ctx, runId, answer.status, reason, toolContractMismatch(tools));
   refuseReadinessChallenge(deps, runId, parsed);
-  reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
+  reportGatewayTurnRejection(ctx, deps, runId, answer);
+  return answer;
 }
 
 // Ends a pending readiness challenge at once when the route refused the challenge's own request: a
@@ -2208,8 +2239,9 @@ function unavailableGatewayProfile(
     message: "coding-sidecar-gateway-profile-unavailable",
     code: unavailableGatewayProfileCode(resolved, selectedModelId, authentication),
   });
-  reportGatewayTurnFailure(ctx, deps, authentication.runId, "turn-rejected");
-  return unavailableError();
+  const answer = unavailableError();
+  reportGatewayTurnRejection(ctx, deps, authentication.runId, answer);
+  return answer;
 }
 
 function unavailableGatewayProfileCode(
@@ -2504,15 +2536,16 @@ function settleFailedGatewayChat(
   recordGatewayOutcome(ctx, deps, runId, cancellation, cancelled ? "cancelled" : "failed", 0, 0);
   const spendReason = gatewaySpendRejectionReason(error);
   const failureCode = spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected";
+  const runtimeRetry = runtimeRetryFor(error, failureCode);
   const turnFailureRecorded =
-    !cancelled && reportGatewayTurnFailure(ctx, deps, runId, failureCode, error);
+    !cancelled && reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   if (spendReason !== undefined && bufferedStream === undefined) {
     logGatewayRejection(ctx, runId, 403, spendReason);
     return forbiddenGatewayRequest();
   }
-  const refused = !cancelled && runtimeRetryFor(error, failureCode) === "refused";
+  const refused = !cancelled && runtimeRetry === "refused";
   if (bufferedStream === undefined) return refused ? providerRejectionError() : unavailableError();
   return refused
     ? settleBufferedOpenAiStreamRejection(bufferedStream)
@@ -2597,12 +2630,15 @@ async function streamGatewayChat(
   } catch (error) {
     recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", 0, 0);
     const failureCode = gatewayTurnFailureCode(error);
-    const turnFailureRecorded = reportGatewayTurnFailure(ctx, deps, runId, failureCode, error);
+    const runtimeRetry = runtimeRetryFor(error, failureCode);
+    const turnFailureRecorded = reportGatewayTurnFailure(ctx, deps, runId, {
+      failureCode,
+      runtimeRetry,
+      error,
+    });
     emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
     settlePromptTokenReservation(deps, promptTokenReservation);
-    return runtimeRetryFor(error, failureCode) === "refused"
-      ? providerRejectionError()
-      : unavailableError();
+    return runtimeRetry === "refused" ? providerRejectionError() : unavailableError();
   }
   const session = createGatewayStreamSession(ctx, dispatch, iterator);
   try {
@@ -2636,9 +2672,14 @@ async function pumpGatewayStreamWithCancellation(
     await pumpGatewayStream(session);
   } catch (error) {
     const failureCode = gatewayStreamFailureCode(error);
+    const runtimeRetry = runtimeRetryFor(error, failureCode);
     const turnFailureRecorded =
       !cancellationSignal.aborted &&
-      reportGatewayTurnFailure(session.ctx, deps, session.runId, failureCode, error);
+      reportGatewayTurnFailure(session.ctx, deps, session.runId, {
+        failureCode,
+        runtimeRetry,
+        error,
+      });
     emitGatewayStreamFailureDiagnostic(
       session.ctx,
       deps,
@@ -2646,7 +2687,7 @@ async function pumpGatewayStreamWithCancellation(
       session.runId,
       turnFailureRecorded,
     );
-    settleGatewayStreamError(session, runtimeRetryFor(error, failureCode));
+    settleGatewayStreamError(session, runtimeRetry);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);
   }
@@ -3343,8 +3384,7 @@ function rejectUnmanagedGatewayToolContract(
 ): RouteResult | undefined {
   const declaresTools = parsed.tools !== undefined && parsed.tools.length > 0;
   if (!declaresTools || isExactManagedToolSet(parsed.tools)) return undefined;
-  emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
-  return forbiddenGatewayRequest();
+  return refuseGatewayToolContract(ctx, deps, authentication.runId, parsed);
 }
 
 function runtimeGatewayAdmissionResponse(
@@ -3369,8 +3409,10 @@ function authenticatedGatewayAdmission(
 ): RuntimeGatewayAdmission {
   const registry = gatewayReadinessRegistry(deps);
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
-    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
-    return { kind: "handled", result: forbiddenGatewayRequest() };
+    return {
+      kind: "handled",
+      result: refuseGatewayToolContract(ctx, deps, authentication.runId, parsed),
+    };
   }
   if (
     isExactManagedToolSet(parsed.tools) &&
@@ -3438,7 +3480,7 @@ function logChatRequestRejection(
       : undefined;
   logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
   refuseReadinessChallenge(deps, runId, observed?.parsed);
-  reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
+  reportGatewayTurnRejection(ctx, deps, runId, validationError);
 }
 
 interface ValidatedChatRequest {
@@ -3615,9 +3657,10 @@ function executeBudgetedGatewayChat(
     estimatedPromptTokens,
   );
   if (promptTokenReservation === undefined) {
-    logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");
-    reportGatewayTurnFailure(ctx, deps, authentication.runId, "turn-rejected");
-    return Promise.resolve(forbiddenGatewayRequest());
+    const answer = forbiddenGatewayRequest();
+    logGatewayRejection(ctx, authentication.runId, answer.status, "runtime-prompt-budget-denied");
+    reportGatewayTurnRejection(ctx, deps, authentication.runId, answer);
+    return Promise.resolve(answer);
   }
   return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {
     ...profile,
