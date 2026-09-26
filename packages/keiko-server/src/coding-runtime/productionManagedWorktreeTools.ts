@@ -62,18 +62,13 @@ import {
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   codingToolFullAccessDeliveryAllowed,
-  createCodingToolAuthorityPreview,
   createRuntimeCodingToolFacade,
   type CodingToolAuthorityContextProvider,
   type CommitExecutionApproval,
 } from "./codingToolAuthorityPort.js";
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
-import type {
-  CodingToolEditBaseRead,
-  CodingToolFacade,
-  CodingToolMutationGuard,
-} from "./codingToolFacadePorts.js";
+import type { CodingToolFacade, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
   GovernedCodingToolResult,
@@ -112,9 +107,7 @@ import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
   createProductionAuxiliaryPorts,
-  hasExactWorkspaceAccess,
   PRODUCTION_SKILL_STATIC_FACTS,
-  workspaceAuthorityCheckedRead,
 } from "./productionAuxiliaryPorts.js";
 import {
   createExplicitSkillInvocationTracker,
@@ -126,7 +119,6 @@ import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCata
 import { staticSkillReadiness } from "./skillDiscovery.js";
 import {
   createCodingToolReadEditPorts,
-  governedWorkspaceFileDigest,
   type CodingToolReadEditPortDeps,
   type CodingToolReadEditPorts,
 } from "./codingToolReadEditPorts.js";
@@ -713,10 +705,9 @@ export function createProductionManagedWorktreeToolFacade(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolFacade {
   const readEdit = createReadEditPorts(input);
-  const authorityContext = managedWorktreeAuthorityContext(input);
-  const facade = createRuntimeCodingToolFacade(
+  return createRuntimeCodingToolFacade(
     input.authority,
-    authorityContext,
+    managedWorktreeAuthorityContext(input),
     governedPorts(input, readEdit),
     {
       invocationRegistry: input.invocationRegistry,
@@ -734,7 +725,6 @@ export function createProductionManagedWorktreeToolFacade(
       unavailableOptionalTools: () => deriveOptionalToolAvailability(input),
     },
   );
-  return { ...facade, editBaseDigest: editBaseDigestPort(input, authorityContext) };
 }
 
 function managedWorktreeAuthorityContext(
@@ -756,40 +746,6 @@ function managedWorktreeAuthorityContext(
     correlationId: input.authorityRef.runId,
   });
 }
-
-// The governed ask's base check (#3612) reads a file only as far as keiko_workspace_read would: the
-// run's live authority and producer binding must admit a read of that path, and the run's exact
-// managed workspace must still be the active one, before the same secure read and again after it.
-// An expired or revoked run, or one that lost its workspace, reads nothing and says so, so its ask
-// never reaches the human unverified (PR #3617 review). The check reserves no delegation; it is no
-// tool call.
-function editBaseDigestPort(
-  input: ProductionManagedWorktreeToolInput,
-  authorityContext: CodingToolAuthorityContextProvider,
-): NonNullable<CodingToolFacade["editBaseDigest"]> {
-  const read = workspaceAuthorityCheckedRead(input);
-  const admitsRead = createCodingToolAuthorityPreview(input.authority, authorityContext, {
-    requireProducerBinding: true,
-  });
-  return async (capability, relativePath, signal) => {
-    const request = {
-      action: "read",
-      relativePath,
-      actionId: EDIT_BASE_CHECK_ID,
-      idempotencyKey: EDIT_BASE_CHECK_ID,
-    } as const;
-    const admitted = (): boolean =>
-      hasExactWorkspaceAccess(input) && admitsRead(capability, request).ok;
-    if (!admitted()) return EDIT_BASE_AUTHORITY_DENIED;
-    const digest = await governedWorkspaceFileDigest(read, relativePath, signal);
-    if (!admitted()) return EDIT_BASE_AUTHORITY_DENIED;
-    return digest === undefined ? EDIT_BASE_UNREADABLE : { kind: "digest", digest };
-  };
-}
-
-const EDIT_BASE_CHECK_ID = "edit-base-check";
-const EDIT_BASE_UNREADABLE: CodingToolEditBaseRead = { kind: "unreadable" };
-const EDIT_BASE_AUTHORITY_DENIED: CodingToolEditBaseRead = { kind: "authority-denied" };
 
 function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingToolReadEditPorts {
   return createCodingToolReadEditPorts({

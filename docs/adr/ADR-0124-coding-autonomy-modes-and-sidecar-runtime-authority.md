@@ -222,32 +222,44 @@ A permission request carries only ids, enums, expiry, requested connector scopes
 labels. It never carries raw command logs, file contents, prompts, or credentials.
 
 The V2 governed ask a generated OpenCode plugin sends (`action: "permission-request"`) also names the
-tool call it asks for (`actionId`, the call's own `sessionID:id` identity, bound to the ask id) and,
-for a changeset edit, one base digest per asked file (`baseDigests`: the file and the
-`expectedContentHash` the edit is built on). Both are body-free. The approval registry validates
-them fail-closed with exact keys, so an ask that names another call or session, or whose bases do not
-match the asked files, never reaches the human (#3612). Before an edit ask is put to the human, the
-server compares each base with the digest a governed read of the file reports now. The read goes
-only as far as `keiko_workspace_read` would: the run's live authority and producer binding must
-admit a read of the path, and the run's exact managed workspace must still be the active one,
-before and after it, without reserving a delegation. An expired or revoked run, or one that lost
-its workspace, reads nothing: its ask is refused as `authority-denied` (route reason
-`approval-authority-denied`) instead of reaching the human unverified, and its tool call reads
-Denied. A stale base is refused without asking anyone, answered 409 with the
-edit's own `CONTENT_HASH_MISMATCH` refusal and re-read guidance for the model, and logged as
-`approval-stale` on the existing `coding-sidecar.tool-facade.rejected` line. Every check writes
-`coding-runtime.approval.base-checked` under the run's correlation: the ask's request id, the
-outcome (`current`, `stale`, `denied`, `failed`, `cancelled`), the file counts up to where the check
-ended, and a stale file only as a digest. An ask that arrives after, or whose check finishes after,
-the run's approval registry closed is cancelled, logged as `cancelled`, and reaches no one. A denied ask settles its tool call as `denied`, an expired
-or cancelled one as `cancelled`, so the timeline shows the human's verdict instead of the generic
-failure OpenCode reports for a refused call. The run's own wait on an approval ends at the same
-instant as the ask's (`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval
-nobody decided in time is retired, the run returns to `running`, or to the next queued ask, under a
-new revision, so the Workbench stops offering a card nothing can decide; an ask that arrives after
-the expiry takes the expired one's place instead of a queue slot behind it. Each retirement writes
+tool call it asks for (`actionId`, the call's own `sessionID:id` identity, bound to the ask id). It is
+body-free. The approval registry validates the ask fail-closed with exact keys, so an ask that names
+another call or session, or carries any other field, never reaches the human (#3612). An ask that
+arrives after the run's approval registry closed is cancelled and reaches no one.
+
+A file edit raises no governed ask in any mode (owner decision, 2026-09-26). Its one human approval
+is the change review the mode policy requires before anything is written: the edit port registers
+the mutation with `requiresReview` from the ADR-0138 matrix (`governed-assist` and
+`supervised-coding` review every workspace edit, `autonomous-delivery` applies without one) before
+the editor action is queued, and the editor route refuses a stale base
+(`CONTENT_HASH_MISMATCH`, with re-read guidance for the model) before the review is shown. Until
+1.1.10 an edit in "Ask for approval" took two decisions for the same change — an ask with the file
+list, then Apply on the diff — and the edit ask carried the changeset's base digests so a stale base
+could be refused before the first of them; with the ask gone, that pre-ask check went with it.
+
+A human's "no" rejects one step, not the run (owner decision, 2026-09-26). The run returns to
+`running`, or to its next queued ask, under a new revision; `Stop` remains the way to end a run. The
+model learns why the step did not happen and goes on without it: a denied or expired plugin ask
+answers 409 with the call's own result (`status` `denied`, or `cancelled` for an expired one, no
+evidence, and a fixed guidance sentence), which the plugin returns to the model in place of the
+call, and a denied native OpenCode ask is rejected with that guidance as its `message`, which
+OpenCode 2.0.10 hands to the model as the correction for that call so its loop goes on (a bare
+reject would end the turn). A cancelled or unavailable ask stays a bare refusal. Every decision on
+the run's active approval writes `coding-runtime.approval.decided` (`approved` or `denied`) under the
+run's correlation (1.1.10 lab: an approval left no coding-runtime line of its own). Before 1.1.10 a
+denial stopped the run as `failed`/`revoked`. The tool call a refused ask ends is settled with the
+human's verdict — `denied`, or `cancelled` for an expired or cancelled ask — so the timeline shows it
+instead of the generic failure OpenCode reports for a refused call.
+
+The run's own wait on an approval ends at the same instant as the ask's
+(`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval nobody decided in
+time is retired, the run returns to `running`, or to the next queued ask, under a new revision, so
+the Workbench stops offering a card nothing can decide; an ask that arrives after the expiry takes
+the expired one's place instead of a queue slot behind it, and a queued ask whose wait ran out
+before its turn is retired as well instead of stopping the run. Each retirement writes
 `coding-runtime.approval.retired` (1.1.9 lab: the expired card stayed on screen, approving it failed
-as `invalid-intent`, and the model's next ask expired unseen behind it).
+as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is decided,
+retired, or whose run settles takes its expiry timer with it.
 
 ### D7 — Coding evidence is content-free by construction
 

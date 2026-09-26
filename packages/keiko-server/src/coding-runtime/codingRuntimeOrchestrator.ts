@@ -375,6 +375,35 @@ const CODING_RUNTIME_APPROVAL_RETIRED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// The human's decision on the run's active approval (lab 2026-09-26: an approval's POST left no
+// coding-runtime line of its own, so approve and deny were not reconstructable from the log). A
+// denial rejects that one step and the run goes on (owner decision 2026-09-26, ADR-0124 D6).
+const CODING_RUNTIME_APPROVAL_DECIDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.approval.decided",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeApprovalDecided",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    requestId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["approved", "denied"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-approval-wait"],
+  proofIds: ["coding-runtime.approval.decided.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const CODING_RUNTIME_RUN_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1041,23 +1070,6 @@ function recordRuntimeLifecycleFailure(
   });
 }
 
-function recordRuntimeStopFailure(
-  diagnostics: ServerDiagnosticSink | undefined,
-  runId: string,
-  error: unknown,
-): void {
-  emitServerDiagnostic(
-    diagnostics,
-    serverDiagnosticFromError({
-      correlationId: runtimeDiagnosticCorrelationId(runId),
-      operation: "coding-runtime.stop",
-      source: "coding-runtime-orchestrator.permission-denied",
-      error,
-      redact: () => "Coding runtime stop failed.",
-    }),
-  );
-}
-
 function recordApprovalExpiryFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -1210,6 +1222,22 @@ function recordRuntimeApprovalRetired(
       CODING_RUNTIME_APPROVAL_RETIRED_OPERATION,
       { correlationId: runtimeDiagnosticCorrelationId(runId) },
       { runId, revision, requestId, reason: "expired", replaced },
+    ),
+  );
+}
+
+function recordRuntimeApprovalDecided(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  revision: number,
+  requestId: string,
+  decision: "approved" | "denied",
+): void {
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_APPROVAL_DECIDED_OPERATION,
+      { correlationId: runtimeDiagnosticCorrelationId(runId) },
+      { runId, revision, requestId, decision },
     ),
   );
 }
@@ -2047,12 +2075,21 @@ export class CodingRuntimeOrchestrator {
         decision,
       );
       if (!permissionSettled) return this.stopAfterApprovalFailure(current);
-      if (decision === "denied") return this.stopAfterPermissionDenied(current);
+      // A denial rejects this one step: the runtime already told the model, and the run goes on
+      // with its next queued ask, or running (owner decision 2026-09-26, ADR-0124 D6).
       this.dropActiveApproval(current.runId);
       const running = this.transition(current, "running");
       if (!running.ok) return running;
       const live = this.current();
-      return live === undefined ? running : this.promoteQueuedApproval(live);
+      if (live === undefined) return running;
+      recordRuntimeApprovalDecided(
+        this.deps.activityLog,
+        live.runId,
+        live.revision,
+        challenge.permission.requestId,
+        decision,
+      );
+      return this.promoteQueuedApproval(live);
     });
   }
 
@@ -2165,28 +2202,6 @@ export class CodingRuntimeOrchestrator {
         : this.transition(current, "recovery-required", "recovery-required");
     } catch {
       return this.transition(current, "recovery-required", "recovery-required");
-    }
-  }
-
-  private async stopAfterPermissionDenied(
-    current: CodingRuntimeSnapshot,
-  ): Promise<CodingRuntimeOrchestratorResult> {
-    const stopping = this.transition(current, "stopping");
-    if (!stopping.ok) return stopping;
-    this.dropActiveApproval(current.runId);
-    try {
-      const stopped = await this.deps.manager.stop(current.runId);
-      const live = this.current();
-      if (live === undefined) return this.fail("runtime-failed");
-      return stopped.ok
-        ? this.transition(live, "failed", "revoked")
-        : this.transition(live, "recovery-required", "recovery-required");
-    } catch (error: unknown) {
-      recordRuntimeStopFailure(this.deps.diagnostics, current.runId, error);
-      const live = this.current();
-      return live === undefined
-        ? this.fail("runtime-failed")
-        : this.transition(live, "recovery-required", "recovery-required");
     }
   }
 

@@ -12,7 +12,11 @@ import {
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
-import { createCodingToolFacade, staleEditBaseToolResult } from "./codingToolFacade.js";
+import {
+  createCodingToolFacade,
+  humanDecisionFeedback,
+  humanDecisionToolResult,
+} from "./codingToolFacade.js";
 import type {
   CodingToolAuthorityPort,
   CodingToolDelegatePort,
@@ -1337,39 +1341,20 @@ describe("CodingToolFacade", () => {
     ).resolves.toMatchObject({ status: "completed", verification });
   });
 
-  // #3612: a stale base refused at the governed ask reads to the model like the editor route's own
-  // CONTENT_HASH_MISMATCH refusal after an approval: the same evidence code and re-read guidance.
-  it("answers a stale changeset base with the edit refusal's evidence and guidance", async () => {
-    const ports = facade();
-    ports.delegate.execute = vi.fn(() =>
-      Promise.resolve({
-        outcome: "failed",
-        reasonCode: "CONTENT_HASH_MISMATCH",
-        message: "The changeset file content hash no longer matches.",
-      }),
-    );
-    const afterApproval = await createCodingToolFacade(ports).execute({
-      body: requestBody({
-        action: "edit",
-        changeset: {
-          patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+b\n",
-          files: [{ file: "src/a.ts", expectedContentHash: "a".repeat(64) }],
-        },
-      }),
-      capability,
+  // Owner decision 2026-09-26 (ADR-0124 D6): a declined or expired governed ask answers the model
+  // in place of its call. No evidence claims the step ran; the fixed guidance says how to go on.
+  it.each([
+    ["denied", "denied", "The user declined this step"],
+    ["expired", "cancelled", "Nobody decided this approval in time"],
+  ] as const)("answers a %s step with its own result", (outcome, status, guidance) => {
+    expect(humanDecisionToolResult(outcome)).toEqual({
+      status,
+      evidence: [],
+      guidance: expect.stringContaining(guidance) as string,
     });
-    const beforeAsking = staleEditBaseToolResult("src/a.ts");
-    expect(beforeAsking).toEqual({
-      ...afterApproval,
-      detail: "The file changed after its read: src/a.ts",
+    expect(humanDecisionToolResult(outcome)).toMatchObject({
+      guidance: humanDecisionFeedback(outcome),
     });
-    expect(afterApproval).toMatchObject({
-      status: "failed",
-      evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
-    });
-    // A path outside the printable detail bound is left out, never echoed.
-    expect(staleEditBaseToolResult("src/\u00e4.ts")).not.toHaveProperty("detail");
-    expect(staleEditBaseToolResult("src/\u00e4.ts")).toHaveProperty("guidance");
   });
 
   // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.

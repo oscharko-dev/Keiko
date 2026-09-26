@@ -151,7 +151,7 @@ type WorkspaceBoundReadInput = Pick<
 >;
 
 /** The secure read, answered only while the run's exact managed workspace is the active one. */
-export function workspaceAuthorityCheckedRead(
+function workspaceAuthorityCheckedRead(
   input: WorkspaceBoundReadInput,
 ): SecureWorkspaceTextReadPort {
   return {
@@ -164,7 +164,7 @@ export function workspaceAuthorityCheckedRead(
 }
 
 /** Whether the run's exact managed workspace is still the one its root access resolves to. */
-export function hasExactWorkspaceAccess(input: WorkspaceBoundReadInput): boolean {
+function hasExactWorkspaceAccess(input: WorkspaceBoundReadInput): boolean {
   try {
     const access = input.resolveWorkspaceRootAccess();
     return access?.kind === "managed-task" && access.canonicalRoot === input.workspaceRoot;

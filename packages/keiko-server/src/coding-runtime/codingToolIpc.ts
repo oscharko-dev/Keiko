@@ -295,6 +295,9 @@ export type CodingToolResult =
   | {
       readonly status: "denied" | "invalid" | "cancelled" | "timeout" | "busy" | "observed";
       readonly evidence: readonly [];
+      /** A governed ask the human declined, or nobody decided in time (ADR-0124 D6): the fixed
+       * guidance tells the model how to go on without the step. */
+      readonly guidance?: string | undefined;
     };
 
 /** A research page read (#2387): digest and byte count cover exactly the returned bytes. */
@@ -809,7 +812,7 @@ function requestIdentity(value: Record<string, unknown>): CodingToolRequestIdent
 }
 
 /** A path the governed read admits: workspace-relative and not denied by the sensitive-path policy. */
-export function isGovernedReadPath(value: unknown): value is string {
+function isGovernedReadPath(value: unknown): value is string {
   return normalizedRelativePath(value) && !isDenied(value);
 }
 

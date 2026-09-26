@@ -32,10 +32,10 @@ import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 // warn line naming WHY, never a raw message. A status the bridge can return that is not in this
 // table (200 success, 502 a genuine facade-execution failure already diagnosed at its own source,
 // 503 no run is currently active) intentionally emits no "rejected" line here. A refused governed
-// ask is a 403 too, but names the human decision's outcome (#3610): denied, expired, cancelled, or
-// unavailable when it could not be put to the human. A changeset whose base digest is already stale
-// is never put to the human: a 409 names it `approval-stale` and carries the edit's refusal result
-// for the model (#3612).
+// ask names the human decision's outcome (#3610): denied, expired, cancelled, or unavailable when it
+// could not be put to the human. A denied or expired step answers 409 with the call's own refusal
+// result, which the plugin returns to the model in place of the call, so the run goes on without it
+// (owner decision 2026-09-26, ADR-0124 D6); a cancelled or unavailable ask stays a bare 403.
 type CodingSidecarToolFacadeRejectionReason =
   | "origin-not-allowed"
   | "capability-invalid"
@@ -68,12 +68,10 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
         "approval-expired",
         "approval-cancelled",
         "approval-unavailable",
-        "approval-stale",
-        "approval-authority-denied",
       ],
     },
     // A refused governed ask names its run and its permission request, so the line joins the run's
-    // approval.base-checked and approval.waiting lines (PR #3617 review).
+    // approval.waiting and approval.decided lines (PR #3617 review).
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -100,8 +98,6 @@ const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   "approval-expired": "timeout",
   "approval-cancelled": "cancelled",
   "approval-unavailable": "unavailable",
-  "approval-stale": "conflict",
-  "approval-authority-denied": "authority-denied",
 };
 
 interface ToolFacadeStatusMapping {
@@ -307,8 +303,8 @@ function toolFacadeRouteResult(ctx: RouteContext, result: OpenCodeToolBridgeResp
   // Only a bare 403 is an origin refusal; a refused governed ask names its decision (#3610).
   const reason = result.rejection ?? mapping.reason;
   if (reason !== undefined) logToolFacadeRejection(ctx, result.status, reason, result.approval);
-  // The model reads a stale base's refusal result as the edit's own answer (#3612).
-  if (reason === "approval-stale") return { status: 409, body: JSON.parse(result.body) as unknown };
+  // The model reads a refused step's own result in place of the call (ADR-0124 D6).
+  if (result.status === 409) return { status: 409, body: JSON.parse(result.body) as unknown };
   return {
     status: result.status,
     body: errorBody(mapping.code, mapping.message, ctx.correlationId),

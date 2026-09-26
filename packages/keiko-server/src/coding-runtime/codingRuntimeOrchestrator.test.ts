@@ -2606,57 +2606,80 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
-  it("records structured diagnostics when stopping a denied run fails", async () => {
-    const captured = captureDiagnostics();
-    const f = fixture(undefined, undefined, [], captured.diagnostics);
-    await f.orchestrator.start(start);
-    await f.orchestrator.ingest({
-      schemaVersion: "1",
-      eventId: "task-denied-stop-failure",
-      runId: "run-1",
-      occurredAt: "2026-01-01T00:00:00.000Z",
-      kind: "task-submitted",
-    });
-    await f.orchestrator.ingest({
-      schemaVersion: "1",
-      eventId: "permission-denied-stop-failure",
-      runId: "run-1",
-      occurredAt: "2026-01-01T00:00:00.000Z",
-      kind: "permission-requested",
-      permissionRequest: {
-        requestId: "permission-denied",
-        kind: "workspace-write",
-        actionClass: "workspace-write",
-        reasonCode: "approval-required",
-        actionKind: "file-edit",
-        expiresAt: "2026-01-01T00:01:00.000Z",
-      },
-    });
-    f.manager.stop.mockRejectedValueOnce(
-      new TypeError("private stop detail", { cause: new RangeError("private cause detail") }),
-    );
+  // Owner decision 2026-09-26 (ADR-0124 D6): a denial rejects only the step it was asked for. Before
+  // 1.1.10 it stopped the whole run as failed/revoked; the runtime has already told the model, so the
+  // run goes on with its next queued ask, or running, and the decision leaves its own line.
+  describe("a denied step", () => {
+    it("rejects only that step and gives the next queued ask the card", async () => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      await f.orchestrator.start(start);
+      const first = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      await f.orchestrator.ingest(verificationPermission("permission-2"));
 
-    const result = await f.orchestrator.decideApproval("run-1", {
-      requestId: "permission-denied",
-      decision: "denied",
-      expectedRevision: 5,
+      const result = await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "denied",
+        expectedRevision: first.revision,
+      });
+
+      expect(successfulSnapshot(result).state).toBe("awaiting-approval");
+      expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-2");
+      expect(f.manager.stop).not.toHaveBeenCalled();
+      expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+        runId: "run-1",
+        requestId: "permission-1",
+        decision: "denied",
+      });
+      const decided = requireLoggedEvent(
+        captured.records.find((event) => event.op === "coding-runtime.approval.decided"),
+        "expected the denial to be logged",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.approval.decided.emitted-line",
+          formatActivityLogProofLine(decided),
+        ),
+      ).toMatchObject({ runId: "run-1", requestId: "permission-1", decision: "denied" });
     });
 
-    expect(successfulSnapshot(result)).toMatchObject({
-      state: "recovery-required",
-      failureCode: "recovery-required",
+    it("returns the run to running when nothing else waits", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+
+      const result = await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "denied",
+        expectedRevision: waiting.revision,
+      });
+
+      expect(successfulSnapshot(result)).toMatchObject({ state: "running" });
+      expect(successfulSnapshot(result)).not.toHaveProperty("failureCode");
+      expect(f.orchestrator.status().pendingPermission).toBeUndefined();
+      expect(f.manager.stop).not.toHaveBeenCalled();
     });
-    expect(captured.records).toContainEqual(
-      expect.objectContaining({
-        correlationId: UNKNOWN_CORRELATION_ID,
-        operation: "coding-runtime.stop",
-        source: "coding-runtime-orchestrator.permission-denied",
-        errorClass: "TypeError",
-        causeChain: ["RangeError"],
-      }),
-    );
-    expect(JSON.stringify(captured.records)).not.toContain("private stop detail");
-    expect(JSON.stringify(captured.records)).not.toContain("private cause detail");
+
+    it("logs an approval with the same decision line", async () => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(verificationPermission("permission-1")),
+      );
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: waiting.revision,
+      });
+      expect(
+        captured.records.find((event) => event.op === "coding-runtime.approval.decided")?.extra,
+      ).toMatchObject({ requestId: "permission-1", decision: "approved" });
+    });
   });
 
   it("queues concurrent permission asks without orphaning the operator-visible challenge", async () => {

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "93b0d50b532b5d6b2dd07cba980eb0e64c7e4f2d754616233de0dd1a44b53adf" as const;
+  "5df95edea37909ce68ed8adc4eb5280cf5118c2eff9c26574d7dc650b5179554" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3428,10 +3428,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
-    op: "coding-runtime.approval.base-checked",
+    op: "coding-runtime.approval.decided",
     category: "process",
     owner: "keiko-server",
-    emitter: "coding-runtime.opencodeV2ApprovalRequests.recordBaseCheck",
+    emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeApprovalDecided",
     fields: {
       completeness: {
         type: "string",
@@ -3449,40 +3449,29 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
       },
+      revision: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       requestId: {
         type: "string",
         dataClass: "opaque-id",
         required: true,
         maxLength: 128,
       },
-      outcome: {
+      decision: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["current", "stale", "denied", "failed", "cancelled"],
-      },
-      fileCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
-      },
-      checkedFileCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
-      },
-      staleFileSha256: {
-        type: "string",
-        dataClass: "digest",
-        required: false,
-        maxLength: 64,
+        values: ["approved", "denied"],
       },
     },
     causal: "correlation",
-    lifecycle: "state",
+    lifecycle: "end",
     analyzerProjection: "timeline",
     failureClasses: ["coding-runtime-approval-wait"],
-    proofIds: ["coding-runtime.approval.base-checked.emitted-line"],
+    proofIds: ["coding-runtime.approval.decided.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -7796,8 +7785,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "approval-expired",
           "approval-cancelled",
           "approval-unavailable",
-          "approval-stale",
-          "approval-authority-denied",
         ],
       },
       runId: {
@@ -32071,14 +32058,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.approval.base-checked", "coding-runtime.approval.waiting"],
-        end: ["coding-runtime.approval.retired"],
+        state: ["coding-runtime.approval.waiting"],
+        end: ["coding-runtime.approval.decided", "coding-runtime.approval.retired"],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
-          op: "coding-runtime.approval.base-checked",
+          op: "coding-runtime.approval.decided",
           mode: "correlation",
         },
         {
@@ -32092,34 +32079,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
-        "coding-runtime.approval.base-checked",
+        "coding-runtime.approval.decided",
         "coding-runtime.approval.retired",
         "coding-runtime.approval.waiting",
       ],
       replayReferences: [],
       operations: [
         {
-          op: "coding-runtime.approval.base-checked",
+          op: "coding-runtime.approval.decided",
           owner: "keiko-server",
           category: "process",
-          lifecycle: "state",
+          lifecycle: "end",
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "checkedFileCount",
-              type: "integer",
-              dataClass: "count",
-              required: true,
-            },
-            {
-              name: "fileCount",
-              type: "integer",
-              dataClass: "count",
-              required: true,
-            },
-            {
-              name: "outcome",
+              name: "decision",
               type: "string",
               dataClass: "closed-enum",
               required: true,
@@ -32131,23 +32106,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "revision",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "runId",
               type: "string",
               dataClass: "opaque-id",
               required: true,
-            },
-            {
-              name: "staleFileSha256",
-              type: "string",
-              dataClass: "digest",
-              required: false,
             },
           ],
           evidenceClasses: [
             "closed-enum",
             "completeness-state",
             "count",
-            "digest",
             "loss-state",
             "opaque-id",
           ],
@@ -32155,7 +32129,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             frames: false,
             causeChain: false,
           },
-          proofIds: ["coding-runtime.approval.base-checked.emitted-line"],
+          proofIds: ["coding-runtime.approval.decided.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -61663,7 +61637,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-context.pack": "tools-workflows",
     "coding-repository-handler.settled": "tools-workflows",
     "coding-repository-handler.started": "tools-workflows",
-    "coding-runtime.approval.base-checked": "tools-workflows",
+    "coding-runtime.approval.decided": "tools-workflows",
     "coding-runtime.approval.retired": "tools-workflows",
     "coding-runtime.approval.waiting": "tools-workflows",
     "coding-runtime.authority.mint-failed": "tools-workflows",

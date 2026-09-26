@@ -29,7 +29,6 @@ import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRunti
 import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
-  governedWorkspaceFileDigest,
 } from "./codingToolReadEditPorts.js";
 import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 
@@ -156,43 +155,6 @@ async function observedWorkspaceReadFailure(kind: WorkspaceReadFailureFixture): 
 function editRefusedLines(events: readonly ServerLogEvent[]): readonly ServerLogEvent[] {
   return events.filter((event) => event.op === "coding-runtime.edit.refused");
 }
-
-// #3612: the governed ask's base check answers only with the digest a governed read of the whole
-// file would report; anything that read would not return is "cannot say", never a digest.
-describe("governed workspace file digest", () => {
-  const signal = new AbortController().signal;
-  const reading = (
-    text: string,
-  ): { readonly readText: () => Promise<SecureWorkspaceTextReadResult> } => ({
-    readText: () => Promise.resolve({ ok: true, text }),
-  });
-
-  it("digests the whole file the governed read returns", async () => {
-    await expect(
-      governedWorkspaceFileDigest(reading("export const a = 1;\n"), "src/a.ts", signal),
-    ).resolves.toBe(createHash("sha256").update("export const a = 1;\n", "utf8").digest("hex"));
-  });
-
-  it("cannot say for a file over the read bound, a refused read, or a path the read refuses", async () => {
-    await expect(
-      governedWorkspaceFileDigest(reading("x".repeat(65_537)), "src/a.ts", signal),
-    ).resolves.toBeUndefined();
-    await expect(
-      governedWorkspaceFileDigest(
-        { readText: () => Promise.resolve({ ok: false, reason: "not-found" }) },
-        "src/a.ts",
-        signal,
-      ),
-    ).resolves.toBeUndefined();
-    const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: "secret" }));
-    for (const path of [".env", "/etc/passwd", "src/../../outside.ts", "C:/a.ts", ""]) {
-      await expect(
-        governedWorkspaceFileDigest({ readText }, path, signal),
-      ).resolves.toBeUndefined();
-    }
-    expect(readText).not.toHaveBeenCalled();
-  });
-});
 
 // #3615: a read the secure read refuses for the model's own request names its closed code, so the
 // model can act on it and the catalog settles the call as a refusal; a fault stays a bare failure.

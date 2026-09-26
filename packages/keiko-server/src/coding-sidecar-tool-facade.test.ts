@@ -209,7 +209,6 @@ describe("coding-sidecar tool facade route", () => {
     ["approval-expired", "timeout"],
     ["approval-cancelled", "cancelled"],
     ["approval-unavailable", "unavailable"],
-    ["approval-authority-denied", "authority-denied"],
   ] as const)(
     "logs a refused governed ask as %s (%s), never as an origin violation",
     async (rejection, errorKind) => {
@@ -232,14 +231,14 @@ describe("coding-sidecar tool facade route", () => {
   );
 
   // PR #3617 review: a refused ask's line names its run as parent, and the run and permission
-  // request, so it joins the run's approval.base-checked line that says why.
+  // request, so it joins the run's approval.waiting and approval.decided lines.
   it("links a refused governed ask's line to its run and permission request", async () => {
     const log = captureServerLog();
     const handle = vi.fn(() =>
       Promise.resolve({
         status: 403,
         body: "",
-        rejection: "approval-authority-denied" as const,
+        rejection: "approval-cancelled" as const,
         approval: { runId: "run-tool-facade", requestId: "permission-1" },
       }),
     );
@@ -248,9 +247,9 @@ describe("coding-sidecar tool facade route", () => {
       expect.objectContaining({
         op: "coding-sidecar.tool-facade.rejected",
         parentCorrelationId: "run-tool-facade",
-        errorKind: "authority-denied",
+        errorKind: "cancelled",
         extra: {
-          reason: "approval-authority-denied",
+          reason: "approval-cancelled",
           runId: "run-tool-facade",
           requestId: "permission-1",
           completeness: "complete",
@@ -260,37 +259,35 @@ describe("coding-sidecar tool facade route", () => {
     ]);
   });
 
-  // #3612: a changeset whose base is already stale never reaches the human. The route logs the
-  // refusal as a conflict and hands the edit's own refusal result to the plugin, which returns it to
-  // the model in place of the call.
-  it("logs a stale changeset base as approval-stale (conflict) and passes its refusal result through", async () => {
-    const log = captureServerLog();
-    const refusal = {
-      status: "failed",
-      evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
-      guidance: "Re-read the file.",
-    };
-    const handle = vi.fn(() =>
-      Promise.resolve({
-        status: 409,
-        body: JSON.stringify(refusal),
-        rejection: "approval-stale" as const,
-      }),
-    );
-    const result = await handleCodingSidecarToolFacade(
-      toolFacadeContext({}),
-      depsWith(bridge(handle)),
-    );
-    expect(result).toEqual({ status: 409, body: refusal });
-    expect(log.events).toEqual([
-      expect.objectContaining({
-        op: "coding-sidecar.tool-facade.rejected",
-        status: 409,
-        errorKind: "conflict",
-        extra: { reason: "approval-stale", completeness: "complete", loss: "none" },
-      }),
-    ]);
-  });
+  // Owner decision 2026-09-26 (ADR-0124 D6): a declined or expired step answers 409 with the call's
+  // own result. The route logs the human decision and hands the result to the plugin, which returns
+  // it to the model in place of the call, so the run goes on without the step.
+  it.each([
+    ["approval-denied", "authority-denied"],
+    ["approval-expired", "timeout"],
+  ] as const)(
+    "logs a declined step as %s (%s) and passes its own result through",
+    async (rejection, errorKind) => {
+      const log = captureServerLog();
+      const refusal = { status: "denied", evidence: [], guidance: "Do not repeat it." };
+      const handle = vi.fn(() =>
+        Promise.resolve({ status: 409, body: JSON.stringify(refusal), rejection }),
+      );
+      const result = await handleCodingSidecarToolFacade(
+        toolFacadeContext({}),
+        depsWith(bridge(handle)),
+      );
+      expect(result).toEqual({ status: 409, body: refusal });
+      expect(log.events).toEqual([
+        expect.objectContaining({
+          op: "coding-sidecar.tool-facade.rejected",
+          status: 409,
+          errorKind,
+          extra: { reason: rejection, completeness: "complete", loss: "none" },
+        }),
+      ]);
+    },
+  );
 
   it("rejects an oversized body with 413 before ever calling the bridge, and logs body-too-large", async () => {
     const log = captureServerLog();
