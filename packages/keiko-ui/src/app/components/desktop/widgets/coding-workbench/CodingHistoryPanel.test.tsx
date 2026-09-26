@@ -98,6 +98,65 @@ describe("coding history navigation", () => {
     expect(fetchCodingHistory).toHaveBeenCalledTimes(2);
   });
 
+  // #3626: Cancel discards the draft; the next edit starts from the task's current title.
+  it("discards an unsaved rename draft after Cancel", async () => {
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    fireEvent.click((await screen.findAllByRole("button", { name: "Rename" }))[0] as HTMLElement);
+    fireEvent.change(screen.getByRole("textbox", { name: "Task title" }), {
+      target: { value: "Discarded draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Rename" })[0] as HTMLElement);
+    expect(screen.getByRole("textbox", { name: "Task title" })).toHaveValue(task.title);
+    expect(updateCodingTask).not.toHaveBeenCalled();
+  });
+
+  // #3628: a slow older read must not overwrite the list a newer read already showed.
+  it("keeps the latest refresh when an older read answers after it", async () => {
+    let answerOlder: ((tasks: readonly CodingHistoryTask[]) => void) | undefined;
+    let answerNewer: ((tasks: readonly CodingHistoryTask[]) => void) | undefined;
+    vi.mocked(fetchCodingHistory)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerOlder = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerNewer = resolve;
+          }),
+      );
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    act(() => {
+      window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
+    });
+    await waitFor(() => expect(fetchCodingHistory).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      answerNewer?.([{ ...task, title: "New title" }]);
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("New title")).toBeVisible();
+    await act(async () => {
+      answerOlder?.([{ ...task, title: "Old title" }]);
+      await Promise.resolve();
+    });
+    expect(screen.getByText("New title")).toBeVisible();
+    expect(screen.queryByText("Old title")).not.toBeInTheDocument();
+  });
+
+  // #3630: a Windows project path names its folder like a POSIX one does.
+  it.each([
+    ["C:\\work\\repo", "repo"],
+    ["C:\\work\\repo\\", "repo"],
+    ["/projects/example/", "example"],
+  ])("shows the folder name of %s", async (projectPath, folder) => {
+    vi.mocked(fetchCodingHistory).mockResolvedValue([{ ...task, projectPath }]);
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    expect(await screen.findByText(`${folder} · ${task.branch}`)).toBeVisible();
+  });
+
   it("validates a rename, preserves an unsuccessful edit and allows retry or cancel", async () => {
     vi.mocked(updateCodingTask).mockRejectedValueOnce(new Error("unavailable"));
     render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
