@@ -74412,14 +74412,14 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1336",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1340",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1354",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1358",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
