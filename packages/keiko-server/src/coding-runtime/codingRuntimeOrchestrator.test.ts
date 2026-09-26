@@ -2943,6 +2943,39 @@ describe("CodingRuntimeOrchestrator", () => {
         }),
       ).toMatchObject({ ok: true, snapshot: { state: "running" } });
     });
+
+    // PR #3625 review: a live queued ask is promoted before the late ask is considered, so the late
+    // ask queues behind it and did not take the expired one's place; only an ask that finds no live
+    // queued ask does. The retired line says which happened.
+    it.each([
+      ["a live queued ask is promoted first", "2026-01-01T00:06:00.000Z", false, "permission-2"],
+      ["every queued ask has expired too", "2026-01-01T00:00:30.000Z", true, "permission-3"],
+    ] as const)(
+      "records the late ask as the replacement only when no live queued ask waits: %s",
+      async (_label, queuedExpiresAt, replaced, shown) => {
+        vi.useFakeTimers();
+        let nowMs = FIXTURE_NOW_MS;
+        const captured = captureActivityLog();
+        const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
+        await f.orchestrator.start(start);
+        await f.orchestrator.ingest(verificationPermission("permission-1"));
+        await f.orchestrator.ingest(verificationPermission("permission-2", queuedExpiresAt));
+        nowMs += 60_000;
+
+        await f.orchestrator.ingest(
+          verificationPermission("permission-3", "2026-01-01T00:06:00.000Z"),
+        );
+
+        expect(f.orchestrator.status().pendingPermission?.requestId).toBe(shown);
+        expect(
+          captured.records.find(
+            (event) =>
+              event.op === "coding-runtime.approval.retired" &&
+              event.extra?.requestId === "permission-1",
+          )?.extra,
+        ).toMatchObject({ reason: "expired", replaced });
+      },
+    );
   });
 
   it("queues a second permission received while paused and promotes it after resume", async () => {

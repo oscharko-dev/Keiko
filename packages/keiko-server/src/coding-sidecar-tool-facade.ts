@@ -158,6 +158,12 @@ const TOOL_FACADE_DEFAULT_MAPPING: ToolFacadeStatusMapping = {
   message: "Coding tool facade call failed.",
 };
 
+// The refused asks whose own result the model reads in place of the call (ADR-0124 D6).
+const PASSED_THROUGH_REJECTIONS: ReadonlySet<OpenCodeToolBridgeResponse["rejection"]> = new Set([
+  "approval-denied",
+  "approval-expired",
+]);
+
 // The 408 mapping is shared between the bridge-returned deadline (a call admitted then aborted
 // mid-execution) and the route's own body-ingestion deadline below -- one message, not two.
 const TOOL_FACADE_DEADLINE_MAPPING =
@@ -303,8 +309,12 @@ function toolFacadeRouteResult(ctx: RouteContext, result: OpenCodeToolBridgeResp
   // Only a bare 403 is an origin refusal; a refused governed ask names its decision (#3610).
   const reason = result.rejection ?? mapping.reason;
   if (reason !== undefined) logToolFacadeRejection(ctx, result.status, reason, result.approval);
-  // The model reads a refused step's own result in place of the call (ADR-0124 D6).
-  if (result.status === 409) return { status: 409, body: JSON.parse(result.body) as unknown };
+  // The model reads a refused step's own result in place of the call (ADR-0124 D6). Only the
+  // denied or expired ask's own result passes; any other 409 gets the mapped refusal (PR #3625
+  // review).
+  if (result.status === 409 && PASSED_THROUGH_REJECTIONS.has(result.rejection)) {
+    return { status: 409, body: JSON.parse(result.body) as unknown };
+  }
   return {
     status: result.status,
     body: errorBody(mapping.code, mapping.message, ctx.correlationId),

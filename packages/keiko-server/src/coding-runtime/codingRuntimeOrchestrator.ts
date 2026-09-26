@@ -2441,15 +2441,22 @@ export class CodingRuntimeOrchestrator {
     const running = this.transition(current, "running");
     const live = this.current();
     if (!running.ok || live === undefined) return live ?? current;
+    // A live queued ask is promoted first, so a late ask takes the expired one's place only when
+    // none is waiting; otherwise it queues behind the promoted one (PR #3625 review).
     recordRuntimeApprovalRetired(
       this.deps.activityLog,
       live.runId,
       live.revision,
       active.permission.requestId,
-      replaced,
+      replaced && !this.hasLiveQueuedApproval(live.runId),
     );
     this.promoteQueuedApproval(live);
     return this.current() ?? live;
+  }
+
+  private hasLiveQueuedApproval(runId: string): boolean {
+    const nowMs = this.now().getTime();
+    return (this.queuedApprovals.get(runId) ?? []).some((queued) => queued.expiresAt > nowMs);
   }
 
   // An approval that stops being the run's active one takes its expiry timer with it, so neither a

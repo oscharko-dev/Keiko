@@ -289,6 +289,30 @@ describe("coding-sidecar tool facade route", () => {
     },
   );
 
+  // PR #3625 review: only a denied or expired ask's own result reaches the model. Any other 409 is
+  // answered with the route's own refusal and its body is never parsed or passed on.
+  it.each([
+    ["without a decision", undefined],
+    ["for a cancelled ask", "approval-cancelled"],
+  ] as const)("never passes a 409 body through %s", async (_label, rejection) => {
+    const handle = vi.fn(() =>
+      Promise.resolve({
+        status: 409,
+        body: "not json from the bridge",
+        ...(rejection === undefined ? {} : { rejection }),
+      }),
+    );
+    const result = await handleCodingSidecarToolFacade(
+      toolFacadeContext({}),
+      depsWith(bridge(handle)),
+    );
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "CODING_TOOL_FACADE_UNAVAILABLE" } },
+    });
+    expect(JSON.stringify(result)).not.toContain("not json");
+  });
+
   it("rejects an oversized body with 413 before ever calling the bridge, and logs body-too-large", async () => {
     const log = captureServerLog();
     const handle = vi.fn(() => Promise.resolve({ status: 200, body: "{}" }));
