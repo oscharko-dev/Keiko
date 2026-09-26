@@ -1184,7 +1184,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     const portableAvailability = portableAvailabilityFailure(portable);
     if (portableAvailability !== undefined)
       return this.recordLaunchFailure(request, portableAvailability);
-    const egressPolicy = codexRuntimeEgressPolicy(egress);
+    const egressPolicy = codexRuntimeEgressPolicy(egress, this.deps, request.runId);
     if (egressPolicy === undefined) {
       return this.recordLaunchFailure(request, failure("egress-unqualified", false));
     }
@@ -2597,14 +2597,15 @@ function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureRes
 }
 
 function observeSandboxAttestation(
-  deps: Pick<NormalizedCodingRuntimeManagerDeps, "onSandboxAttestation">,
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "diagnostics" | "now" | "onSandboxAttestation">,
   runId: string,
   attestation: LongLivedRuntimeSandboxAttestation,
 ): boolean {
   try {
     deps.onSandboxAttestation?.(runId, attestation);
     return true;
-  } catch {
+  } catch (error) {
+    emitSandboxAttestationFailureDiagnostic(deps.diagnostics, runId, error, deps.now);
     return false;
   }
 }
@@ -2678,6 +2679,8 @@ function supervisorLaunchRequest(
 
 function codexRuntimeEgressPolicy(
   policy: ReviewedCodexEgressPolicy,
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "diagnostics" | "now">,
+  runId: string,
 ): LongLivedRuntimeEgressPolicy | undefined {
   const reviewedEgressReceipt = `sha256:${digestValue(policy.receipt)}`;
   if (policy.httpsProxy === undefined) {
@@ -2702,9 +2705,44 @@ function codexRuntimeEgressPolicy(
         ? {}
         : { noProxyIdentityDigest: digestValue(policy.noProxy) }),
     };
-  } catch {
+  } catch (error) {
+    emitCodexEgressPolicyFailureDiagnostic(deps.diagnostics, runId, error, deps.now);
     return undefined;
   }
+}
+
+function emitSandboxAttestationFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.sandbox-attestation",
+    source: "coding-runtime-manager.sandbox-attestation",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: "sandbox-attestation-observer",
+  });
+}
+
+function emitCodexEgressPolicyFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.egress-policy",
+    source: "coding-runtime-manager.egress-policy",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: "egress-policy-attestation",
+  });
 }
 
 function digestValue(value: string): string {
