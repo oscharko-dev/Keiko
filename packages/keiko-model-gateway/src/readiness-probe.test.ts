@@ -434,12 +434,46 @@ describe("requestGatewayReadinessChatCompletion", () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.text()).toBe("<html>bad gateway</html>");
     expect(bodies).toHaveLength(1);
+    const skipped = events.filter(
+      (event) => event.op === "gateway.readiness.compatibility-retry.skipped",
+    );
+    expect(skipped).toMatchObject([
+      { level: "warn", extra: { reason: "unreadable-rejection", sentField: "max_tokens" } },
+    ]);
+    expect(skipped[0]?.errorKind).toBeDefined();
+    expectActivityLogProof(
+      "gateway.readiness.compatibility-retry.skipped.line",
+      formatActivityLogProofLine(skipped[0] ?? {}),
+    );
+  });
+
+  // PR #3625 review: the rejection is read once from the answer itself. Read from a clone, a body
+  // over the cap cancelled only the clone's tee branch, whose cancellation waits for the untouched
+  // original — the probe never settled.
+  it("settles a rejection whose body exceeds the read cap instead of stalling", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response("x".repeat(70 * 1024), { status: 400 }));
+
+    const response = await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: PROVIDER,
+      body: { messages: [] },
+      maxOutputTokens: 17,
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+
+    expect(response.status).toBe(400);
     expect(
       events.filter((event) => event.op === "gateway.readiness.compatibility-retry.skipped"),
-    ).toMatchObject([{ extra: { reason: "unreadable-rejection", sentField: "max_tokens" } }]);
-  });
+    ).toMatchObject([{ extra: { reason: "unreadable-rejection" } }]);
+  }, 5_000);
 
   // PR #3625 review: the probe's attempts and its compatibility retry are recorded under the probe's
   // correlation id, and the retry line says which field was rejected and how the retry answered.

@@ -222,43 +222,54 @@ function readinessStatusErrorKind(status: number): ActivityLogErrorKind {
 function logReadinessFieldRetrySkipped(
   request: GatewayReadinessChatCompletionRequest,
   sentField: OutputTokenField,
-  reason: "other-cause" | "unreadable-rejection",
   rejectedStatus: number,
+  unreadable?: { readonly errorKind: ActivityLogErrorKind },
 ): void {
   const url = readinessChatCompletionsUrl(request.provider);
   readinessLog(request).write(
     activityLogEvent(
       READINESS_COMPATIBILITY_RETRY_SKIPPED_OPERATION,
-      { level: "info", ...correlationOf(request) },
+      unreadable === undefined
+        ? { level: "info", ...correlationOf(request) }
+        : { level: "warn", ...correlationOf(request), errorKind: unreadable.errorKind },
       {
         endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
         modelId: logModelId(request.provider.modelId),
         sentField,
-        reason,
+        reason: unreadable === undefined ? "other-cause" : "unreadable-rejection",
         rejectedStatus,
       },
     ),
   );
 }
 
-// Whether the rejection says the output-token field sent is unsupported, the same rule the chat
-// adapter applies. Read from a clone, so the caller keeps the untouched response; a rejection that
-// names another cause or cannot be read is recorded and answered with "no".
-async function rejectsSentOutputTokenField(
+// A rejected answer handed back with its status and headers but without its body: readiness reads
+// only the status of a rejected answer.
+function withoutBody(answer: Response): Response {
+  return new Response(null, {
+    status: answer.status,
+    statusText: answer.statusText,
+    headers: answer.headers,
+  });
+}
+
+// The rejection read once from the answer itself, bounded, never from a clone: a clone tees the
+// body, and cancelling one tee branch waits until the other is cancelled too, so a capped or failed
+// read would stall on an original nobody reads (PR #3625 review). An unreadable rejection is
+// recorded with its closed error kind.
+async function readRejection(
   request: GatewayReadinessChatCompletionRequest,
   answer: Response,
   sentField: OutputTokenField,
-): Promise<boolean> {
-  let payload: unknown;
+): Promise<{ readonly payload: unknown } | undefined> {
   try {
-    payload = await readJsonCapped(answer.clone(), READINESS_REJECTION_MAX_BYTES);
-  } catch {
-    logReadinessFieldRetrySkipped(request, sentField, "unreadable-rejection", answer.status);
-    return false;
+    return { payload: await readJsonCapped(answer, READINESS_REJECTION_MAX_BYTES) };
+  } catch (error) {
+    logReadinessFieldRetrySkipped(request, sentField, answer.status, {
+      errorKind: activityLogErrorKind(error),
+    });
+    return undefined;
   }
-  if (rejectsOutputTokenField(payload, sentField)) return true;
-  logReadinessFieldRetrySkipped(request, sentField, "other-cause", answer.status);
-  return false;
 }
 
 // Records the retry before sending it, and its failure if it throws, then rethrows.
@@ -416,8 +427,12 @@ export async function requestGatewayReadinessChatCompletion(
     return answer;
   }
   const sentField = sentOutputTokenField(request);
-  if (!(await rejectsSentOutputTokenField(request, answer, sentField))) return answer;
-  await answer.body?.cancel();
+  const rejection = await readRejection(request, answer, sentField);
+  if (rejection === undefined) return withoutBody(answer);
+  if (!rejectsOutputTokenField(rejection.payload, sentField)) {
+    logReadinessFieldRetrySkipped(request, sentField, answer.status);
+    return withoutBody(answer);
+  }
   return sendReadinessRetry(request, sentField, answer.status, () =>
     requestWithStreamFallback(other),
   );
