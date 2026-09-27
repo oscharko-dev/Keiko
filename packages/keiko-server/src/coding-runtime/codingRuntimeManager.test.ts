@@ -2735,15 +2735,21 @@ describe("coding runtime manager", () => {
   it("classifies a symlink's real resolved target for sensitivity, not just its lexical name (#2906)", async () => {
     const fixture = createManagedFixture();
     mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
-    // The sensitive file AND the symlink both live inside the approved "src" scope, so
+    // The sensitive target AND the link both live inside the approved "src" scope, so
     // resolveContainedEditTarget's own scope-membership check passes either way -- isolating the
     // sensitivity classification as the only thing that can still deny this.
-    writeFileSync(join(fixture.workspaceRoot, "src", ".env"), "SECRET=1\n");
+    const sensitiveTarget = join(fixture.workspaceRoot, "src", ".env");
+    if (process.platform === "win32") {
+      mkdirSync(sensitiveTarget, { recursive: true });
+    } else {
+      writeFileSync(sensitiveTarget, "SECRET=1\n");
+    }
     // The symlink's own lexical name ("config-alias") matches no deny pattern; only its REAL
     // resolved target, "src/.env", does.
     symlinkSync(
-      join(fixture.workspaceRoot, "src", ".env"),
+      sensitiveTarget,
       join(fixture.workspaceRoot, "src", "config-alias"),
+      process.platform === "win32" ? "junction" : undefined,
     );
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];

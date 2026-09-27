@@ -21,8 +21,7 @@ import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import type { PrDescriptionContext, PrDescriptionServiceOptions } from "./prDescriptionTypes.js";
 
-const GIT_EXECUTABLE =
-  process.platform === "win32" ? String.raw`C:\Program Files\Git\cmd\git.exe` : "/usr/bin/git";
+const GIT_EXECUTABLE = process.env.KEIKO_TEST_GIT_EXECUTABLE?.trim() || "git";
 
 export class DescriptionFixture {
   public readonly root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-description-")));
