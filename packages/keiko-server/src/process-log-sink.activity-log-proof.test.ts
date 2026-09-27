@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+
 // Activity Log proof for `command.terminated` (#3532). Kept in a file of its own, separate from
 // process-log-sink.test.ts, which a concurrent stream owns: this file's only job is to drive the
 // real `logCommandTermination` emitter and prove its persisted line against the registered
@@ -5,7 +7,6 @@
 
 import { describe, expect, it } from "vitest";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
-import { createBufferedServerLogSink } from "./observability/server-log.js";
 import { logCommandTermination } from "./process-log-sink.js";
 import {
   expectActivityLogProof,

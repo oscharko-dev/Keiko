@@ -151,7 +151,7 @@ function classById(result, id) {
   return result.classes.find((c) => c.id === id);
 }
 
-function captureRepair(stateDir) {
+async function captureRepair(stateDir) {
   // A stub UI static root keeps the install-layout check `ok` so the dry-run exit code reflects only
   // state confidentiality, not whether the dev tree has a built UI export.
   const staticRoot = join(root, "ui-static");
@@ -164,7 +164,7 @@ function captureRepair(stateDir) {
     out: (s) => lines.push(s),
     err: (s) => lines.push(s),
   };
-  const code = runRepairCli(
+  const code = await runRepairCli(
     ["--dry-run", "--state-dir", stateDir, "--config", join(stateDir, "keiko.config.json")],
     io,
     { KEIKO_UI_STATIC_ROOT: staticRoot },
@@ -332,16 +332,20 @@ describe("auditLocalState — focused class behaviour", () => {
 });
 
 describe("keiko repair --dry-run on the fixture (#1325 AC4)", () => {
-  it("reports a healthy fixture as clean", () => {
-    const { code, output } = captureRepair(createHealthyFixture(join(root, "healthy", ".keiko")));
+  it("reports a healthy fixture as clean", async () => {
+    const { code, output } = await captureRepair(
+      createHealthyFixture(join(root, "healthy", ".keiko")),
+    );
     expect(output).toContain("[ok] Credential storage");
     expect(output).not.toContain("[action] Credential storage");
     expect(output).not.toContain("[would-fix] Runtime state artifacts");
     expect(code).toBe(0);
   });
 
-  it("flags the drifted fixture: plaintext credentials and loose permissions", () => {
-    const { code, output } = captureRepair(createDriftedFixture(join(root, "drifted", ".keiko")));
+  it("flags the drifted fixture: plaintext credentials and loose permissions", async () => {
+    const { code, output } = await captureRepair(
+      createDriftedFixture(join(root, "drifted", ".keiko")),
+    );
     expect(output).toContain("[action] Credential storage");
     if (process.platform === "win32") {
       expect(output).not.toContain("[would-fix] Runtime state artifacts");

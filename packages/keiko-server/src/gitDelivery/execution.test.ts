@@ -25,7 +25,7 @@ import type {
 import type { NodeGitWorktreeReaderDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../store/index.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {

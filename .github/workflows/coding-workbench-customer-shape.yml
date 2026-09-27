@@ -9,6 +9,7 @@ on:
       - ".github/workflows/release.yml"
       - "package.json"
       - "package-lock.json"
+      - "packages/keiko-activity-log/**"
       - "packages/keiko-contracts/**"
       - "packages/keiko-cli/**"
       - "packages/keiko-harness/**"

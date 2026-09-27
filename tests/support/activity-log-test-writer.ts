@@ -7,8 +7,8 @@
 // Readiness then reports the writer as `test-injected`, never as production. A test that sets
 // `KEIKO_STATE_DIR` still gets the real production file writer.
 //
-// The marker is the global symbol `installActivityLogTestWriter` (keiko-server
-// `observability/server-logger.ts`) reads. It is set directly rather than through that function so
+// The marker is the global symbol `installActivityLogTestWriter` (keiko-activity-log
+// `src/server-logger.ts`) reads. It is set directly rather than through that function so
 // this setup never loads the server module graph into suites that do not need it; the shared
 // `Symbol.for` key is what makes one marker visible to every module instance (source and dist).
 const ACTIVITY_LOG_TEST_WRITER = Symbol.for("@oscharko-dev/keiko-server/activity-log-test-writer");

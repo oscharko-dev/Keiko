@@ -17,7 +17,8 @@
 //
 // SHAPE, FOLLOWING THE ESTABLISHED CONVENTION
 //
-// `ServerLogCategory` (observability/server-log.ts) is a closed union with no task-workspace member.
+// `ServerLogCategory` (keiko-activity-log server-log.ts) is a closed union with no task-workspace
+// member.
 // gitDelivery already answered the same question for its own domain lifecycle lines
 // (`logGitDeliveryMutation`/`logGitDeliveryPreconditionFailure`, gitDelivery/execution.ts;
 // `logCommandTermination`, process-log-sink.ts): bucket under `"diagnostic"` and carry the domain in a
@@ -48,8 +49,8 @@ import {
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type {
   TaskWorkspaceDriftMarker,
   WorkspaceCleanupRefusalReason,

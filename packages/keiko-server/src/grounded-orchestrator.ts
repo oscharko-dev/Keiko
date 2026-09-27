@@ -162,7 +162,7 @@ import {
   type ServerLogger,
   type ServerLogSink,
 } from "./observability/index.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";

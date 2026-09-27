@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ServerLogEvent } from "../observability/server-log.js";
-import { redactLogFields } from "../observability/log-redaction.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   expectActivityLogProof,

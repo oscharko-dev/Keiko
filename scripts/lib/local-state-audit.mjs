@@ -68,8 +68,9 @@ const SUPPORT_INCIDENT_FILE_PATTERN = /^incident-[a-f0-9]{32}\.json$/u;
 const SUPPORT_INCIDENT_FINGERPRINT_CLAIM_PATTERN = /^fingerprint-[a-f0-9]{64}\.claim$/u;
 const SUPPORT_INCIDENT_SLOT_CLAIM_PATTERN = /^slot-\d{2}\.claim$/u;
 const MAX_SUPPORT_INCIDENT_RECORD_BYTES = 4096;
-// Source of truth: packages/keiko-cli/src/support-segment-manifest-names.ts (grammar, #3531) and
-// packages/keiko-cli/src/support-segment-manifest.ts's MAX_SEGMENT_MANIFEST_BYTES (bound). The
+// Source of truth: packages/keiko-activity-log/src/reader/support-segment-manifest-names.ts
+// (grammar, #3531) and packages/keiko-activity-log/src/reader/support-segment-manifest.ts's
+// MAX_SEGMENT_MANIFEST_BYTES (bound). The
 // segment id shape mirrors keiko-contracts activity-log-files.ts's SEGMENT_ID_PATTERN.
 const ACTIVITY_LOG_MANIFESTS_SUBDIR = "activity-log-manifests";
 const ACTIVITY_LOG_MANIFEST_FILE_PATTERN =

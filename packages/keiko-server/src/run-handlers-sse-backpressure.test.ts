@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Regression (#2902 w5-sse-counters review finding): `run-handlers.ts`'s two SSE writers
 // (`openSseStream`'s writer, reached from `handleRunEvents` — GET /api/runs/:runId/events — and
 // `aggregateRunWriter`, reached from `handleAllRunEvents` — GET /api/runs/events) each call
@@ -18,13 +23,7 @@ import { handleAllRunEvents } from "./run-handlers.js";
 import type { RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 // A minimal `ServerResponse`-shaped double (mirrors `sse-write.test.ts`'s `listenableFakeRes`):
 // `write` records the frame it was given, then always rejects, so the very first frame trips the

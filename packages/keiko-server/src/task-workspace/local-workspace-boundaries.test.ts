@@ -9,7 +9,7 @@ import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
-import { createBufferedServerLogSink } from "../observability/index.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";

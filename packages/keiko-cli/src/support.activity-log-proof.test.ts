@@ -40,7 +40,7 @@ import {
 } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 import { resolveOutPath, runSupportCli, type SupportCliDeps } from "./support.js";
-import { analyzeLogText } from "./support-analyze.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 const tempRoots: string[] = [];

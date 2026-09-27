@@ -30,7 +30,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext, RouteResult } from "../routes.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   createGitDeliveryLocalMutationRouteGroup,

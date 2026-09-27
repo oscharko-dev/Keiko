@@ -66,6 +66,27 @@ import { createRunRegistry } from "../runs.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { STREAMING, type RouteContext } from "../routes.js";
 
+const transcriptFixtureGitEnvironment: { value: NodeJS.ProcessEnv } = vi.hoisted(() => ({
+  value: {},
+}));
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    readGitStageSupport: vi.fn(
+      (
+        deps: Parameters<typeof actual.readGitStageSupport>[0],
+        paths: Parameters<typeof actual.readGitStageSupport>[1],
+      ) =>
+        actual.readGitStageSupport(
+          { ...deps, processEnv: transcriptFixtureGitEnvironment.value },
+          paths,
+        ),
+    ),
+  };
+});
+
 const DIGEST = "a".repeat(64);
 const SCRIPTED_TRANSCRIPT_INTEGRATION_TIMEOUT_MS = 30_000;
 const roots: string[] = [];
@@ -348,6 +369,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     readonly events: CodingWorkbenchRuntimeEvent[];
     readonly approvals: TranscriptApprovals;
   } {
+    transcriptFixtureGitEnvironment.value = { PATH: process.env.PATH, HOME: root };
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
     const snapshots = createCodingRuntimeSnapshotStore(db);

@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Registry-linked executable proofs (#3532) for every Activity Log operation `chat-activity.ts`
 // emits. There is no pre-existing co-located test file for this module (one is created here,
 // following the repository's `foo.ts` -> `foo.test.ts` convention) — every proof drives the real
@@ -20,13 +25,7 @@ import {
   logGitChangeDescriptionTargetDenied,
   logGitChangeTurnAuthorityEvent,
 } from "./chat-activity.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 function captureServerLog(): BufferedServerLogSink {
   const sink = createBufferedServerLogSink();

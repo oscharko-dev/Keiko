@@ -33,7 +33,7 @@ import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../ind
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { RouteContext } from "../routes.js";
 import { atlassianCredentialMetadataPath } from "./credentialMetadataStore.js";

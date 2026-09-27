@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 // The BFF client-diagnostics route's loss evidence (#3532): refused reports get their own throttled
 // line, trailing suppressed counts are flushed at shutdown, and browser-reported delivery loss is
 // persisted and counted — all through the real production sink.
@@ -24,7 +25,6 @@ import {
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
 } from "./client-diagnostics-routes.js";
-import { resetServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 
 const CORRELATION_ID = "client-loss-route-test";

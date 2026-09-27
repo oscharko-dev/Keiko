@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Unit tests for the media-only realtime Voice control-plane protocol state machine. The fake socket
 // and injected negotiation seam exercise lifecycle, SDP signaling, content-free capability offers,
 // content-free replay, idempotency, and deterministic teardown without network, media, or paid calls.
@@ -11,13 +16,7 @@ import {
 import type { RealtimeNegotiationOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { VoiceControlMessage, VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

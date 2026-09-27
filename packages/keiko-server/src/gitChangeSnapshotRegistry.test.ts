@@ -11,7 +11,7 @@ import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts";
 import { GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { GitChangeSnapshotRegistry } from "./gitChangeSnapshotRegistry.js";
 import type { GitSnapshotContent } from "./gitChangeSnapshotRegistry.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

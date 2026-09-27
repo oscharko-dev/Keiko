@@ -6,7 +6,7 @@ import type { EditorAgentSessionSnapshot, WorkspaceInfo } from "@oscharko-dev/ke
 import { createNodeEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../store/index.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import {

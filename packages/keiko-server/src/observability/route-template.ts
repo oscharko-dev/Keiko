@@ -346,6 +346,11 @@ function isTemplatableRoute(segments: readonly string[]): boolean {
   return isStaticRouteSegment(segments[0] ?? "");
 }
 
+// Names this reducer when the server installs it into the Activity Log redaction. A source copy and
+// a built copy of the server carry distinct but identical functions; the shared id lets the second
+// installation keep the first instead of conflicting with it (ADR-0179).
+export const ROUTE_TEMPLATE_REDACTOR_ID = "keiko-server/route-template";
+
 // Reduces an absolute request path to its route template, or returns `undefined` when the value is
 // not a route this server serves — in which case the caller must treat it as a filesystem path and
 // refuse it. `maxLength` is the caller's own string cap: eliding a short segment to a placeholder makes

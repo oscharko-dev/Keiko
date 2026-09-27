@@ -22,6 +22,7 @@ export const loadWorkflows = memo(() => import("@oscharko-dev/keiko-workflows"))
 export const loadWorkspaceModule = memo(() => import("@oscharko-dev/keiko-workspace"));
 export const loadSecurity = memo(() => import("@oscharko-dev/keiko-security"));
 export const loadEvaluations = memo(() => import("@oscharko-dev/keiko-evaluations"));
+export const loadActivityLog = memo(() => import("@oscharko-dev/keiko-activity-log"));
 export const loadServer = memo(() => import("@oscharko-dev/keiko-server"));
 export const loadCredentialVault = memo(
   () => import("@oscharko-dev/keiko-server/credential-vault"),

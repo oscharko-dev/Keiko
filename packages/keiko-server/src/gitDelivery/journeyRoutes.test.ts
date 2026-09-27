@@ -27,7 +27,7 @@ import type {
 import type { RouteContext, RouteResult } from "../routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore } from "../store/index.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshotStore,

@@ -37,7 +37,7 @@ import {
   type ServerDiagnosticSummary,
 } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_SUBSCRIBERS = 32;

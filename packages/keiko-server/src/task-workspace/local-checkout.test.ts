@@ -13,7 +13,8 @@ import {
   productionWorkspaceMatches,
   resolveProductionRuntimeContext,
 } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
-import { createBufferedServerLogSink, type ServerLogSink } from "../observability/index.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

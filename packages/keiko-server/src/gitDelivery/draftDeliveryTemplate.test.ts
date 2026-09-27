@@ -11,7 +11,7 @@ import {
 import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import { formatServerLogLine, type ServerLogEvent } from "../observability/server-log.js";
+import { formatServerLogLine, type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   resolveDraftDeliveryTemplate,
   DRAFT_DELIVERY_TEMPLATE_MAX_BYTES,

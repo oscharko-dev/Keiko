@@ -438,7 +438,7 @@ export {
   type ServerLogCategory,
   type ServerLogLevel,
   type ServerLogThreshold,
-} from "./observability/server-log.js";
+} from "@oscharko-dev/keiko-activity-log";
 
 // ADR-0173 D3/D11 — error evidence for the activity log: dist/src-anchored stack frames, a
 // content-free `.cause` chain, and the content-free error-CLASS classifier they both build on.
@@ -447,7 +447,7 @@ export {
 // sink already writes, via a dynamic `import("@oscharko-dev/keiko-server")` reached only inside the
 // crash handler — never at module scope, where it would cost real startup time against
 // GEN-PERF-CLI-001's budget.
-export { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+export { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 // #3533 — local SupportIncident candidates. `keiko support incident` lists, resolves, previews,
 // records (Report a problem), and dismisses them through these. The automatic trigger runs inside
@@ -463,7 +463,7 @@ export {
   type SupportIncidentCreation,
   type SupportIncidentDismissal,
   type SupportIncidentSegmentFile,
-} from "./observability/support-incident.js";
+} from "@oscharko-dev/keiko-activity-log";
 export { contentFreeErrorClass, describeError } from "./diagnostics-log.js";
 
 // #3532 — product-wide Activity Log wiring. `createActivityLogSink` is the level-gated production
@@ -475,7 +475,7 @@ export {
   createActivityLogSink,
   isMandatoryActivityLogEvent,
   type ActivityLogSinkOptions,
-} from "./observability/server-logger.js";
+} from "@oscharko-dev/keiko-activity-log";
 export {
   checkActivityLogReadiness,
   currentActivityLogReadiness,
@@ -483,14 +483,14 @@ export {
   type ActivityLogReadinessOptions,
   type ActivityLogReadinessScope,
   type ActivityLogStorageHealthProvider,
-} from "./observability/activity-log-readiness.js";
+} from "@oscharko-dev/keiko-activity-log";
 export {
   persistActivityLogLossSummary,
   type ActivityLogLossSummaryOutcome,
   type ActivityLogLossSummaryTrigger,
-} from "./observability/activity-log-loss-summary.js";
+} from "@oscharko-dev/keiko-activity-log";
 export { flushClientDiagnosticsIngestCounts } from "./client-diagnostics-routes.js";
-export { resolveRuntimeStateDir } from "./observability/runtime-state-dir.js";
+export { resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
 // The one process-wide Activity Log port every domain package is handed (#3532). CLI commands that
 // compose domain packages in-process (`keiko memory`, `keiko run`, the workflow commands, `keiko
 // evaluate --live`) pass it to the vault and the Model Gateway exactly like the BFF does, so their

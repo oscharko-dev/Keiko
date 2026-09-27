@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 import { EventEmitter } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
@@ -5,11 +10,8 @@ import { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodingSafeActivityProjection } from "../coding-runtime/codingSafeActivityProjection.js";
 import {
-  createBufferedServerLogSink,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-  type BufferedServerLogSink,
   type ServerLogEvent,
 } from "../observability/index.js";
 import { createFakeSessionPairingPort, fakePairingRequestBody } from "./_support.js";

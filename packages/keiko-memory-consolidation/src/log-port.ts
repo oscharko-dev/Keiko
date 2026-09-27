@@ -63,7 +63,7 @@ export function nullConsolidationLogSink(): ConsolidationLogSink {
 
 // The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
 // `keiko-contracts` rather than declared here, so this reducer and its siblings in
-// `keiko-local-knowledge/src/knowledge-log.ts`, `keiko-server/src/observability/server-log.ts`
+// `keiko-local-knowledge/src/knowledge-log.ts`, `keiko-activity-log/src/server-log.ts`
 // and `keiko-model-gateway/src/observability.ts` cannot drift into accepting different things: an
 // identifier, a taxonomy code, a constructor name — never a sentence.
 //

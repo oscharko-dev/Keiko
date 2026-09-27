@@ -11,7 +11,7 @@ import {
 import { readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 const MAX_PROVIDER_RESPONSE_BYTES = 500_000;
 

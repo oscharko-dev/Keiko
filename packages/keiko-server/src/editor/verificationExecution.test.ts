@@ -22,7 +22,7 @@ import {
   planDirectTargetedTests,
 } from "@oscharko-dev/keiko-verification";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   executeVerificationEnforced,
   probeNetworkIsolation,

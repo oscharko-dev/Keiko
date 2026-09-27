@@ -1,10 +1,11 @@
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+
 // Activity Log proofs for deps-activity.ts's shared emitters (#3532): the memory-audit
 // state-cache seed count, the task-workspace repository registration decision (registered /
 // refused), and the server runtime shutdown lifecycle line. Each test drives the real exported
 // emitter with a capturing sink and proves the persisted line against its registered operation.
 
 import { describe, expect, it } from "vitest";
-import { createBufferedServerLogSink } from "./observability/server-log.js";
 import {
   logMemoryAuditStateCacheSeeded,
   logRuntimeShutdown,

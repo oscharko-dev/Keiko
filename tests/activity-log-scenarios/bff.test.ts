@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the bff surface — the keiko-server HTTP/BFF layer (the
 // `request` close line, the bounded request-body reader, chat admission and PR-description turn
 // authority, and the server diagnostic sink).
@@ -28,7 +29,6 @@ import {
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "../../packages/keiko-server/src/bounded-request-body.js";
-import { resetServerLogger } from "../../packages/keiko-server/src/observability/index.js";
 import { processServerLogSink } from "../../packages/keiko-server/src/process-log-sink.js";
 import { logRequestOnClose } from "../../packages/keiko-server/src/server.js";
 import {

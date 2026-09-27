@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Wiring test for `gateway-setup.ts`'s two `securityLogSink: processServerLogSink()` call sites
 // that feed the provider-credential vault's key resolution (Wave 4a, epic #3233 §8, gap g18):
 // `persistGatewayConfig`'s `persistSealedGatewayConfig` call, and `durableStoredGatewayConfig`'s
@@ -24,13 +29,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 
 type ResolveLocalVaultKeyOptions = Parameters<

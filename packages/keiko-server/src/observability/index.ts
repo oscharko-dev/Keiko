@@ -1,14 +1,14 @@
-// One import site for the server activity log. `server-log.ts` owns the sink, the line format and
-// rotation; `server-logger.ts` owns the calling surface, the level gate and the bound context;
-// `log-redaction.ts` owns the field policy and `log-level.ts` the severity ordering. Instrumentation
-// sites should import from here so the layering stays an implementation detail — and so the modules
-// never need to import each other in both directions.
+// One import site for the server activity log. The writer, the calling surface, the field policy and
+// the severity ordering live in @oscharko-dev/keiko-activity-log (ADR-0179); this module re-exports
+// them and installs the BFF route vocabulary into the package redaction. Instrumentation sites import
+// from here so the layering stays an implementation detail.
 
-// `server-log.js` already re-exports the level and redaction surfaces, so no name is exported
-// twice. The readiness, loss-summary and persistence modules own the #3532 health evidence.
-export * from "./server-log.js";
-export * from "./server-logger.js";
-export * from "./activity-log-persistence.js";
-export * from "./activity-log-readiness.js";
-export * from "./activity-log-loss-summary.js";
-export * from "./runtime-state-dir.js";
+import { configureActivityLogRouteRedactor } from "@oscharko-dev/keiko-activity-log";
+import { redactRoutePath, ROUTE_TEMPLATE_REDACTOR_ID } from "./route-template.js";
+
+// The route vocabulary stays in the BFF. The package defaults to refusing every path until the
+// server composition root supplies this narrow reducer.
+configureActivityLogRouteRedactor(ROUTE_TEMPLATE_REDACTOR_ID, redactRoutePath);
+
+export * from "@oscharko-dev/keiko-activity-log";
+export { redactRoutePath } from "./route-template.js";

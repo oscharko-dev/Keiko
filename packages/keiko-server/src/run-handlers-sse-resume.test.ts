@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // User finding #2456 — the desktop wake-up replay burst. `handleAllRunEvents` used to attach every
 // snapshot run with `attach(writer, -1)` (full ring-buffer replay) on EVERY connection, so a tab
 // re-opening its shared stream after visibility-hidden re-downloaded up to 128 runs' buffers just
@@ -26,13 +31,7 @@ import type { RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 // An ACCEPTING `ServerResponse` double that records every frame it is handed (the frame-recording
 // of `run-handlers-sse-backpressure.test.ts`'s double, the accepting `write` of

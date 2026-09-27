@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Tests for the grounded Q&A orchestrator (Issue #185). Verifies the deterministic linear
 // composition of the connected-context layers, the clarification-needed escape hatch, and
 // the budget-exhaustion → uncertainty-marker propagation produced by #183.
@@ -78,7 +79,6 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
-import { createBufferedServerLogSink } from "./observability/index.js";
 
 const NOW = 1_700_000_000_000;
 let ROOT = "";

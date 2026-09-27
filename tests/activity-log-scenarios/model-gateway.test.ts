@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the model-gateway surface — Gateway chat/stream calls, http
 // egress, the circuit breaker, and the gateway's own log-sink loss path. Each scenario drives a
 // production `Gateway` entry point with the real production file writer under a temporary
@@ -25,7 +26,6 @@ import {
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 
 import {
-  resetServerLogger,
   type ServerLogEvent,
   type ServerLogLevel,
 } from "../../packages/keiko-server/src/observability/index.js";

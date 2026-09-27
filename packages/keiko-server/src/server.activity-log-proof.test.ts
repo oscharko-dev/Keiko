@@ -17,7 +17,7 @@ import {
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
-import { closeFileServerLogSinks, createFileServerLogSink } from "./observability/server-log.js";
+import { closeFileServerLogSinks, createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { logRequestOnClose, type RequestLogContext } from "./server.js";
 
 interface RequestDouble extends EventEmitter {
