@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   utimesSync,
@@ -26,12 +27,17 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryUserId,
+  WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
 import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
 import { gitHubCodeContextPortFor } from "./coding-context/githubIssueReaderAuthorization.js";
+import {
+  resolveMemoryCaptureAutonomyMode,
+  resolvePersistedMemoryAutonomyMode,
+} from "./memory-capture-policy.js";
 import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
@@ -101,6 +107,7 @@ import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { RuntimeShutdownCleanup } from "./deps-activity.js";
+import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
@@ -1106,6 +1113,63 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       // Idempotent: the second exposure re-registers nothing and emits no second line.
       expect(events).toHaveLength(1);
       expect(JSON.stringify(events)).not.toContain(repositoryRoot);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("reconnects a recreated managed root before the editor can use its stale manifest", () => {
+    const repositoryRoot = tmp("managed-root-reconnect-source-");
+    const managedRoot = tmp("managed-root-reconnect-target-");
+    const packageManifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), packageManifest);
+    writeFileSync(join(managedRoot, "package.json"), packageManifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+
+    try {
+      store.createProject(repositoryRoot);
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        activityLog,
+      });
+      const previous = store.findWorkspaceManifestRecordByProject(managedRoot);
+      if (previous === undefined) throw new Error("Expected a managed root manifest.");
+      const previousManifest = JSON.parse(previous.recordJson) as WorkspaceManifest;
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeDefined();
+
+      workspaceScriptTrust.revoke(repositoryRoot);
+      renameSync(managedRoot, `${managedRoot}-previous`);
+      mkdirSync(managedRoot);
+      writeFileSync(join(managedRoot, "package.json"), packageManifest);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        activityLog,
+      });
+
+      const refreshed = store.findWorkspaceManifestRecordByProject(managedRoot);
+      if (refreshed === undefined) throw new Error("Expected a reconnected manifest.");
+      const refreshedManifest = JSON.parse(refreshed.recordJson) as WorkspaceManifest;
+      expect(refreshedManifest.roots[0]?.identityDigest).not.toBe(
+        previousManifest.roots[0]?.identityDigest,
+      );
+      expect(refreshed.rootProjects[0]?.objectIdentityDigest).not.toBe(
+        previous.rootProjects[0]?.objectIdentityDigest,
+      );
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeUndefined();
+      expect(events.some((event) => event.op === "task-workspace.manifest.reconnected")).toBe(true);
     } finally {
       store.close();
     }
@@ -3071,7 +3135,7 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     });
   }
 
-  it("resolves the ceiling from the option, then the environment, then governed-assist", () => {
+  it("resolves the ceiling from the option, then the environment, then all-mode availability", () => {
     const fromOption = depsWithEnv(
       { KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },
       "supervised-coding",
@@ -3080,10 +3144,26 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     const fromEnv = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: "supervised-coding" });
     expect(fromEnv.codingRuntimeDeploymentCeiling).toBe("supervised-coding");
     const fromDefault = depsWithEnv({});
-    expect(fromDefault.codingRuntimeDeploymentCeiling).toBe("governed-assist");
+    expect(fromDefault.codingRuntimeDeploymentCeiling).toBe("autonomous-delivery");
   });
 
-  it("ignores an unrecognized ceiling environment value fail-closed", () => {
+  it("keeps memory approval semantics when all Coding modes are available by default", () => {
+    const deps = depsWithEnv({});
+    expect(deps.codingRuntimeDeploymentCeiling).toBe("autonomous-delivery");
+    expect(resolveMemoryCaptureAutonomyMode(deps)).toBe("governed-assist");
+    expect(resolveMemoryCaptureAutonomyMode(deps, "autonomous-delivery")).toBe("governed-assist");
+    deps.store.updateMemoryAutonomyPolicy("autonomous-delivery", 0);
+    expect(resolvePersistedMemoryAutonomyMode(deps)).toBe("governed-assist");
+  });
+
+  it("preserves explicitly configured Memory ceilings", () => {
+    const fromOption = depsWithEnv({}, "supervised-coding");
+    const fromEnv = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" });
+    expect(resolveMemoryCaptureAutonomyMode(fromOption)).toBe("supervised-coding");
+    expect(resolveMemoryCaptureAutonomyMode(fromEnv)).toBe("autonomous-delivery");
+  });
+
+  it("rejects an unrecognized explicit ceiling environment value fail-closed", () => {
     for (const value of ["", "yolo", "AUTONOMOUS-DELIVERY", "supervised_coding"]) {
       const deps = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: value });
       expect(deps.codingRuntimeDeploymentCeiling).toBe("governed-assist");
@@ -3405,4 +3485,52 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
       await depsB.dispose?.();
     }
   }, 15000);
+});
+
+describe("Local checkout activity projection composition", () => {
+  it("purges prior workspace activity before a Local selection and keeps the real binding", async () => {
+    const root = snapshotWorkspace().root;
+    const projection = createCodingSafeActivityProjection({ now: () => 1_800_000_000_000 });
+    projection.open({
+      runId: "old-run",
+      workspaceId: "old-workspace",
+      authorityExpiresAt: new Date(1_800_000_060_000).toISOString(),
+      workspaceIsCurrent: () => true,
+    });
+    const purge = vi.spyOn(projection, "purgeAll");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("local-activity-evidence-"),
+      env: {},
+      initialProjectPath: root,
+      uiDbPath: join(tmp("local-activity-ui-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          safeActivityProjection: projection,
+          createRun: (): never => {
+            throw new Error("No model run is expected");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("No editor action is expected")),
+        },
+      },
+    });
+    try {
+      expect(deps.codingSafeActivityProjection).toBe(projection);
+      const selectLocal = deps.workspaceLifecycle?.selectLocal;
+      if (selectLocal === undefined) throw new Error("Local selection was not composed");
+      const active = selectLocal({ root, branch: "main", requestedBy: "operator" });
+      expect(purge).toHaveBeenCalledWith("workspace-switch");
+      expect(active.binding.activeRoot).toBe(root);
+      expect(deps.workspaceLifecycle?.getActive()?.binding).toEqual(active.binding);
+      expect(projection.currentContent()).toBeNull();
+    } finally {
+      await deps.dispose?.();
+    }
+  });
 });

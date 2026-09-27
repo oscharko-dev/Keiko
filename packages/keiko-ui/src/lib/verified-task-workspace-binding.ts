@@ -138,9 +138,13 @@ async function verifyAndActivate(
   root: string,
   workspaceId: string,
   requestedBy: string,
+  correlationId?: string,
 ): Promise<VerifiedTaskWorkspaceBindResult> {
   try {
-    const report = await reconcileTaskWorkspaces({ root });
+    const report = await reconcileTaskWorkspaces({
+      root,
+      ...(correlationId === undefined ? {} : { correlationId }),
+    });
     const entry = report.entries.find((item) => item.workspaceId === workspaceId);
     if (entry?.status !== "healthy") {
       // The same closed, content-free verdict the restore path names. Without it a repair that
@@ -149,6 +153,7 @@ async function verifyAndActivate(
       // the one generic verify sentence (#3381 review).
       reportClientDiagnostic(
         `[keiko] task workspace bind verify failed: status=${entry?.status ?? "missing-report-entry"}`,
+        { correlationId, errorKind: "validation-failed" },
       );
       return { ok: false, stage: "verify" };
     }
@@ -157,7 +162,11 @@ async function verifyAndActivate(
     return boundedBindFailure("verify", error);
   }
   try {
-    await setActiveTaskWorkspace({ workspaceId, requestedBy });
+    await setActiveTaskWorkspace({
+      workspaceId,
+      requestedBy,
+      ...(correlationId === undefined ? {} : { correlationId }),
+    });
     return { ok: true };
   } catch (error) {
     warnBindStage("activate", error);
@@ -172,6 +181,13 @@ export interface RestoreVerifiedActiveTaskWorkspaceOptions {
    * the reconciliation pass; every other identity is verified again.
    */
   readonly verifiedWorkspaceId?: string | null;
+}
+
+function restoredWorkspaceStatus(
+  entries: Awaited<ReturnType<typeof reconcileTaskWorkspaces>>["entries"],
+  workspaceId: string,
+): string {
+  return entries.find((item) => item.workspaceId === workspaceId)?.status ?? "missing-report-entry";
 }
 
 /**
@@ -201,19 +217,20 @@ export async function restoreVerifiedActiveTaskWorkspace(
 ): Promise<ActiveWorkspaceView | null> {
   const active = await getActiveTaskWorkspace();
   if (active === null) return null;
+  // Local bindings are re-proved by the server on every active read. The managed-worktree
+  // reconciliation report intentionally has no entry for the selected checkout.
+  if (active.instance.executionLocation === "local") return active;
   if (active.instance.workspaceId === options.verifiedWorkspaceId) return active;
   const report = await reconcileTaskWorkspaces({ root: active.instance.repositoryRoot });
   // Re-read after the pass: reconciliation is the repair authority, so the settled view must be
   // the post-verification truth (fresh health, verified-head stamp, or a self-healed pointer).
   const reverified = await getActiveTaskWorkspace();
   if (reverified === null) return null;
-  const entry = report.entries.find((item) => item.workspaceId === reverified.instance.workspaceId);
-  if (entry?.status === "healthy" || reverified.instance.health !== "healthy") return reverified;
+  const status = restoredWorkspaceStatus(report.entries, reverified.instance.workspaceId);
+  if (status === "healthy" || reverified.instance.health !== "healthy") return reverified;
   // The verdict is a closed, content-free status (never an Error), so it is logged as itself: the
   // one fact an operator needs from this line is WHICH status refused the restored binding.
-  reportClientDiagnostic(
-    `[keiko] task workspace bind restore-verify failed: status=${entry?.status ?? "missing-report-entry"}`,
-  );
+  reportClientDiagnostic(`[keiko] task workspace bind restore-verify failed: status=${status}`);
   throw new TaskWorkspaceRestoreVerificationError();
 }
 
@@ -236,6 +253,7 @@ export async function bindVerifiedTaskWorkspace(
       taskId: input.taskId,
       ...(input.source === undefined ? { baseBranch: input.baseBranch } : { source: input.source }),
       requestedBy: input.requestedBy,
+      ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
     });
     workspaceId = provisioned.instance.workspaceId;
   } catch (error) {
@@ -251,7 +269,7 @@ export async function bindVerifiedTaskWorkspace(
   } catch (error) {
     warnBindStage("provision-callback", error);
   }
-  return verifyAndActivate(input.root, workspaceId, input.requestedBy);
+  return verifyAndActivate(input.root, workspaceId, input.requestedBy, input.correlationId);
 }
 
 export interface VerifiedTaskWorkspaceRepairInput {

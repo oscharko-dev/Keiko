@@ -238,7 +238,7 @@ describe("coding task selection", () => {
     );
   });
 
-  it("keeps a task bound from Code setup visible when the desktop base folder differs", async () => {
+  it("hides a task from the previous repository after the desktop selection changes", async () => {
     const workspace = activeWorkspace();
     const { result } = renderHook(() =>
       useCodingTaskSession({
@@ -249,14 +249,10 @@ describe("coding task selection", () => {
         selection: undefined,
       }),
     );
-    await waitFor(() => expect(result.current.conversationId).toBe("chat-one"));
-    expect(result.current.visibleRun).toBe(true);
-    await act(async () => result.current.newTask());
-    expect(workspace.provision).toHaveBeenCalledWith({
-      root: "/repo",
-      baseBranch: "master",
-      taskId: expect.stringMatching(/^coding-/u),
-    });
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.conversationId).toBeUndefined();
+    expect(result.current.visibleRun).toBe(false);
+    expect(workspace.provision).not.toHaveBeenCalled();
   });
 
   it("keeps recovery controls reachable for a legacy run without a saved conversation", () => {
@@ -354,6 +350,30 @@ describe("coding task selection", () => {
     rerender({ selection: undefined });
     rerender({ selection: "chat-one" });
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads));
+  });
+
+  it("drops the previous conversation when reading another selected task fails", async () => {
+    const workspace = activeWorkspace();
+    read.mockImplementation((id: string) =>
+      id === "chat-one" ? Promise.resolve(detail) : Promise.reject(new Error("Read failed")),
+    );
+    const { result, rerender } = renderHook(
+      ({ selection }: { readonly selection: string | undefined }) =>
+        useCodingTaskSession({
+          snapshot: snapshot("chat-one"),
+          active: false,
+          root: "/repo",
+          workspace,
+          selection,
+        }),
+      { initialProps: { selection: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-one"));
+    rerender({ selection: "chat-two" });
+    await waitFor(() => expect(result.current.error).toBe(true));
+    expect(result.current.pending).toBe(false);
+    expect(result.current.conversationId).toBeUndefined();
+    expect(result.current.detail).toBeNull();
   });
 
   it("clears the old conversation for New task and surfaces workspace creation failure", async () => {

@@ -68,7 +68,9 @@ function isAbsoluteFixedPath(value: string): boolean {
   return isAbsolute(value) || win32.isAbsolute(value);
 }
 
-export const SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS = 2_000;
+// Leave room for process scheduling under load while keeping a hung helper bounded well inside
+// the governed tool bridge's 30-second deadline.
+export const SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS = 15_000;
 export const SECURE_WORKSPACE_TEXT_READ_MAX_LIVE = 8;
 
 export class SecureWorkspaceReadProcessError extends Error {

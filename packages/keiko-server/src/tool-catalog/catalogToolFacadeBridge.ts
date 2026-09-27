@@ -452,7 +452,8 @@ function bindingFor(
     ): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard);
       recordResult(result);
-      if (result.status === "failed") throw handlerFault(result);
+      if (result.status === "failed" && !isExecutedVerificationFailure(request, result))
+        throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
         resultCount: 1,
@@ -478,7 +479,8 @@ function executionOverride(
     execute: async (_argumentsValue, context): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard);
       recordResult(result);
-      if (result.status === "failed") throw handlerFault(result);
+      if (result.status === "failed" && !isExecutedVerificationFailure(request, result))
+        throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
         resultCount: 1,
@@ -499,6 +501,16 @@ type CatalogDispatchOutcome = Awaited<
 // this table does not know -- is a handler fault, which the lifecycle logs at error level and
 // which opens a support incident (#3615).
 type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason];
+
+// A red test run is a completed verification effect, not a broken catalog handler. Preserve the
+// governed failed result for the model while the catalog records that its handler ran successfully.
+// Refusals and infrastructure failures still take the fault path below.
+function isExecutedVerificationFailure(
+  request: CodingToolActionRequest,
+  result: Extract<CodingToolResult, { readonly status: "failed" }>,
+): boolean {
+  return request.action === "verification" && result.evidence[0]?.code === "VERIFICATION_FAILED";
+}
 // Every editor-agent conflict and failure code is classified here, so a code added to the contract
 // fails the build until it is (PR #3617 review). `undefined` keeps a code a handler fault. An
 // editor that is not connected, or a language provider the workspace cannot serve, is a capability

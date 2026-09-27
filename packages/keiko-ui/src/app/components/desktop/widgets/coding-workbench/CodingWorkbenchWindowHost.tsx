@@ -3,6 +3,7 @@
 import { useRef, type ReactNode } from "react";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
 
 function openGit(context: WindowRenderContext, target: CodingWorkbenchGitTarget): void {
   const { root, binding, repositoryDialog, descriptionReview } = target;
@@ -54,6 +55,19 @@ function resolvedTargetBranch(
   return targetBranch;
 }
 
+function isHistoryRestore(selection: string | undefined): boolean {
+  return selection !== undefined && !selection.startsWith("new:");
+}
+
+function handledHistoryPatch(restoringHistory: boolean): WindowCfgRecord {
+  return {
+    historySelection: undefined,
+    ...(restoringHistory
+      ? { executionLocation: undefined, targetBranch: undefined, targetBranchRoot: undefined }
+      : {}),
+  };
+}
+
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
 export function CodingWorkbenchWindowHost({
   cfg,
@@ -67,26 +81,38 @@ export function CodingWorkbenchWindowHost({
   // their own selection independent of subsequent Chat or Git context changes.
   const initialRoot = useRef(context.activeBinding === null ? context.selectedRoot : null);
   const root = cfgRoot ?? initialRoot.current;
-  const targetBranch = resolvedTargetBranch(cfg, root);
+  const historySelection =
+    typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
+  const restoringHistory = isHistoryRestore(historySelection);
+  const targetBranch = restoringHistory ? undefined : resolvedTargetBranch(cfg, root);
+  const selectedLocation: WorkbenchExecutionLocation | undefined =
+    !restoringHistory && (cfg.executionLocation === "local" || cfg.executionLocation === "worktree")
+      ? cfg.executionLocation
+      : undefined;
   return (
     <CodingWorkbenchWindow
-      historySelection={typeof cfg.historySelection === "string" ? cfg.historySelection : undefined}
-      onHistorySelectionHandled={() =>
-        context.openWindow("coding", { historySelection: undefined })
-      }
+      historySelection={historySelection}
+      onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
       onOpenHistory={() => context.openWindow("codingHistory")}
       selectedRoot={root ?? undefined}
       selectedBranch={targetBranch}
+      selectedLocation={selectedLocation}
       onSelectRepository={(repositoryPath) => {
         // #A review: a selection is local window state until Start, not a failure — routine
         // diagnostics were removed here (they showed up server-side as warn-level client
         // failures for an ordinary pick). The run-start request already carries the bound
         // repository and target branch for the operation that actually matters.
-        context.updateCfg({ repositoryPath, targetBranch: undefined, targetBranchRoot: undefined });
+        context.updateCfg({
+          repositoryPath,
+          targetBranch: undefined,
+          targetBranchRoot: undefined,
+          executionLocation: undefined,
+        });
       }}
       onSelectBranch={(branch) => {
         context.updateCfg({ targetBranch: branch, targetBranchRoot: root ?? undefined });
       }}
+      onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
       onOpenGit={(target) => openGit(context, target)}
     />
   );

@@ -90,6 +90,35 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.sidecar-session.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.readinessV2Ports.subscribe",
+  fields: {
+    binding: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["created", "reused"],
+    },
+    streamCount: { type: "integer", dataClass: "count", required: true },
+    sessionId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-session-continuity"],
+  proofIds: ["coding-runtime.sidecar-session.bound.emitted-line"],
+  releaseImpact: "patch",
+});
 
 function v2Record(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -878,6 +907,8 @@ function readinessV2Ports(
   request: OpenCodeLifecycleHandshakeRequest,
 ): Parameters<typeof createOpenCodeRuntimeAdapter>[0]["readiness"] {
   let fixedSessionId: string | undefined;
+  let sessionCreation: Promise<string> | undefined;
+  let streamCount = 0;
   let startupRead = false;
   const history = createOpenCodeV2HistoryProjection({
     runId: run.runId,
@@ -912,7 +943,23 @@ function readinessV2Ports(
       challengeV2Gateway(input, run, client, fixedSessionId, request, startupRead),
     toolFacadeChallenge: () => challengeToolFacade(input, bridge),
     subscribe: async function* (signal): AsyncIterable<OpenCodeSyncHint> {
-      fixedSessionId = await createAndEchoV2Session(client, run.workspaceRoot, request.signal);
+      // A reconnect opens another event stream for the same run, not another sidecar session.
+      // Keep the creation promise so concurrent subscriptions cannot create competing sessions.
+      sessionCreation ??= createAndEchoV2Session(client, run.workspaceRoot, request.signal);
+      fixedSessionId = await sessionCreation;
+      streamCount += 1;
+      if (fixedSessionId !== "")
+        input.activityLog?.write(
+          activityLogEvent(
+            SIDECAR_SESSION_BOUND_OPERATION,
+            { correlationId: run.runId },
+            {
+              binding: streamCount === 1 ? "created" : "reused",
+              streamCount,
+              sessionId: fixedSessionId,
+            },
+          ),
+        );
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
       for await (const event of client.events(combined)) {
@@ -933,6 +980,9 @@ function readinessV2Ports(
         }
         return events;
       } catch (error) {
+        // Stopping the monitor aborts its in-flight read after the final history was captured.
+        // The adapter owns that cancellation; it is not a sidecar history failure.
+        if (signal.aborted) throw error;
         if (messages.length > 0) input.safeActivity?.recordDrops(messages.length);
         recordOpenCodeV2HistoryFailure(input.diagnostics, run.runId, error);
         throw error;

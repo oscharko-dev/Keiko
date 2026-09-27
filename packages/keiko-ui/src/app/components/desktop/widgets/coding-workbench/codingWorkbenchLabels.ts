@@ -258,7 +258,10 @@ export function eventTitle(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
-  if (event.kind === "status") return runStateLabel(event.state, t);
+  if (event.kind === "status")
+    return event.state === "failed"
+      ? t("codingWorkbench.event.runFailed")
+      : runStateLabel(event.state, t);
   return t(`codingWorkbench.event.${event.eventKind}`);
 }
 
@@ -266,17 +269,20 @@ export function eventDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
-  const turnFailure = turnFailureDetail(event, t);
-  const base = event.failureCode
-    ? t("codingWorkbench.event.detailFailure", {
-        sequence: event.sequence,
-        revision: event.revision,
-        failure: event.failureCode,
-      })
-    : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
-  return [base, turnFailure, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
+  const failure = eventFailureDetail(event, t);
+  return [failure, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
     .filter((part) => part.length > 0)
     .join(" ");
+}
+
+function eventFailureDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  const turnFailure = turnFailureDetail(event, t);
+  if (turnFailure.length > 0) return turnFailure;
+  if (event.failureCode === "runtime-failed") return t("codingWorkbench.event.failure.runtime");
+  return event.failureCode === undefined ? "" : t("codingWorkbench.event.failure.generic");
 }
 
 function turnFailureDetail(

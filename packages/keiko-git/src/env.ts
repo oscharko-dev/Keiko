@@ -23,6 +23,10 @@ export function gitEnv(
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: devNullPath(platform),
     GIT_OPTIONAL_LOCKS: "0",
+    // A local read or branch switch must never invoke a promisor remote's lazy fetch. The
+    // protocol denylist also protects older Git versions that ignore GIT_NO_LAZY_FETCH.
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_ALLOW_PROTOCOL: "",
     LC_ALL: "C",
   };
   if (platform === "win32") {

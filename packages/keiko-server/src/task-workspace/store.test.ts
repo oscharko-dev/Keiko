@@ -20,6 +20,7 @@ function instance(overrides: Partial<WorkspaceInstance> = {}): WorkspaceInstance
     repositoryRoot: "/repo",
     baseBranch: "main",
     taskBranch: "keiko/task/task-1-abcd1234",
+    executionLocation: "worktree",
     managedWorktreePath: "/m/repo_aaaaaaaaaaaaaaaa/ws_aaaaaaaaaaaaaaaaaaaaaaaa",
     gitdirIdentity: "gitdir-identity-hash",
     lifecycleState: "active",

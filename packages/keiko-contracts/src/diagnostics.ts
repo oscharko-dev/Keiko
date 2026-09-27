@@ -466,6 +466,9 @@ const GIT_CHANGE_DESCRIPTION_OUTCOME_SET: ReadonlySet<string> = new Set(
   CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_OUTCOMES,
 );
 const BODY_FREE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
+// Local checkout bindings carry a server-derived SHA-256 identity after their namespace.
+// Accept that exact grammar here without opening other diagnostic ids to arbitrary colon data.
+const WORKSPACE_DIAGNOSTIC_ID_PATTERN = /^(?:[A-Za-z0-9._-]{1,128}|local:[a-f0-9]{64})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function isSetMember(value: unknown, values: ReadonlySet<string>): value is string {
@@ -497,7 +500,7 @@ function isClientDiagnosticWorkspaceTrustBinding(
     typeof value.repositoryId === "string" &&
     BODY_FREE_ID_PATTERN.test(value.repositoryId) &&
     typeof value.workspaceId === "string" &&
-    BODY_FREE_ID_PATTERN.test(value.workspaceId)
+    WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value.workspaceId)
   );
 }
 
@@ -996,6 +999,7 @@ export function isClientSessionRepairIngestRequest(
 export const CLIENT_GIT_CLIENT_OPERATION_KINDS = [
   "repository-clone",
   "repository-register",
+  "checkout-selection",
   "status-read",
   "branches-read",
   "summary-read",
@@ -1021,6 +1025,7 @@ export type ClientGitClientOperationOutcome = (typeof CLIENT_GIT_CLIENT_OPERATIO
 const GIT_CLIENT_DISCARD_OPERATIONS: ReadonlySet<ClientGitClientOperationKind> = new Set([
   "repository-clone",
   "repository-register",
+  "checkout-selection",
 ]);
 const GIT_CLIENT_DISCARD_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> = new Set([
   "discarded-succeeded",
@@ -1085,7 +1090,7 @@ export function isClientDiagnosticGitClientOperation(
 // own field is declared over just these three values, with no further cast.
 export type ClientGitRetryOperation = Exclude<
   ClientGitClientOperationKind,
-  "repository-clone" | "repository-register"
+  "repository-clone" | "repository-register" | "checkout-selection"
 >;
 
 // Listed, not derived with a module-level `.filter()` of the kinds above: a bundler cannot prove that

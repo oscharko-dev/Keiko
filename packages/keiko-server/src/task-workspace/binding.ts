@@ -6,8 +6,8 @@
 // so BOTH the provisioning/activation path AND the #446 lifecycle/active-pointer path derive the same
 // binding from a stored instance — there is exactly one derivation, never a recomputed second one.
 //
-// The active root is the managed worktree path: every bound surface (editor/runtime/git-delivery/
-// terminal/files/...) operates on the task's isolated worktree, never the bare repository root.
+// Every surface uses the selected execution location: an isolated worktree for managed tasks,
+// or the registered checkout for Local. Both persist that active root in managedWorktreePath.
 
 import type {
   WorkspaceBinding,

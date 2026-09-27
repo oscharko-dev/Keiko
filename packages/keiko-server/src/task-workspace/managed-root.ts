@@ -25,7 +25,18 @@ import { PathEscapeError, resolveWithinWorkspace } from "@oscharko-dev/keiko-wor
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertContainedRealPathWithinOwnedRoot } from "@oscharko-dev/keiko-workspace/internal/owned-root";
 import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+
+/** Managed maintenance must never classify or mutate a user-owned Local checkout. */
+export function assertManagedWorkspaceInstance(
+  instance: WorkspaceInstance,
+  code: TaskWorkspaceErrorCode = "ILLEGAL_TRANSITION",
+): void {
+  if (instance.executionLocation === "local") {
+    throw new TaskWorkspaceError(code, "This operation applies only to managed worktrees.");
+  }
+}
 
 const MARKER_CONTENT = JSON.stringify({ keikoManagedRoot: true, schemaVersion: "1" });
 const MAX_MARKER_BYTES = 256;

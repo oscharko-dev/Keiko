@@ -470,7 +470,7 @@ function ActivityStatus({
         </p>
       ) : null}
       {retryableActivity(activity.status) ? (
-        <button className={styles.button} type="button" onClick={activity.retry}>
+        <button className={styles.cmpActivityRetry} type="button" onClick={activity.retry}>
           {t("codingWorkbench.activity.retry")}
         </button>
       ) : null}
@@ -891,6 +891,7 @@ function EventRow({
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
   const tone = eventTone(item.event);
+  const detail = eventDetail(item.event, t);
   return (
     <li
       ref={rowRef}
@@ -906,14 +907,14 @@ function EventRow({
         onToggle={() => reportClientDiagnostic("[keiko] coding workbench event details toggled")}
       >
         <summary className={styles.cmpActivitySummary}>{eventTitle(item.event, t)}</summary>
-        <p className={styles.timelineDetail}>{eventDetail(item.event, t)}</p>
+        {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
       </details>
     </li>
   );
 }
 
 function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routine" | "success" {
-  if (event.failureCode !== undefined) return "attention";
+  if (event.state === "failed" || event.failureCode !== undefined) return "attention";
   if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") return "attention";
   if (event.state === "succeeded") return "success";
   return "routine";

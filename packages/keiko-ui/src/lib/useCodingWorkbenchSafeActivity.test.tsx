@@ -257,6 +257,65 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(view.result.current.feed).toBeNull();
   });
 
+  it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
+    "reads a %s run once without opening an unnecessary live stream",
+    async (runState) => {
+      streamSnapshotsMock.mockRejectedValue(new Error("live channel restarted"));
+      const view = renderHook(() =>
+        useCodingWorkbenchSafeActivity({
+          runId: "run-1",
+          runState,
+          runtimeEventSignal: 0,
+        }),
+      );
+      await waitFor(() => expect(view.result.current.status).toBe("ended"));
+      expect(getSnapshotMock).toHaveBeenCalledOnce();
+      expect(streamSnapshotsMock).not.toHaveBeenCalled();
+      expect(view.result.current.feed?.runId).toBe("run-1");
+      expect(view.result.current.errorCode).toBeNull();
+    },
+  );
+
+  it("preserves a failed final snapshot read instead of claiming a confirmed transcript", async () => {
+    getSnapshotMock.mockRejectedValue(new Error("snapshot unavailable"));
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "succeeded",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    expect(view.result.current.feed).toBeNull();
+    expect(streamSnapshotsMock).not.toHaveBeenCalled();
+  });
+
+  it("still streams the final updates when the run finishes during the initial snapshot read", async () => {
+    let resolveSnapshot: ((value: CodingAppSessionChannelSnapshot) => void) | undefined;
+    getSnapshotMock.mockImplementation(
+      () =>
+        new Promise<CodingAppSessionChannelSnapshot>((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    const view = renderHook(
+      (input: UseCodingWorkbenchSafeActivityInput) => useCodingWorkbenchSafeActivity(input),
+      {
+        initialProps: {
+          runId: "run-1",
+          runState: "running",
+          runtimeEventSignal: 0,
+        } as UseCodingWorkbenchSafeActivityInput,
+      },
+    );
+    await waitFor(() => expect(getSnapshotMock).toHaveBeenCalledOnce());
+    view.rerender({ runId: "run-1", runState: "succeeded", runtimeEventSignal: 1 });
+    await act(async () => {
+      resolveSnapshot?.(snapshot());
+    });
+    await waitFor(() => expect(streamSnapshotsMock).toHaveBeenCalledOnce());
+  });
+
   // Cross-run isolation: switching to a new runId must abandon the previous feed before it can
   // leak into the new run's view.
   it("drops the previous run's feed when runId changes", async () => {

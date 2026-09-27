@@ -77,6 +77,7 @@ import type {
   ReleaseImpactCatalog,
   UpdatePreflightReport,
   WorkspaceInstance,
+  WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
@@ -84,6 +85,7 @@ import {
   deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { IncomingMessage } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
@@ -121,9 +123,12 @@ import {
 } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
+import type { WorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
   logMemoryAuditStateCacheSeeded,
   logRuntimeShutdown,
+  logTaskWorkspaceManifestReconnected,
   logTaskWorkspaceRepositoryRegistration,
   type RuntimeShutdownCleanup,
 } from "./deps-activity.js";
@@ -144,6 +149,7 @@ import {
   resolveUiDbPath,
   validateProjectPath,
   type UiStore,
+  type WorkspaceManifestRecordRow,
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
@@ -278,6 +284,10 @@ import {
 } from "./task-workspace/active-store.js";
 import { createWorkspaceProvisioningService } from "./task-workspace/provisioning.js";
 import { createWorkspaceLifecycleService } from "./task-workspace/lifecycle.js";
+import {
+  withLocalCheckout,
+  type LocalCheckoutEvidenceDeps,
+} from "./task-workspace/local-checkout.js";
 import {
   createWorkspaceMutexRegistry,
   type WorkspaceMutexRegistry,
@@ -770,6 +780,9 @@ export interface UiHandlerDeps {
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  // Memory retains its explicitly configured ceiling or the approval baseline. Coding's all-mode
+  // availability is not permission to auto-accept memories or widen standing maintenance.
+  readonly memoryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
   // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
@@ -1134,8 +1147,8 @@ export interface BuildHandlerDepsOptions {
    */
   readonly codingAppSessionContentSource?: CodingAppSessionContentSource | undefined;
   // Explicit deployment ceiling for coding-runtime authority. Precedence: this option, then the
-  // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the governed-assist default. An
-  // unrecognized environment value is ignored fail-closed (the narrowest posture wins).
+  // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the all-mode product default. An
+  // unrecognized explicit value fails closed to governed-assist.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
   /**
    * Read-only public research egress (#2387). Enabled by default: this only opens the
@@ -2417,18 +2430,7 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   readonly activityLog?: ServerLogSink | undefined;
 }): void {
   ensureBoundRepositoryProject(input);
-  const projectRegistered = input.uiStore
-    .listProjects()
-    .some((project) => project.path === input.instance.managedWorktreePath);
-  const manifestRegistered =
-    input.uiStore.findWorkspaceManifestRecordByProject(input.instance.managedWorktreePath) !==
-    undefined;
-  if (!projectRegistered || !manifestRegistered) {
-    input.uiStore.createProject(
-      input.instance.managedWorktreePath,
-      `${basename(input.instance.repositoryRoot)} · Coding Workbench`,
-    );
-  }
+  ensureManagedProjectIdentity(input);
   if (input.workspaceScriptTrust.trustLevelForRoot(input.instance.repositoryRoot) !== "trusted") {
     return;
   }
@@ -2437,6 +2439,56 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   input.workspaceScriptTrust.deriveFromTrustedRoot(
     input.instance.managedWorktreePath,
     input.instance.repositoryRoot,
+  );
+}
+
+function ensureManagedProjectIdentity(input: {
+  readonly uiStore: UiStore;
+  readonly instance: WorkspaceInstance;
+  readonly correlationId?: string | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+}): void {
+  const path = input.instance.managedWorktreePath;
+  const projectRegistered = input.uiStore.listProjects().some((project) => project.path === path);
+  const manifest = input.uiStore.findWorkspaceManifestRecordByProject(path);
+  if (!projectRegistered || manifest === undefined) {
+    input.uiStore.createProject(
+      path,
+      `${basename(input.instance.repositoryRoot)} · Coding Workbench`,
+    );
+    return;
+  }
+  const liveRoot = inspectWorkspaceRootIdentity(path);
+  if (managedManifestMatchesLiveRoot(manifest, path, liveRoot)) return;
+  // A recreated managed worktree may reuse its path. Reconnect revokes its old trust before the
+  // new identity can serve editor actions; a current repository grant is reconsidered afterward.
+  input.uiStore.reconnectProject(path);
+  const refreshed = input.uiStore.findWorkspaceManifestRecordByProject(path);
+  if (refreshed === undefined || !managedManifestMatchesLiveRoot(refreshed, path, liveRoot)) {
+    throw new Error("Managed workspace manifest identity could not be refreshed.");
+  }
+  logTaskWorkspaceManifestReconnected(
+    input.activityLog ?? processServerLogSink(),
+    input.correlationId,
+    input.instance.workspaceId,
+  );
+}
+
+function managedManifestMatchesLiveRoot(
+  record: WorkspaceManifestRecordRow,
+  path: string,
+  liveRoot: WorkspaceRootIdentity,
+): boolean {
+  const parsed: unknown = JSON.parse(record.recordJson);
+  if (!validateWorkspaceManifest(parsed).ok) throw new Error("WORKSPACE_MANIFEST_INVALID");
+  const manifest = parsed as WorkspaceManifest;
+  const root = manifest.roots.find((candidate) => candidate.canonicalRoot === path);
+  const registeredRoot = record.rootProjects.find((candidate) => candidate.projectPath === path);
+  return (
+    root?.rootRef === liveRoot.rootRef &&
+    root.identityDigest === liveRoot.identityDigest &&
+    registeredRoot?.rootRef === liveRoot.rootRef &&
+    registeredRoot.objectIdentityDigest === liveRoot.objectIdentityDigest
   );
 }
 
@@ -3805,7 +3857,18 @@ function composePersistenceTaskWorkspaceServices(
     evidenceStore,
     redactString,
   });
-  return { workspaceScriptTrust, services };
+  return {
+    workspaceScriptTrust,
+    services: {
+      ...services,
+      workspaceLifecycle: withOptionalLocalCheckout(persistence, services, {
+        evidenceStore,
+        redactString,
+        now: Date.now,
+        activityLog: options.activityLog,
+      }),
+    },
+  };
 }
 
 function buildPersistenceBundle(
@@ -3856,6 +3919,26 @@ function buildPersistenceBundle(
     dispose?.();
     throw error;
   }
+}
+
+function withOptionalLocalCheckout(
+  persistence: ComposedPersistence,
+  services: TaskWorkspaceServices,
+  evidence: LocalCheckoutEvidenceDeps,
+): TaskWorkspaceServices["workspaceLifecycle"] {
+  if (
+    services.workspaceLifecycle === undefined ||
+    persistence.activeWorkspacePointerStore === undefined ||
+    persistence.workspaceInstanceStore === undefined
+  )
+    return services.workspaceLifecycle;
+  return withLocalCheckout(
+    services.workspaceLifecycle,
+    persistence.activeWorkspacePointerStore,
+    persistence.store,
+    persistence.workspaceInstanceStore,
+    evidence,
+  );
 }
 
 function composeUiPersistence(
@@ -4261,10 +4344,21 @@ function activityAwareWorkspaceLifecycle(
   const purge = (): void => {
     projection.purgeAll("workspace-switch");
   };
+  const selectLocal = lifecycle.selectLocal;
   return {
     list: lifecycle.list,
     listAll: lifecycle.listAll,
     getActive: lifecycle.getActive,
+    ...(selectLocal === undefined
+      ? {}
+      : {
+          selectLocal: (
+            request: Parameters<typeof selectLocal>[0],
+          ): ReturnType<typeof selectLocal> => {
+            purge();
+            return selectLocal(request);
+          },
+        }),
     setActive: (request): ReturnType<WorkspaceLifecycleService["setActive"]> => {
       purge();
       return lifecycle.setActive(request);
@@ -4837,6 +4931,7 @@ type RuntimeUiHandlerDeps = ReturnType<typeof codingSidecarGatewayModelSourceFie
     | "codingWorkbenchEvidenceStore"
     | "codingRuntimeEvidenceAggregator"
     | "codingRuntimeDeploymentCeiling"
+    | "memoryDeploymentCeiling"
     | "codingSidecarGatewayEvidenceAggregator"
   >;
 
@@ -4857,6 +4952,7 @@ function buildRuntimeUiHandlerDeps(
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator: services.codingRuntimeEvidenceAggregator,
     codingRuntimeDeploymentCeiling: services.codingRuntimeCeiling,
+    memoryDeploymentCeiling: resolveConfiguredDeploymentCeiling(args.options) ?? "governed-assist",
     ...buildRuntimeMutationLeaseDependency(args.options, services.runtimeComposition),
     ...codingRuntimeControlPlaneDeps,
     codingSidecarGatewayEvidenceAggregator: {
@@ -5309,17 +5405,22 @@ function buildRuntimeMutationLeaseDependency(
 export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEILING";
 
 /**
- * Option precedence, then explicit deployment configuration, then the governed-assist default.
- * An unrecognized environment value never widens anything: the narrowest posture wins, and the
- * readiness projection makes the effective ceiling visible to the operator.
+ * Option precedence, then explicit deployment configuration, then the all-mode product default.
+ * An unrecognized explicit value fails closed; the selected run mode remains the human authority
+ * decision and readiness reports the effective ceiling.
  */
 function resolveCodingRuntimeDeploymentCeiling(
   options: BuildHandlerDepsOptions,
 ): CodingWorkbenchMode {
-  if (options.codingRuntimeDeploymentCeiling !== undefined) {
-    return options.codingRuntimeDeploymentCeiling;
-  }
-  const configured = options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV];
+  return resolveConfiguredDeploymentCeiling(options) ?? "autonomous-delivery";
+}
+
+function resolveConfiguredDeploymentCeiling(
+  options: BuildHandlerDepsOptions,
+): CodingWorkbenchMode | undefined {
+  const configured =
+    options.codingRuntimeDeploymentCeiling ?? options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV];
+  if (configured === undefined) return undefined;
   return isCodingWorkbenchMode(configured) ? configured : "governed-assist";
 }
 

@@ -413,20 +413,28 @@ function qualifiedWorkspaceRoot(
   const request = canonicalRoot(requestRoot);
   const active = canonicalRoot(activeRoot);
   const root = canonicalRoot(instance.managedWorktreePath);
-  const rel = relative(managed, root);
   if (
     request !== active ||
     active !== root ||
     instance.lifecycleState !== "active" ||
     instance.health !== "healthy" ||
     instance.driftMarkers.length !== 0 ||
-    rel === "" ||
-    rel === ".." ||
-    rel.startsWith(`..${sep}`)
+    !rootWithinSelectedWorkspace(managed, root, instance)
   ) {
     invalidWorkspace("workspace-instance");
   }
   return root;
+}
+
+function rootWithinSelectedWorkspace(
+  managed: string,
+  root: string,
+  instance: WorkspaceInstance,
+): boolean {
+  if (instance.executionLocation === "local")
+    return root === canonicalRoot(instance.repositoryRoot);
+  const rel = relative(managed, root);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
 function canonicalRoot(root: string): string {

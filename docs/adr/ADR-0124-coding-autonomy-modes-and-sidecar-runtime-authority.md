@@ -89,9 +89,20 @@ Naming the mode here does not implement the runner.
 The effective mode is computed as the minimum of:
 
 - the requested mode for the current task, and
-- the deployment ceiling configured for the environment.
+- the server-owned deployment ceiling resolved for the surface.
 
-Unknown, missing, or malformed values fail closed to `governed-assist`.
+**Owner amendment, 2026-09-27:** a normal Coding Workbench installation resolves an absent
+configuration to `autonomous-delivery`, exposing all three modes without an extra setup step.
+The selected mode still defaults to `governed-assist`; an explicit human selection (including a
+persisted selection) bounds the run. An explicit narrower ceiling is honored, and malformed or
+unknown explicit values fail closed. Missing or invalid requested modes and missing envelope
+ceilings still fail closed to `governed-assist` at admission. Availability is resolved at production
+composition, not inferred from a successfully launched runtime.
+
+This amendment is scoped to Coding. Memory retains the previous explicitly configured ceiling or
+`governed-assist` when absent; Coding availability must not promote legacy captures or widen
+persisted Memory maintenance authority. Both surfaces continue to use the same canonical mode
+ordering and minimum calculation.
 
 No caller may widen authority by passing a higher requested mode than the environment allows. The
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
@@ -227,11 +238,12 @@ body-free. The approval registry validates the ask fail-closed with exact keys, 
 another call or session, or carries any other field, never reaches the human (#3612). An ask that
 arrives after the run's approval registry closed is cancelled and reaches no one.
 
-A file edit raises no governed ask in any mode (owner decision, 2026-09-26). Its one human approval
-is the change review the mode policy requires before anything is written: the edit port registers
-the mutation with `requiresReview` from the ADR-0138 matrix (`governed-assist` and
-`supervised-coding` review every workspace edit, `autonomous-delivery` applies without one) before
-the editor action is queued, and the editor route refuses a stale base
+A file edit raises no governed ask in any mode (owner decision, 2026-09-26). A routine,
+workspace-contained edit uses the ADR-0138 medium-risk policy at mutation registration:
+`governed-assist` reviews the exact change before writing, while `supervised-coding` and
+`autonomous-delivery` apply it through the same governed patch boundary without a per-edit
+decision. Higher-risk actions and hard denials retain their independent policy gates. The editor
+route refuses a stale base
 (`CONTENT_HASH_MISMATCH`, with re-read guidance for the model) before the review is shown. Until
 1.1.10 an edit in "Ask for approval" took two decisions for the same change — an ask with the file
 list, then Apply on the diff — and the edit ask carried the changeset's base digests so a stale base

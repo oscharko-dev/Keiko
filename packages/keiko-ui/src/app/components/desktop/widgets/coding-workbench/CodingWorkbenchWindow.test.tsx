@@ -28,6 +28,7 @@ import {
 import type { ProjectWithAvailability } from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import type { CodingTaskSession } from "./useCodingTaskSession";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
@@ -37,6 +38,7 @@ import {
 } from "../../context/ActiveWorkspaceContext";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
+const taskSessionHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
@@ -103,7 +105,23 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // Task selection/persistence is exercised at its owning hook in useCodingTaskSession.test.tsx.
 // These regression pins continue to exercise the existing runtime controls for the selected run.
 vi.mock("./useCodingTaskSession", () => ({
-  useCodingTaskSession: (): unknown => ({
+  useCodingTaskSession: taskSessionHookMock,
+}));
+
+// Binding and restoration are covered by the execution-location hook's focused suite. Keep this
+// presentation suite on an already verified checkout so a network-free fixture stays startable.
+vi.mock("./useWorkbenchExecutionLocation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./useWorkbenchExecutionLocation")>()),
+  useWorkbenchExecutionLocation: (): {
+    ready: boolean;
+    pending: boolean;
+    error: boolean;
+    retry: () => void;
+  } => ({ ready: true, pending: false, error: false, retry: vi.fn() }),
+}));
+
+function defaultTaskSession(): CodingTaskSession {
+  return {
     detail: null,
     conversationId: undefined,
     visibleRun: true,
@@ -111,8 +129,8 @@ vi.mock("./useCodingTaskSession", () => ({
     error: false,
     newTask: vi.fn(),
     finish: vi.fn(),
-  }),
-}));
+  };
+}
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -310,10 +328,11 @@ function renderWorkbench(
   const workbench = (
     <CodingWorkbenchWindow
       selectedRoot={
-        (activeWorkspace === undefined || activeWorkspace.activeBinding === null) &&
-        chatCatalogMock.activeProject?.available === true
-          ? chatCatalogMock.activeProject.path
-          : undefined
+        activeWorkspace !== undefined && activeWorkspace.activeBinding !== null
+          ? undefined
+          : chatCatalogMock.activeProject?.available === true
+            ? chatCatalogMock.activeProject.path
+            : "/repo"
       }
       onOpenGit={onOpenGit}
     />
@@ -414,6 +433,7 @@ function trustStatus(
 // results (#3381 review). A suite that needs a different default overrides it in its own
 // `beforeEach`, which runs after this one.
 beforeEach(() => {
+  taskSessionHookMock.mockReturnValue(defaultTaskSession());
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
   chatCatalogMock.models = [];
@@ -462,6 +482,24 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  it("keeps a fresh task start available when previous history cannot load", async () => {
+    taskSessionHookMock.mockReturnValue({
+      ...defaultTaskSession(),
+      visibleRun: false,
+      error: true,
+    });
+    renderWorkbench(
+      liveState({ run: { status: "ready", value: null, error: null } }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+    );
+
+    await userEvent.setup().type(screen.getByLabelText("Task instructions"), "Repair Vitest");
+    expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
+    expect(screen.getByText(/coding task could not be loaded/iu)).toBeInTheDocument();
+  });
+
   // The composer is the sole issue entry point after every terminal outcome. End-to-end issue
   // resolution/authority pins live in CodingWorkbenchSetup.issue-intake.test.tsx.
   it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
@@ -636,7 +674,7 @@ describe("CodingWorkbenchWindow", () => {
     const user = userEvent.setup();
     const liveActions = actions();
     runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
-    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
     const taskInput = screen.getByLabelText("Task instructions");
     await user.type(taskInput, "Resume where the run crashed");
 
@@ -646,14 +684,14 @@ describe("CodingWorkbenchWindow", () => {
       }),
       actions: liveActions,
     });
-    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     expect(taskInput).toHaveValue("Resume where the run crashed");
 
     runtimeHookMock.mockReturnValue({
       state: liveState({ mutation: { status: "idle", kind: null, requestId: null, error: null } }),
       actions: liveActions,
     });
-    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     expect(taskInput).toHaveValue("");
   });
 
@@ -661,7 +699,7 @@ describe("CodingWorkbenchWindow", () => {
     const user = userEvent.setup();
     const liveActions = actions();
     runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
-    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
 
     const taskInput = screen.getByLabelText("Task instructions");
     await user.type(taskInput, "Investigate the failing test");
@@ -677,7 +715,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
       actions: liveActions,
     });
-    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     expect(taskInput).toHaveValue("Investigate the failing test");
 
     // …and fails. The draft must survive so the operator can fix and resend it.
@@ -692,7 +730,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
       actions: liveActions,
     });
-    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     expect(taskInput).toHaveValue("Investigate the failing test");
 
     // A second attempt: pending again, then this time succeeds — the draft is cleared.
@@ -702,9 +740,9 @@ describe("CodingWorkbenchWindow", () => {
       }),
       actions: liveActions,
     });
-    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
-    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
 
     expect(taskInput).toHaveValue("");
   });
@@ -721,7 +759,9 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
       "keiko",
     );
-    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent("dev");
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent(
+      "task-1",
+    );
     expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
@@ -780,6 +820,9 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent(
+      "task-1",
+    );
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
@@ -1093,22 +1136,26 @@ describe("CodingWorkbenchWindow", () => {
 
   it("states the unqualified runtime once while the bootstrap setup section owns that message", (): void => {
     const initial = createInitialCodingWorkbenchRuntimeState();
-    renderWorkbench({
-      ...initial,
-      canStart: false,
-      runtime: {
-        status: "ready",
-        error: null,
-        value: {
-          schemaVersion: "1",
-          requestedMode: "governed-assist",
-          deploymentCeiling: "supervised-coding",
-          effectiveMode: "governed-assist",
-          runtimeAvailable: false,
-          runtimeUnavailableReason: "runtime-unqualified",
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...initial,
+        canStart: false,
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "governed-assist",
+            deploymentCeiling: "supervised-coding",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: false,
+            runtimeUnavailableReason: "runtime-unqualified",
+          },
         },
       },
+      actions: actions(),
     });
+    render(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
     // Setup renders the sentence itself; a second live-region copy would announce it twice.
     expect(screen.getAllByText(/until the coding runtime is active/u)).toHaveLength(1);
@@ -2590,7 +2637,7 @@ describe("CodingWorkbenchWindow", () => {
   it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", async () => {
     const events = Array.from({ length: 1_000 }, (_, index) => event(index + 1));
     runtimeHookMock.mockReturnValue({ state: liveState({ events }), actions: actions() });
-    const { container } = render(<CodingWorkbenchWindow />);
+    const { container } = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
     await userEvent.setup().click(screen.getByRole("button", { name: "Run details" }));
 
     expect(

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "89500180b7a8fd88f839bcdb0dfc79b80820207c62e83b3ef8292193a6df5af0"
+    "catalogDigest": "760e01428c40bee9627ff2f53d5fab8aba24955065d61e2feaf284b0608b4e88"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -32,6 +32,10 @@
         "field": "effectiveMode"
       },
       {
+        "op": "coding-runtime.editor-review.decided",
+        "field": "mode"
+      },
+      {
         "op": "coding-runtime.run.settled",
         "field": "requestedMode"
       },
@@ -51,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 465,
-    "proofCount": 473,
-    "resolvedProofCount": 473,
-    "failureClassCount": 321,
+    "operationCount": 469,
+    "proofCount": 477,
+    "resolvedProofCount": 477,
+    "failureClassCount": 323,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -259,7 +263,9 @@
         "coding-runtime.dev-lane.refused",
         "coding-runtime.edit.refused",
         "coding-runtime.editor-mutation.settled",
+        "coding-runtime.editor-review.decided",
         "coding-runtime.event.dropped",
+        "coding-runtime.event.late-terminal",
         "coding-runtime.follow-up.dispatch-failed",
         "coding-runtime.history",
         "coding-runtime.history-projection",
@@ -289,6 +295,7 @@
         "coding-runtime.run.shutdown",
         "coding-runtime.run.started",
         "coding-runtime.safe-activity",
+        "coding-runtime.sidecar-session.bound",
         "coding-runtime.skill-discovery",
         "coding-runtime.task-replacement",
         "coding-runtime.tool-authority.denied",
@@ -559,7 +566,8 @@
         "support.incident.deduplicated",
         "support.incident.dismissed",
         "support.incident.expired",
-        "support.incident.rejected"
+        "support.incident.rejected",
+        "task-workspace.manifest.reconnected"
       ],
       "scenarios": [
         "lifecycle-crash.crash",
@@ -693,6 +701,7 @@
     "coding-runtime-repository-rerank": ["tools-workflows.dependency-failure"],
     "coding-runtime-run-settlement": ["tools-workflows.dependency-failure"],
     "coding-runtime-run-start": ["tools-workflows.dependency-failure"],
+    "coding-runtime-session-continuity": ["tools-workflows.dependency-failure"],
     "coding-runtime-shutdown": ["tools-workflows.crash"],
     "coding-runtime-skill-discovery": ["tools-workflows.dependency-failure"],
     "coding-runtime-task-replacement": ["tools-workflows.dependency-failure"],
@@ -914,6 +923,7 @@
     "support-publication": ["runtime-packages.dependency-failure"],
     "support-publication-acknowledgement": ["runtime-packages.dependency-failure"],
     "task-workspace-lifecycle": ["tools-workflows.dependency-failure"],
+    "task-workspace-manifest-reconnect": ["lifecycle-crash.dependency-failure"],
     "task-workspace-repository-registration": ["tools-workflows.rejection"],
     "tool-catalog-binding": ["tools-workflows.dependency-failure"],
     "tool-catalog-binding-unavailable": ["tools-workflows.dependency-failure"],
@@ -1170,7 +1180,13 @@
     "coding-runtime.editor-mutation.settled.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
     ],
+    "coding-runtime.editor-review.decided.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
+    ],
     "coding-runtime.event.dropped.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+    ],
+    "coding-runtime.event.late-terminal.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
     ],
     "coding-runtime.follow-up.dispatch-failed.emitted-line": [
@@ -1259,6 +1275,9 @@
     ],
     "coding-runtime.safe-activity.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"
+    ],
+    "coding-runtime.sidecar-session.bound.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.skill-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionAuxiliaryPorts.test.ts"
@@ -2136,7 +2155,11 @@
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
     ],
     "task-workspace.lifecycle.line": [
-      "packages/keiko-server/src/task-workspace/activity-log.test.ts"
+      "packages/keiko-server/src/task-workspace/activity-log.test.ts",
+      "packages/keiko-server/src/task-workspace/local-checkout.test.ts"
+    ],
+    "task-workspace.manifest.reconnected.trust-revoked": [
+      "packages/keiko-server/src/deps-activity.test.ts"
     ],
     "task-workspace.repository.registered.restricted": [
       "packages/keiko-server/src/deps-activity.test.ts"

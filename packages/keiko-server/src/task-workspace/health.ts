@@ -443,8 +443,11 @@ function instancesFor(
   deps: WorkspaceHealthServiceDeps,
   repositoryRoot: string | undefined,
 ): readonly WorkspaceInstance[] {
-  if (repositoryRoot === undefined || repositoryRoot.length === 0) return deps.store.listAll();
-  return deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  const instances =
+    repositoryRoot === undefined || repositoryRoot.length === 0
+      ? deps.store.listAll()
+      : deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  return instances.filter((instance) => instance.executionLocation !== "local");
 }
 
 async function reportImpl(

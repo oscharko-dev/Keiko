@@ -39,6 +39,53 @@ function observation(sequence: number): CodingWorkbenchRuntimeSseEvent {
 }
 
 describe("Coding Workbench event retention", () => {
+  it.each([
+    ["succeeded", false],
+    ["succeeded", true],
+    ["failed", true],
+    ["cancelled", true],
+    ["taken-over", true],
+    ["recovery-required", true],
+  ] as const)("finishes %s without reconnecting, buffered=%s", (state, buffered) => {
+    vi.useFakeTimers();
+    const reported = vi.fn();
+    setClientDiagnosticWriter(reported);
+    const source = new FakeEventSource();
+    const onEvents = vi.fn();
+    const onError = vi.fn();
+    const createEventSource = vi.fn(() => source as unknown as EventSource);
+    const session = createCodingWorkbenchRuntimeStreamSession(
+      "run-1",
+      { onOpen: vi.fn(), onEvents, onError, onReset: vi.fn(() => Promise.resolve()) },
+      { staleAfterMs: 100, createEventSource },
+    );
+    try {
+      const final = event(2, {
+        state,
+        ...(state === "recovery-required"
+          ? { kind: "runtime-event", eventKind: "runtime-stopped" }
+          : {}),
+      });
+      const lateError = source.onerror;
+      if (buffered) source.emit("runtime-event", JSON.stringify(observation(1)));
+      source.emit(final.kind, JSON.stringify(final));
+      lateError?.(new Event("error"));
+      vi.advanceTimersByTime(1_000);
+      expect(onEvents).toHaveBeenCalledExactlyOnceWith(
+        buffered ? [observation(1), final] : [final],
+        "cursor-2",
+        true,
+      );
+      expect(source.close).toHaveBeenCalledOnce();
+      expect(createEventSource).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
+      expect(reported).not.toHaveBeenCalled();
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("closes and recreates a runtime stream after bounded inactivity", async () => {
     vi.useFakeTimers();
     try {

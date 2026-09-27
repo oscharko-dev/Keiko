@@ -170,6 +170,18 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
       const event = parseCodingWorkbenchRuntimeEvent(message.data);
       if (event.runId !== this.runId) return;
       this.latestCursor = event.cursor;
+      if (
+        TERMINAL_STATES.has(event.state) ||
+        (event.kind === "runtime-event" && event.eventKind === "runtime-stopped")
+      ) {
+        // The server closes after this frame. Deliver the final evidence before detaching, so
+        // EventSource cannot turn a normal completion into an error or a watchdog reconnect.
+        this.pending.push(event);
+        this.pendingResnapshot = true;
+        this.flush();
+        this.close();
+        return;
+      }
       if (event.kind === "runtime-event" && event.eventKind === "observation-streamed") {
         this.pending.push(event);
         this.batchTimer ??= setTimeout(() => {

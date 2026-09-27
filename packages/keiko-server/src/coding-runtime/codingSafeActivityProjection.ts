@@ -92,7 +92,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["pending", "running", "failed"],
+      values: ["pending", "running", "failed", "succeeded"],
     },
     // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
     rejection: {
@@ -931,14 +931,14 @@ function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
 }
 
 type SettledToolState = "succeeded" | "failed" | "denied" | "cancelled";
-type RestatedToolState = "pending" | "running" | "failed";
+type RestatedToolState = "pending" | "running" | "failed" | "succeeded";
 
 function isSettledToolState(state: CodingSafeActivityToolState): state is SettledToolState {
   return TERMINAL_TOOL_STATES.has(state);
 }
 
 function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
-  return state === "pending" || state === "running" || state === "failed";
+  return state === "pending" || state === "running" || state === "failed" || state === "succeeded";
 }
 
 function supersededRestatement(
@@ -1097,14 +1097,14 @@ const TERMINAL_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set([
   "cancelled",
 ]);
 
-// A late OpenCode part update (it names its message) for a call that has already ended. Keiko settles
+// A late OpenCode part update identifies its message after the call has already ended. Keiko settles
 // a call from the facade result, independently of OpenCode's part updates, and can do so before
 // OpenCode's earlier pending or running update arrives over the event stream (a lab run of 1.1.8: a
-// 10 ms read); only Keiko settles a call as denied or cancelled, which OpenCode then reports as a
-// generic failure — or, since a declined or expired ask answers with the call's own refusal result
-// (ADR-0124 D6), as a completed call. Each restates a state the call already passed and is kept as a
-// no-op, not an omitted update (#3612). A settlement never restates pending or running, so one that
-// tries is still a refused regression.
+// 10 ms read). The facade also returns HTTP 200 with a governed failed result for a red verification;
+// OpenCode calls that transport success even though Keiko already settled the tool as failed. Keiko
+// alone settles denied and cancelled calls, which OpenCode may likewise report as generic failure
+// or completed. These restatements keep Keiko's verdict and produce evidence, not omitted updates.
+// A settlement never restates pending or running, so one that tries is still a refused regression.
 function staleOpenCodeRestatement(
   from: CodingSafeActivityToolState,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
@@ -1112,7 +1112,7 @@ function staleOpenCodeRestatement(
   if (signal.messageId === undefined || !TERMINAL_TOOL_STATES.has(from)) return false;
   if (signal.state === "pending" || signal.state === "running") return true;
   return (
-    (from === "denied" || from === "cancelled") &&
+    (from === "denied" || from === "cancelled" || from === "failed") &&
     (signal.state === "failed" || signal.state === "succeeded")
   );
 }

@@ -55,8 +55,13 @@ export interface WorkspaceMutationResult {
 // the parsed envelope onto the thrown `ApiError` (#449, ADR-0093 D3) via the `enrichError` hook.
 // `ApiError` is referenced only in that hook (runtime throw path), never at module load, so a partial
 // `@/lib/api` mock in unrelated UI tests is unaffected.
-async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<T> {
+async function taskWorkspaceFetch<T>(
+  path: string,
+  init?: RequestInit,
+  correlationId?: string,
+): Promise<T> {
   return bffFetchJson<T>(path, init, {
+    ...(correlationId === undefined ? {} : { correlationId }),
     enrichError: (error, envelope) => {
       // A non-2xx body that parsed but is not the `{ error: { … } }` envelope (a proxy answering
       // with `{}`) must still yield the redacted ApiError, never a TypeError from this hook.
@@ -87,15 +92,18 @@ export type TaskWorkspaceProvisionInput = TaskWorkspaceProvisionSource & {
   readonly root: string;
   readonly taskId: string;
   readonly requestedBy: string;
+  readonly correlationId?: string;
 };
 
 export async function provisionTaskWorkspace(
   input: TaskWorkspaceProvisionInput,
 ): Promise<WorkspaceMutationResult & { readonly created: boolean }> {
-  return taskWorkspaceFetch("/api/task-workspaces", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  const { correlationId, ...body } = input;
+  return taskWorkspaceFetch(
+    "/api/task-workspaces",
+    { method: "POST", body: JSON.stringify(body) },
+    correlationId,
+  );
 }
 
 // Run a live #447 reconciliation pass (verifies disk + git and stamps the verified head the runtime
@@ -105,10 +113,12 @@ export async function provisionTaskWorkspace(
 // it. The report is inspected by the caller to gate activation on a verified, healthy workspace.
 export async function reconcileTaskWorkspaces(input: {
   readonly root: string;
+  readonly correlationId?: string;
 }): Promise<WorkspaceReconciliationReport> {
   const body = await taskWorkspaceFetch<{ report: WorkspaceReconciliationReport }>(
     "/api/task-workspaces/reconciliation",
     { method: "POST", body: JSON.stringify({ root: input.root }) },
+    input.correlationId,
   );
   return body.report;
 }
@@ -136,11 +146,29 @@ export async function setActiveTaskWorkspace(input: {
   readonly workspaceId: string;
   readonly requestedBy: string;
   readonly acquireLock?: boolean;
+  readonly correlationId?: string;
 }): Promise<WorkspaceMutationResult> {
-  return taskWorkspaceFetch("/api/task-workspaces/active", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  const { correlationId, ...body } = input;
+  return taskWorkspaceFetch(
+    "/api/task-workspaces/active",
+    { method: "POST", body: JSON.stringify(body) },
+    correlationId,
+  );
+}
+
+export async function selectLocalCheckout(input: {
+  readonly root: string;
+  readonly branch: string;
+  readonly requestedBy: string;
+  readonly correlationId?: string;
+}): Promise<ActiveWorkspaceView> {
+  const { correlationId, ...request } = input;
+  const body = await taskWorkspaceFetch<{ active: ActiveWorkspaceView }>(
+    "/api/task-workspaces/local",
+    { method: "POST", body: JSON.stringify(request) },
+    correlationId,
+  );
+  return body.active;
 }
 
 export async function clearActiveTaskWorkspace(): Promise<void> {

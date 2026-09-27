@@ -1738,6 +1738,41 @@ describe("CodingRuntimeOrchestrator", () => {
     });
   });
 
+  it("treats the sidecar stop after settlement as a late terminal event", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    let finish: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        finish = resolve;
+      }),
+    });
+    await f.orchestrator.start(start);
+    finish?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+
+    const result = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-stop-after-settlement",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "runtime-stopped",
+    });
+    expect(result).toMatchObject({ ok: true, snapshot: { state: "succeeded" } });
+    expect(linesWithOp(captured, "coding-runtime.event.dropped")).toEqual([]);
+    const [line] = linesWithOp(captured, "coding-runtime.event.late-terminal");
+    if (line === undefined) throw new Error("expected late-terminal evidence");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.event.late-terminal.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ runId: "run-1", settledState: "succeeded" });
+  });
+
   it("purges only the requested run when stop follows natural terminal settlement", async () => {
     const f = fixture();
     let resolveCompletion: ((outcome: "succeeded") => void) | undefined;

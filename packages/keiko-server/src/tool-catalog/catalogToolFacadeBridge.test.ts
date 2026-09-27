@@ -330,6 +330,34 @@ describe("canonical catalog facade bridge", () => {
     });
   });
 
+  it("records an executed red Vitest result as a completed handler without hiding failed tests", async () => {
+    const { bridge, log } = createBridge();
+    const request = COVERED.find((entry) => entry.action === "verification");
+    if (request === undefined) throw new Error("verification fixture missing");
+    const failedTests = {
+      status: "failed" as const,
+      evidence: [{ kind: "governed-delegate" as const, code: "VERIFICATION_FAILED" }],
+      reasonCode: "VERIFICATION_FAILED",
+    };
+
+    await expect(
+      bridge.execute(request, facadeInput(), (_signal, mutationGuard) => {
+        expect(mutationGuard.check()).toBe(true);
+        return Promise.resolve(failedTests);
+      }),
+    ).resolves.toEqual(failedTests);
+    expect(log.events.at(-1)).toMatchObject({
+      op: "tool-catalog.invocation-settled",
+      extra: {
+        status: "completed",
+        reason: "none",
+        effectStarted: true,
+        budgetDisposition: "committed",
+      },
+    });
+    expect(log.events.at(-1)?.errorKind).toBeUndefined();
+  });
+
   // #3615: a refusal the handler gave for the model's own input -- a stale base, a patch that does
   // not apply, a denied or missing path -- settles as that verdict below error level, so it opens no
   // support incident, and the model still receives the handler's own result.

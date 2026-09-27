@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 37;
+export const SCHEMA_VERSION = 38;
 
 interface Migration {
   readonly version: number;
@@ -1402,6 +1402,12 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
+// The active pointer can also reference the selected local checkout. Existing rows remain managed.
+const V38_SQL = `
+ALTER TABLE task_workspace_instances ADD COLUMN execution_location TEXT NOT NULL DEFAULT 'worktree'
+  CHECK (execution_location IN ('local', 'worktree'));
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -1443,6 +1449,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 35, sql: V35_SQL },
   { version: 36, sql: V36_SQL },
   { version: 37, sql: V37_SQL },
+  { version: 38, sql: V38_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

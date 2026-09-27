@@ -157,6 +157,7 @@ type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
   | "autonomousDeliveryDeploymentCeiling"
   | "runtimeMutationLease"
+  | "workspaceLifecycle"
   | "workspaceRootAccessResolver"
   | "workspaceScriptTrust"
 > & { readonly store?: UiHandlerDeps["store"] | undefined };
@@ -1867,17 +1868,28 @@ function changesetWorkspaceFs(
 ): WorkspaceFs | undefined {
   if (runtimeMutation.kind !== "runtime") return nodeWorkspaceFs;
   try {
-    // Only a proven managed root grants a writable fs here, so both refusal decisions collapse to
-    // the same answer; the collapse is stated at this consumer rather than in the resolver (#3347).
     const access = workspaceRootAccessOrUndefined(
       deps?.workspaceRootAccessResolver?.(workspaceRoot),
     );
-    return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
-      ? access.fs
-      : undefined;
+    if (access?.canonicalRoot !== workspaceRoot) return undefined;
+    if (access.kind === "managed-task") return access.fs;
+    return localChangesetWorkspaceFs(workspaceRoot, access.fs, deps);
   } catch {
     return undefined;
   }
+}
+
+function localChangesetWorkspaceFs(
+  workspaceRoot: string,
+  fs: WorkspaceFs,
+  deps: EditorAgentRouteDeps | undefined,
+): WorkspaceFs | undefined {
+  const active = deps?.workspaceLifecycle?.getActive();
+  return active?.instance.executionLocation === "local" &&
+    active.instance.repositoryRoot === workspaceRoot &&
+    active.binding.activeRoot === workspaceRoot
+    ? fs
+    : undefined;
 }
 
 function runtimeMutationLeaseDeniedResult(action: EditorAgentAction): EditorAgentActionResult {

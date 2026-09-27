@@ -43,7 +43,8 @@ The customer contract for this release is explicit:
 - installation and first-run activation require no terminal, package manager, network download, or
   separate runtime setup;
 - model endpoints and credentials are still configured once in Keiko's GUI;
-- **Ask for approval** is the default deployment ceiling, and no installation event widens it;
+- all three Coding Workbench modes are available without deployment setup, while **Ask for
+  approval** is the default selected run mode;
 - OpenCode is the only packaged Coding Workbench runtime and reaches models only through Keiko's
   Model Gateway; and
 - macOS may require the local user to approve Keiko's Endpoint Security System Extension once.
@@ -260,13 +261,20 @@ fallback: it is the same review-approved OpenCode payload, staged by the same pr
 the same digests, and reached only because the artifact itself declares that lane. Nothing about a
 missing or failing prerequisite can select it, and no lane is chosen after another one fails.
 
-### D7 — Installation never widens authority
+### D7 — The selected mode controls run authority
 
-The installed deployment ceiling defaults to `governed-assist` (**Ask for approval**). The operator
-may later select a higher existing product mode through the authenticated GUI when deployment
-configuration permits it. Setup, system-extension approval, model configuration, runtime
-qualification, and successful first launch do not select **Supervised workspace** or **Full
-access**.
+The installed **Coding Workbench** deployment ceiling defaults to `autonomous-delivery`, making all three existing
+Coding Workbench modes available without further setup. **Ask for approval** remains the default
+selected mode. A local human can select **Supervised workspace** or **Full access** in the
+authenticated composer; the selected mode bounds each new run. Setup, system-extension approval,
+model configuration, runtime qualification, and successful first launch never silently select a
+wider mode. An explicitly configured narrower deployment ceiling still clamps the selection, and
+invalid explicit configuration fails closed to **Ask for approval**.
+
+This owner decision (2026-09-27) intentionally honors an existing human Coding mode selection when
+it becomes available. It does not widen Memory: production composition retains the previously
+configured Memory ceiling or `governed-assist` when absent. Legacy capture calls, the policy
+projection and standing maintenance all consume that Memory ceiling.
 
 The three existing modes and their monotonic stricter-wins policy remain the only authority model.
 
@@ -486,7 +494,8 @@ it as plain green. This is the class audit finding F-01 closed, and it must not 
   "only when explicitly requested" unenforceable. And an operator reading `unsigned-non-production`
   in a shipped bundle learns nothing about evaluation. The machinery is reused; the lane is not.
 - **Auto-select Full access after successful setup.** Installation state is not human authorization
-  and may never widen the deployment ceiling.
+  and may never select a wider run mode or override an explicit narrower deployment ceiling.
+  D7 defines Coding availability; successful installation is not a separate authority grant.
 
 ## Version History
 

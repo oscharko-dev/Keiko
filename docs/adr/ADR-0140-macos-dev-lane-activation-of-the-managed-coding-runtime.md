@@ -115,21 +115,17 @@ in both directions by the shared contract validator. Discovery failures no longe
 an unexplained `false`. The kill switch (`KEIKO_CODING_SIDECAR_DISABLED`) dominates every other
 prerequisite and reports `runtime-disabled` before discovery runs.
 
-### D5 — Explicit deployment ceiling, never lane-implied
+### D5 — All modes available by default, never lane-implied
 
-The coding-runtime deployment ceiling is explicit configuration
-(`KEIKO_CODING_DEPLOYMENT_CEILING`, or the composition option), defaulting to `governed-assist`;
-unrecognized values are ignored fail-closed. Enabling the dev lane never widens the ceiling. The
-readiness projection reports the same ceiling the mint clamp enforces; the previously reported
-autonomous-delivery ceiling was a separate authority knob and could diverge from enforcement.
-
-For a local installation whose operator explicitly elects to make all three Coding Workbench modes
-usable, set `KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery` when launching Keiko. This is an
-installation-level choice, independent of the repository and branch selected in a Workbench window.
-The selected mode then determines each new run's authority inside its validated Authority Envelope;
-changing the repository never silently changes the installation ceiling. The operator must carry
-this explicit configuration forward on subsequent launches. The default remains fail-closed for
-installations without that choice.
+The Coding Workbench makes all three product modes available without startup configuration. Its
+deployment ceiling defaults to `autonomous-delivery`; the local human's selection in the composer
+determines each new run's authority inside its validated Authority Envelope. The selected mode
+defaults to **Ask for approval** and is never silently widened by runtime activation, repository
+binding, or a restart. An installation may impose a narrower ceiling through
+`KEIKO_CODING_DEPLOYMENT_CEILING` or the composition option. An unrecognized explicit value fails
+closed to `governed-assist`. Enabling the dev lane never changes the ceiling. Readiness reports the
+same ceiling the mint clamp enforces; the previously reported autonomous-delivery ceiling was a
+separate authority knob and could diverge from enforcement.
 
 ### D6 — Long-lived gateway-only network confinement on macOS (Issue #2951)
 

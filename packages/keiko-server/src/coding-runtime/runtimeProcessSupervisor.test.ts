@@ -115,6 +115,12 @@ describe("runtime process supervisor", () => {
     const supervisor = createRuntimeProcessSupervisor({
       backend: fake.value,
       qualifications: [request.qualification],
+      planSandbox: (sandboxRequest) =>
+        planLongLivedRuntimeSandbox(
+          sandboxRequest,
+          { bubblewrap: true, unshare: true, seatbelt: true, docker: true, podman: true },
+          "win32",
+        ),
     });
 
     expect(supervisor.spawnOwnedTree(request)).toEqual({

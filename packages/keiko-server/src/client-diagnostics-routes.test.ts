@@ -556,26 +556,32 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
-  it("preserves the validated workspace trust identity on the originating timeline", async () => {
-    const sink = captureServerLog();
-    const body = JSON.stringify({
-      message: "coding workbench repository trust bound",
-      clientTs: CLIENT_TS,
-      correlationId: "originating-run-correlation",
-      workspaceTrustBinding: {
-        repositoryId: "repository-a",
-        workspaceId: "workspace-a",
-      },
-    });
+  it.each(["workspace-a", `local:${"a".repeat(64)}`])(
+    "preserves the validated workspace trust identity %s on the originating timeline",
+    async (workspaceId) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        message: "coding workbench repository trust bound",
+        clientTs: CLIENT_TS,
+        correlationId: "originating-run-correlation",
+        workspaceTrustBinding: {
+          repositoryId: "repository-a",
+          workspaceId,
+        },
+      });
 
-    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
-    expect(clientDiagnosticLine(sink)).toMatchObject({
-      op: "client.diagnostic",
-      correlationId: "originating-run-correlation",
-      repositoryId: "repository-a",
-      workspaceId: "workspace-a",
-    });
-  });
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(clientDiagnosticLine(sink)).toMatchObject({
+        op: "client.diagnostic",
+        correlationId: "originating-run-correlation",
+        repositoryId: "repository-a",
+        workspaceId,
+      });
+    },
+  );
 
   // PR #3625 review: routine settlements — an add-repository result discarded after it actually
   // succeeded, a manual retry that recovered or was superseded — are routed to their own
@@ -605,6 +611,27 @@ describe("POST /api/diagnostics/client", () => {
       completeness: "complete",
       loss: "none",
     });
+  });
+
+  it("records a superseded checkout selection as correlated routine evidence", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench checkout selection superseded",
+      clientTs: CLIENT_TS,
+      correlationId: "checkout-attempt-123",
+      kind: "other",
+      gitClientOperation: { operation: "checkout-selection", outcome: "discarded-succeeded" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    expect(event).toMatchObject({
+      level: "info",
+      correlationId: "checkout-attempt-123",
+      extra: { operation: "checkout-selection", outcome: "discarded-succeeded" },
+    });
+    expectActivityLogProof("client.git-operation.settled.line", formatActivityLogProofLine(event));
   });
 
   // A manual retry that recovers carries the SAME id its attempt line minted, so the two join on

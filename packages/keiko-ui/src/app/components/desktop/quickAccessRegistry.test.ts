@@ -1,7 +1,7 @@
+import { buildUnifiedQuickAccessCommands } from "./quickAccessCommands";
 import { describe, expect, it, vi } from "vitest";
 import {
   appCommandWindowTypes,
-  buildUnifiedQuickAccessCommands,
   commandIdsForEvidence,
   paletteWindowOrder,
   type Command,

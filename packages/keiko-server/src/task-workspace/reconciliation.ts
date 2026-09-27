@@ -17,6 +17,7 @@
 // SAME store. Restoration of the last active workspace is conservative — it never auto-selects among
 // ambiguous active workspaces (SC).
 
+import { assertManagedWorkspaceInstance } from "./managed-root.js";
 import { existsSync, realpathSync } from "node:fs";
 import {
   detectWorkspaceAt,
@@ -442,6 +443,7 @@ export async function reconcileSingleInstance(
   actor?: string,
   correlationId?: string,
 ): Promise<ReconcileInstanceResult> {
+  assertManagedWorkspaceInstance(instance);
   const ctx: ReconcileCtx = {
     deps,
     lockTtlMs: resolveLockTtl(deps.lockTtlMs),
@@ -573,8 +575,11 @@ function instancesFor(
   deps: WorkspaceReconciliationServiceDeps,
   repositoryRoot: string | undefined,
 ): readonly WorkspaceInstance[] {
-  if (repositoryRoot === undefined || repositoryRoot.length === 0) return deps.store.listAll();
-  return deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  const rows =
+    repositoryRoot === undefined || repositoryRoot.length === 0
+      ? deps.store.listAll()
+      : deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  return rows.filter((instance) => instance.executionLocation !== "local");
 }
 
 // Live reconcile: group the in-scope instances by repository root so each repository's adapter is built

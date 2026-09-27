@@ -7,6 +7,7 @@
 export { KEIKO_GIT_VERSION } from "./version.js";
 
 export { gitEnv, networkGitEnv } from "./env.js";
+export { resolveGitExecutable } from "./git-executable.js";
 export {
   GIT_BASE_ARGS,
   createGitProcessRunner,

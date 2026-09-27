@@ -25,8 +25,8 @@ product.
 
 **The human-control invariant — non-negotiable:**
 
-> A local human selects or accepts the task, autonomy mode, Authority Envelope, and deployment
-> ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
+> A local human selects or accepts the task, autonomy mode, and Authority Envelope within the
+> server-owned deployment ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
 > when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
 > their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
 > after the app-bound required checks succeed on the exact current head and every review
@@ -60,6 +60,14 @@ monotonic semantics fixed by
   (A mode's `allowed` disposition is a policy ceiling — see ADR-0138 D4 for the same-day
   capability-availability clarification: a surface still needs an implemented execution path
   before a given mode's `allowed` verdict can act.)
+
+**Coding Workbench availability (owner decision, 2026-09-27):** a normal installation offers all
+three modes without extra configuration; its Coding ceiling defaults to `autonomous-delivery`.
+The selected mode defaults to **Ask for approval**, and a saved human mode selection remains a
+selection, not an installation side effect. Explicitly configured narrower ceilings still apply;
+invalid explicit values fail closed. This availability default is scoped to Coding: Memory retains
+its explicit deployment ceiling or `governed-assist`, including legacy requests and standing
+maintenance. See ADR-0124 D2 and ADR-0163 D7.
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform

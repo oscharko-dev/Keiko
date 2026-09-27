@@ -104,7 +104,11 @@ consumed one-use approvals are denied. Delivery actions follow the governing dep
 For accepted Keiko repository work targeting `dev`, ADR-0135 allows branch commits, pushes, and PR
 updates and delegates final merge authority to the direct app-bound required checks. Unknown or
 missing mode values still fall back to `governed-assist`, and the effective mode remains capped by
-the deployment ceiling.
+the deployment ceiling. ADR-0124 D2's owner amendment (2026-09-27) makes all three Coding
+modes available by default without additional configuration. This is a surface availability
+ceiling, not a selected run mode: the human still chooses the mode, the default selection remains
+Ask for approval, and explicit narrower configuration still applies. Memory keeps its previous
+approval baseline when no ceiling is configured.
 
 ### D2 - Dock onto the existing editor-agent control plane
 

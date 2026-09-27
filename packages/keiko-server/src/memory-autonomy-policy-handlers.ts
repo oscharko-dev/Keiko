@@ -4,6 +4,7 @@ import { parseUpdateMemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contrac
 import type { UiHandlerDeps } from "./deps.js";
 import {
   DEFAULT_MEMORY_AUTONOMY_MODE,
+  memoryDeploymentCeiling,
   resolveMemoryCaptureAutonomyMode,
 } from "./memory-capture-policy.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
@@ -19,7 +20,7 @@ function policyProjection(
     requestedMode: DEFAULT_MEMORY_AUTONOMY_MODE,
     revision: 0,
   };
-  const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? DEFAULT_MEMORY_AUTONOMY_MODE;
+  const deploymentCeiling = memoryDeploymentCeiling(deps);
   return {
     requestedMode,
     effectiveMode: resolveMemoryCaptureAutonomyMode(deps, requestedMode),

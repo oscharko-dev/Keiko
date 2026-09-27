@@ -366,7 +366,18 @@ function requireMutationAuthority(
 ): RouteResult | undefined {
   if (resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) return undefined;
   return runId === undefined && concealment?.conceal !== "not-found"
-    ? failureResult("authority-resolution-failed", ctx.correlationId)
+    ? {
+        status: 403,
+        body: {
+          ...errorBody(
+            "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+            "Runtime request was rejected.",
+            ctx.correlationId,
+          ),
+          // This branch runs before readBody. Only this refusal can safely be replayed.
+          preBodySessionDenied: true,
+        },
+      }
     : notFound(ctx.correlationId);
 }
 

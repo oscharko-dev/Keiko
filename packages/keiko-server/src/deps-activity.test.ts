@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   logMemoryAuditStateCacheSeeded,
   logRuntimeShutdown,
+  logTaskWorkspaceManifestReconnected,
   logTaskWorkspaceRepositoryRegistration,
 } from "./deps-activity.js";
 import {
@@ -92,6 +93,28 @@ describe("logTaskWorkspaceRepositoryRegistration — Activity Log proof", () => 
       formatActivityLogProofLine(line ?? {}),
     );
     expect(proven).toMatchObject({ reason: "ui-database-inside-repository" });
+  });
+});
+
+describe("logTaskWorkspaceManifestReconnected — Activity Log proof", () => {
+  it("records the revoked trust when a managed root is reconnected", () => {
+    const sink = createBufferedServerLogSink();
+
+    logTaskWorkspaceManifestReconnected(sink, "req-manifest-reconnect-0001", "ws_test");
+
+    expect(sink.events).toHaveLength(1);
+    const [line] = sink.events;
+    expect(line).toMatchObject({
+      category: "security",
+      op: "task-workspace.manifest.reconnected",
+      correlationId: "req-manifest-reconnect-0001",
+      extra: { workspaceId: "ws_test", trustRevoked: true, completeness: "complete", loss: "none" },
+    });
+    const proven = expectActivityLogProof(
+      "task-workspace.manifest.reconnected.trust-revoked",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({ workspaceId: "ws_test", trustRevoked: true });
   });
 });
 

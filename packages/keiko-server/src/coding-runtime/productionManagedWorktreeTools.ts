@@ -183,6 +183,36 @@ const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOpera
   releaseImpact: "patch",
 });
 
+const CODING_RUNTIME_EDITOR_REVIEW_DECIDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.editor-review.decided",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionManagedWorktreeTools.editorReviewRequirement",
+  fields: {
+    mode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    risk: { type: "string", dataClass: "closed-enum", required: true, values: ["medium"] },
+    disposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["allowed", "review-required"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-editor-mutation"],
+  proofIds: ["coding-runtime.editor-review.decided.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const CODING_RUNTIME_REPOSITORY_RERANK_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -751,6 +781,20 @@ function managedWorktreeAuthorityContext(
   });
 }
 
+function editorReviewRequirement(input: ProductionManagedWorktreeToolInput): boolean {
+  const mode = effectiveModeOf(input);
+  const requiresReview =
+    codingWorkbenchPolicyEffectFor(mode, "workspace-contained", "medium") !== "allowed";
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_EDITOR_REVIEW_DECIDED_OPERATION,
+      { correlationId: input.authorityRef.runId },
+      { mode, risk: "medium", disposition: requiresReview ? "review-required" : "allowed" },
+    ),
+  );
+  return requiresReview;
+}
+
 function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingToolReadEditPorts {
   return createCodingToolReadEditPorts({
     activityLog: input.activityLog,
@@ -774,12 +818,9 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
     }),
     resolveWorkspaceRoot: () => input.workspaceRoot,
     resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
-    requiresEditorReview: () =>
-      codingWorkbenchPolicyEffectFor(
-        input.effectiveModeNow?.() ?? input.effectiveMode,
-        "workspace-contained",
-        "high",
-      ) !== "allowed",
+    // A workspace-contained changeset is the routine medium-risk file-edit action. The editor
+    // still validates scope, paths, base hashes, and the live mutation lease before committing.
+    requiresEditorReview: () => editorReviewRequirement(input),
     // KEIKO-0469: opt in to defense-in-depth binding enforcement so that a mutationGuard reaching
     // read/discover/edit without a producer-binding is denied at the preflight boundary rather
     // than silently no-op'ing the workspace/run identity check. The paired authority port
@@ -2145,7 +2186,7 @@ export type VerificationLivenessRefusal = "signal-aborted" | "guard-rejected" | 
 export function verificationLivenessRefusal(
   input: Pick<
     ProductionManagedWorktreeToolInput,
-    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt" | "workspaceRoot"
   >,
   guard: Pick<CodingToolMutationGuard, "check">,
   signal: AbortSignal | undefined,
@@ -2294,13 +2335,14 @@ function buildEgressAuthority(
 function live(
   input: Pick<
     ProductionManagedWorktreeToolInput,
-    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt" | "workspaceRoot"
   >,
 ): boolean {
   try {
     input.liveFacts();
+    const access = input.resolveWorkspaceRootAccess();
     return (
-      input.resolveWorkspaceRootAccess()?.kind === "managed-task" &&
+      access?.canonicalRoot === input.workspaceRoot &&
       Date.now() < Date.parse(input.authorityExpiresAt)
     );
   } catch {

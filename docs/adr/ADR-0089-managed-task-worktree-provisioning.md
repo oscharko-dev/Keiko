@@ -30,6 +30,14 @@ Acceptance Criteria (AC1–AC5) and the Stop Conditions (SC1–SC4): no broad sh
 
 ## Decision
 
+The managed provisioning and activation paths below apply to managed worktrees. The Workbench's
+explicit **Local** choice uses the registered checkout and selected local branch. Managed activation
+rejects Local instances before path validation or mutation. Local selection records successful and
+rejected activation attempts through the same `recordWorkspaceLifecycle` adapter: one durable
+content-free evidence document paired with the correlated activity-log line, including measured
+duration. Repository paths and branch names do not enter that evidence. Evidence persistence
+failures retain the adapter's correlated diagnostic rather than silently claiming persistence.
+
 **D1 — A narrow worktree adapter over the single governed spawn boundary (AC5, SC1, SC3).**
 `packages/keiko-tools/src/git-worktree-adapter.ts` adds `createNodeGitWorktreeAdapter`, exposed on the
 existing `@oscharko-dev/keiko-tools/internal/git-mutation` subpath alongside the read snapshot reader

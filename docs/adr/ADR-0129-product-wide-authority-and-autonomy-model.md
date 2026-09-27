@@ -26,6 +26,19 @@ records still carry pre-three-mode, per-action-approval framing, ADR-0125 alread
 affected decisions (ADR-0058, ADR-0059, ADR-0060, ADR-0061, ADR-0062, ADR-0124); this record adds
 no further supersessions.
 
+## Surface availability clarification (owner decision, 2026-09-27)
+
+The shared policy and hard denials remain product-wide. ADR-0124 D2 and ADR-0163 D7 resolve an
+unconfigured **Coding Workbench** ceiling to `autonomous-delivery`, while the selected mode defaults
+to Ask for approval. This exposes all three modes without requiring a configuration step. Explicit
+narrower deployment configuration continues to clamp the selection. Memory and unconfigured
+non-Coding admission retain their fail-closed default; Coding availability is not authorization
+for unattended Memory acceptance or maintenance. Missing or invalid requested modes and missing
+or invalid envelope ceilings remain fail-closed. Git-change description turns use the explicit
+accepted Coding mode and the Coding deployment ceiling; their authority must not be clamped
+through the independent Memory capture policy, even though the Chat wire carries that mode in
+the shared request field. Existing description-scope and envelope validation still apply.
+
 ## Context
 
 ADR-0124 defined the three Coding Workbench autonomy modes (`governed-assist`,

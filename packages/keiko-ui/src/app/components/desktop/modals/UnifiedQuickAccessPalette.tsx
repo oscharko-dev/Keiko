@@ -24,8 +24,14 @@ import {
 import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import { FileIcon } from "../widgets/shared/projectTree";
-import { fuzzyScore } from "../widgets/cards/editorCommands";
-import type { QuickAccessCommand } from "../quickAccessRegistry";
+import { fuzzyScore, type EditorPaletteHost } from "../widgets/cards/editorCommands";
+import type {
+  Command,
+  QuickAccessCommand,
+  QuickAccessShortcutLabels,
+} from "../quickAccessRegistry";
+import { useTranslate } from "@/lib/i18n";
+import { buildUnifiedQuickAccessCommands } from "../quickAccessCommands";
 import { requestWorkspaceRoots, type WorkspaceRootTarget } from "../workspaceRootTargets";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 
@@ -70,6 +76,26 @@ interface UnifiedQuickAccessPaletteProps {
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly opener?: HTMLElement | null;
   readonly onClose: () => void;
+}
+
+// Build the editor command inventory only when the lazy palette is opened. Keeping this work in
+// the shell would pull every editor command into the initial desktop JavaScript bundle.
+export function DesktopQuickAccessPalette({
+  appCommands,
+  editorHost,
+  shortcutLabels,
+  ...props
+}: Omit<UnifiedQuickAccessPaletteProps, "commands"> & {
+  readonly appCommands: readonly Command[];
+  readonly editorHost: EditorPaletteHost | null;
+  readonly shortcutLabels: QuickAccessShortcutLabels;
+}): ReactNode {
+  const t = useTranslate();
+  const commands = useMemo(
+    () => buildUnifiedQuickAccessCommands(appCommands, editorHost, t, shortcutLabels),
+    [appCommands, editorHost, shortcutLabels, t],
+  );
+  return <UnifiedQuickAccessPalette {...props} commands={commands} />;
 }
 
 function partitionSearchOutcomes<T>(

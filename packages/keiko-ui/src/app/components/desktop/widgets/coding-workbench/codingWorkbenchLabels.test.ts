@@ -21,6 +21,7 @@ import {
   activeRunState,
   changesetDeliveryAlert,
   eventDetail,
+  eventTitle,
   lifecycleAnnouncement,
   modelSourceLabel,
   startBlockedReason,
@@ -238,6 +239,12 @@ function runtimeEvent(extra: Record<string, unknown>): CodingWorkbenchRuntimeSse
 }
 
 describe("eventDetail auxiliary outcome", () => {
+  it("names the whole failed run separately from successful tool calls", () => {
+    expect(eventTitle(runtimeEvent({ kind: "status", state: "failed" }), t)).toBe(
+      "codingWorkbench.event.runFailed",
+    );
+  });
+
   it.each([
     "provider-failed",
     "stream-incomplete",
@@ -247,7 +254,7 @@ describe("eventDetail auxiliary outcome", () => {
     "invalid-tool-call",
   ] as const)("shows the actionable %s cause for a redacted gateway failure", (failureCode) => {
     expect(eventDetail(runtimeEvent({ eventKind: "failure-redacted", failureCode }), t)).toBe(
-      `codingWorkbench.event.detailFailure codingWorkbench.event.turnFailure.${failureCode}`,
+      `codingWorkbench.event.turnFailure.${failureCode}`,
     );
   });
 
@@ -257,26 +264,27 @@ describe("eventDetail auxiliary outcome", () => {
         runtimeEvent({ eventKind: "failure-redacted", failureCode: "recovery-required" }),
         t,
       ),
-    ).toBe("codingWorkbench.event.detailFailure");
-    expect(eventDetail(runtimeEvent({ eventKind: "child-run-completed" }), t)).toBe(
-      "codingWorkbench.event.detail",
+    ).toBe("codingWorkbench.event.failure.generic");
+    expect(eventDetail(runtimeEvent({ eventKind: "child-run-completed" }), t)).toBe("");
+    expect(eventDetail(runtimeEvent({ failureCode: "runtime-failed" }), t)).toBe(
+      "codingWorkbench.event.failure.runtime",
     );
   });
 
   it("appends the normalized outcome as a content-free sentence", () => {
     expect(eventDetail(runtimeEvent({ auxiliaryOutcome: "denied" }), t)).toBe(
-      "codingWorkbench.event.detail codingWorkbench.event.detailOutcome",
+      "codingWorkbench.event.detailOutcome",
     );
   });
 
   it("omits the outcome line when no auxiliary outcome is present", () => {
-    expect(eventDetail(runtimeEvent({}), t)).toBe("codingWorkbench.event.detail");
+    expect(eventDetail(runtimeEvent({}), t)).toBe("");
   });
 
   it("keeps a redacted failure distinct from the outcome vocabulary", () => {
     expect(
       eventDetail(runtimeEvent({ failureCode: "runtime-crashed", auxiliaryOutcome: "stopped" }), t),
-    ).toBe("codingWorkbench.event.detailFailure codingWorkbench.event.detailOutcome");
+    ).toBe("codingWorkbench.event.failure.generic codingWorkbench.event.detailOutcome");
   });
 });
 
@@ -293,16 +301,13 @@ describe("eventDetail untrusted research content", () => {
         }),
         t,
       ),
-    ).toBe(
-      "codingWorkbench.event.detail codingWorkbench.event.detailOutcome " +
-        "codingWorkbench.event.detailUntrustedContent",
-    );
+    ).toBe("codingWorkbench.event.detailOutcome " + "codingWorkbench.event.detailUntrustedContent");
   });
 
   it("says nothing about content for a research denial, which took nothing in", () => {
     expect(
       eventDetail(runtimeEvent({ eventKind: "research-performed", auxiliaryOutcome: "denied" }), t),
-    ).toBe("codingWorkbench.event.detail codingWorkbench.event.detailOutcome");
+    ).toBe("codingWorkbench.event.detailOutcome");
   });
 });
 

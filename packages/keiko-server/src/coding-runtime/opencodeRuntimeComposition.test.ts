@@ -357,10 +357,11 @@ interface StartBridgeControl {
   readonly activityLog?: ServerLogSink;
   readonly startTimeoutMs?: number;
   readonly historyResponse?: Promise<Response>;
-  readonly historyResponseFactory?: () => Promise<Response>;
+  readonly historyResponseFactory?: (signal?: AbortSignal) => Promise<Response>;
   readonly expectedStart?: Readonly<Record<string, unknown>>;
   readonly onSseCancel?: () => void;
   readonly onSseStart?: (controller: ReadableStreamDefaultController<Uint8Array>) => void;
+  readonly sessionCreateCalls?: string[];
   readonly sseFrame?: string;
   readonly historyCalls?: Readonly<Record<string, number>>[];
   readonly governedEvents?: OpenCodeReconciliationEvent[];
@@ -543,7 +544,8 @@ async function startBridgeFixture(
     }
     if (path === "/api/session/ses_tool/message") {
       control?.historyCalls?.push({});
-      if (control?.historyResponseFactory !== undefined) return control.historyResponseFactory();
+      if (control?.historyResponseFactory !== undefined)
+        return control.historyResponseFactory(init?.signal ?? undefined);
       return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
     }
     if (path.endsWith("/prompt")) {
@@ -594,8 +596,10 @@ async function startBridgeFixture(
       });
       return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/api/session" && init?.method === "POST")
+    if (path === "/api/session" && init?.method === "POST") {
+      control?.sessionCreateCalls?.push("ses_tool");
       return Promise.resolve(v2Envelope({ id: "ses_tool" }));
+    }
     if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_tool" }]));
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
@@ -1231,6 +1235,47 @@ describe("private OpenCode run control", () => {
     });
     try {
       expect(historyCalls).toEqual([{}, {}]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("reuses the fixed V2 session when the event stream reconnects", async () => {
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const sessionCreateCalls: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facade, undefined, {
+      onSseStart: (controller): void => {
+        streams.push(controller);
+      },
+      sessionCreateCalls,
+      activityLog,
+    });
+    try {
+      expect(sessionCreateCalls).toEqual(["ses_tool"]);
+      streams[0]?.close();
+      await vi.waitFor(() => {
+        expect(streams).toHaveLength(2);
+      });
+      expect(sessionCreateCalls).toEqual(["ses_tool"]);
+      expect(fixture.runtime.manager.health()).toMatchObject({ status: "ready" });
+      const bindings = activityLog.events
+        .filter((event) => event.op === "coding-runtime.sidecar-session.bound")
+        .map((event) =>
+          expectActivityLogProof(
+            "coding-runtime.sidecar-session.bound.emitted-line",
+            formatActivityLogProofLine(event),
+          ),
+        );
+      expect(bindings).toMatchObject([
+        {
+          correlationId: FIXTURE_RUN_ID,
+          binding: "created",
+          streamCount: 1,
+          sessionId: "ses_tool",
+        },
+        { correlationId: FIXTURE_RUN_ID, binding: "reused", streamCount: 2, sessionId: "ses_tool" },
+      ]);
     } finally {
       await fixture.stop();
     }
@@ -2162,6 +2207,49 @@ describe("private OpenCode tool bridge", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  it("does not diagnose a history read cancelled by normal run disposal", async () => {
+    const diagnostics = persistedDiagnostics();
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    let holdHistory = false;
+    let markHistoryStarted: (() => void) | undefined;
+    const historyStarted = new Promise<void>((resolve) => {
+      markHistoryStarted = resolve;
+    });
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: (signal): Promise<Response> => {
+          if (!holdHistory) return Promise.resolve(v2Envelope([]));
+          markHistoryStarted?.();
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                reject(new Error("history read aborted", { cause: signal.reason }));
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+    );
+    holdHistory = true;
+    streams[0]?.enqueue(
+      new TextEncoder().encode(
+        'data: {"id":"evt_final","type":"session.execution.succeeded","data":{"sessionID":"ses_tool"}}\n\n',
+      ),
+    );
+    await historyStarted;
+    await fixture.stop();
+    expect(diagnostics.read()).not.toContain("coding-runtime.history");
+    expect(fixture.runtime.manager.health()).toEqual({ status: "stopped" });
   });
 
   // #3603: the gateway route refused the readiness challenge's model request (a deterministic

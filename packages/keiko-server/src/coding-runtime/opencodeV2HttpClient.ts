@@ -4,7 +4,9 @@ const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,256}$/u;
 const MAX_JSON_BYTES = OPENCODE_HISTORY_RESPONSE_MAX_BYTES;
 const MAX_TEXT_BYTES = 65_536;
-const DEFAULT_TIMEOUT_MS = 10_000;
+// History reads share the sidecar's event loop with tool execution. A burst of parallel tools may
+// delay its local HTTP response without making the run unhealthy; keep a bounded scheduling margin.
+const DEFAULT_TIMEOUT_MS = 30_000;
 const MESSAGE_PAGE_SIZE = 100;
 const MAX_MESSAGE_PAGES = 64;
 const MAX_MESSAGES = 4096;

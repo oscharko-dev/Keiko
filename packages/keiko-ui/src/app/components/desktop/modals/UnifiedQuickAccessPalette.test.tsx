@@ -4,6 +4,7 @@ import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchFilesSearch, fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
 import {
+  DesktopQuickAccessPalette,
   rootFairMerge,
   UnifiedQuickAccessPalette,
   type FileResult,
@@ -55,6 +56,31 @@ afterEach(() => {
 });
 
 describe("UnifiedQuickAccessPalette", () => {
+  it("builds desktop commands with current shortcut labels and executes the selected action", async () => {
+    const run = vi.fn();
+    const onClose = vi.fn();
+    const props = {
+      initialMode: "commands" as const,
+      appCommands: [{ id: "theme", label: "Change theme", icon: "spark" as const, run }],
+      editorHost: null,
+      openEditorFile: vi.fn(),
+      onClose,
+    };
+    const { rerender } = render(
+      <DesktopQuickAccessPalette {...props} shortcutLabels={new Map([["theme", "Alt+T"]])} />,
+    );
+    expect(await screen.findByRole("option", { name: /Change theme/ })).toHaveTextContent("Alt+T");
+    rerender(
+      <DesktopQuickAccessPalette {...props} shortcutLabels={new Map([["theme", "Alt+Y"]])} />,
+    );
+    const option = screen.getByRole("option", { name: /Change theme/ });
+    expect(option).toHaveTextContent("Alt+Y");
+    expect(option).not.toHaveTextContent("Alt+T");
+    await userEvent.click(option);
+    expect(run).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("restores the opener captured before the lazy palette mounts", () => {
     const opener = document.createElement("button");
     document.body.appendChild(opener);

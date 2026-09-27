@@ -194,7 +194,26 @@ function renderWorkbench(
   runtimeHookMock.mockReturnValue({ state, actions: actions() });
   return render(
     <ActiveWorkspaceProvider value={api}>
-      <CodingWorkbenchWindow selectedRoot={selectedRoot} />
+      {selectedRoot === undefined || api.activeBinding !== null ? (
+        <CodingWorkbenchWindow selectedRoot={selectedRoot} />
+      ) : (
+        <CodingWorkbenchSetup
+          selectedRoot={selectedRoot}
+          selectedBaseBranch={branchRead.currentBranch}
+          refreshWorkspace={api.refresh}
+          runtimePosture="verified"
+          renderRepositoryControls={(pending): ReactNode => (
+            <>
+              <select aria-label="Choose coding repository" disabled={pending}>
+                <option>{selectedRoot.split("/").at(-1)}</option>
+              </select>
+              <select aria-label="Choose coding branch" disabled={pending}>
+                <option>{branchRead.currentBranch}</option>
+              </select>
+            </>
+          )}
+        />
+      )}
     </ActiveWorkspaceProvider>,
   );
 }
@@ -234,22 +253,22 @@ async function flushBindSequence(): Promise<void> {
   });
 }
 
+beforeEach(() => {
+  provisionMock.mockReset();
+  reconcileMock.mockReset();
+  setActiveMock.mockReset();
+  listMock.mockReset();
+  repairMock.mockReset();
+  branchRead.currentBranch = "main";
+  branchRead.loading = false;
+  branchRead.error = null;
+});
+
+afterEach(() => {
+  resetClientDiagnosticWriter();
+});
+
 describe("CodingWorkbenchSetup", () => {
-  beforeEach(() => {
-    provisionMock.mockReset();
-    reconcileMock.mockReset();
-    setActiveMock.mockReset();
-    listMock.mockReset();
-    repairMock.mockReset();
-    branchRead.currentBranch = "main";
-    branchRead.loading = false;
-    branchRead.error = null;
-  });
-
-  afterEach(() => {
-    resetClientDiagnosticWriter();
-  });
-
   it.each(["loading", "failed"])("does not bind while branch inventory is %s", async (state) => {
     branchRead.loading = state === "loading";
     branchRead.error = state === "failed" ? "Branch lookup failed" : null;
@@ -937,5 +956,57 @@ describe("CodingWorkbenchSetup", () => {
     await waitFor(() => {
       expect(onBoundRepository).toHaveBeenCalledWith("/repos/keiko-checkout");
     });
+  });
+});
+
+// Integration pins run the production Window and its automatic location-binding hook. The unit
+// setup-card tests above separately cover the explicit bootstrap form.
+describe("Workbench automatic binding through the production Window", () => {
+  function renderWindow(): ReturnType<typeof render> {
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    return render(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow
+          selectedRoot="/repos/selected"
+          selectedBranch="main"
+          selectedLocation="worktree"
+        />
+      </ActiveWorkspaceProvider>,
+    );
+  }
+
+  it.each(["loading", "failed"])("does not bind when branch inventory is %s", async (status) => {
+    branchRead.loading = status === "loading";
+    branchRead.error = status === "failed" ? "Branch inventory unavailable" : null;
+    renderWindow();
+    await flushBindSequence();
+    expect(provisionMock).not.toHaveBeenCalled();
+    expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("provisions, reconciles and activates through the real Window", async () => {
+    successfulBind();
+    renderWindow();
+    await waitFor(() => expect(setActiveMock).toHaveBeenCalledOnce());
+    expect(provisionMock).toHaveBeenCalledOnce();
+    expect(reconcileMock).toHaveBeenCalledOnce();
+    expect(provisionMock.mock.invocationCallOrder[0]).toBeLessThan(
+      reconcileMock.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(reconcileMock.mock.invocationCallOrder[0]).toBeLessThan(
+      setActiveMock.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it.each(["drifted", "missing"])("does not activate when reconciliation is %s", async (status) => {
+    successfulBind();
+    reconcileMock.mockResolvedValue({
+      entries: status === "missing" ? [] : [{ workspaceId: "ws-selected", status }],
+    });
+    renderWindow();
+    await waitFor(() => expect(reconcileMock).toHaveBeenCalledOnce());
+    await flushBindSequence();
+    expect(setActiveMock).not.toHaveBeenCalled();
+    expect(provisionMock).toHaveBeenCalledOnce();
   });
 });

@@ -210,6 +210,16 @@ export interface WorkspaceLifecycleActionResult {
 }
 
 export interface WorkspaceLifecycleService {
+  // Ordinary checkout selection is available only when the production lifecycle composes the
+  // registered-project Git validator. Test lifecycles and managed-only deployments omit it.
+  readonly selectLocal?:
+    | ((request: {
+        readonly root: string;
+        readonly branch: string;
+        readonly requestedBy: string;
+        readonly correlationId?: string;
+      }) => ActiveWorkspaceView)
+    | undefined;
   // List the persisted instances for an already-resolved repository root.
   readonly list: (repositoryRoot: string) => readonly WorkspaceInstance[];
   // Every persisted instance across repositories — the switcher's inventory. The active pointer is

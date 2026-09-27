@@ -47,6 +47,7 @@ import {
 import {
   assertManagedRootOwned,
   assertManagedTargetContained,
+  assertManagedWorkspaceInstance,
   ensureManagedWorktreeParent,
   managedTargetExists,
 } from "./managed-root.js";
@@ -1179,6 +1180,7 @@ function activateLocked(
   if (instance === undefined) {
     throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
   }
+  assertManagedWorkspaceInstance(instance);
   const nowMs = ctx.deps.now();
   assertActivatable(ctx, instance, request, nowMs);
   assertPersistedManagedPath(ctx, instance);

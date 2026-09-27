@@ -140,7 +140,7 @@ function useActivityConnection(input: ActivityConnectionInput): void {
     }
     const controller = new AbortController();
     setState({ status: "loading", feed: null, errorCode: null });
-    void connectActivity(controller, enqueue)
+    void connectActivity(controller, enqueue, runStateRef)
       .then(() => {
         flush();
         markDisconnected(controller, runStateRef, setState);
@@ -159,11 +159,15 @@ function useActivityConnection(input: ActivityConnectionInput): void {
 async function connectActivity(
   controller: AbortController,
   enqueue: (snapshot: CodingAppSessionChannelSnapshot) => void,
+  runStateRef: RefObject<CodingWorkbenchRuntimeStateName | undefined>,
 ): Promise<void> {
   await codingAppSessionPairingSettled();
   if (controller.signal.aborted) return;
+  const endedBeforeRead = terminalRunState(runStateRef.current);
   enqueue(await getCodingAppSessionChannelSnapshot(controller.signal));
-  if (controller.signal.aborted) return;
+  // A completed run has a final snapshot, not a live connection to maintain. Keeping an SSE
+  // subscription here turns a later server restart into an error on an already finished task.
+  if (controller.signal.aborted || endedBeforeRead) return;
   await streamCodingAppSessionChannelSnapshots({ signal: controller.signal, onSnapshot: enqueue });
 }
 

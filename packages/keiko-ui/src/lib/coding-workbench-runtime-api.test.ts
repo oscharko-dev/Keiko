@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { genericDescriptionArtifact } from "../app/components/desktop/widgets/coding-workbench/_workbenchDescriptionStatusTestSupport";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
@@ -56,6 +57,192 @@ function snapshot(): Record<string, unknown> {
 describe("Coding Workbench runtime API", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetClientDiagnosticWriter();
+  });
+
+  it("repairs a restarted app session and retries only a start rejected before its body was read", async () => {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    const denied = jsonResponse(
+      {
+        error: {
+          code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+          message: "Runtime request was rejected.",
+        },
+        preBodySessionDenied: true,
+      },
+      403,
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(denied)
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse(snapshot()));
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      requestId: "start-after-restart",
+      taskIntent: "add a bounded test",
+      requestedMode: "supervised-coding",
+    } as const;
+
+    await expect(startCodingWorkbenchRuntime(input)).resolves.toMatchObject({ runId: "run-1" });
+
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls.map(([path]) => path)).toEqual([
+      "/api/coding-workbench/runtime/runs",
+      "/api/coding-workbench/app-session/local-session",
+      "/api/coding-workbench/runtime/runs",
+    ]);
+    expect(calls[2]?.[1].body).toBe(calls[0]?.[1].body);
+    const deniedId = new Headers(calls[0]?.[1].headers).get("X-Keiko-Correlation-Id");
+    expect(new Headers(calls[2]?.[1].headers).get("X-Keiko-Correlation-Id")).toBe(deniedId);
+    expect(reports).toEqual([
+      {
+        message: "[keiko] coding start session repair: replayed",
+        meta: {
+          correlationId: deniedId,
+          sessionRepairReport: {
+            outcome: "replayed",
+            repairCorrelationId: expect.any(String),
+          },
+        },
+      },
+    ]);
+  });
+
+  it("does not replay a start refused after the server read its body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+            message: "Runtime request was rejected.",
+          },
+        },
+        403,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "post-body-refusal",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["missing marker", undefined, 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["false marker", false, 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["string marker", "true", 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["numeric marker", 1, 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["wrong status", true, 409, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["wrong code", true, 403, "CODING_RUNTIME_INVALID_INTENT"],
+  ] as const)("never replays a start with %s", async (_case, marker, status, code) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: { code, message: "Runtime request was rejected." },
+          ...(marker === undefined ? {} : { preBodySessionDenied: marker }),
+        },
+        status,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "non-replayable-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a failed session repair without replaying the start", async () => {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+              message: "Runtime request was rejected.",
+            },
+            preBodySessionDenied: true,
+          },
+          403,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({}, 503));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "repair-failed-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(reports).toContainEqual({
+      message: "[keiko] coding start session repair: repair-failed",
+      meta: expect.objectContaining({
+        sessionRepairReport: expect.objectContaining({
+          outcome: "repair-failed",
+          errorKind: "unavailable",
+        }),
+      }),
+    });
+  });
+
+  it("reports a failed replay without attempting a third start", async () => {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+              message: "Runtime request was rejected.",
+            },
+            preBodySessionDenied: true,
+          },
+          403,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "UNAVAILABLE", message: "Unavailable" } }, 503),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "replay-failed-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(reports).toContainEqual({
+      message: "[keiko] coding start session repair: replay-failed",
+      meta: expect.objectContaining({
+        sessionRepairReport: expect.objectContaining({
+          outcome: "replay-failed",
+          errorKind: "unavailable",
+        }),
+      }),
+    });
   });
 
   it("preserves a closed issue refusal from the mounted error envelope without retrying as generic", async () => {

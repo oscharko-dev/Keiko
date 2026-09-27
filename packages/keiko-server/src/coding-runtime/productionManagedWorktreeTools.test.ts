@@ -576,18 +576,17 @@ describe("production managed worktree tools", () => {
   // #3612: the governed ask checks a changeset's base digests before the human sees it. The check
   // reads through the same secure read as keiko_workspace_read and answers with the very digest that
   // read reports, never a second formula.
-  // Owner decision 2026-09-26 (ADR-0124 D6): a file edit raises no ask of its own, so this change
-  // review is its one human approval. The mode policy (ADR-0138) decides at registration, before the
-  // editor action is queued, that the review is required: nothing is written until the human
-  // applies it.
+  // Owner decision (ADR-0124 D6): contained routine edits use the medium-risk policy. Ask mode
+  // reviews the diff; Supervised and Full access apply it through the same governed patch boundary.
   it.each([
     ["governed-assist", true],
-    ["supervised-coding", true],
+    ["supervised-coding", false],
     ["autonomous-delivery", false],
   ] as const)(
     "derives editor review policy for %s (requiresReview=%s)",
     async (effectiveMode: CodingWorkbenchMode, requiresReview: boolean) => {
       const order: string[] = [];
+      const activity: ServerLogEvent[] = [];
       const register = vi.fn((): boolean => {
         order.push("register");
         return true;
@@ -634,6 +633,7 @@ describe("production managed worktree tools", () => {
           discard: vi.fn((): boolean => true),
           waitForMutation: () => Promise.resolve("succeeded"),
         },
+        activityLog: { write: (event): void => void activity.push(event) },
         invocationRegistry: createCodingToolInvocationRegistry(),
         verificationRunner: { runToReport: vi.fn() },
         onRuntimeEvent: vi.fn(),
@@ -655,6 +655,19 @@ describe("production managed worktree tools", () => {
       ).resolves.toMatchObject({ status: "completed" });
       expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview }));
       expect(order).toEqual(["register", "action"]);
+      const reviewDecision = activity.find(
+        (event) => event.op === "coding-runtime.editor-review.decided",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.editor-review.decided.emitted-line",
+          formatActivityLogProofLine(reviewDecision ?? {}),
+        ),
+      ).toMatchObject({
+        mode: effectiveMode,
+        risk: "medium",
+        disposition: requiresReview ? "review-required" : "allowed",
+      });
     },
   );
 
@@ -2419,6 +2432,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
   }
 
   function searchFacade(input: {
+    readonly workspaceRoot: string;
     readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
     readonly authorityExpiresAt?: string;
     readonly activityLog?: { write: (event: ServerLogEvent) => void };
@@ -2439,7 +2453,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
         }),
       },
       authorityRef: { runId: "run-h1-search", envelopeDigest: DIGEST },
-      workspaceRoot: "/managed/worktree",
+      workspaceRoot: input.workspaceRoot,
       resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
       authorityExpiresAt: input.authorityExpiresAt ?? "2099-01-01T00:00:00.000Z",
       effectiveMode: "autonomous-delivery",
@@ -2476,6 +2490,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     );
     const events: ServerLogEvent[] = [];
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2562,6 +2577,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     readonly provenance: unknown;
   }> {
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: accessFor(root),
       ...(slot === undefined ? {} : { repositorySemanticSearch: slot }),
       ...(events === undefined
@@ -2615,8 +2631,10 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const bound = semanticSlot({
       search: (): IndexMatches => Promise.reject(new Error("index unreachable")),
     });
+    const root = twoMatchingFiles();
     const facade = searchFacade({
-      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      workspaceRoot: root,
+      resolveWorkspaceRootAccess: accessFor(root),
       repositorySemanticSearch: bound.slot,
       activityLog: { write: (event): void => void events.push(event) },
       diagnostics: { record: (record): void => void records.push(record) },
@@ -2672,8 +2690,10 @@ describe("H1 repository search mounted into production composition (#3386)", () 
         return Promise.reject(new Error("index unreachable"));
       },
     });
+    const root = twoMatchingFiles();
     const facade = searchFacade({
-      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      workspaceRoot: root,
+      resolveWorkspaceRootAccess: accessFor(root),
       repositorySemanticSearch: bound.slot,
       activityLog: { write: (event): void => void events.push(event) },
       diagnostics: { record: (record): void => void records.push(record) },
@@ -2733,6 +2753,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const root = tempWorkspace();
     writeFileSync(join(root, ".env"), "SECRET=sentinel-value\n");
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2759,6 +2780,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       writeFileSync(join(root, "src", name), "export const truncationProbe = true;\n");
     }
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2784,6 +2806,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const root = tempWorkspace();
     let calls = 0;
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined => {
         calls += 1;
         return calls === 1
@@ -2805,6 +2828,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
   it("fails closed with a distinct reason when the run's authority already expired", async () => {
     const root = tempWorkspace();
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2822,6 +2846,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
   it("cancels an already-aborted search before the workspace is ever touched", async () => {
     const root = tempWorkspace();
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -3850,6 +3875,7 @@ function authorizedEnvelope(network = false): never {
 // mapping so the next refusal in a customer log names what actually fired.
 describe("verificationLivenessRefusal", () => {
   const liveInput = {
+    workspaceRoot: "/managed/worktree",
     liveFacts: (): CodingWorkbenchRuntimeAuthorityFacts => FACTS,
     resolveWorkspaceRootAccess,
     authorityExpiresAt: "2099-01-01T00:00:00.000Z",

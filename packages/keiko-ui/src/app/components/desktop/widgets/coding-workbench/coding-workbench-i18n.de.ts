@@ -377,6 +377,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.chooseBranch": "Coding-Branch auswählen",
   "codingWorkbench.repository.label": "Repository",
   "codingWorkbench.repository.branchLabel": "Branch",
+  "codingWorkbench.repository.locationLabel": "Arbeitsort",
+  "codingWorkbench.repository.locationLocal": "Lokal",
+  "codingWorkbench.repository.locationWorktree": "Neuer lokaler Worktree",
+  "codingWorkbench.repository.locationBinding": "Gewählten Checkout vorbereiten…",
+  "codingWorkbench.repository.locationError":
+    "Der gewählte Checkout konnte nicht geöffnet werden. Wähle den Branch in Git und versuche es erneut.",
   "codingWorkbench.repository.search": "Repositories suchen",
   "codingWorkbench.repository.searchBranch": "Branches suchen",
   "codingWorkbench.repository.noMatches": "Keine passenden Repositories.",
@@ -993,6 +999,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Fehler: {failure}",
+  "codingWorkbench.event.failure.runtime":
+    "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
+  "codingWorkbench.event.failure.generic":
+    "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
+  "codingWorkbench.event.runFailed": "Coding-Lauf fehlgeschlagen",
   "codingWorkbench.event.turnFailure.provider-failed":
     "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",
   "codingWorkbench.event.turnFailure.stream-incomplete":

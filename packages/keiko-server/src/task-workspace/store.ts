@@ -45,6 +45,7 @@ interface InstanceRow {
   readonly repository_root: string;
   readonly base_branch: string;
   readonly task_branch: string;
+  readonly execution_location: "local" | "worktree";
   readonly managed_worktree_path: string;
   readonly gitdir_identity: string;
   readonly lifecycle_state: string;
@@ -64,15 +65,16 @@ const COLUMNS = `
   managed_worktree_path, gitdir_identity, lifecycle_state, health, lock_json, created_at, updated_at,
   last_verified_at, last_verified_head, drift_markers_json, recovery_hints_json, audit_correlation_id
 `;
+const READ_COLUMNS = `${COLUMNS}, execution_location`;
 
-const SQL_GET_BY_ID = `SELECT ${COLUMNS} FROM task_workspace_instances WHERE workspace_id = ?`;
-const SQL_FIND_BY_REPO_TASK = `SELECT ${COLUMNS} FROM task_workspace_instances WHERE repository_id = ? AND task_id = ?`;
-const SQL_LIST_BY_REPO = `SELECT ${COLUMNS} FROM task_workspace_instances WHERE repository_id = ? ORDER BY updated_at DESC, workspace_id`;
-const SQL_LIST_ALL = `SELECT ${COLUMNS} FROM task_workspace_instances ORDER BY updated_at DESC, workspace_id`;
+const SQL_GET_BY_ID = `SELECT ${READ_COLUMNS} FROM task_workspace_instances WHERE workspace_id = ?`;
+const SQL_FIND_BY_REPO_TASK = `SELECT ${READ_COLUMNS} FROM task_workspace_instances WHERE repository_id = ? AND task_id = ?`;
+const SQL_LIST_BY_REPO = `SELECT ${READ_COLUMNS} FROM task_workspace_instances WHERE repository_id = ? ORDER BY updated_at DESC, workspace_id`;
+const SQL_LIST_ALL = `SELECT ${READ_COLUMNS} FROM task_workspace_instances ORDER BY updated_at DESC, workspace_id`;
 const SQL_DELETE = "DELETE FROM task_workspace_instances WHERE workspace_id = ?";
 const SQL_UPSERT = `
-INSERT INTO task_workspace_instances (${COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO task_workspace_instances (${READ_COLUMNS})
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(workspace_id) DO UPDATE SET
   schema_version = excluded.schema_version,
   task_id = excluded.task_id,
@@ -91,8 +93,9 @@ ON CONFLICT(workspace_id) DO UPDATE SET
   last_verified_head = excluded.last_verified_head,
   drift_markers_json = excluded.drift_markers_json,
   recovery_hints_json = excluded.recovery_hints_json,
-  audit_correlation_id = excluded.audit_correlation_id
-RETURNING ${COLUMNS}
+  audit_correlation_id = excluded.audit_correlation_id,
+  execution_location = excluded.execution_location
+RETURNING ${READ_COLUMNS}
 `;
 
 function parseJsonArray(json: string): readonly unknown[] {
@@ -110,6 +113,7 @@ function rowToInstance(row: InstanceRow): WorkspaceInstance {
     repositoryRoot: row.repository_root,
     baseBranch: row.base_branch,
     taskBranch: row.task_branch,
+    executionLocation: row.execution_location,
     managedWorktreePath: row.managed_worktree_path,
     gitdirIdentity: row.gitdir_identity,
     lifecycleState: row.lifecycle_state as TaskWorkspaceLifecycleState,
@@ -153,6 +157,7 @@ function upsertParams(instance: WorkspaceInstance): readonly (string | null)[] {
     JSON.stringify(instance.driftMarkers),
     JSON.stringify(instance.recoveryHints),
     instance.auditCorrelationId,
+    instance.executionLocation ?? "worktree",
   ];
 }
 

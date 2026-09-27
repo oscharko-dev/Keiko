@@ -114,6 +114,7 @@ describe("production workspace HEAD reader worktree layouts", () => {
   it("resolves a linked-worktree HEAD through commondir and packed refs", () => {
     const fixture = worktreeFixture();
     expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot)).toBe(MAIN_SHA);
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.worktreeRoot)).toBe(MAIN_SHA);
   });
 
   it("prefers a loose common-root ref over the packed ref", () => {

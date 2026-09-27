@@ -20,6 +20,7 @@ import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary"
 import { secureRandomId } from "@/lib/secure-random";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import type { ClientDiagnosticCodingHistoryScope } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
 
 export interface CodingTaskSession {
   readonly detail: CodingHistoryDetail | null;
@@ -36,6 +37,7 @@ interface SessionInput {
   readonly active: boolean;
   readonly workspace: ActiveWorkspaceApi | null;
   readonly root: string | undefined;
+  readonly location?: WorkbenchExecutionLocation;
   readonly selection: string | undefined;
   readonly onSelectionHandled?: (() => void) | undefined;
 }
@@ -60,7 +62,7 @@ interface TaskLoader {
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const input = {
     ...options,
-    root: options.workspace?.activeInstance?.repositoryRoot ?? options.root,
+    root: options.root ?? options.workspace?.activeInstance?.repositoryRoot,
   };
   const ignoredRun = useRef<string | undefined>(undefined);
   const latest = useRef(input);
@@ -130,6 +132,9 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
     async (id: string, activate: boolean): Promise<void> => {
       const seq = ++sequence.current;
       const operation = historyLoad(id, scopeRevision.current.scope);
+      // A failed read for another task must never leave the previous task's conversation id
+      // attached to the composer. A refresh of the same task may retain its visible history.
+      setDetail((current) => (current?.task.id === id ? current : null));
       setPending(true);
       setError(false);
       try {
@@ -317,15 +322,17 @@ function useNewTask(
 }
 
 async function provisionNewTask(current: SessionInput): Promise<boolean | undefined> {
-  const root = current.root ?? current.workspace?.activeInstance?.repositoryRoot;
-  const baseBranch = current.workspace?.activeInstance?.baseBranch;
-  return root !== undefined && baseBranch !== undefined
-    ? await current.workspace?.provision({
-        root,
-        baseBranch,
-        taskId: `coding-${secureRandomId("task")}`,
-      })
-    : await current.workspace?.clearActive();
+  if (current.location === "local") return true;
+  const workspace = current.workspace;
+  if (workspace === null) return undefined;
+  const root = current.root ?? workspace.activeInstance?.repositoryRoot;
+  const baseBranch = workspace.activeInstance?.baseBranch;
+  if (root === undefined || baseBranch === undefined) return await workspace.clearActive();
+  return await workspace.provision({
+    root,
+    baseBranch,
+    taskId: `coding-${secureRandomId("task")}`,
+  });
 }
 
 function useSessionSelection(
