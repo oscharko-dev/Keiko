@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Gateway, parseGatewayConfig, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
@@ -7,11 +12,8 @@ import {
   resetGatewayInstanceCacheForTests,
 } from "./gateway-instance-cache.js";
 import {
-  createBufferedServerLogSink,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-  type BufferedServerLogSink,
   type ServerLogThreshold,
 } from "./observability/index.js";
 import {

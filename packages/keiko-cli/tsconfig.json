@@ -14,6 +14,7 @@
   "include": ["src"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts", "src/test-support/**"],
   "references": [
+    { "path": "../keiko-activity-log/tsconfig.json" },
     { "path": "../keiko-contracts/tsconfig.json" },
     { "path": "../keiko-security/tsconfig.json" },
     { "path": "../keiko-model-gateway/tsconfig.json" },

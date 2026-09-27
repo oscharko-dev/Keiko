@@ -962,10 +962,12 @@ describe("runUiCli", () => {
 
   it("keeps the ambient UI environment when a local Git mutation environment is injected", async () => {
     const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-ambient-env-"));
     const captured: UiHandlerDeps[] = [];
     const deps: UiCliDeps = {
       staticRoot,
       hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
       localGitMutationEnv: { HOME: "/private/evaluation-home", PATH: "/usr/bin" },
       createServer: ({ handlerDeps }) => {
         captured.push(handlerDeps);
@@ -978,6 +980,7 @@ describe("runUiCli", () => {
       expect(captured[0]?.env.HOME).toBe("/host/home");
     } finally {
       closeHandlerDeps(captured[0]);
+      await rm(cwd, { recursive: true, force: true });
     }
   });
 

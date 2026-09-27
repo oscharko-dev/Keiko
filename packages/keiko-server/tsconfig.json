@@ -19,6 +19,9 @@
   ],
   "references": [
     {
+      "path": "../keiko-activity-log/tsconfig.json"
+    },
+    {
       "path": "../keiko-connectors/tsconfig.json"
     },
     {

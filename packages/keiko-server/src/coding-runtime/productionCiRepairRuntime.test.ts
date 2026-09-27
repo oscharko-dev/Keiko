@@ -12,8 +12,8 @@ import {
 } from "../gitDelivery/ciObservationTest/_support.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
-import { redactLogFields } from "../observability/log-redaction.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

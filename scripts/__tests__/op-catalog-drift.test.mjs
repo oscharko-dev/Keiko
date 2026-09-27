@@ -1146,6 +1146,7 @@ describe("op catalog drift", () => {
         "activity-log.pin.quota-exhausted",
       ]);
       expect(byFailureClass.get("activity-log-contract")?.lossSignals).toEqual([
+        "activity-log.writer-rejected",
         "server-log.line-dropped",
         "server-log.write-failed",
       ]);

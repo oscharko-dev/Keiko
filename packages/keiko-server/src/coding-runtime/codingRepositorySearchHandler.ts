@@ -16,8 +16,8 @@ import {
   type CodingRepositorySearchOptions,
 } from "@oscharko-dev/keiko-workspace/coding-repository-search";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const CODING_REPOSITORY_HANDLER_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",

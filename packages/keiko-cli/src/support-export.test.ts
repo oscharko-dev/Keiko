@@ -726,7 +726,7 @@ describe("buildSupportBundleManifest", () => {
 
   // `buildSupportBundleManifest` forwards `schemaVersion` verbatim rather than deriving its own
   // copy (see `ManifestInput.schemaVersion`'s doc comment) — the real value comes from
-  // `packages/keiko-server/src/observability/server-log.ts`'s own `SERVER_LOG_SCHEMA_VERSION`,
+  // `packages/keiko-activity-log/src/server-log.ts`'s own `SERVER_LOG_SCHEMA_VERSION`,
   // imported here (not hard-coded) so a future bump of that constant fails this assertion
   // automatically instead of relying on a hand-maintained copy staying in sync.
   it("tracks the server's log schema version", () => {

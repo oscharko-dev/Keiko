@@ -1,6 +1,7 @@
+import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
+
 import { vi } from "vitest";
 import { fixture } from "./catalogDefinition.js";
-import { createBufferedServerLogSink } from "../../observability/server-log.js";
 import { createCodingToolInvocationRegistry } from "../../coding-runtime/codingToolInvocationRegistry.js";
 import type { CodingToolAuthorityPreview } from "../../coding-runtime/codingToolAuthorityPort.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";

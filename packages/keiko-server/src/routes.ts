@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentActivityLogReadiness } from "./observability/activity-log-readiness.js";
+import { currentActivityLogReadiness } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type ApiError } from "./route-error.js";
 export { errorBody } from "./route-error.js";
 export type { ApiError } from "./route-error.js";

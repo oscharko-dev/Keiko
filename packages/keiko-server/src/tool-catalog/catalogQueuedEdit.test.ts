@@ -1,10 +1,11 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { createCodingRuntimeEditorMutationLeaseCoordinator } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createCodingToolReadEditPorts } from "../coding-runtime/codingToolReadEditPorts.js";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { createCanonicalCatalogFacadeBridge } from "./catalogToolFacadeBridge.js";
 

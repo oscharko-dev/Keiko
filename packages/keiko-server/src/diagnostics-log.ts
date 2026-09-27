@@ -15,15 +15,16 @@ import {
   contentFreeErrorClass,
   machineToken,
   safeProperty,
-} from "./observability/error-classification.js";
-import { closeReasonVocabulary, redactLogFields } from "./observability/log-redaction.js";
-import { redactRoutePath } from "./observability/route-template.js";
-import { reportServerLogFailure, type ServerLogEvent } from "./observability/server-log.js";
-import {
+  closeReasonVocabulary,
+  redactLogFields,
+  reportServerLogFailure,
+  type ServerLogEvent,
   createActivityLogSink,
   resolveActivityLogStateDir,
-} from "./observability/server-logger.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+  causeChain,
+  keikoStackFrames,
+} from "@oscharko-dev/keiko-activity-log";
+import { redactRoutePath } from "./observability/route-template.js";
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -149,7 +150,7 @@ export {
   MACHINE_TOKEN_SHAPE,
   safeProperty,
   SPECIFIC_BUILT_IN_ERROR_NAMES,
-} from "./observability/error-classification.js";
+} from "@oscharko-dev/keiko-activity-log";
 // Server-side operator diagnostics sink (RB-6 / GEN-OBS-DIAGNOSTICS-901/602/603, STATUS-403).
 //
 // Before this module the top-level route-error catch, the buffered-send rethrow, and the streamed

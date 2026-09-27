@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,12 +10,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
-import {
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type ServerLogEvent,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import {
   inspectRemediationStore,
   openRemediationStore,

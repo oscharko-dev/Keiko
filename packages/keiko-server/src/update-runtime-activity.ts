@@ -16,7 +16,7 @@ import {
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 
 import { correlationIdOrUnknown } from "./correlation.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 export interface UpdateRuntimeActivityFields {
   readonly eventId: string;

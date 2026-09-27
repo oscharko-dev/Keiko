@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // GEN-PERF-RELACT-001 — unit contract for the shared per-workspace activity broadcaster.
 // Pins the four properties the per-connection implementation it replaced did not have:
 // one shared sweep per tick, full-state late-join without losing diffs for existing
@@ -13,12 +15,7 @@ import {
   type ActivityFrame,
   type ActivitySubscriber,
 } from "./relationship-activity-broadcast.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const REFRESH_MS = 5_000;
 const PING_MS = 30_000;

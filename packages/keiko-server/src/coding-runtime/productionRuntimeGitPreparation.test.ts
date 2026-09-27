@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { readVerifiedCommitFacts } from "../gitDelivery/verifiedCommitFacts.js";
 import { foreignOriginDigest } from "../gitDelivery/verifiedRepositoryIdentity.js";
 import {

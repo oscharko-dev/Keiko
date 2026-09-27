@@ -35,7 +35,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 export const DEFAULT_CONTAINER_PROBE_DEADLINE_MS = 4_000 as const; // generous: real daemon round-trip
 export const SUPPORTED_DOCKER_MAJOR = 20 as const; // engine-version floor; below → "unsupported"

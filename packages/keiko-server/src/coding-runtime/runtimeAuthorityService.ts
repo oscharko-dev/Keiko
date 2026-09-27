@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 // KEIKO-0577: replace the file-local digest()/canonicalJson() with the shared, architecturally
 // correct helpers from @oscharko-dev/keiko-security so a second silently-diverging
 // implementation of a security-relevant hashing primitive cannot drift further.

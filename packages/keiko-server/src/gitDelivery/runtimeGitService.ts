@@ -50,7 +50,7 @@ import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacade
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { errorKindOf } from "../observability/server-log.js";
+import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 
 const RUNTIME_GIT_STATE_FIELD = {
   type: "string",

@@ -1,3 +1,4 @@
+import { resetServerLogFailureNotices } from "../../../tests/support/activity-log-test-support.js";
 // Registry-linked executable proof (#3532) for `server.diagnostic.failure`.
 //
 // Kept out of `diagnostics-log.test.ts` / `diagnostics-log.activity-log.test.ts` /
@@ -21,7 +22,7 @@ import {
   defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
 } from "./diagnostics-log.js";
-import { closeFileServerLogSinks, resetServerLogFailureNotices } from "./observability/index.js";
+import { closeFileServerLogSinks } from "./observability/index.js";
 
 describe("server.diagnostic.failure activity log proof (#3532)", () => {
   let stateDir: string;

@@ -380,7 +380,8 @@ function seedSupportIncident(stateDir) {
   writeFileSync(join(dir, "slot-00.claim"), incidentId, { mode: 0o600 });
 }
 
-// Source of truth: packages/keiko-cli/src/support-segment-manifest-names.ts (grammar, #3531) and
+// Source of truth: packages/keiko-activity-log/src/reader/support-segment-manifest-names.ts
+// (grammar, #3531) and
 // support-segment-manifest.ts (content shape, MAX_SEGMENT_MANIFEST_BYTES). Derived, rebuildable
 // metadata over one sealed Activity Log segment; the fixture does not model logs/ itself (see
 // seedSupportIncident above), so this content is representative, not a real rebuild.

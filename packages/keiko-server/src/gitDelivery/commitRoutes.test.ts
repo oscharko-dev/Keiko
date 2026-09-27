@@ -38,7 +38,7 @@ import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { createEditorSettingsControlService } from "../editor/settings/editorSettingsControl.js";
 import { createEditorSettingsStore } from "../editor/settings/editorSettingsStore.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { RouteContext } from "../routes.js";
 import type {

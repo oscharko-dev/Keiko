@@ -9,6 +9,13 @@
 // the history itself is several times larger than that budget, so an implementation that held the
 // history (or even its raw text) could not pass. The fixture is generated from one
 // production-formatted template line per operation, so every line is a valid registered v2 record.
+//
+// Every child also runs with one young-generation cap (SEMI_SPACE_MB). V8 doubles its new space
+// once the bytes surviving scavenges since the last growth exceed its capacity, and the empty
+// command alone already sits at that threshold. Without the cap, whether a query commits another
+// 16 MiB of new space depends on scavenge timing rather than on what the reader retains, and the
+// growth measured against the budget becomes V8 sizing noise. The cap applies to all three children
+// alike, so it neither raises the baseline nor hides retained history (#3558).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -17,25 +24,25 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { closeFileServerLogSinks } from "@oscharko-dev/keiko-server";
+import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
-import { DEFAULT_SUPPORT_QUERY_LIMITS, runSupportQuery } from "./support-query.js";
 import {
   ActivityLogScanner,
-  ensureSegmentManifests,
-  listActivityLogStoreFiles,
-} from "./support-segment-scan.js";
-import {
+  DEFAULT_SUPPORT_QUERY_LIMITS,
   correlationKey,
+  ensureSegmentManifests,
   filterKeyHashes,
+  listActivityLogStoreFiles,
   manifestMayContainAnyKey,
   parentCorrelationKey,
-} from "./support-segment-manifest.js";
-import { fixtureLine, fixtureProcess } from "./test-support/activity-log-segments.js";
+  runSupportQuery,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import { fixtureLine, fixtureProcess } from "../../../tests/support/activity-log-segments.js";
 
 const SEGMENT_COUNT = 40;
 const SEGMENT_BYTES = 2 * 1024 * 1024;
 const HEAP_BUDGET_MB = 112;
+const SEMI_SPACE_MB = 8;
 const RSS_GROWTH_BUDGET_MB = 32;
 const TARGET_SEGMENT = 23;
 const CHILD_SEGMENT = 29;
@@ -171,6 +178,7 @@ function runBuiltQuery(queriedStateDir: string = stateDir): ChildRun {
     process.execPath,
     [
       `--max-old-space-size=${String(HEAP_BUDGET_MB)}`,
+      `--max-semi-space-size=${String(SEMI_SPACE_MB)}`,
       "--input-type=module",
       "-e",
       DRIVER,
@@ -233,7 +241,8 @@ describe("support query over a long history (#3531)", () => {
     await annotate(
       `[#3531 long-history] history=${(historyBytes / 1048576).toFixed(1)} MiB in ${String(
         SEGMENT_COUNT,
-      )} segments, heap cap ${String(HEAP_BUDGET_MB)} MiB; baseline ${String(baseline.elapsedMs)} ms / ` +
+      )} segments, heap cap ${String(HEAP_BUDGET_MB)} MiB, semi-space cap ${String(SEMI_SPACE_MB)} MiB; ` +
+        `baseline ${String(baseline.elapsedMs)} ms / ` +
         `${baseline.peakRssMb.toFixed(0)} MiB RSS; cold ${String(cold.elapsedMs)} ms / ` +
         `${cold.peakRssMb.toFixed(0)} MiB RSS; warm ${String(warm.elapsedMs)} ms / ` +
         `${warm.peakRssMb.toFixed(0)} MiB RSS, opened ${String(warm.result.segments.opened)}`,

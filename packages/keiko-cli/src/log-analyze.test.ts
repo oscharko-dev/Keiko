@@ -29,7 +29,7 @@ import {
   buildReproductionSeed,
   renderGatewayReplayScriptFixture,
   type GatewayReplayScript,
-} from "./support-analyze.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 
 // ─── Shared fixture plumbing ────────────────────────────────────────────────────────────────────
 

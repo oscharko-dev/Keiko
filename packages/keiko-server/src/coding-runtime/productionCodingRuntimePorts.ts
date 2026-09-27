@@ -13,7 +13,7 @@ import {
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
 import { getServerLogger } from "../observability/index.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type {
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskDispatchRequest,

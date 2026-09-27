@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Integration tests for the capability-gated WebSocket voice control upgrade (Issue #497). Boots the
 // real BFF (createUiServer) on a loopback ephemeral port and connects a real `ws` client, asserting
 // the upgrade is hard-rejected for every non-full-realtime deployment / bad origin / wrong path, and
@@ -17,12 +19,7 @@ import { CORRELATION_HEADER } from "./correlation.js";
 import { MAX_VOICE_CONTROL_FRAME_BYTES } from "./voice-realtime.js";
 import { VOICE_LIVE_TRANSCRIBE_PATH } from "./voice-live-dictation.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
 import {

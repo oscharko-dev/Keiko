@@ -12,7 +12,7 @@ import {
   codingWorkbenchIssueBindingDigest,
   codingWorkbenchRemoteDigest,
 } from "../coding-context/githubIssueResolution.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { resolveDraftRepository } from "./draftDeliveryFacts.js";
 import {
   DraftDeliveryFailure,

@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +24,7 @@ import {
 import { createCodingAppSessionChannel, type CodingAppSessionChannel } from "./sessionChannel.js";
 import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
-import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
+import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

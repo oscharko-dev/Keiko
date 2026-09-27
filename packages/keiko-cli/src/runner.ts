@@ -21,7 +21,7 @@ import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import { runAuditCli } from "./audit.js";
 import { runSupportCli } from "./support.js";
 import { installLayoutOverrideEvidence } from "./install-layout.js";
-import { loadServer } from "./lazy-modules.js";
+import { loadActivityLog } from "./lazy-modules.js";
 import type { CliSecurityLogSinkFactory } from "./security-log.js";
 import {
   SafeArtifactFileError,
@@ -170,7 +170,7 @@ function deferredSecurityLogCollector(
     // The event being written when a failure strikes is lost too; it is counted with the rest.
     let inFlight = 0;
     try {
-      fileSinkFactory ??= (await loadServer()).createActivityLogSink;
+      fileSinkFactory ??= (await loadActivityLog()).createActivityLogSink;
       while (pending.length > 0) {
         const next = pending.shift();
         if (next === undefined) continue;
@@ -290,7 +290,7 @@ function runSupportCommand(rest: readonly string[], io: CliIo, env: EnvSource): 
   if (rest[0] !== "export" || installLayoutOverrideEvidence(env) === undefined) {
     return runSupportCli(rest, io, env);
   }
-  return loadServer().then(({ createActivityLogSink }) =>
+  return loadActivityLog().then(({ createActivityLogSink }) =>
     runSupportCli(rest, io, env, { activityLogSinkFactory: createActivityLogSink }),
   );
 }

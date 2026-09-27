@@ -26,7 +26,7 @@ import {
   codingWorkbenchRemoteDigest,
 } from "../coding-context/githubIssueResolution.js";
 import { runMigrations } from "../store/schema.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
 import type { DraftDeliveryRunContext, DraftDeliveryServiceOptions } from "./draftDeliveryTypes.js";

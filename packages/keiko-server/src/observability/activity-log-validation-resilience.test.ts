@@ -1,3 +1,4 @@
+import { resetServerLogFailureNotices } from "../../../../tests/support/activity-log-test-support.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,9 +12,8 @@ import {
   MAX_LOG_LINE_BYTES,
   closeFileServerLogSinks,
   createFileServerLogSink,
-  resetServerLogFailureNotices,
   type ServerLogSink,
-} from "./server-log.js";
+} from "@oscharko-dev/keiko-activity-log";
 import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
 
 function runBusinessOperation(sink: ServerLogSink, rejectedValue: string): string {

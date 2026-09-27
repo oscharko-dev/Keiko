@@ -13,7 +13,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { errorKindOf } from "../observability/server-log.js";
+import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import {
   gitDeliveryActivityCode,
   gitDeliveryActivityErrorKind,

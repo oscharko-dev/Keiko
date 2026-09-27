@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Integration tests for the run-engine BFF routes (ADR-0011 D5 routes 5–9). They bind a real
 // ephemeral 127.0.0.1 socket and drive the full HTTP/SSE flow with an INJECTED fake ModelPort
 // (deterministic, offline — no network, no gateway). A real temp workspace (copy of the unit-test
@@ -26,14 +31,7 @@ import {
 } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { handleAllRunEvents, handleRunEvents } from "./run-handlers.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import {
   createInMemoryEvidenceStore,
   listEvidence,

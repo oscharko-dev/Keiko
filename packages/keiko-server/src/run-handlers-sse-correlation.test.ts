@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Regression (#2902 audit thread 11): `run-handlers.ts`'s two SSE writers — `openSseStream`'s
 // writer, reached from `handleRunEvents` (GET /api/runs/:runId/events), and `aggregateRunWriter`,
 // reached from `handleAllRunEvents` (GET /api/runs/events) — never threaded the request's
@@ -16,13 +21,7 @@ import { handleAllRunEvents } from "./run-handlers.js";
 import type { RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 // A minimal, ACCEPTING `ServerResponse` double (mirrors `run-handlers-sse-backpressure.test.ts`'s
 // `rejectingFakeRes`, but `write` always succeeds): every event this file emits is meant to reach

@@ -49,7 +49,7 @@ import type { Project, UiStore } from "./store/index.js";
 import { type ServerDiagnosticSink } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
 // ONE definition of "may this worktree run its repository's scripts" (ADR-0147 D3). The verification
 // runner owns it; this runner asks it rather than restating the rule, so the two governed

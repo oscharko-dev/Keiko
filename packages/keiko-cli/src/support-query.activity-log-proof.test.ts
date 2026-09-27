@@ -4,23 +4,23 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { closeFileServerLogSinks } from "@oscharko-dev/keiko-server";
+import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
-import { loadServer } from "./lazy-modules.js";
+import { loadActivityLog } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { runSupportCli } from "./support.js";
-import { DEFAULT_SUPPORT_QUERY_LIMITS } from "./support-query.js";
+import { DEFAULT_SUPPORT_QUERY_LIMITS } from "@oscharko-dev/keiko-activity-log/reader";
 import { runSupportQueryCli } from "./support-query-cli.js";
 import {
   fixtureLine,
   fixtureProcess,
   segmentIdentity,
   writeFixtureSegment,
-} from "./test-support/activity-log-segments.js";
+} from "../../../tests/support/activity-log-segments.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 const roots: string[] = [];
@@ -64,12 +64,12 @@ function lineOf(stateDir: string, op: string): string {
   return lines[0] ?? "";
 }
 
-// The support commands reach keiko-server through `loadServer()`, the whole server module graph
+// The support query commands reach the Activity Log through `loadActivityLog()`, its isolated graph
 // imported lazily. That first import is the slowest step of this suite and, under coverage or on a
 // slow filesystem, can alone exceed the per-test budget of whichever test runs first. Pay it once
 // here, bounded on the hook as in portable-macos-activation.test.ts, so a real hang still fails.
 beforeAll(async () => {
-  await loadServer();
+  await loadActivityLog();
 }, 60_000);
 describe("support query activity log proofs (#3531)", () => {
   it("persists support.manifest.rebuilt and support.query.completed for one correlated query", async () => {
@@ -172,9 +172,9 @@ describe("support query activity log proofs (#3531)", () => {
   it("persists support.query.failed with a closed error kind when the incident lookup fails", async () => {
     const stateDir = stateWithHistory();
     const { io, err } = makeIo();
-    const server = await loadServer();
-    const failingServer = {
-      ...server,
+    const activityLog = await loadActivityLog();
+    const failingActivityLog = {
+      ...activityLog,
       readSupportIncident: (): never => {
         throw new Error("incident store unavailable");
       },
@@ -189,7 +189,7 @@ describe("support query activity log proofs (#3531)", () => {
       },
       io,
       {},
-      { run: { loadServer: () => Promise.resolve(failingServer) } },
+      { run: { loadActivityLog: () => Promise.resolve(failingActivityLog) } },
     );
 
     expect(code).toBe(1);

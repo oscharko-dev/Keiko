@@ -38,7 +38,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 // Spies on the default merge-adapter factory the F1 fix threads runCommand termination-evidence
 // through (readMergeProviderReadiness / executeGovernedMerge's shared `mergeAdapterFor`, exercised

@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 // Unit coverage for the shared task-workspace activity-log emitter (IDX61). Each of the five
 // #445-#448 service test files (provisioning/lifecycle/reconciliation/repair/cleanup .test.ts)
 // proves this module is actually WIRED into that service's own central `emit` helper, at an
@@ -8,12 +10,7 @@
 // the default fallback to the process-wide sink when a caller supplies none.
 
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   logWorkspaceIdentityProbe,

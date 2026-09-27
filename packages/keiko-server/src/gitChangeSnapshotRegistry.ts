@@ -5,7 +5,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { GitSnapshotContentFile } from "./gitChangeSnapshotEntries.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 export interface GitSnapshotContent {
   readonly snapshot: GitChangeSnapshot;

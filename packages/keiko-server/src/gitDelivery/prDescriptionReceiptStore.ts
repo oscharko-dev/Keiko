@@ -14,7 +14,7 @@ import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolu
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
 import { gitDeliveryActivityCode, gitDeliveryActivityErrorKind } from "./execution.js";
 import type {

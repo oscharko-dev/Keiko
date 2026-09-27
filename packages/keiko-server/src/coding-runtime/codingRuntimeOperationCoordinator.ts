@@ -31,8 +31,9 @@ import {
   errorKindOf,
   type ServerLogEvent,
   type ServerLogSink,
-} from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+  causeChain,
+  keikoStackFrames,
+} from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 
 interface RuntimeOperationCoordinatorDeps {

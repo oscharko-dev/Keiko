@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 // Route integration tests for /api/task-workspaces/* (Issue #445). Drives the live createUiServer
 // (CSRF guard + host check run for real) against a real service over a disposable git repository, so
 // the controlled server-side provisioning + activation path is exercised end-to-end over HTTP.
@@ -23,12 +25,7 @@ import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
 import { runMigrations } from "../store/schema.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import type { WorkspaceProvisioningService } from "./types.js";

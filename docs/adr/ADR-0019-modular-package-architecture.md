@@ -48,6 +48,7 @@ The first architecture sprint should converge on the following package map. Name
 | --- | --- | --- |
 | `@oscharko-dev/keiko-contracts` | Shared public contracts, branded IDs, event envelopes, model capability schema, BFF wire types, workflow descriptors. | Runtime IO, provider calls, UI components, persistence. |
 | `@oscharko-dev/keiko-security` | Redaction, secret handling, safe error shaping, content hashing, trust-boundary helpers. | Product workflows, provider routing, UI state. |
+| `@oscharko-dev/keiko-activity-log` | Activity Log writer, segmented store, and support reader engine. | HTTP routes, CLI parsing/rendering, domain logging ports, UI code. |
 | `@oscharko-dev/keiko-model-gateway` | Provider abstraction, OpenAI-compatible calls, discovery, capability probing, routing, resilience, TLS handling. | UI components, workspace file reads, tool execution, direct persistence of customer UI state. |
 | `@oscharko-dev/keiko-workspace` | Workspace discovery, path containment, safe file reads, context packs, retrieval seams. | Provider calls, browser UI, patch application. |
 | `@oscharko-dev/keiko-tools` | Controlled tool execution, terminal/browser adapters, patch parsing, patch writing boundaries. | Model selection, workflow policy decisions, credential storage. |
@@ -65,7 +66,7 @@ The package graph must be a directed acyclic graph. The intended direction is:
 
 1. `contracts` is the leaf package. It must not import from other Keiko packages.
 2. `security` may depend on `contracts`.
-3. `model-gateway`, `workspace`, `tools`, and `evidence` may depend on `contracts` and `security` where needed. The model gateway and tools also consume the pure `tool-catalog` compiler, descriptors and validation surface (ADR-0175, #3409); execution handlers, authority, storage and workspace I/O remain outside that dependency.
+3. `model-gateway`, `workspace`, `tools`, `evidence`, and `activity-log` may depend on `contracts` and `security` where needed. `activity-log` may not depend on any other Keiko package; only server and CLI compose it (ADR-0179). The model gateway and tools also consume the pure `tool-catalog` compiler, descriptors and validation surface (ADR-0175, #3409); execution handlers, authority, storage and workspace I/O remain outside that dependency.
 4. `harness` may depend on `contracts`, `security`, `model-gateway`, `workspace`, `tools`, `tool-catalog`, and `evidence` only through public package surfaces. Its catalog dependency supplies pure invocation and descriptor semantics; runtime composition injects the existing authority and counter ports without a dependency on the server.
 5. `workflows` may depend on `contracts`, `security`, `model-gateway`, `workspace`, `tools`, `harness`, and `evidence` only through public package surfaces.
 6. `server` wires runtime dependencies and may depend on domain packages, but domain packages must not depend on `server`.

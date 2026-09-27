@@ -4,7 +4,7 @@
 // `auditLocalStateResult` in ./audit.ts produces for `keiko audit local-state --json`) and an
 // `evidenceIndexCount` (from `listEvidence` in @oscharko-dev/keiko-evidence). NO new redaction
 // logic is written here: every Activity Log line is already redacted at write time
-// (packages/keiko-server/src/observability/server-log.ts's `formatServerLogLine`), so this module
+// (packages/keiko-activity-log/src/server-log.ts's `formatServerLogLine`), so this module
 // reads and concatenates raw bytes rather than re-parsing and re-serializing them — re-encoding an
 // already-safe line risks introducing exactly the leak the redaction choke point exists to
 // prevent, the same "a fixture never re-derives what the producer owns" discipline AGENTS.md §7
@@ -24,10 +24,8 @@ import {
   readableActivityLogFileNames,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
-import {
-  openSafeArtifactFile,
-  SafeArtifactFileError,
-} from "@oscharko-dev/keiko-security/fs-hardening";
+import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
+import { describeErrorKind } from "@oscharko-dev/keiko-activity-log/reader";
 import type { AuditResult } from "./audit.js";
 
 // The one byte that ends a log line in this format (server-log.ts's own file sink writes ASCII
@@ -70,20 +68,7 @@ export interface SkippedLogFile {
   readonly errorKind: string;
 }
 
-const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
-
-// Identifies an unknown error for redacted diagnostics without ever surfacing its `message` (which
-// an fs error uses to quote the absolute path it failed on, AGENTS.md §7): the shared hardened
-// primitives throw a `SafeArtifactFileError` whose closed `kind` is the diagnosis; Node's own fs
-// errors set a short, all-caps `code` (ENOENT, EACCES, EISDIR, EMFILE, EROFS, …); anything else —
-// no `code` at all, or a `code` that is not shaped like one of those short identifiers — falls back
-// to the error's own constructor name.
-export function describeErrorKind(error: unknown): string {
-  if (error instanceof SafeArtifactFileError) return error.kind;
-  const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && ERROR_CODE_PATTERN.test(code)) return code;
-  return error instanceof Error ? error.constructor.name : "Error";
-}
+export { describeErrorKind } from "@oscharko-dev/keiko-activity-log/reader";
 
 // The state directory: the trust root every Activity Log file is read under, so a symlinked `logs`
 // directory is refused here exactly as the writer refuses it.
@@ -530,7 +515,7 @@ export interface SupportBundleManifest {
 
 export interface ManifestInput {
   // The server activity log's own envelope schema version (`SERVER_LOG_SCHEMA_VERSION`,
-  // `packages/keiko-server/src/observability/server-log.ts`). Supplied by the caller — never
+  // `packages/keiko-activity-log/src/server-log.ts`). Supplied by the caller — never
   // read here — because this module stays pure/synchronous (this file's header comment) and is
   // exercised in tests without touching argv, process.*, or another package's runtime; `support.ts`
   // (the `keiko support export` command) is the one place allowed to lazily load `keiko-server`

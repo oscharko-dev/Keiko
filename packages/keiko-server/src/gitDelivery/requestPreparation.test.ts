@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 // Reviewer 3941877976 (#3384): `gitDeliveryRepositoryBindingMismatch`'s read-failure catch used to
 // discard the exception entirely and report the same closed refusal a client sees for a genuinely
 // different remote — losing the errorKind/stack evidence ADR-0173's no-silent-failures contract
@@ -13,16 +15,11 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import type { RouteContext } from "../routes.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,

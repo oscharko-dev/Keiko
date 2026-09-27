@@ -16,7 +16,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {

@@ -1,10 +1,11 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatServerLogLine, type ServerLogEvent } from "./observability/server-log.js";
 import {
+  formatServerLogLine,
+  type ServerLogEvent,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-} from "./observability/server-logger.js";
+} from "@oscharko-dev/keiko-activity-log";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   expectActivityLogProof,

@@ -3,11 +3,11 @@
   "ownerIssue": 3406,
   "closeoutIssue": 3415,
   "sourceContract": "docs/architecture/governed-tool-contract.v1.json",
-  "sourceContractDigest": "4bb2d5e817b7b16a2cbabb60fd03fc63c0f92316b72d6e2dbdf858e773f11342",
+  "sourceContractDigest": "b51743f8b971f0f06d8147bf86597480003256b5bc57f0085507102bfbe25639",
   "inventory": [],
   "historicalInventory": {
     "rowCount": 43,
-    "digest": "a994f09e81113b9060712ba7500f7e50b79df2f8c59dabcf686d3d7c47a1fbab"
+    "digest": "f9eeb6771ff63b7fc3e665c6bed4d02282a0b1257382acaa09dcc6d035faa92f"
   },
   "nonDispatchProbes": [
     {
