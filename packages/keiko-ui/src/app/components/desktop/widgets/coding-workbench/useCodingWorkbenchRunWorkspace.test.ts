@@ -32,6 +32,7 @@ function projection(workspaceId: string, taskBranch: string): CodingWorkbenchWor
 
 const WORKSPACE_A: CodingWorkbenchRunWorkspace = {
   root: "/worktrees/a",
+  baseBranch: "dev",
   taskBranch: "issue/a",
   workspace: projection("workspace-a", "issue/a"),
   trust: {
@@ -45,6 +46,7 @@ const WORKSPACE_A: CodingWorkbenchRunWorkspace = {
 
 const WORKSPACE_B: CodingWorkbenchRunWorkspace = {
   root: "/worktrees/b",
+  baseBranch: "main",
   taskBranch: "issue/b",
   workspace: projection("workspace-b", "issue/b"),
   trust: {
@@ -58,6 +60,7 @@ const WORKSPACE_B: CodingWorkbenchRunWorkspace = {
 
 const UNBOUND: CodingWorkbenchRunWorkspace = {
   root: null,
+  baseBranch: null,
   taskBranch: null,
   workspace: null,
   trust: null,

@@ -1,4 +1,8 @@
-import { captureCiModes, writeCiJourneyReceipt } from "./support/coding-issue-ci-evidence.js";
+import {
+  captureCiModes,
+  writeCiJourneyReceipt,
+  type CiReadinessDisplay,
+} from "./support/coding-issue-ci-evidence.js";
 import { createCiFixtureReader } from "./servers/coding-issue-ci-fixture.mjs";
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -21,11 +25,17 @@ import {
 test.describe.configure({ mode: "serial" });
 const stateDir = ciStateDir();
 const completedCases: string[] = [];
+// Set once the journey observes its own "technical-ready" readiness (below) -- the exact state and
+// head `CodingWorkbenchCiReadiness.tsx` renders and reports at that moment, so the receipt asserts
+// against a value the journey itself already established rather than a guess.
+let technicalReadyDisplay: CiReadinessDisplay | undefined;
 test.afterEach(() => {
   if (test.info().status === "passed") completedCases.push(test.info().title);
 });
 test.afterAll(() => {
-  if (completedCases.length === 2) writeCiJourneyReceipt(stateDir, completedCases);
+  if (completedCases.length === 2 && technicalReadyDisplay !== undefined) {
+    writeCiJourneyReceipt(stateDir, completedCases, technicalReadyDisplay);
+  }
 });
 function provider(): CiProviderState {
   return JSON.parse(readFileSync(ciProviderPath(stateDir), "utf8")) as CiProviderState;
@@ -88,6 +98,7 @@ test("#3388 @coding-issue-ci pending failure approved repair new head and techni
   expect(ready.advisoryChecks.failed).toBe(1);
   expect(ready.humanReview).toMatchObject({ requiredCount: 1, approvedCount: 0 });
   await expect(page.getByText("Technical checks ready", { exact: true })).toBeVisible();
+  technicalReadyDisplay = { state: "technical-ready", headSha: ready.headSha };
   const ci = page.getByRole("region", { name: "CI readiness", exact: true });
   await expect(ci).toContainText("Draft pull request");
   await expect(ci.getByRole("button")).toHaveCount(0);

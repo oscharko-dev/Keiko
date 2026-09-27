@@ -399,6 +399,71 @@ describe("useCodingWorkbenchChanges", () => {
     expect(view.result.current.diffStatus).toBe("ready");
     expect(view.result.current.diff?.files[0]?.path).toBe("src/file-000.ts");
   });
+
+  // #3635: a transient diff-read failure left the panel `status` "ready" (files and history both
+  // succeeded), so the whole-panel `retry` control never renders, and reselecting the already
+  // selected file is a no-op (`selectPath` short-circuits on an unchanged path). `retryDiff` is the
+  // dedicated recovery path and must re-fetch ONLY the diff, leaving the status/history reads alone.
+  it("retryDiff re-fetches only the selected file's diff after a failure, without re-reading status or history", async () => {
+    const stub = client();
+    stub.getDiff.mockRejectedValueOnce(new Error("bounded diff transport failure"));
+    const view = renderHook(
+      (input: UseCodingWorkbenchChangesInput) => useCodingWorkbenchChanges(input),
+      { initialProps: { ...baseInput(), client: stub } },
+    );
+    await flush();
+    expect(view.result.current.status).toBe("ready");
+    expect(view.result.current.diffStatus).toBe("error");
+    expect(view.result.current.diff).toBeNull();
+
+    stub.getStatus.mockClear();
+    stub.getHistory.mockClear();
+    stub.getDiff.mockClear();
+    act(() => view.result.current.retryDiff());
+    await flush();
+
+    expect(stub.getStatus).not.toHaveBeenCalled();
+    expect(stub.getHistory).not.toHaveBeenCalled();
+    expect(stub.getDiff).toHaveBeenCalledTimes(1);
+    expect(view.result.current.status).toBe("ready");
+    expect(view.result.current.diffStatus).toBe("ready");
+    expect(view.result.current.diff?.files[0]?.path).toBe("src/file-000.ts");
+  });
+
+  // #3648: history exists only to label the revision (`headLabel` already falls back to the
+  // branch or "HEAD"), so a history-read rejection must never blank the successfully read status,
+  // files or diff.
+  it("keeps ready status, files and the diff when only the history read rejects", async () => {
+    const stub = client({
+      getHistory: vi.fn(() => Promise.reject(new Error("bounded history transport failure"))),
+    });
+    const view = renderHook(
+      (input: UseCodingWorkbenchChangesInput) => useCodingWorkbenchChanges(input),
+      { initialProps: { ...baseInput(), client: stub } },
+    );
+    await flush();
+
+    expect(view.result.current.status).toBe("ready");
+    expect(view.result.current.files).toHaveLength(2);
+    expect(view.result.current.head).toBe("HEAD");
+    expect(view.result.current.diffStatus).toBe("ready");
+    expect(view.result.current.diff?.files).toHaveLength(1);
+  });
+
+  // The companion case: an explicit `available: false` history response (no rejection) must be
+  // just as harmless as a rejection — both name "no usable history", never "no usable changes".
+  it("keeps ready status and files when the history read resolves unavailable", async () => {
+    const stub = client({ getHistory: vi.fn(async () => historyFixture("aaaaaaaa", false)) });
+    const view = renderHook(
+      (input: UseCodingWorkbenchChangesInput) => useCodingWorkbenchChanges(input),
+      { initialProps: { ...baseInput(), client: stub } },
+    );
+    await flush();
+
+    expect(view.result.current.status).toBe("ready");
+    expect(view.result.current.files).toHaveLength(2);
+    expect(view.result.current.head).toBe("HEAD");
+  });
 });
 
 // A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that

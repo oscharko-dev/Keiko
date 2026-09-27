@@ -19,7 +19,7 @@ export interface UserErrorNotice {
   readonly remediation: string | undefined;
   // RB-6 / ADR-0173 D5 — the request correlation id, when the underlying failure carried one, so
   // the notice can offer a copyable support id (same i18n "{feature}.supportId" pattern proven at
-  // VoiceDictation.tsx, WorkspaceTrustSurfaces.tsx, RepositoryFolderSwitcher.tsx).
+  // VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx).
   readonly correlationId: string | undefined;
 }
 

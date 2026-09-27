@@ -29,6 +29,10 @@ interface HistoryPaneProps {
   readonly error: string | null;
   readonly loadingMore: boolean;
   readonly loadMoreError: string | null;
+  // #3650: the server clamps `skip` to a bounded ceiling; once a Load-more request comes back
+  // clamped there, the same final page repeats forever and `history.truncated` cannot say so on
+  // its own (a full page is a legitimate signal that more commits exist beyond it).
+  readonly limitReached: boolean;
   readonly onLoadMore: () => void;
   readonly selectedSha: string | null;
   readonly onSelect: (entry: GitHistoryEntry) => void;
@@ -68,6 +72,7 @@ export function HistoryPane({
   error,
   loadingMore,
   loadMoreError,
+  limitReached,
   onLoadMore,
   selectedSha,
   onSelect,
@@ -219,7 +224,7 @@ export function HistoryPane({
           padding: "10px 14px 14px",
         }}
       >
-        {history.truncated ? (
+        {history.truncated && !limitReached ? (
           <>
             {loadMoreError === null ? null : (
               <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, color: "var(--danger)", margin: 0 }}>
@@ -242,7 +247,9 @@ export function HistoryPane({
             aria-label={t("gitClientWindow.history.paginationStatusAria")}
             style={{ ...SUBTLE_TEXT_STYLE, margin: 0 }}
           >
-            {t("gitClientWindow.history.end", { count: entries.length })}
+            {limitReached
+              ? t("gitClientWindow.history.limitReached")
+              : t("gitClientWindow.history.end", { count: entries.length })}
           </p>
         )}
       </div>

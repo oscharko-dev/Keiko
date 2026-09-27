@@ -98,11 +98,24 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
 // checkout now provisions, runs the #447 reconciliation pass that stamps the verified head the runtime
 // launch authority requires, and only then activates — no out-of-band `page.request` reconciliation
 // call (#2476 AC1). The section yields once the verified binding lands.
+//
+// PR #3625: the setup card no longer has "Repository path"/"Target branch" text inputs -- the
+// repository is chosen from Git's registered checkouts through a combobox. `registerTrustedRepositoryProject`
+// (called before this, for its own M11 workspace-trust reason) already registered the fixture under
+// the name below, so it is selectable here without a further registration call.
 async function bindFixtureWorkspace(page: Page): Promise<void> {
   const setup = page.getByRole("region", { name: "Code setup" });
   await expect(setup).toBeVisible();
-  await setup.getByLabel("Repository path").fill(repositoryRoot);
-  await setup.getByLabel("Target branch").fill("main");
+  await setup.getByRole("combobox", { name: "Choose coding repository" }).click();
+  await page
+    .getByRole("listbox", { name: "Choose coding repository" })
+    .getByRole("option", { name: "Authority Fixture Repository", exact: true })
+    .click();
+  await setup.getByRole("combobox", { name: "Choose coding branch" }).click();
+  await page
+    .getByRole("listbox", { name: "Choose coding branch" })
+    .getByRole("option", { name: "main", exact: true })
+    .click();
   await setup.getByRole("button", { name: "Bind workspace" }).click();
   // The bind performs real filesystem + git reconciliation before it yields, so allow for that IO.
   await expect(setup).toHaveCount(0, { timeout: 30_000 });

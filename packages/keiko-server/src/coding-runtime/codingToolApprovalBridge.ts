@@ -15,6 +15,7 @@ import type {
 const MAX_PENDING_RECORDS = 64;
 const MAX_APPROVED_RECORDS = 64;
 const MAX_BINDING_RECORDS = 64;
+const MAX_DECLINED_RECORDS = 64;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
 /**
@@ -96,6 +97,8 @@ export interface CodingToolApprovalProofVerifier {
   readonly consumeStage?: (runId: string, proposalId: string) => object | undefined;
   readonly matchesCommit?: (runId: string, request: CommitToolRequest) => boolean;
   readonly consumeCommit?: (runId: string, request: CommitToolRequest) => object | undefined;
+  /** Whether the operator declined this run's Git stage, commit, push or pull-request proposal. */
+  readonly proposalDeclined?: (runId: string, proposalId: string) => boolean;
   readonly matches: (input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
@@ -124,6 +127,11 @@ export interface CodingToolApprovalBridge extends CodingToolApprovalProofVerifie
     proposalId: string,
   ) => GitDeliveryIssuedApproval | undefined;
   readonly commitService?: VerifiedCommitService;
+  /**
+   * Records the operator's "no" to one of this run's proposals, which the proposal's own server-side
+   * wait reads (ADR-0124 D6). A decline grants nothing: it only ends that run's wait for that id.
+   */
+  readonly declineProposal?: (runId: string, proposalId: string) => void;
   readonly observePermission: (input: CodingToolApprovalObservation) => boolean;
   readonly activatePermission: (input: CodingToolApprovalActivation) => boolean;
   readonly invalidateRun: (runId: string) => void;
@@ -173,16 +181,23 @@ export function createCodingToolApprovalBridge(
   const pending = new Map<string, PendingApproval>();
   const approved = new Map<string, ApprovedAction>();
   const bindings = new Map<string, number>();
+  const declined = new Set<string>();
   return {
     ...(commitService === undefined ? {} : commitApprovalMethods(commitService)),
     ...(gitService === undefined ? {} : stageApprovalMethods(gitService)),
     ...(deliveryService === undefined ? {} : deliveryApprovalMethods(deliveryService)),
+    declineProposal: (runId, proposalId): void => {
+      recordDecline(declined, runId, proposalId);
+    },
+    proposalDeclined: (runId, proposalId): boolean =>
+      declined.has(permissionKey(runId, proposalId)),
     observePermission: (input): boolean => observePermission(pending, approved, bindings, input),
     activatePermission: (input): boolean => activatePermission(pending, approved, bindings, input),
     matches: (input): boolean => matchesApprovedAction(approved, input),
     consume: (input): boolean => consumeApprovedAction(approved, input),
     invalidateRun: (runId): void => {
       invalidateRun(pending, approved, bindings, runId);
+      forgetRunKeys(declined, runId);
       commitService?.invalidate();
       gitService?.invalidate();
       deliveryService?.invalidate();
@@ -402,6 +417,25 @@ export function codingToolVerificationApprovalTargetId(
       : undefined;
   }
   return targetPathHash === undefined ? verifierId : undefined;
+}
+
+// Keyed by run and proposal, so a decline can only ever end that run's own wait for that id.
+// Bounded like every other record here: the oldest decline goes first, and a run's declines leave
+// with the run.
+function recordDecline(declined: Set<string>, runId: string, proposalId: string): void {
+  const key = permissionKey(runId, proposalId);
+  declined.delete(key);
+  declined.add(key);
+  if (declined.size <= MAX_DECLINED_RECORDS) return;
+  const oldest = declined.values().next().value;
+  if (oldest !== undefined) declined.delete(oldest);
+}
+
+function forgetRunKeys(keys: Set<string>, runId: string): void {
+  const prefix = `${runId}\u0000`;
+  for (const key of keys) {
+    if (key.startsWith(prefix)) keys.delete(key);
+  }
 }
 
 function permissionKey(runId: string, requestId: string): string {

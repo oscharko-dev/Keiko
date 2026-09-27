@@ -20,6 +20,30 @@ export function newClientCorrelationId(): string {
   return secureRandomId("ui");
 }
 
+// A successful JSON response exposes no correlation id of its own; only a thrown `ApiError` does.
+// The server stamps X-Keiko-Correlation-Id on every response (server.ts), and both BFF fetch
+// scaffolds (`./http` and `./api`) record it here against the value they parsed, so a caller that
+// holds only that value (an add-repository result, a Git read answered as unavailable) can still
+// name the request that produced it (PR #3625 review). Weak keys: nothing outlives its value.
+const RESPONSE_CORRELATION_IDS = new WeakMap<object, string>();
+
+/** Records the correlation id of the response `value` was parsed from; the fetch scaffolds call it. */
+export function recordResponseCorrelationId(value: unknown, correlationId: string | null): void {
+  if (correlationId !== null && typeof value === "object" && value !== null) {
+    RESPONSE_CORRELATION_IDS.set(value, correlationId);
+  }
+}
+
+/**
+ * The server's correlation id for the response a successful JSON body was parsed from by a BFF fetch
+ * scaffold: the success-path counterpart to `ApiError.correlationId`. `undefined` for any value no
+ * scaffold parsed (a hand-built fixture, an empty body, a response without the header).
+ */
+export function responseCorrelationIdOf(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  return RESPONSE_CORRELATION_IDS.get(value);
+}
+
 interface BffRequestShape {
   readonly isStateChanging: boolean;
   readonly hasBody: boolean;

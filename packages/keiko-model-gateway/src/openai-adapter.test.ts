@@ -208,6 +208,90 @@ describe("OpenAiAdapter.call", () => {
     );
   });
 
+  // User finding #3643: an Azure deployment-path base URL that already ends in "/openai" — a
+  // shape Gateway Setup accepts and persists (gateway-setup.test.ts's
+  // "https://example.openai.azure.com/openai" case) — was sent to
+  // "/openai/openai/deployments/...", a route no real Azure deployment answers.
+  it.each([
+    ["https://my-azure.openai.azure.com/openai", "no trailing slash"],
+    ["https://my-azure.openai.azure.com/openai/", "one trailing slash"],
+    ["https://my-azure.openai.azure.com/openai//", "repeated trailing slashes"],
+    ["https://my-azure.openai.azure.com/openai/openai", "a repeated /openai segment"],
+  ])(
+    "RB-4 (#3643): does not duplicate the /openai segment when the base URL already ends in it (%s: %s)",
+    async (baseUrl) => {
+      let seenUrl = "";
+      const adapter = adapterWith((url) => {
+        if (typeof url === "string") seenUrl = url;
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+        );
+      });
+      await adapter.call(REQUEST, {
+        ...CONFIG,
+        baseUrl,
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2024-10-21",
+      });
+      expect(seenUrl).toBe(
+        "https://my-azure.openai.azure.com/openai/deployments/example-chat-model/chat/completions?api-version=2024-10-21",
+      );
+    },
+  );
+
+  // User finding #3640: Azure rejects a Chat Completions request from a reasoning-model-family
+  // deployment (gpt-5.6 here) that attaches function tools unless reasoning_effort is exactly
+  // "none" — the Coding Workbench's selected effort (e.g. "medium") is not a value the provider
+  // accepts once tools are attached, so it must be overridden on the wire rather than forwarded.
+  // Only GPT-5.6 carries that contract: the rest of the gpt-5 family keeps its selected effort with
+  // tools, so its Coding Workbench turns still reason.
+  it.each([
+    {
+      name: "forces 'none' for a GPT-5.6 deployment once tools are attached",
+      modelId: "gpt-5.6",
+      tools: true,
+      expected: "none",
+    },
+    {
+      name: "leaves the selected effort alone for a GPT-5.6 deployment with no tools attached",
+      modelId: "gpt-5.6",
+      tools: false,
+      expected: "medium",
+    },
+    {
+      name: "keeps the selected effort for a gpt-5.4 deployment with tools attached",
+      modelId: "gpt-5.4",
+      tools: true,
+      expected: "medium",
+    },
+    {
+      name: "does not force the effort for a non-reasoning-family deployment with tools attached",
+      modelId: "gpt-4o",
+      tools: true,
+      expected: "medium",
+    },
+  ])("RB-4 (#3640): $name", async ({ modelId, tools, expected }) => {
+    let seenBody: Record<string, unknown> = {};
+    const adapter = adapterWith((_url, init) => {
+      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+        string,
+        unknown
+      >;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        ...REQUEST,
+        reasoningEffort: "medium",
+        ...(tools ? { toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]) } : {}),
+      },
+      { ...CONFIG, modelId },
+    );
+    expect(seenBody.reasoning_effort).toBe(expected);
+  });
+
   it("RB-4 (GEN-AI-GATEWAY-001): preserves a truncated finishReason so callers can detect an incomplete answer", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(

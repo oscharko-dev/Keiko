@@ -18,6 +18,7 @@ import {
   handleGitHistory,
   handleGitRemotes,
   handleGitSummary,
+  invalidateGitSummaryCache,
   parseHistory,
   parseRemotes,
 } from "./gitRepositoryReads.js";
@@ -1227,6 +1228,23 @@ describe("git summary response cache partitioning", () => {
       "remote",
       "status",
     ]);
+  });
+
+  // #3644: a summary read right after a Git action must compute the post-action state. Replaying
+  // the entry cached before the action left Sync on its pre-action choice until the TTL passed.
+  it("recomputes the summary once a finished Git action invalidates the cache", async () => {
+    const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
+    const runner = summaryRunner();
+    const dependencies = deps(runner);
+
+    await handleGitSummary(ctx(path), dependencies);
+    const firstRun = runner.mock.calls.length;
+    await handleGitSummary(ctx(path), dependencies);
+    expect(runner.mock.calls).toHaveLength(firstRun);
+
+    invalidateGitSummaryCache(dependencies);
+    await handleGitSummary(ctx(path), dependencies);
+    expect(runner.mock.calls).toHaveLength(firstRun * 2);
   });
 
   it("still partitions the cache by runner, so two fake runners never share an entry", async () => {

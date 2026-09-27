@@ -29,7 +29,11 @@ interface JourneyActions {
   readonly failure: JourneyActionFailure | null;
   readonly invoke: (action: JourneyAction, callback: () => void | Promise<void>) => Promise<void>;
 }
-export function useJourneyActions(runId: string): JourneyActions {
+// #F review: `JourneyUnavailable` (CodingWorkbenchJourneyOutcome.tsx) reuses this same hook for its
+// own Refresh control, but renders exactly when no valid `JourneyOutcome` — and so no `runId` from
+// one — exists yet; `runId` is optional so that caller can still get busy/failure tracking instead
+// of firing its retry as a bare, uncaught `void onRefresh()`.
+export function useJourneyActions(runId: string | undefined): JourneyActions {
   const locked = useRef(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<JourneyActionFailure | null>(null);

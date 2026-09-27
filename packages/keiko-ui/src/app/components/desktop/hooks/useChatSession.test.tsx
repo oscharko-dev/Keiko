@@ -46,6 +46,7 @@ import {
   type SendMessageOutcome,
   type ChatSessionApi,
   useChatSession,
+  useGatewayModelCatalogSettled,
 } from "./useChatSession";
 import {
   resetConversationMemorySettingsForTests,
@@ -332,6 +333,39 @@ describe("useChatSession bootstrap", () => {
     // Pinned invalidation: no stale id is sendable mid-refresh — restoration is the success
     // path's job (see the restore pin below).
     expect(result.current.selectedModel).toBeUndefined();
+  });
+
+  // PR #3625 review: a consumer must tell a refresh in flight (empty catalog) from a settled one.
+  it("reports the model catalog settled only after a successful refresh", async () => {
+    let settle: (value: Awaited<ReturnType<typeof fetchModels>>) => void = () => undefined;
+    let fail: (error: unknown) => void = () => undefined;
+    vi.mocked(fetchModels).mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          settle = resolve;
+          fail = reject;
+        }),
+    );
+    const { result } = renderHook(() => useGatewayModelCatalogSettled());
+    expect(result.current).toBe(false);
+
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    expect(result.current).toBe(false);
+    await act(async () => {
+      settle({ models: [] });
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    expect(result.current).toBe(false);
+    await act(async () => {
+      fail(new Error("gateway unreachable"));
+    });
+    expect(result.current).toBe(false);
   });
 
   it("restores a non-default model selection once the refreshed catalog confirms it", async () => {
@@ -4269,51 +4303,65 @@ describe("useChatSession canonical Voice FIFO", () => {
   });
 
   it("accepts 128 maximum-size finals, rejects item 129, and retains the FIFO on teardown", async () => {
-    vi.mocked(sendDesktopChat).mockImplementation((_request, signal) => {
-      return new Promise((_resolve, reject) => {
-        signal?.addEventListener(
-          "abort",
-          () => reject(new DOMException("cancelled", "AbortError")),
-          { once: true },
+    // Capacity is under test here, not hashing. Through the real pure-JS SHA-256 the 128 finals are
+    // ~33 MB of hashing, which V8 block coverage slowed past the 15 s budget on a busy CI runner
+    // (PR #3625). The product compares digests only for equality, so a length-derived stand-in
+    // keeps every capacity, overflow and teardown path; the real runtime's maximum-size hash is
+    // pinned in canonical-voice-hasher.test.ts.
+    clearCanonicalVoiceHasherForTests();
+    await prepareCanonicalVoiceHasher(async () => ({
+      sha256Hex: (value: string): string => value.length.toString(16).padStart(64, "0"),
+    }));
+    try {
+      vi.mocked(sendDesktopChat).mockImplementation((_request, signal) => {
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("cancelled", "AbortError")),
+            { once: true },
+          );
+        });
+      });
+      const rendered = await setupVoiceQueueSession();
+      act(() => {
+        void rendered.result.current.sendMessage({ text: "occupy send slot" });
+      });
+      await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+      const maximumFinal = "q".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS);
+      const queued: Promise<SendMessageOutcome>[] = [];
+      act(() => {
+        for (let index = 0; index < 128; index += 1) {
+          const promise = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+            canonicalVoiceTurn(maximumFinal, `queued-id-${String(index)}`),
+          );
+          if (promise !== undefined) queued.push(promise);
+        }
+      });
+      let overflow: SendMessageOutcome | undefined;
+      await act(async () => {
+        overflow = await rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("overflow final", "overflow-id"),
         );
       });
-    });
-    const rendered = await setupVoiceQueueSession();
-    act(() => {
-      void rendered.result.current.sendMessage({ text: "occupy send slot" });
-    });
-    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
-    const maximumFinal = "q".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS);
-    const queued: Promise<SendMessageOutcome>[] = [];
-    act(() => {
-      for (let index = 0; index < 128; index += 1) {
-        const promise = rendered.result.current.enqueueCanonicalVoiceTurn?.(
-          canonicalVoiceTurn(maximumFinal, `queued-id-${String(index)}`),
-        );
-        if (promise !== undefined) queued.push(promise);
-      }
-    });
-    let overflow: SendMessageOutcome | undefined;
-    await act(async () => {
-      overflow = await rendered.result.current.enqueueCanonicalVoiceTurn?.(
-        canonicalVoiceTurn("overflow final", "overflow-id"),
-      );
-    });
 
-    expect(overflow).toBeUndefined();
-    expect(queued).toHaveLength(128);
-    expect(rendered.result.current.error).toContain("queue is full");
-    const firstQueued = queued[0];
-    let firstSettled = false;
-    void firstQueued?.then(() => {
-      firstSettled = true;
-    });
-    act(() => rendered.unmount());
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(firstSettled).toBe(false);
-    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[1]?.aborted).toBe(true);
+      expect(overflow).toBeUndefined();
+      expect(queued).toHaveLength(128);
+      expect(rendered.result.current.error).toContain("queue is full");
+      const firstQueued = queued[0];
+      let firstSettled = false;
+      void firstQueued?.then(() => {
+        firstSettled = true;
+      });
+      act(() => rendered.unmount());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(firstSettled).toBe(false);
+      expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[1]?.aborted).toBe(true);
+    } finally {
+      clearCanonicalVoiceHasherForTests();
+      await prepareCanonicalVoiceHasher();
+    }
   });
 
   // #2842 / ADR-0154 D4 — barge-in returns the floor to capture and advances the dialog generation,

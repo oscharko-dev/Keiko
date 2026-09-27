@@ -35,6 +35,8 @@ export interface CodingWorkbenchRepositoryTrustBinding {
 export interface CodingWorkbenchRunWorkspace {
   /** The active task-worktree root the run was submitted against: the editor-bridge root. */
   readonly root: string | null;
+  /** The repository branch selected when the run was submitted. */
+  readonly baseBranch: string | null;
   /** The task branch of the instance the run was submitted against. */
   readonly taskBranch: string | null;
   /** The runtime workspace projection (task id, branch, health) at submission. */
@@ -62,6 +64,7 @@ export interface CodingWorkbenchRunWorkspaceBinding {
 
 const UNBOUND: CodingWorkbenchRunWorkspace = {
   root: null,
+  baseBranch: null,
   taskBranch: null,
   workspace: null,
   trust: null,

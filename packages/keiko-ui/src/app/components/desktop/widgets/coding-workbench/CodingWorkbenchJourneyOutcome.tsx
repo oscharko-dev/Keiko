@@ -6,7 +6,11 @@ import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-j
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { ApiError, proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { RetryMessage } from "./CodingWorkbenchChanges";
 import { JourneyDetails } from "./_JourneyDetails";
 import {
   canProposeJourneyReady,
@@ -122,8 +126,61 @@ export function CodingWorkbenchJourneyOutcome(
   useEffect(() => {
     if (present && !valid) reportClientDiagnostic("[keiko] journey unavailable: binding-mismatch");
   }, [valid, present]);
-  if (!valid || props.outcome === undefined) return null;
-  return <JourneyCard key={props.outcome.binding.runId} {...props} outcome={props.outcome} />;
+  if (valid && props.outcome !== undefined) {
+    return <JourneyCard key={props.outcome.binding.runId} {...props} outcome={props.outcome} />;
+  }
+  // #3633: a draft pull request exists but no handoff status has been observed yet (the first read
+  // failed or answered without one). The card and its Refresh, the only way to read it again, stay
+  // instead of the whole section disappearing. An outcome that is present but fails validation
+  // (foreign, malformed, forged) still renders nothing (CodingWorkbenchJourneyOutcome.security.test).
+  if (props.outcome !== undefined || props.snapshot?.draftDelivery?.pullRequest === undefined) {
+    return null;
+  }
+  return <JourneyUnavailable runId={props.snapshot.runId} onRefresh={props.onRefresh} />;
+}
+
+// #F review: the retry here used to be a bare `void onRefresh()` — `useCodingWorkbenchJourney`'s
+// `refresh` rethrows a failed read, so a transient failure became an unhandled rejection with no
+// operator-visible feedback and no way to tell the retry was even attempted. Reuses the SAME
+// action-feedback path `JourneyCard` uses (`useJourneyActions`) instead of a second, uncaught retry
+// idiom: busy state disables the control, and a failure renders the same body-free alert.
+function JourneyUnavailable({
+  runId,
+  onRefresh,
+}: {
+  readonly runId: string | undefined;
+  readonly onRefresh: CodingWorkbenchJourneyOutcomeProps["onRefresh"];
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const { busy, failure, invoke } = useJourneyActions(runId);
+  return (
+    <section className={common.card} aria-label={t("codingWorkbench.journey.title")}>
+      <h3 className={common.approvalResearchTitle}>{t("codingWorkbench.journey.title")}</h3>
+      <RetryMessage
+        text={t("codingWorkbench.journey.unavailable")}
+        className={undefined}
+        retry={
+          onRefresh === undefined
+            ? undefined
+            : {
+                label: t("codingWorkbench.journey.refresh"),
+                onRetry: () => void invoke("refresh", onRefresh),
+                disabled: busy,
+              }
+        }
+      />
+      {busy && (
+        <output aria-live="polite" className={common.helpText}>
+          {t("codingWorkbench.journey.busy")}
+        </output>
+      )}
+      {failure !== null && (
+        <p role="alert" className={styles["cmp-journey-error"]}>
+          {t(`codingWorkbench.journey.actionError.${failure.action}`, { reason: failure.reason })}
+        </p>
+      )}
+    </section>
+  );
 }
 function JourneyCard(
   props: CodingWorkbenchJourneyOutcomeProps & { readonly outcome: JourneyOutcome },
@@ -183,6 +240,35 @@ interface JourneyProposeState {
   readonly propose: () => void;
 }
 
+// #3649: a successful mark-ready action left the card showing its pre-action `JourneyOutcome`
+// until a manual Refresh, still offering the already-completed action — a second click could
+// resubmit it against a PR that is no longer draft. The mark-ready action itself DID succeed
+// server-side, so a refresh failure afterward must never be presented as a failed propose-ready;
+// it is reported on its own body-free diagnostic instead, and the card simply stays on its
+// last-known state until an explicit Refresh (the same recovery `JourneyUnavailable` offers, #F).
+async function proposeReadyThenRefresh(
+  proposeReady: () => void | Promise<void>,
+  refreshJourney: (() => void | Promise<void>) | undefined,
+  runId: string,
+): Promise<void> {
+  await proposeReady();
+  if (refreshJourney === undefined) return;
+  try {
+    await refreshJourney();
+  } catch (error) {
+    // PR #3625 review: the refresh request's own correlation id and body-free evidence, so this line
+    // joins the server's refusal of that request; the run is linked as the parent operation.
+    const correlationId = correlationIdOf(error);
+    reportClientDiagnostic("[keiko] journey action: post-propose-ready refresh failed", {
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+      ...(correlationId === undefined ? {} : { correlationId }),
+      parentCorrelationId: runId,
+    });
+  }
+}
+
 function useJourneyProposeState(
   props: CodingWorkbenchJourneyOutcomeProps & {
     readonly outcome: JourneyOutcome;
@@ -192,6 +278,7 @@ function useJourneyProposeState(
   invoke: ReturnType<typeof useJourneyActions>["invoke"],
 ): JourneyProposeState {
   const ready = props.onProposeReady;
+  const refresh = props.onRefresh;
   const markReadyAvailable = props.markReadyAvailable === true;
   const canPropose = props.ready && ready !== undefined && markReadyAvailable;
   const pending = props.ready && !markReadyAvailable;
@@ -202,7 +289,11 @@ function useJourneyProposeState(
       !canProposeJourneyReady(props.outcome, props.snapshot?.state, Date.now())
     )
       return;
-    if (ready !== undefined) void invoke("propose-ready", ready);
+    if (ready !== undefined) {
+      void invoke("propose-ready", () =>
+        proposeReadyThenRefresh(ready, refresh, props.outcome.binding.runId),
+      );
+    }
   };
   return { canPropose, pending, propose };
 }

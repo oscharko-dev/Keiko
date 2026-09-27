@@ -146,6 +146,16 @@ describe("CodexSubscriptionAuthCard authentication truth", () => {
     expect(actions.refreshProfile).toHaveBeenCalledTimes(1);
   });
 
+  // #3636: a refresh that updates only the profile can flip it to "connected" while the runtime
+  // SOURCE (which `canStart` actually gates) stays whatever it was before sign-in. The refresh
+  // control must also refresh the source, or Start stays disabled with no card left to explain it.
+  it("also refreshes the runtime source from the auth truth row (#3636)", async () => {
+    const user = userEvent.setup();
+    const actions = renderAuthCard(codexState({ profile: ready(profile()) }));
+    await user.click(screen.getByRole("button", { name: "Refresh authentication" }));
+    expect(actions.refreshSource).toHaveBeenCalledTimes(1);
+  });
+
   it("hides the refresh control once the profile is connected", () => {
     renderAuthCard(codexState({ profile: ready(profile({ status: "connected" })) }));
     expect(
@@ -262,6 +272,9 @@ describe("CodexSubscriptionAuthCard", () => {
     await user.click(screen.getByRole("button", { name: "Refresh authentication" }));
 
     expect(actions.refreshProfile).toHaveBeenCalledTimes(1);
+    // #3636: without this, the profile can connect while `source.value.available` stays stale and
+    // Start never re-enables.
+    expect(actions.refreshSource).toHaveBeenCalledTimes(1);
   });
 
   it("offers the server-approved setup methods for an actionable sign-in status", async () => {

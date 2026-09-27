@@ -46,6 +46,7 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
         "authority-denied",
         "policy-authorized",
         "approved",
+        "denied",
         "cancelled",
         "expired",
         "unavailable",

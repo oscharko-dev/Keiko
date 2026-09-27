@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { CodingHistoryTask } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CODING_HISTORY_CHANGED,
@@ -9,6 +9,7 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { repositoryName } from "./CodingWorkbenchRepositorySelector";
 import styles from "./CodingHistory.module.css";
 import type { WindowRenderContext } from "../../windows/WindowsRegistry";
 
@@ -27,16 +28,21 @@ function useHistoryList(): {
   const [tasks, setTasks] = useState<readonly CodingHistoryTask[]>([]);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
+  // #3628: only the latest read may set the list. An older read that answers after a newer one
+  // (a slow mount read overtaken by a change notification's read) would otherwise overwrite it.
+  const latestRead = useRef(0);
   const refresh = useCallback(async (): Promise<void> => {
+    const read = ++latestRead.current;
     setLoading(true);
     setError(false);
     try {
-      setTasks(await fetchCodingHistory());
+      const next = await fetchCodingHistory();
+      if (read === latestRead.current) setTasks(next);
     } catch (cause) {
       historyError(cause);
-      setError(true);
+      if (read === latestRead.current) setError(true);
     } finally {
-      setLoading(false);
+      if (read === latestRead.current) setLoading(false);
     }
   }, []);
   useEffect(() => {
@@ -174,7 +180,7 @@ function HistoryItem({
       <button className={styles.cmpOpen} type="button" onClick={() => onOpen(task)}>
         <strong>{task.title}</strong>
         <span>
-          {task.projectPath.split("/").at(-1)} · {task.branch}
+          {repositoryName(task.projectPath)} · {task.branch}
         </span>
         <time dateTime={new Date(task.updatedAt).toISOString()}>
           {new Date(task.updatedAt).toLocaleString()}
@@ -203,33 +209,66 @@ function RenameTask({ task }: { readonly task: CodingHistoryTask }): ReactNode {
   return (
     <>
       {editing ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
+        <RenameForm
+          title={title}
+          onChange={setTitle}
+          onSave={() => void save()}
+          onCancel={() => {
+            setEditing(false);
+            setError(false);
           }}
-          className={styles.cmpRename}
-        >
-          <input
-            className={styles.cmpInput}
-            aria-label={t("codingWorkbench.history.taskTitle")}
-            value={title}
-            maxLength={100}
-            onChange={(event) => setTitle(event.target.value)}
-          />
-          <button type="submit" disabled={title.trim().length === 0}>
-            {t("codingWorkbench.history.save")}
-          </button>
-          <button type="button" onClick={() => setEditing(false)}>
-            {t("codingWorkbench.history.cancel")}
-          </button>
-        </form>
+        />
       ) : (
-        <button className={styles.cmpSecondary} type="button" onClick={() => setEditing(true)}>
+        <button
+          className={styles.cmpSecondary}
+          type="button"
+          onClick={() => {
+            // #3626: each edit starts from the task's current title, never a discarded draft.
+            setTitle(task.title);
+            setEditing(true);
+          }}
+        >
           {t("codingWorkbench.history.rename")}
         </button>
       )}
       {error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
     </>
+  );
+}
+
+function RenameForm({
+  title,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  readonly title: string;
+  readonly onChange: (title: string) => void;
+  readonly onSave: () => void;
+  readonly onCancel: () => void;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+      className={styles.cmpRename}
+    >
+      <input
+        className={styles.cmpInput}
+        aria-label={t("codingWorkbench.history.taskTitle")}
+        value={title}
+        maxLength={100}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <button type="submit" disabled={title.trim().length === 0}>
+        {t("codingWorkbench.history.save")}
+      </button>
+      <button type="button" onClick={onCancel}>
+        {t("codingWorkbench.history.cancel")}
+      </button>
+    </form>
   );
 }

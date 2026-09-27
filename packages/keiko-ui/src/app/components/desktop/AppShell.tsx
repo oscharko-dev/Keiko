@@ -207,15 +207,6 @@ const GatewaySetupDialog = dynamic(
   { ssr: false, loading: GatewaySetupLoading },
 );
 
-const RepositoryFolderSwitcher = dynamic(
-  () => import("./RepositoryFolderSwitcher").then((mod) => mod.RepositoryFolderSwitcher),
-  { ssr: false, loading: () => null },
-);
-const RepositoryBranchSwitcher = dynamic(
-  () => import("./RepositoryBranchSwitcher").then((mod) => mod.RepositoryBranchSwitcher),
-  { ssr: false, loading: () => null },
-);
-
 const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
   { ssr: false, loading: () => null },
@@ -1505,20 +1496,6 @@ function AppShellInner(): ReactNode {
     [chromeWindowsSignature, workspaceLinkRevision],
   );
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
-  // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed
-  // Building the context controls inline defeated Header's memoization (new element identities on
-  // every AppShell render). Project and repository branch stay distinct controls with one shared
-  // design-system gap; managed Task Workspace lifecycle belongs to Coding Workbench context.
-  const contextControl = useMemo(
-    () => (
-      <div className={styles.cmpContextControls}>
-        <RepositoryFolderSwitcher />
-        <RepositoryBranchSwitcher />
-      </div>
-    ),
-    [],
-  );
-
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
   const openQuickAccessFiles = useCallback((): void => {
@@ -1820,7 +1797,6 @@ function AppShellInner(): ReactNode {
                       onTileAll={ws.api.tileAll}
                       onSplitFront={ws.api.splitFront}
                       onCascade={ws.api.cascade}
-                      contextControl={contextControl}
                     />
                     <div className="mid">
                       {needsGatewaySetup ? null : (

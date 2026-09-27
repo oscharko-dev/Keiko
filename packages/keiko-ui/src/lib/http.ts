@@ -40,18 +40,27 @@
 
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ApiError } from "./api";
-import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
+import {
+  buildBffHeaders,
+  CORRELATION_HEADER,
+  newClientCorrelationId,
+  recordResponseCorrelationId,
+} from "./bff-correlation";
 import {
   reportClientDiagnostic,
   type ClientDiagnosticSessionRepairReport,
 } from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
 
-// Re-exported for the existing consumers that import these two from "./http"
-// (AppShell.tsx, RepositoryFolderSwitcher.tsx, SelectionAwareWorkspaceHosts.tsx,
-// coding-app-session-channel-api.ts). The implementation lives in ./bff-correlation so this file
-// and ./api can both depend on it without the module cycle documented above.
-export { CORRELATION_HEADER, newClientCorrelationId };
+// Re-exported for the consumers that import these from "./http" (SelectionAwareWorkspaceHosts.tsx,
+// coding-app-session-channel-api.ts, GitClientWindow.tsx, AddRepositoryDialog.tsx). The
+// implementation lives in ./bff-correlation so this file and ./api can both depend on it without the
+// module cycle documented above.
+export {
+  CORRELATION_HEADER,
+  newClientCorrelationId,
+  responseCorrelationIdOf,
+} from "./bff-correlation";
 
 // The `{ error: { code, message, … } }` envelope every BFF route returns on a non-2xx. Extra
 // fields (e.g. task-workspace `failureClass`) are surfaced to `opts.enrichError`.
@@ -188,6 +197,7 @@ async function performBffFetch<T>(
   }
 
   const value = (await res.json()) as unknown;
+  recordResponseCorrelationId(value, res.headers.get(CORRELATION_HEADER));
   if (opts?.validator === undefined) return value as T;
   try {
     return opts.validator(path, value);

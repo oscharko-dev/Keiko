@@ -198,28 +198,29 @@ describe("scripted child executes the production generated approval shim", () =>
     },
   );
 
-  it("uses the same generated edit metadata and waits before any write", async () => {
+  // Owner decision 2026-09-26 (ADR-0124 D6): the edit goes straight to the tool facade, which queues
+  // its change review; nothing is written before the human applies it there. That write gate is the
+  // mode policy's `requiresEditorReview` (ADR-0138 matrix, coding-workbench.test.ts) and the
+  // production edit port's registration, pinned in productionManagedWorktreeTools.test.ts.
+  it("hands a governed-assist edit to its change review without a second ask", async () => {
     const f = fixture();
-    const result = f.tools.execute(
-      {
-        id: "edit-1",
-        name: "keiko_changeset_edit",
-        args: {
-          changeset: {
-            patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n",
-            files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+    await expect(
+      f.tools.execute(
+        {
+          id: "edit-1",
+          name: "keiko_changeset_edit",
+          args: {
+            changeset: {
+              patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n",
+              files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+            },
           },
         },
-      },
-      new AbortController().signal,
-    );
-    const rejected = expect(result).rejects.toThrow("functional-permission-rejected");
-    await pending(f.tools);
-    expect(f.tools.rows()[0]).toMatchObject({
-      metadata: { actionKind: "file-edit", fileCount: 1, addedLines: 1, deletedLines: 1 },
-    });
-    expect(f.fetch).not.toHaveBeenCalled();
-    f.tools.close();
-    await rejected;
+        new AbortController().signal,
+      ),
+    ).resolves.toBe('{"status":"completed"}');
+    expect(f.tools.rows()).toEqual([]);
+    expect(f.broadcast).not.toHaveBeenCalled();
+    expect(f.fetch).toHaveBeenCalledOnce();
   });
 });

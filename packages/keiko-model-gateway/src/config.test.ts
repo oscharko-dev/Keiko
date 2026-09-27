@@ -22,6 +22,7 @@ import {
   resolvePrDescriptionBrandingFromConfig,
   toolCallingConfigurationFingerprint,
   toSafeObject,
+  trimTrailingAzureOpenAiSegment,
   type ParseGatewayConfigOptions,
 } from "./config.js";
 import { resolveCodingSafeSidecarGatewayProfile } from "./model-selection.js";
@@ -3184,5 +3185,66 @@ describe("hasConfiguredEnvModelProvider", () => {
 
   it("is false on an empty environment", () => {
     expect(hasConfiguredEnvModelProvider({})).toBe(false);
+  });
+});
+
+// User finding #3643: chatCompletionsUrl (openai-adapter.ts) and readinessChatCompletionsUrl
+// (readiness-probe.ts) both appended the literal "/openai/deployments/..." segment without
+// checking whether the configured base URL already ended in "/openai" — a shape Gateway Setup
+// accepts and persists (gateway-setup.test.ts's "https://example.openai.azure.com/openai" case)
+// — building "/openai/openai/deployments/...", a route no real Azure deployment answers.
+describe("trimTrailingAzureOpenAiSegment (#3643)", () => {
+  it("strips a single trailing /openai segment", () => {
+    expect(trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/openai")).toBe(
+      "https://example.openai.azure.com",
+    );
+  });
+
+  it("strips a trailing /openai segment behind one or more trailing slashes", () => {
+    expect(trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/openai/")).toBe(
+      "https://example.openai.azure.com",
+    );
+    expect(trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/openai//")).toBe(
+      "https://example.openai.azure.com",
+    );
+  });
+
+  it("collapses a hand-crafted repeated /openai/openai suffix down to none", () => {
+    expect(trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/openai/openai")).toBe(
+      "https://example.openai.azure.com",
+    );
+    expect(
+      trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/openai/openai/openai/"),
+    ).toBe("https://example.openai.azure.com");
+  });
+
+  it("leaves a base URL that does not already end in /openai unchanged but for its own trailing slashes", () => {
+    expect(trimTrailingAzureOpenAiSegment("https://example.openai.azure.com")).toBe(
+      "https://example.openai.azure.com",
+    );
+    expect(trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/")).toBe(
+      "https://example.openai.azure.com",
+    );
+  });
+
+  it("is a safe no-op on an empty base URL", () => {
+    expect(trimTrailingAzureOpenAiSegment("")).toBe("");
+  });
+
+  // validateBaseUrl already refuses a baseUrl carrying a query string at config-parse time, so
+  // this shape can never reach production; the function must still not crash or mis-parse it —
+  // the literal suffix simply does not match, so it passes through unstripped.
+  it("does not strip a /openai suffix hidden behind a query string (hostile/unreachable input)", () => {
+    expect(
+      trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/openai?unexpected=1"),
+    ).toBe("https://example.openai.azure.com/openai?unexpected=1");
+  });
+
+  // The segment is matched exactly, never case-folded — consistent with the hardcoded literal
+  // "/openai/deployments/" it complements.
+  it("does not strip a differently-cased /OpenAI suffix", () => {
+    expect(trimTrailingAzureOpenAiSegment("https://example.openai.azure.com/OpenAI")).toBe(
+      "https://example.openai.azure.com/OpenAI",
+    );
   });
 });

@@ -52,7 +52,7 @@ const FIXTURE_PROGRAM_TIMEOUT_MS = 2 * 60_000;
 const GATE_COMMAND = "npm run check:activity-log";
 // ADR-0178: the one condition the gate's host job may carry (matched exactly, see ciFindings).
 const ACTIVITY_LOG_REUSE_GUARD =
-  "${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}";
+  "${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}";
 
 /**
  * The gate's hosting job header, anchored by its own `name:`. The guard line alone appears on all
@@ -510,7 +510,7 @@ describe("required wiring of the Activity Log gate", () => {
         workflow: replaced(
           w.workflow,
           GATE_HOST_GUARDED,
-          `${GATE_HOST_HEADER}    if: \${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || github.event_name == 'push') }}\n`,
+          `${GATE_HOST_HEADER}    if: \${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || github.event_name == 'push') }}\n`,
         ),
       }),
       "ci-job-conditional",

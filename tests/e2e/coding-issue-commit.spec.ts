@@ -2,6 +2,7 @@ import { openCodingIssueWorkbench, selectCodingIssueMode } from "./support/codin
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readActivityLogText } from "../../scripts/lib/activity-log-files.mjs";
 import {
   captureCommitModes,
   writeCommitJourneyReceipt,
@@ -22,6 +23,9 @@ import {
   commitStateDir,
   type CommitFixtureOperation,
 } from "./support/coding-issue-commit.js";
+// ADR-0124 D6: a declined step answers with this exact result; imported from the server source
+// rather than restated (AGENTS.md #7).
+import { humanDecisionToolResult } from "../../packages/keiko-server/src/coding-runtime/codingToolFacade.js";
 
 const stateDir = commitStateDir();
 const repository = commitRepository(stateDir);
@@ -126,6 +130,52 @@ async function readyCommitProposal(
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
 }
+
+function activityLogLines(): readonly Record<string, unknown>[] {
+  return readActivityLogText(join(stateDir, "bff-state", "state", "logs"))
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/**
+ * ADR-0124 D6 (owner decision, 2026-09-26): a file edit raises no governed ask in ANY mode any
+ * more, so `approvedKinds` below can never observe `"file-edit"` -- the edit's one human approval
+ * is now the change review the mode policy requires before anything is written
+ * (governed-assist/supervised-coding review every edit; autonomous-delivery applies without one),
+ * never the retired pre-write ask. "Closing the review card is routine and reports nothing from the
+ * browser; the server line above is the review's evidence" (ADR-0124 D6): this reads that server
+ * line -- `coding-runtime.editor-mutation.settled` (codingToolReadEditPorts.ts's `completedEdit`) --
+ * to relocate what the retired ask used to prove: an edit was actually gated through the mutation
+ * lease and applied, under this run's own correlation, never silently bypassed.
+ */
+function editorMutationsSettledFor(runId: string): readonly Record<string, unknown>[] {
+  return activityLogLines().filter(
+    (line) => line.op === "coding-runtime.editor-mutation.settled" && line.correlationId === runId,
+  );
+}
+
+/**
+ * ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- a
+ * denial no longer settles the run `failed`/`revoked` (codingRuntimeOrchestrator.ts's
+ * `decideApproval` transitions unconditionally to `running` once a decision settles, whichever way
+ * it went). The decision itself is what the activity log records instead
+ * (`coding-runtime.approval.decided`, `recordRuntimeApprovalDecided`), keyed by the exact approval
+ * `requestId` (the same value the pending permission's own `requestId` carries) so this is tied to
+ * the specific denied proposal, never any other decision on the run.
+ */
+function approvalDecisionsFor(
+  requestId: string,
+  decision: "approved" | "denied",
+): readonly Record<string, unknown>[] {
+  return activityLogLines().filter(
+    (line) =>
+      line.op === "coding-runtime.approval.decided" &&
+      line.requestId === requestId &&
+      line.decision === decision,
+  );
+}
 async function openWorkbench(page: Page): Promise<void> {
   await openCodingIssueWorkbench(page, {
     repository,
@@ -204,9 +254,16 @@ async function startVerified(
       { timeout: 90_000 },
     )
     .toBe("verified-turn-ready");
-  expect((await snapshot(page)).effectiveMode).toBe(mode);
+  const current = await snapshot(page);
+  expect(current.effectiveMode).toBe(mode);
   expect([...approvedKinds].sort()).toEqual(
-    mode === "governed-assist" ? ["file-edit", "git-stage", "verification-command"] : [],
+    mode === "governed-assist" ? ["git-stage", "verification-command"] : [],
+  );
+  if (current.runId === undefined) throw new Error("Expected an active run id");
+  const settled = editorMutationsSettledFor(current.runId);
+  expect(settled.length).toBeGreaterThan(0);
+  expect(settled.every((line) => line.state === "succeeded" && line.actionKind === "edit")).toBe(
+    true,
   );
   expect(git(root, ["diff", "--cached", "--name-only"])).toBe(COMMIT_TARGET);
   return root;
@@ -326,18 +383,21 @@ test("#3386 @coding-issue-commit staged drift after review cannot execute", asyn
   completedCases.push("staged-drift-refused");
 });
 
-test("#3386 @coding-issue-commit actual UI denial revokes the execution path", async ({ page }) => {
+test("#3386 @coding-issue-commit actual UI denial rejects only that step", async ({ page }) => {
   await openWorkbench(page);
   const root = await startVerified(page, "governed-assist", "denied");
   const before = git(root, ["rev-parse", "HEAD"]);
   const pending = await startPendingCommit(page);
   await page.getByRole("button", { name: "Deny", exact: true }).click();
-  await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "failed");
-  expect(await snapshot(page)).toMatchObject({ failureCode: "revoked" });
-  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
+  // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
+  // run returns to `running`, never `failed`/`revoked`.
+  await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "running");
+  // The waiting call ends with the human's verdict, not the `cancelled` of an expired ask.
+  expect((await waitControl(pending.controlId)).result).toEqual(humanDecisionToolResult("denied"));
   expect((await control("execute", pending.proposalId)).result?.status).toBe("denied");
   expect(git(root, ["rev-parse", "HEAD"])).toBe(before);
   await expect(page.getByRole("region", { name: "Reviewed commit message" })).toHaveCount(0);
-  await finish(page, "revoked");
-  completedCases.push("explicit-ui-denial-revokes-execution");
+  expect(approvalDecisionsFor(pending.proposalId, "denied").length).toBeGreaterThan(0);
+  await finish(page);
+  completedCases.push("explicit-ui-denial-rejects-step-only");
 });

@@ -58,6 +58,9 @@ describe("prompt-driven issue intake", () => {
 
   it.each([
     ["Implement #13", "#13"],
+    // #3629: a parenthesized bare reference binds the task like any other.
+    ["Fix the bug (#13)", "#13"],
+    ["(#13) fix the bug", "#13"],
     [
       "Implement https://github.com/acme/repo/issues/13 and verify #13",
       "https://github.com/acme/repo/issues/13",

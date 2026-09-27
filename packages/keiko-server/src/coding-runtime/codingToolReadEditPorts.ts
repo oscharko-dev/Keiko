@@ -29,11 +29,7 @@ import {
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
-import {
-  isExactEditorAgentChangeset,
-  isGovernedReadPath,
-  type CodingToolReadResult,
-} from "./codingToolIpc.js";
+import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
@@ -413,7 +409,7 @@ const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperat
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["succeeded", "failed", "cancelled"],
+      values: ["succeeded", "failed", "cancelled", "rejected"],
     },
     actionKind: {
       type: "string",
@@ -460,6 +456,7 @@ const EDIT_REFUSAL_REASONS = [
   "EDIT_PREPARE_FAILED",
   "WORKSPACE_ACCESS_LOST",
   "EDIT_MUTATION_FAILED",
+  "CHANGE_REJECTED",
   "EDIT_CLIENT_ERROR",
   "UNCLASSIFIED",
 ] as const;
@@ -540,6 +537,7 @@ const EDIT_REFUSAL_ERROR_KINDS: Readonly<Record<EditRefusalReason, ActivityLogEr
   OUT_OF_SCOPE: "authority-denied",
   POLICY_DENIED: "authority-denied",
   APPROVAL_REQUIRED: "authority-denied",
+  CHANGE_REJECTED: "authority-denied",
   WORKSPACE_ACCESS_LOST: "authority-denied",
   TIMED_OUT: "timeout",
   CANCELLED: "cancelled",
@@ -599,25 +597,6 @@ function completedRead(
 // One formula for the digest a read reports and the pre-ask base check compares against (#3612).
 function wholeFileDigest(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-/**
- * The digest a governed read of `relativePath` reports now, or undefined when that read would not
- * return the whole file (denied path, missing file, over the read bound, read refused). The pre-ask
- * base check of a changeset compares it with the model's `expectedContentHash` (#3612); only the
- * comparison leaves the server, never the text. A denied path is never read, so the check cannot
- * serve as a digest oracle for a file the model is not allowed to read.
- */
-export async function governedWorkspaceFileDigest(
-  read: SecureWorkspaceTextReadPort,
-  relativePath: string,
-  signal: AbortSignal,
-): Promise<string | undefined> {
-  if (!isGovernedReadPath(relativePath)) return undefined;
-  const result = await read.readText({ relativePath, signal });
-  return result.ok && Buffer.byteLength(result.text, "utf8") <= MAX_READ_BYTES
-    ? wholeFileDigest(result.text)
-    : undefined;
 }
 
 function recordCompletedRead(
@@ -875,6 +854,17 @@ async function executeEdit(
   }
 }
 
+// A change applied or rejected in its review is the human's decision, logged as such; a cancelled
+// or failed mutation keeps its warn line (owner decision 2026-09-26, ADR-0124 D6: the review's "no"
+// read as an internal mutation failure, and the model was told EDIT_MUTATION_FAILED).
+const SETTLED_EDIT_REFUSALS: Readonly<
+  Record<Exclude<CodingRuntimeMutationOutcome, "succeeded">, EditRefusalReason>
+> = {
+  rejected: "CHANGE_REJECTED",
+  cancelled: "CANCELLED",
+  failed: "EDIT_MUTATION_FAILED",
+};
+
 async function completedEdit(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
@@ -887,17 +877,16 @@ async function completedEdit(
       CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION,
       {
         correlationId,
-        ...(outcome === "succeeded"
+        ...(outcome === "succeeded" || outcome === "rejected"
           ? {}
           : { level: "warn", errorKind: outcome === "cancelled" ? "cancelled" : "internal" }),
       },
       { state: outcome, actionKind: "edit" },
     ),
   );
-  const reasonCode = outcome === "cancelled" ? "CANCELLED" : "EDIT_MUTATION_FAILED";
   return outcome === "succeeded"
     ? { status: "completed" }
-    : editRefused(deps, correlationId, reasonCode);
+    : editRefused(deps, correlationId, SETTLED_EDIT_REFUSALS[outcome]);
 }
 
 function editRefused(

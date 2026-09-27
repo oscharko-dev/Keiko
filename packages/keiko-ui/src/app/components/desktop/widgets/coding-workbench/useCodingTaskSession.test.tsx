@@ -336,6 +336,26 @@ describe("coding task selection", () => {
     expect(result.current.conversationId).toBeUndefined();
   });
 
+  // #3631: the host clears a consumed selection; selecting the same task again retries it.
+  it("retries a failed activation when the same task is selected again", async () => {
+    const { result, rerender } = renderHook(
+      ({ selection }: { readonly selection: string | undefined }) =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace: null,
+          selection,
+        }),
+      { initialProps: { selection: "chat-one" as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.error).toBe(true));
+    const reads = read.mock.calls.length;
+    rerender({ selection: undefined });
+    rerender({ selection: "chat-one" });
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads));
+  });
+
   it("clears the old conversation for New task and surfaces workspace creation failure", async () => {
     const { result } = renderHook(() =>
       useCodingTaskSession({

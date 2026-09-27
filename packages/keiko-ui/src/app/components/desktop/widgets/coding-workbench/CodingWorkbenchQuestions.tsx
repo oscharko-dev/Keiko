@@ -106,6 +106,7 @@ export function CodingWorkbenchQuestionsSurface({
       <PanelTitle
         eyebrow={t("codingWorkbench.questions.eyebrow")}
         id="coding-workbench-questions-title"
+        focusable
       >
         {t("codingWorkbench.questions.title")}
       </PanelTitle>

@@ -42,6 +42,18 @@ import {
 // long after this module's own top-level code (including this declaration) has finished running
 // — mirrors the same importOriginal-plus-delegating-wrapper pattern
 // defaultPolicyPacks.test.ts already uses for this exact module graph.
+// #3644: the summary cache the Git window reads must be dropped by every finished action.
+const invalidatedSummaryDeps: object[] = [];
+vi.mock("../gitRepositoryReads.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gitRepositoryReads.js")>();
+  return {
+    ...actual,
+    invalidateGitSummaryCache: (deps: object): void => {
+      invalidatedSummaryDeps.push(deps);
+      actual.invalidateGitSummaryCache(deps);
+    },
+  };
+});
 const readStagedPathsCalls: NodeGitWorktreeReaderDeps[] = [];
 const readStagedConflictMarkerFileCountCalls: NodeGitWorktreeReaderDeps[] = [];
 vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
@@ -323,6 +335,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
     expect(cap.count()).toBe(1);
     expectCompletedMutationEvent(activity.events[0]);
     expect(JSON.stringify(activity.events)).not.toContain("feature/x");
+    expect(invalidatedSummaryDeps).toContain(deps);
   });
 
   it("switches branch, stages a file, and commits — all through the kernel", async () => {

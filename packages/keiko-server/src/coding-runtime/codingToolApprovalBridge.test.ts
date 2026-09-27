@@ -380,3 +380,41 @@ describe("coding tool approval bridge redeems git-ci and connector observations"
     ).toBe(true);
   });
 });
+
+// Owner decision 2026-09-26 (ADR-0124 D6): the operator's "no" to a server-raised Git stage, commit,
+// push or pull-request proposal is what ends that proposal's own wait, so the bridge records it per
+// run and proposal, bounded, and forgets it with the run.
+describe("coding tool approval bridge records declined proposals", () => {
+  it("records a decline for that run's proposal only", () => {
+    const bridge = createCodingToolApprovalBridge();
+
+    expect(bridge.proposalDeclined?.(RUN_ID, "commit-1")).toBe(false);
+    bridge.declineProposal?.(RUN_ID, "commit-1");
+
+    expect(bridge.proposalDeclined?.(RUN_ID, "commit-1")).toBe(true);
+    expect(bridge.proposalDeclined?.(RUN_ID, "commit-2")).toBe(false);
+    expect(bridge.proposalDeclined?.("run-other", "commit-1")).toBe(false);
+  });
+
+  it("forgets a run's declines with the run", () => {
+    const bridge = createCodingToolApprovalBridge();
+    bridge.declineProposal?.(RUN_ID, "commit-1");
+    bridge.declineProposal?.("run-other", "delivery-1");
+
+    bridge.invalidateRun(RUN_ID);
+
+    expect(bridge.proposalDeclined?.(RUN_ID, "commit-1")).toBe(false);
+    expect(bridge.proposalDeclined?.("run-other", "delivery-1")).toBe(true);
+  });
+
+  it("keeps at most 64 declines, dropping the oldest first", () => {
+    const bridge = createCodingToolApprovalBridge();
+    for (let index = 0; index <= 64; index += 1) {
+      bridge.declineProposal?.(RUN_ID, `stage-${String(index)}`);
+    }
+
+    expect(bridge.proposalDeclined?.(RUN_ID, "stage-0")).toBe(false);
+    expect(bridge.proposalDeclined?.(RUN_ID, "stage-1")).toBe(true);
+    expect(bridge.proposalDeclined?.(RUN_ID, "stage-64")).toBe(true);
+  });
+});

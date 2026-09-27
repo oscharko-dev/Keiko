@@ -29,7 +29,6 @@ import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRunti
 import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
-  governedWorkspaceFileDigest,
 } from "./codingToolReadEditPorts.js";
 import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 
@@ -156,43 +155,6 @@ async function observedWorkspaceReadFailure(kind: WorkspaceReadFailureFixture): 
 function editRefusedLines(events: readonly ServerLogEvent[]): readonly ServerLogEvent[] {
   return events.filter((event) => event.op === "coding-runtime.edit.refused");
 }
-
-// #3612: the governed ask's base check answers only with the digest a governed read of the whole
-// file would report; anything that read would not return is "cannot say", never a digest.
-describe("governed workspace file digest", () => {
-  const signal = new AbortController().signal;
-  const reading = (
-    text: string,
-  ): { readonly readText: () => Promise<SecureWorkspaceTextReadResult> } => ({
-    readText: () => Promise.resolve({ ok: true, text }),
-  });
-
-  it("digests the whole file the governed read returns", async () => {
-    await expect(
-      governedWorkspaceFileDigest(reading("export const a = 1;\n"), "src/a.ts", signal),
-    ).resolves.toBe(createHash("sha256").update("export const a = 1;\n", "utf8").digest("hex"));
-  });
-
-  it("cannot say for a file over the read bound, a refused read, or a path the read refuses", async () => {
-    await expect(
-      governedWorkspaceFileDigest(reading("x".repeat(65_537)), "src/a.ts", signal),
-    ).resolves.toBeUndefined();
-    await expect(
-      governedWorkspaceFileDigest(
-        { readText: () => Promise.resolve({ ok: false, reason: "not-found" }) },
-        "src/a.ts",
-        signal,
-      ),
-    ).resolves.toBeUndefined();
-    const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: "secret" }));
-    for (const path of [".env", "/etc/passwd", "src/../../outside.ts", "C:/a.ts", ""]) {
-      await expect(
-        governedWorkspaceFileDigest({ readText }, path, signal),
-      ).resolves.toBeUndefined();
-    }
-    expect(readText).not.toHaveBeenCalled();
-  });
-});
 
 // #3615: a read the secure read refuses for the model's own request names its closed code, so the
 // model can act on it and the catalog settles the call as a refusal; a fault stays a bare failure.
@@ -1214,6 +1176,72 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       expect(persisted).toMatchObject({ state: "succeeded", actionKind: "edit" });
     },
   );
+
+  // Owner decision 2026-09-26 (ADR-0124 D6): the change review is the only approval an edit asks
+  // for. Its "no" read as an internal mutation failure (EDIT_MUTATION_FAILED, errorKind internal),
+  // and the model was told its edit had failed. The rejection is the human's decision now.
+  it("reports a change rejected in its review as the human's decision", async () => {
+    const liveBinding = { ...admittedBinding, expiresAt: "2099-01-01T00:00:00.000Z" };
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: true as const,
+            value: {
+              result: {
+                schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                actionId: "edit-1",
+                sessionId: "session-2332",
+                status: "queued" as const,
+              },
+            },
+          }),
+      },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: liveBinding.runId, envelopeDigest: liveBinding.envelopeDigest },
+        origin: "agent",
+        workspaceId: liveBinding.workspaceId,
+        workspaceRootDigest: liveBinding.workspaceRootDigest,
+        expiresAt: liveBinding.expiresAt,
+      }),
+      requiresEditorReview: () => true,
+      mutationLeaseCoordinator: {
+        register: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+        waitForMutation: () => Promise.resolve("rejected"),
+      },
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        { action: "edit", actionId: "edit-1", idempotencyKey: "edit-key", changeset: changeset() },
+        undefined,
+        { check: (): true => true, binding: liveBinding },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "CHANGE_REJECTED" });
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-runtime.editor-mutation.settled",
+      "coding-runtime.edit.refused",
+    ]);
+    const [settled, refused] = events;
+    expect(settled).not.toHaveProperty("errorKind");
+    expect(settled?.level).not.toBe("warn");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.editor-mutation.settled.emitted-line",
+        formatActivityLogProofLine(settled ?? {}),
+      ),
+    ).toMatchObject({ state: "rejected", actionKind: "edit" });
+    expect(refused).toMatchObject({
+      level: "warn",
+      errorKind: "authority-denied",
+      extra: { reasonCode: "CHANGE_REJECTED" },
+    });
+  });
 
   it("waits boundedly for the live Editor session in the governed workspace", async () => {
     vi.useFakeTimers();

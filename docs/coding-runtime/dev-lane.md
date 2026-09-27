@@ -92,13 +92,20 @@ When readiness reports `false`, the `runtimeUnavailableReason` names the first f
 ## Deployment ceiling
 
 The coding-runtime deployment ceiling is explicit configuration, never an implicit effect of the
-lane flag:
+lane flag. The project owner selected the all-mode profile for local Coding Workbench review on
+2026-09-26. Launch that profile explicitly with:
 
 ```bash
-KEIKO_CODING_DEPLOYMENT_CEILING=supervised-coding \
+KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery \
 npm run dev:start
 ```
 
+- The local operator's explicit all-mode choice above lets a Workbench with a bound repository
+  start new runs in Ask for approval, Supervised workspace, or Full access. The mode selected in
+  the composer remains the authority for that run, subject to its validated Authority Envelope.
+  Ask for approval still asks before workspace edits by design.
+- Use the same environment setting on each later launch; switching repositories or branches does
+  not change the installation's authority ceiling.
 - The shipped default stays `governed-assist`; unrecognized values are ignored fail-closed.
 - The readiness projection reports exactly the ceiling the mint clamp enforces (before #2475 it
   reported the separate autonomous-delivery ceiling, which could diverge from enforcement).

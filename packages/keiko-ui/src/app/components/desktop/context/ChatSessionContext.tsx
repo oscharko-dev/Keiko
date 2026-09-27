@@ -293,7 +293,3 @@ export function useOptionalChatSessionCatalog(): ChatSessionCatalog | null {
 export function useOptionalChatSessionProject(): ProjectWithAvailability | null {
   return useContext(ChatSessionProjectContext);
 }
-
-export function useOptionalChatSessionActions(): ChatSessionActions | null {
-  return useContext(ChatSessionActionsContext);
-}
