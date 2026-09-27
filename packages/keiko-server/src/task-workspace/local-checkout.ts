@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
 
 import { gitEnv, GIT_BASE_ARGS, resolveGitExecutable } from "@oscharko-dev/keiko-git";
 import {
@@ -9,8 +8,12 @@ import {
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiStore } from "../store/types.js";
-import { readProductionWorkspaceHead } from "../coding-runtime/productionWorkspaceHeadReader.js";
+import {
+  readProductionWorkspaceGitState,
+  readProductionWorkspaceHead,
+} from "../coding-runtime/productionWorkspaceHeadReader.js";
 import type { ActiveWorkspacePointerStore } from "./active-store.js";
 import { buildBinding } from "./binding.js";
 import { logWorkspaceLifecycle, type WorkspaceActivityLogSeam } from "./activity-log.js";
@@ -33,41 +36,56 @@ function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function gitOutput(
-  root: string,
-  args: readonly string[],
-  options: { readonly input?: string; readonly timeout?: number; readonly maxBuffer?: number } = {},
-): string {
-  const env = gitEnv();
+function trustedGitExecutable(root: string, env: NodeJS.ProcessEnv): string {
   const executable = resolveGitExecutable(env, root);
   if (!executable.ok) {
     throw new TaskWorkspaceError("REPOSITORY_UNREACHABLE", "Trusted Git executable unavailable.", [
       executable.reason,
     ]);
   }
-  return execFileSync(
-    executable.path,
-    [
-      ...GIT_BASE_ARGS,
-      "-C",
-      root,
-      "-c",
-      "core.fsmonitor=false",
-      "-c",
-      `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
-      "-c",
-      "submodule.recurse=false",
-      ...args,
-    ],
-    {
-      encoding: "utf8",
-      env,
-      timeout: options.timeout ?? GIT_TIMEOUT_MS,
-      maxBuffer: options.maxBuffer ?? 4_096,
-      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
-      ...(options.input === undefined ? {} : { input: options.input }),
-    },
-  ).trim();
+  return executable.path;
+}
+
+function trustedGitArgs(root: string, args: readonly string[]): string[] {
+  return [
+    ...GIT_BASE_ARGS,
+    "-C",
+    root,
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+    "-c",
+    "submodule.recurse=false",
+    ...args,
+  ];
+}
+
+function gitOutput(
+  root: string,
+  args: readonly string[],
+  options: { readonly input?: string; readonly timeout?: number; readonly maxBuffer?: number } = {},
+): string {
+  const env = gitEnv();
+  return execFileSync(trustedGitExecutable(root, env), trustedGitArgs(root, args), {
+    encoding: "utf8",
+    env,
+    timeout: options.timeout ?? GIT_TIMEOUT_MS,
+    maxBuffer: options.maxBuffer ?? 4_096,
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+    ...(options.input === undefined ? {} : { input: options.input }),
+  }).trim();
+}
+
+// Never terminate a mutating switch because it exceeded a read command's buffer or deadline:
+// Git may have updated the index and worktree before moving HEAD. Suppress output entirely.
+function gitSwitch(root: string, branch: string): void {
+  const env = gitEnv();
+  execFileSync(
+    trustedGitExecutable(root, env),
+    trustedGitArgs(root, ["switch", "--quiet", "--no-guess", branch]),
+    { env, timeout: 0, stdio: "ignore" },
+  );
 }
 
 function git(root: string, ...args: readonly string[]): string {
@@ -143,7 +161,8 @@ function hasExecutableFilters(root: string): boolean {
 
 function currentBranch(root: string): string | undefined {
   try {
-    return git(root, "symbolic-ref", "--quiet", "--short", "HEAD");
+    const reference = git(root, "symbolic-ref", "--quiet", "HEAD");
+    return reference.startsWith("refs/heads/") ? reference.slice("refs/heads/".length) : undefined;
   } catch (error) {
     if (gitNoMatch(error)) return undefined;
     throw error;
@@ -155,19 +174,16 @@ function localIdentity(root: string): string | undefined {
     return undefined;
   }
   const gitdir = realpathSync(git(root, "rev-parse", "--absolute-git-dir"));
+  return gitDirectoryIdentity(root, gitdir);
+}
+
+function gitDirectoryIdentity(root: string, gitdir: string): string {
   const stat = statSync(gitdir);
   return digest(`${root}\0${gitdir}\0${String(stat.dev)}\0${String(stat.ino)}`);
 }
 
 function localHead(root: string): string | undefined {
-  const commonDir = realpathSync(
-    git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-  );
-  if (basename(commonDir) !== ".git") return undefined;
-  const owner = dirname(commonDir);
-  if (realpathSync(owner) !== owner || realpathSync(join(owner, ".git")) !== commonDir)
-    return undefined;
-  return readProductionWorkspaceHead(root, owner);
+  return readProductionWorkspaceHead(root, root);
 }
 
 function localView(
@@ -177,25 +193,19 @@ function localView(
 ): ActiveWorkspaceView | undefined {
   const persisted = instances.getById(pointer.workspaceId);
   if (persisted?.executionLocation !== "local") return undefined;
-  for (const project of store.listProjects()) {
-    const root = project.path;
-    if (persisted.repositoryRoot !== root) continue;
-    const identity = localIdentity(root);
-    if (identity === undefined || `${LOCAL_PREFIX}${identity}` !== pointer.workspaceId) continue;
-    const branch = currentBranch(root);
-    const head = localHead(root);
-    if (branch !== persisted.taskBranch || head === undefined) return undefined;
-    const instance: WorkspaceInstance = {
-      ...persisted,
-      baseBranch: branch,
-      taskBranch: branch,
-      updatedAt: pointer.updatedAt,
-      lastVerifiedAt: pointer.updatedAt,
-      lastVerifiedHead: head,
-    };
-    return { instance, binding: buildBinding(instance), pointer };
-  }
-  return undefined;
+  const root = persisted.repositoryRoot;
+  if (!store.listProjects().some((project) => project.path === root)) return undefined;
+  if (realpathSync(root) !== root) return undefined;
+  const state = readProductionWorkspaceGitState(root, root);
+  if (state?.branch !== persisted.taskBranch) return undefined;
+  const identity = gitDirectoryIdentity(root, state.gitDir);
+  if (`${LOCAL_PREFIX}${identity}` !== pointer.workspaceId) return undefined;
+  const instance: WorkspaceInstance = {
+    ...persisted,
+    lastVerifiedAt: new Date().toISOString(),
+    lastVerifiedHead: state.head,
+  };
+  return { instance, binding: buildBinding(instance), pointer };
 }
 
 export interface LocalCheckoutLifecycle extends WorkspaceLifecycleService {
@@ -300,7 +310,7 @@ function switchLocalBranch(root: string, branch: string): void {
       "The checkout has executable Git filters; switch branches outside the Workbench.",
     );
   try {
-    git(root, "switch", "--no-guess", branch);
+    gitSwitch(root, branch);
   } catch (error) {
     throw new TaskWorkspaceError(
       "BRANCH_CONFLICT",
@@ -446,6 +456,42 @@ function setActiveWithLocal(
   );
 }
 
+interface LocalInvalidationLogger {
+  readonly log: (
+    pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
+    correlationId: string | undefined,
+    startedAt: number,
+    cause?: unknown,
+  ) => void;
+  readonly clear: () => void;
+}
+
+function createLocalInvalidationLogger(
+  activityLog: WorkspaceActivityLogSeam,
+): LocalInvalidationLogger {
+  let lastInvalidatedPointer: string | null = null;
+  let lastInvalidationCorrelated = false;
+  const log = (
+    pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
+    correlationId: string | undefined,
+    startedAt: number,
+    cause?: unknown,
+  ): void => {
+    const key = `${pointer.workspaceId}\0${pointer.updatedAt}`;
+    const correlated = correlationId !== undefined && correlationId !== UNKNOWN_CORRELATION_ID;
+    if (lastInvalidatedPointer === key && (!correlated || lastInvalidationCorrelated)) return;
+    lastInvalidatedPointer = key;
+    lastInvalidationCorrelated = correlated;
+    logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, cause);
+  };
+  return {
+    log,
+    clear: (): void => {
+      lastInvalidatedPointer = null;
+    },
+  };
+}
+
 export function withLocalCheckout(
   managed: WorkspaceLifecycleService,
   pointerStore: ActiveWorkspacePointerStore,
@@ -453,18 +499,7 @@ export function withLocalCheckout(
   instances: WorkspaceInstanceStore,
   activityLog: WorkspaceActivityLogSeam = {},
 ): LocalCheckoutLifecycle {
-  let lastInvalidatedPointer: string | null = null;
-  const logInvalidation = (
-    pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
-    correlationId: string | undefined,
-    startedAt: number,
-    cause?: unknown,
-  ): void => {
-    const key = `${pointer.workspaceId}\0${pointer.updatedAt}`;
-    if (lastInvalidatedPointer === key) return;
-    lastInvalidatedPointer = key;
-    logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, cause);
-  };
+  const invalidation = createLocalInvalidationLogger(activityLog);
   const getActive = (correlationId?: string): ActiveWorkspaceView | undefined => {
     const pointer = pointerStore.get();
     if (pointer?.workspaceId.startsWith(LOCAL_PREFIX)) {
@@ -473,14 +508,14 @@ export function withLocalCheckout(
       try {
         active = localView(store, instances, pointer);
       } catch (cause) {
-        logInvalidation(pointer, correlationId, startedAt, cause);
+        logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, cause);
         return undefined;
       }
-      if (active === undefined) logInvalidation(pointer, correlationId, startedAt);
-      else lastInvalidatedPointer = null;
+      if (active === undefined) invalidation.log(pointer, correlationId, startedAt);
+      else invalidation.clear();
       return active;
     }
-    lastInvalidatedPointer = null;
+    invalidation.clear();
     return managed.getActive(correlationId);
   };
   return {

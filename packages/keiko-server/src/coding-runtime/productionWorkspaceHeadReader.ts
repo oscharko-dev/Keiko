@@ -12,7 +12,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 const HEAD_BYTES = 4_096;
 const PACKED_REFS_BYTES = 1_048_576;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
-const REF = /^refs\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/u;
+const INVALID_REF_CHARACTER = /[~^:?*[\\]/u;
 
 export interface ProductionWorkspaceHeadFileSystem {
   readonly close: (descriptor: number) => void;
@@ -45,20 +45,42 @@ export function readProductionWorkspaceHead(
   fileSystem: ProductionWorkspaceHeadFileSystem = NODE_FS,
 ): string | undefined {
   try {
-    const workspace = canonicalDirectory(workspaceRoot, fileSystem);
-    const commonRoot = resolveCommonRoot(repositoryRoot, fileSystem);
-    const gitDir = resolveGitDir(workspace, commonRoot, fileSystem);
-    if (gitDir === undefined) return undefined;
-    const head = boundedText(join(gitDir, "HEAD"), HEAD_BYTES, fileSystem)?.trim();
-    if (head === undefined) return undefined;
-    if (SHA.test(head)) return head;
-    const reference = head.startsWith("ref: ") ? head.slice(5) : "";
-    return safeRef(reference)
-      ? readReference(gitDir, commonRoot, reference, fileSystem)
-      : undefined;
+    return readProductionWorkspaceGitState(workspaceRoot, repositoryRoot, fileSystem)?.head;
   } catch {
     return undefined;
   }
+}
+
+export interface ProductionWorkspaceGitState {
+  readonly head: string;
+  readonly branch: string | undefined;
+  readonly gitDir: string;
+}
+
+/** Shares the same bounded, handle-verified Git reads with Local binding validation. */
+export function readProductionWorkspaceGitState(
+  workspaceRoot: string,
+  repositoryRoot: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem = NODE_FS,
+): ProductionWorkspaceGitState | undefined {
+  const workspace = canonicalDirectory(workspaceRoot, fileSystem);
+  const commonRoot = resolveCommonRoot(repositoryRoot, fileSystem);
+  const gitDir = resolveGitDir(workspace, commonRoot, fileSystem);
+  if (gitDir === undefined) return undefined;
+  const head = boundedText(join(gitDir, "HEAD"), HEAD_BYTES, fileSystem)?.trim();
+  if (head === undefined) return undefined;
+  if (SHA.test(head)) return { head, branch: undefined, gitDir };
+  const reference = head.startsWith("ref: ") ? head.slice(5) : "";
+  const resolved = safeRef(reference)
+    ? readReference(gitDir, commonRoot, reference, fileSystem)
+    : undefined;
+  return resolved === undefined
+    ? undefined
+    : { head: resolved, branch: localBranch(reference), gitDir };
+}
+
+function localBranch(reference: string): string | undefined {
+  return reference.startsWith("refs/heads/") ? reference.slice("refs/heads/".length) : undefined;
 }
 
 function resolveCommonRoot(
@@ -72,7 +94,17 @@ function resolveCommonRoot(
   if (dotGitStat.isDirectory()) return canonicalDirectory(dotGit, fileSystem);
   const pointer = parseGitPointer(boundedText(dotGit, HEAD_BYTES, fileSystem));
   if (pointer === undefined) throw new Error("repository-git-dir-invalid");
-  return canonicalDirectory(resolve(repository, pointer), fileSystem);
+  const gitDir = canonicalDirectory(resolve(repository, pointer), fileSystem);
+  const commonPointer = boundedText(join(gitDir, "commondir"), HEAD_BYTES, fileSystem)?.trim();
+  if (commonPointer === undefined) return gitDir;
+  const commonDir = canonicalDirectory(resolve(gitDir, commonPointer), fileSystem);
+  if (
+    !containsCanonicalPath(join(commonDir, "worktrees"), gitDir) ||
+    !commonDir.endsWith(`${sep}.git`)
+  ) {
+    throw new Error("repository-git-dir-invalid");
+  }
+  return commonDir;
 }
 
 function resolveGitDir(
@@ -268,6 +300,26 @@ function parseGitPointer(value: string | undefined): string | undefined {
   return path.length > 0 && !path.includes("\0") ? path : undefined;
 }
 
+function hasControlOrSpace(reference: string): boolean {
+  for (const character of reference) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code <= 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
 function safeRef(reference: string): boolean {
-  return REF.test(reference) && !reference.includes("..") && !reference.includes("//");
+  if (
+    !reference.startsWith("refs/") ||
+    INVALID_REF_CHARACTER.test(reference) ||
+    hasControlOrSpace(reference)
+  )
+    return false;
+  if (reference.includes("..") || reference.includes("@{") || reference.endsWith(".")) return false;
+  return reference
+    .split("/")
+    .every(
+      (component) =>
+        component.length > 0 && !component.startsWith(".") && !component.endsWith(".lock"),
+    );
 }

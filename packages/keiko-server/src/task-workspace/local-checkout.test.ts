@@ -3,9 +3,14 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createInMemoryUiStore } from "../store/index.js";
+import { readProductionWorkspaceHead } from "../coding-runtime/productionWorkspaceHeadReader.js";
+import {
+  productionWorkspaceMatches,
+  resolveProductionRuntimeContext,
+} from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import { createBufferedServerLogSink, type ServerLogSink } from "../observability/index.js";
 import {
   expectActivityLogProof,
@@ -16,6 +21,11 @@ import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js"
 import { withLocalCheckout } from "./local-checkout.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import type { WorkspaceLifecycleService } from "./types.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 
 let root: string;
 let db: DatabaseSync;
@@ -74,6 +84,78 @@ describe("local checkout selection", () => {
     expect(service.list(root)).toEqual([]);
     expect(service.listAll()).toEqual([]);
     expect(readFileSync(join(root, "README.md"), "utf8")).toBe("fixture\n");
+  });
+
+  it("switches a large dirty checkout without terminating Git between index and HEAD updates", () => {
+    for (let index = 0; index < 400; index += 1) {
+      writeFileSync(join(root, `tracked-file-${String(index).padStart(4, "0")}.txt`), "base\n");
+    }
+    git("add", ".");
+    git("commit", "-qm", "large tracked tree");
+    git("branch", "-f", "feature");
+    git("switch", "feature");
+    writeFileSync(join(root, "feature-only.txt"), "feature\n");
+    git("add", "feature-only.txt");
+    git("commit", "-qm", "feature tree");
+    git("switch", "main");
+    for (let index = 0; index < 400; index += 1) {
+      writeFileSync(join(root, `tracked-file-${String(index).padStart(4, "0")}.txt`), "edited\n");
+    }
+
+    const selected = fixture().selectLocal({ root, branch: "feature", requestedBy: "test" });
+    expect(git("symbolic-ref", "HEAD")).toBe("refs/heads/feature");
+    expect(git("diff", "--cached", "--name-only")).toBe("");
+    expect(selected.instance.taskBranch).toBe("feature");
+    expect(readFileSync(join(root, "tracked-file-0000.txt"), "utf8")).toBe("edited\n");
+  });
+
+  it("accepts a branch sharing its name with a tag", () => {
+    git("tag", "feature", "main");
+    const service = fixture();
+    const selected = service.selectLocal({ root, branch: "feature", requestedBy: "test" });
+    expect(git("symbolic-ref", "HEAD")).toBe("refs/heads/feature");
+    expect(service.getActive()?.instance.workspaceId).toBe(selected.instance.workspaceId);
+  });
+
+  it.each(["feature+test", "feature@version", "topic/änderung", "feature=next"])(
+    "accepts the Git-valid branch name %s",
+    (branch) => {
+      git("branch", branch);
+      const service = fixture();
+      const selected = service.selectLocal({ root, branch, requestedBy: "test" });
+      expect(git("symbolic-ref", "HEAD")).toBe(`refs/heads/${branch}`);
+      expect(service.getActive()?.instance.workspaceId).toBe(selected.instance.workspaceId);
+    },
+  );
+
+  it("validates the active local binding without spawning Git on the request path", () => {
+    const service = fixture();
+    service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    vi.mocked(execFileSync).mockClear();
+    expect(service.getActive()?.instance.taskBranch).toBe("main");
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps request correlation after an uncorrelated background invalidation", () => {
+    const log = createBufferedServerLogSink();
+    const service = fixture(log);
+    service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "feature");
+    expect(service.getActive()).toBeUndefined();
+    expect(service.getActive("corr-after-background")).toBeUndefined();
+    expect(service.getActive("corr-after-background")).toBeUndefined();
+    const correlated = log.events.filter(
+      (event) => event.correlationId === "corr-after-background",
+    );
+    expect(correlated).toHaveLength(1);
+    expect(correlated[0]).toMatchObject({
+      op: "task-workspace.lifecycle",
+      extra: { failureKind: "POINTER_DRIFT", outcome: "retry-required" },
+    });
+    expectActivityLogProof(
+      "task-workspace.lifecycle.line",
+      formatActivityLogProofLine(correlated[0] ?? {}),
+    );
   });
 
   it("invalidates a local binding when Git switches branches outside the Workbench", () => {
@@ -144,6 +226,22 @@ describe("local checkout selection", () => {
       expect(selected.binding.activeRoot).toBe(linkedRoot);
       expect(selected.instance.lastVerifiedHead).toBe(git("rev-parse", "linked"));
       expect(service.getActive()?.instance.workspaceId).toBe(selected.instance.workspaceId);
+      const runtime = {
+        workspaceLifecycle: service,
+        managedTaskWorkspaceRoot: root,
+        deploymentCeiling: "governed-assist" as const,
+        readWorkspaceHead: readProductionWorkspaceHead,
+      };
+      const context = resolveProductionRuntimeContext(runtime, {
+        runId: "run-local-linked",
+        requestId: "request-local-linked",
+        taskIntent: "Read the project",
+        requestedMode: "governed-assist",
+        workspaceId: selected.instance.workspaceId,
+        workspaceRoot: linkedRoot,
+        serverPrincipal: "test",
+      });
+      expect(productionWorkspaceMatches(runtime, context)).toBe(true);
     } finally {
       git("worktree", "remove", "--force", linkedRoot);
       rmSync(linkedRoot, { recursive: true, force: true });
