@@ -473,6 +473,11 @@ export async function handleSelectLocalCheckout(
       const branch = requireSafeField(body.branch, "branch");
       const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
       const resolved = await resolveRoot(deps.store, root, deps.redactor);
+      // Body parsing and root resolution yield to other requests. Recheck immediately before the
+      // synchronous checkout mutation so a run started meanwhile cannot lose its bound branch.
+      if (deps.codingRuntimeOrchestrator?.hasLiveRun()) {
+        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+      }
       let active: ActiveWorkspaceView;
       try {
         active = selectLocal({

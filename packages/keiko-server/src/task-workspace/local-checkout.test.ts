@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -47,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   db.close();
+  rmSync(`${root}-hook-marker`, { force: true });
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -84,5 +85,33 @@ describe("local checkout selection", () => {
     expect(() => service.selectLocal({ root, branch: "feature", requestedBy: "test" })).toThrow();
     expect(git("branch", "--show-current")).toBe("main");
     expect(readFileSync(join(root, "README.md"), "utf8")).toBe("uncommitted\n");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not execute a repository post-checkout hook",
+    () => {
+      const marker = `${root}-hook-marker`;
+      const hook = join(root, ".git", "hooks", "post-checkout");
+      writeFileSync(hook, `#!/bin/sh\nprintf reached > '${marker}'\n`);
+      chmodSync(hook, 0o755);
+      const service = fixture();
+      service.selectLocal({ root, branch: "feature", requestedBy: "test" });
+      expect(() => readFileSync(marker, "utf8")).toThrow();
+    },
+  );
+
+  it("refuses branch switching when checkout filters could execute", () => {
+    git("config", "filter.unsafe.smudge", "echo unsafe");
+    const service = fixture();
+    expect(() => service.selectLocal({ root, branch: "feature", requestedBy: "test" })).toThrow();
+    expect(git("branch", "--show-current")).toBe("main");
+  });
+
+  it("recovers a detached checkout by selecting an existing local branch", () => {
+    git("checkout", "--detach", "-q");
+    const service = fixture();
+    const selected = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    expect(git("branch", "--show-current")).toBe("main");
+    expect(selected.instance.taskBranch).toBe("main");
   });
 });

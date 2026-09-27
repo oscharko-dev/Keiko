@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 
-import { TASK_WORKSPACE_SCHEMA_VERSION, type WorkspaceInstance } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { gitEnv, GIT_BASE_ARGS } from "@oscharko-dev/keiko-git";
+import {
+  TASK_WORKSPACE_SCHEMA_VERSION,
+  type WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 import type { UiStore } from "../store/types.js";
 import { readProductionWorkspaceHead } from "../coding-runtime/productionWorkspaceHeadReader.js";
@@ -22,12 +26,59 @@ function digest(value: string): string {
 }
 
 function git(root: string, ...args: readonly string[]): string {
-  return execFileSync("git", ["-C", root, ...args], {
-    encoding: "utf8",
-    timeout: GIT_TIMEOUT_MS,
-    maxBuffer: 4_096,
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+  return execFileSync(
+    "git",
+    [
+      ...GIT_BASE_ARGS,
+      "-C",
+      root,
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+      "-c",
+      "submodule.recurse=false",
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      env: gitEnv(),
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 4_096,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  ).trim();
+}
+
+function gitNoMatch(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "status" in error && error.status === 1;
+}
+
+function hasExecutableFilters(root: string): boolean {
+  try {
+    return (
+      git(
+        root,
+        "config",
+        "--includes",
+        "--name-only",
+        "--get-regexp",
+        "^filter\\..*\\.(process|smudge|clean)$",
+      ).length > 0
+    );
+  } catch (error) {
+    if (gitNoMatch(error)) return false;
+    throw error;
+  }
+}
+
+function currentBranch(root: string): string | undefined {
+  try {
+    return git(root, "symbolic-ref", "--quiet", "--short", "HEAD");
+  } catch (error) {
+    if (gitNoMatch(error)) return undefined;
+    throw error;
+  }
 }
 
 function localIdentity(root: string): string | undefined {
@@ -53,8 +104,12 @@ function localView(
   for (const project of store.listProjects()) {
     const root = project.path;
     const identity = localIdentity(root);
-    if (identity === undefined || `${LOCAL_PREFIX}${identity}` !== pointer.workspaceId ||
-        persisted.repositoryRoot !== root) continue;
+    if (
+      identity === undefined ||
+      `${LOCAL_PREFIX}${identity}` !== pointer.workspaceId ||
+      persisted.repositoryRoot !== root
+    )
+      continue;
     let branch: string;
     try {
       branch = git(root, "symbolic-ref", "--quiet", "--short", "HEAD");
@@ -115,11 +170,22 @@ export function withLocalCheckout(
         git(root, "check-ref-format", "--branch", branch);
         git(root, "show-ref", "--verify", `refs/heads/${branch}`);
       } catch (error) {
-        throw new TaskWorkspaceError("INVALID_BASE_BRANCH", "Select an existing local branch.", [], {
-          cause: error,
-        });
+        throw new TaskWorkspaceError(
+          "INVALID_BASE_BRANCH",
+          "Select an existing local branch.",
+          [],
+          {
+            cause: error,
+          },
+        );
       }
-      if (git(root, "symbolic-ref", "--quiet", "--short", "HEAD") !== branch) {
+      if (currentBranch(root) !== branch) {
+        if (hasExecutableFilters(root)) {
+          throw new TaskWorkspaceError(
+            "BRANCH_CONFLICT",
+            "The checkout has executable Git filters; switch branches outside the Workbench.",
+          );
+        }
         try {
           git(root, "switch", "--no-guess", branch);
         } catch (error) {
@@ -136,7 +202,10 @@ export function withLocalCheckout(
         throw new TaskWorkspaceError("REPOSITORY_UNREACHABLE", "Git HEAD is unavailable.");
       }
       if (localIdentity(root) !== identity) {
-        throw new TaskWorkspaceError("POINTER_DRIFT", "The local checkout changed during selection.");
+        throw new TaskWorkspaceError(
+          "POINTER_DRIFT",
+          "The local checkout changed during selection.",
+        );
       }
       const atIso = new Date().toISOString();
       const workspaceId = `${LOCAL_PREFIX}${identity}`;
@@ -168,17 +237,20 @@ export function withLocalCheckout(
       if (active === undefined) {
         throw new TaskWorkspaceError("POINTER_DRIFT", "The local checkout could not be verified.");
       }
-      logWorkspaceLifecycle({}, {
-        operation: "activate",
-        outcome: "activated",
-        workspaceId,
-        taskId: active.instance.taskId,
-        correlationId,
-        attempt: 1,
-        durationMs: 0,
-        worktreeCount: 0,
-        baseBranch: branch,
-      });
+      logWorkspaceLifecycle(
+        {},
+        {
+          operation: "activate",
+          outcome: "activated",
+          workspaceId,
+          taskId: active.instance.taskId,
+          correlationId,
+          attempt: 1,
+          durationMs: 0,
+          worktreeCount: 0,
+          baseBranch: branch,
+        },
+      );
       return active;
     },
   };
