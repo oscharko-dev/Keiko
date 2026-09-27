@@ -20,12 +20,19 @@ import type { ActiveWorkspaceView, WorkspaceLifecycleService } from "./types.js"
 
 const LOCAL_PREFIX = "local:";
 const GIT_TIMEOUT_MS = 5_000;
+const GIT_OBJECT_TIMEOUT_MS = 60_000;
+const GIT_OBJECT_BUFFER_BYTES = 128 * 1024 * 1024;
+const GIT_OBJECT_ID = /^[a-f0-9]{40,64}$/u;
 
 function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function git(root: string, ...args: readonly string[]): string {
+function gitOutput(
+  root: string,
+  args: readonly string[],
+  options: { readonly input?: string; readonly timeout?: number; readonly maxBuffer?: number } = {},
+): string {
   return execFileSync(
     "git",
     [
@@ -43,11 +50,50 @@ function git(root: string, ...args: readonly string[]): string {
     {
       encoding: "utf8",
       env: gitEnv(),
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: 4_096,
-      stdio: ["ignore", "pipe", "ignore"],
+      timeout: options.timeout ?? GIT_TIMEOUT_MS,
+      maxBuffer: options.maxBuffer ?? 4_096,
+      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+      ...(options.input === undefined ? {} : { input: options.input }),
     },
   ).trim();
+}
+
+function git(root: string, ...args: readonly string[]): string {
+  return gitOutput(root, args);
+}
+
+function targetTreeObjectsAvailable(root: string, branch: string): boolean {
+  const options = { timeout: GIT_OBJECT_TIMEOUT_MS, maxBuffer: GIT_OBJECT_BUFFER_BYTES };
+  const tree = gitOutput(root, ["ls-tree", "-r", "-t", "-z", branch], options);
+  const objects = new Map<string, string>();
+  for (const entry of tree.split("\0")) {
+    if (entry.length === 0) continue;
+    const header = entry.slice(0, entry.indexOf("\t")).split(" ");
+    const type = header[1];
+    const oid = header[2];
+    if ((type !== "blob" && type !== "tree" && type !== "commit") || !GIT_OBJECT_ID.test(oid ?? ""))
+      return false;
+    if (type !== "commit" && oid !== undefined) objects.set(oid, type);
+  }
+  if (objects.size === 0) return true;
+  const ids = [...objects.keys()];
+  const checked = gitOutput(root, ["cat-file", "--batch-check"], {
+    ...options,
+    input: `${ids.join("\n")}\n`,
+  }).split("\n");
+  return (
+    checked.length === ids.length &&
+    checked.every((line, index) => {
+      const oid = ids[index];
+      const [actualOid, actualType, size] = line.split(" ");
+      return (
+        oid !== undefined &&
+        actualOid === oid &&
+        actualType === objects.get(oid) &&
+        /^\d+$/u.test(size ?? "")
+      );
+    })
+  );
 }
 
 function gitNoMatch(error: unknown): boolean {
@@ -177,6 +223,33 @@ export function withLocalCheckout(
           {
             cause: error,
           },
+        );
+      }
+      let objectsAvailable = false;
+      try {
+        objectsAvailable = targetTreeObjectsAvailable(root, branch);
+      } catch {
+        // Missing trees and bounded inventory failures are both unsafe to bind as ready.
+      }
+      if (!objectsAvailable) {
+        logWorkspaceLifecycle(
+          {},
+          {
+            operation: "activate",
+            outcome: "blocked",
+            workspaceId: `${LOCAL_PREFIX}${identity}`,
+            taskId: `coding-workbench-local-${identity.slice(0, 16)}`,
+            correlationId,
+            attempt: 1,
+            durationMs: 0,
+            worktreeCount: 0,
+            baseBranch: branch,
+            errorCode: "BRANCH_CONFLICT",
+          },
+        );
+        throw new TaskWorkspaceError(
+          "BRANCH_CONFLICT",
+          "The selected branch has unavailable Git objects; hydrate it outside the Workbench.",
         );
       }
       if (currentBranch(root) !== branch) {

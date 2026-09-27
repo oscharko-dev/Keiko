@@ -87,6 +87,25 @@ describe("local checkout selection", () => {
     expect(readFileSync(join(root, "README.md"), "utf8")).toBe("uncommitted\n");
   });
 
+  it("refuses a partial target tree before switching or replacing the active binding", () => {
+    const service = fixture();
+    const active = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "feature");
+    writeFileSync(join(root, "feature.txt"), "must be present\n");
+    git("add", "feature.txt");
+    git("commit", "-qm", "add feature file");
+    const blob = git("rev-parse", "feature:feature.txt");
+    git("switch", "main");
+    git("config", "remote.origin.promisor", "true");
+    rmSync(join(root, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+
+    expect(() => service.selectLocal({ root, branch: "feature", requestedBy: "test" })).toThrow(
+      "unavailable Git objects",
+    );
+    expect(git("branch", "--show-current")).toBe("main");
+    expect(service.getActive()?.instance.workspaceId).toBe(active.instance.workspaceId);
+  });
+
   it.skipIf(process.platform === "win32")(
     "does not execute a repository post-checkout hook",
     () => {
