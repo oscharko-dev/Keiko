@@ -752,7 +752,9 @@ function historyRuntimeState(
   state: CodingWorkbenchRuntimeState,
   history: CodingTaskSession,
 ): CodingWorkbenchRuntimeState {
-  const canStart = state.canStart && !history.pending && !history.error;
+  // A failed read of the previous task is recoverable history context, not authority for starting
+  // a fresh run in the already bound workspace. Keep the alert, but do not strand the composer.
+  const canStart = state.canStart && !history.pending;
   if (history.visibleRun) return { ...state, canStart };
   return {
     ...state,

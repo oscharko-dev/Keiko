@@ -28,6 +28,7 @@ import {
 import type { ProjectWithAvailability } from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import type { CodingTaskSession } from "./useCodingTaskSession";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
@@ -37,6 +38,7 @@ import {
 } from "../../context/ActiveWorkspaceContext";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
+const taskSessionHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
@@ -103,7 +105,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // Task selection/persistence is exercised at its owning hook in useCodingTaskSession.test.tsx.
 // These regression pins continue to exercise the existing runtime controls for the selected run.
 vi.mock("./useCodingTaskSession", () => ({
-  useCodingTaskSession: (): unknown => ({
+  useCodingTaskSession: taskSessionHookMock,
+}));
+
+function defaultTaskSession(): CodingTaskSession {
+  return {
     detail: null,
     conversationId: undefined,
     visibleRun: true,
@@ -111,8 +117,8 @@ vi.mock("./useCodingTaskSession", () => ({
     error: false,
     newTask: vi.fn(),
     finish: vi.fn(),
-  }),
-}));
+  };
+}
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -414,6 +420,7 @@ function trustStatus(
 // results (#3381 review). A suite that needs a different default overrides it in its own
 // `beforeEach`, which runs after this one.
 beforeEach(() => {
+  taskSessionHookMock.mockReturnValue(defaultTaskSession());
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
   chatCatalogMock.models = [];
@@ -462,6 +469,24 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  it("keeps a fresh task start available when previous history cannot load", async () => {
+    taskSessionHookMock.mockReturnValue({
+      ...defaultTaskSession(),
+      visibleRun: false,
+      error: true,
+    });
+    renderWorkbench(
+      liveState({ run: { status: "ready", value: null, error: null } }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+    );
+
+    await userEvent.setup().type(screen.getByLabelText("Task instructions"), "Repair Vitest");
+    expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+  });
+
   // The composer is the sole issue entry point after every terminal outcome. End-to-end issue
   // resolution/authority pins live in CodingWorkbenchSetup.issue-intake.test.tsx.
   it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
