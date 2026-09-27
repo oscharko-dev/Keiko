@@ -267,7 +267,11 @@ describe("isClientDiagnosticIngestRequest", () => {
   it("accepts only a git-client operation whose outcome matches its operation's family", () => {
     const discardedClone = { operation: "repository-clone", outcome: "discarded-succeeded" };
     expect(
-      isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: discardedClone }),
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "ui_repo-0001",
+        gitClientOperation: discardedClone,
+      }),
     ).toBe(true);
     const recoveredRetry = { operation: "status-read", outcome: "retry-recovered" };
     expect(
@@ -900,6 +904,7 @@ describe("git-client operation settlement vocabulary", () => {
         expect(
           isClientDiagnosticIngestRequest({
             ...validRequest(),
+            correlationId: "ui_repo-0001",
             gitClientOperation: { operation, outcome },
           }),
         ).toBe(true);
@@ -1224,5 +1229,29 @@ describe.each(["repository-clone", "repository-register"])(
         ).toBe(true);
       }
     });
+  },
+);
+
+it.each(["discarded-succeeded", "discarded-failed"])(
+  "requires a joinable ID for a repository %s settlement",
+  (outcome) => {
+    for (const operation of ["repository-clone", "repository-register"]) {
+      for (const correlationId of [undefined, "x", "unsafe id"]) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            correlationId,
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(false);
+      }
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "ui_repo-0001",
+          gitClientOperation: { operation, outcome },
+        }),
+      ).toBe(true);
+    }
   },
 );

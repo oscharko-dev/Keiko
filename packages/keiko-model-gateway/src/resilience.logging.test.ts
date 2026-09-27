@@ -286,9 +286,9 @@ describe("CircuitBreaker — activity log", () => {
     const log = recorder();
     const clock = stubClock();
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
     expect(log.events).toEqual([]);
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
     const opened = eventFor(log.events, "gateway.circuit.opened");
     expect(opened.level).toBe("warn");
     expect(opened.category).toBe("gateway");
@@ -321,8 +321,8 @@ describe("CircuitBreaker — activity log", () => {
     let now = 0;
     const clock: Clock = { now: () => now, sleep: () => Promise.resolve() };
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
-    breaker.recordFailure();
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
+    breaker.assertAllowed().settle("failure");
     for (let call = 0; call < 5; call += 1) {
       now += 10;
       expect(() => {
@@ -371,8 +371,8 @@ describe("CircuitBreaker — activity log", () => {
       },
       enabled: (level): boolean => level !== "debug",
     });
-    breaker.recordFailure();
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
+    breaker.assertAllowed().settle("failure");
     for (let call = 0; call < 50; call += 1) {
       expect(() => {
         breaker.assertAllowed();
@@ -396,15 +396,15 @@ describe("CircuitBreaker — activity log", () => {
     let now = 0;
     const clock: Clock = { now: () => now, sleep: () => Promise.resolve() };
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
-    breaker.recordFailure();
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
+    breaker.assertAllowed().settle("failure");
     for (let call = 0; call < 3; call += 1) {
       expect(() => {
         breaker.assertAllowed();
       }).toThrow();
     }
     now = 2000;
-    breaker.assertAllowed();
+    const probe = breaker.assertAllowed();
     expect(eventFor(log.events, "gateway.circuit.half-open").extra).toMatchObject({
       rejectedWhileOpen: 3,
     });
@@ -412,7 +412,7 @@ describe("CircuitBreaker — activity log", () => {
     expect(() => {
       breaker.assertAllowed();
     }).toThrow();
-    breaker.recordFailure();
+    probe.settle("failure");
     const opened = log.events.filter((event) => event.op === "gateway.circuit.opened");
     expect(opened.at(-1)?.extra).toMatchObject({
       previousState: "half-open",
@@ -429,10 +429,10 @@ describe("CircuitBreaker — activity log", () => {
     let now = 0;
     const clock: Clock = { now: () => now, sleep: () => Promise.resolve() };
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
-    breaker.recordFailure();
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
+    breaker.assertAllowed().settle("failure");
     now = 2000;
-    breaker.assertAllowed();
+    const probe = breaker.assertAllowed();
     const halfOpen = eventFor(log.events, "gateway.circuit.half-open");
     expect(halfOpen.extra).toMatchObject({
       modelId: "m",
@@ -443,7 +443,7 @@ describe("CircuitBreaker — activity log", () => {
       formatActivityLogProofLine(halfOpen),
     );
     expect(halfOpenPersisted).toMatchObject({ modelId: "m", probes: 1 });
-    breaker.recordSuccess();
+    probe.settle("success");
     const closed = eventFor(log.events, "gateway.circuit.closed");
     expect(closed.extra).toMatchObject({
       previousState: "half-open",
@@ -466,8 +466,8 @@ describe("CircuitBreaker — activity log", () => {
       clock,
       log.sink,
     );
-    breaker.recordFailure();
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
+    breaker.assertAllowed().settle("failure");
     now = 2000;
     breaker.assertAllowed();
     expect(() => {
@@ -486,8 +486,8 @@ describe("CircuitBreaker — activity log", () => {
   it("stays silent when no sink is wired", () => {
     const clock = stubClock();
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock);
-    breaker.recordFailure();
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
+    breaker.assertAllowed().settle("failure");
     expect(() => {
       breaker.assertAllowed();
     }).toThrow();
@@ -502,8 +502,8 @@ describe("CircuitBreaker — caller correlation", () => {
     const log = recorder();
     const clock: Clock = { now: () => 0, sleep: () => Promise.resolve() };
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
-    breaker.recordFailure("run-0001");
-    breaker.recordFailure("run-0002");
+    breaker.assertAllowed("run-0001").settle("failure");
+    breaker.assertAllowed("run-0002").settle("failure");
     expect(eventFor(log.events, "gateway.circuit.opened").correlationId).toBe("run-0002");
     expect(() => {
       breaker.assertAllowed("run-0003");
@@ -516,8 +516,8 @@ describe("CircuitBreaker — caller correlation", () => {
   it("leaves the lines uncorrelated for a caller that supplies no id", () => {
     const log = recorder();
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, stubClock(), log.sink);
-    breaker.recordFailure();
-    breaker.recordFailure();
+    breaker.assertAllowed().settle("failure");
+    breaker.assertAllowed().settle("failure");
     expect(eventFor(log.events, "gateway.circuit.opened").correlationId).toBeUndefined();
   });
 });

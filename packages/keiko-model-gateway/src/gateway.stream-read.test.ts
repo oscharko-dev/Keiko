@@ -596,35 +596,42 @@ describe("stream retry circuit accounting", () => {
   });
 });
 
-it("releases a half-open stream probe when spend admission refuses the attempt", async () => {
-  let now = 0;
-  let refused = false;
-  const fake = streamingFake([new TimeoutError("provider outage")]);
-  const gateway = new Gateway(
-    {
-      ...config(true),
-      providers: [{ ...PROVIDER, maxRetries: 0 }],
-      circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
-    },
-    {
-      adapter: fake.adapter,
-      clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
-      spendBudget: {
-        reserve: (): GatewaySpendReservation => {
-          if (refused) throw new ConfigInvalidError("spend admission refused");
-          return { settle: (): void => undefined };
+it.each(["streaming", "buffered"])(
+  "releases a half-open %s probe when spend admission refuses the attempt",
+  async (mode) => {
+    let now = 0;
+    let refused = false;
+    const fake = streamingFake([new TimeoutError("provider outage")]);
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        providers: [{ ...PROVIDER, maxRetries: 0 }],
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter: fake.adapter,
+        clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+        spendBudget: {
+          reserve: (): GatewaySpendReservation => {
+            if (refused) throw new ConfigInvalidError("spend admission refused");
+            return { settle: (): void => undefined };
+          },
         },
       },
-    },
-  );
-  await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
-  now = 1000;
-  refused = true;
-  await expect(consumeStream(gateway)).rejects.toBeInstanceOf(ConfigInvalidError);
-  refused = false;
-  await expect(consumeStream(gateway)).resolves.toBeUndefined();
-  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
-});
+    );
+    const consume = async (): Promise<void> => {
+      if (mode === "streaming") await consumeStream(gateway);
+      else await gateway.chat(REQUEST);
+    };
+    await expect(consume()).rejects.toBeInstanceOf(TimeoutError);
+    now = 1000;
+    refused = true;
+    await expect(consume()).rejects.toBeInstanceOf(ConfigInvalidError);
+    refused = false;
+    await expect(consume()).resolves.toBeUndefined();
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+  },
+);
 
 it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", async (outcome) => {
   let now = 0;
@@ -666,3 +673,59 @@ it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", asyn
   await expect(consumeStream(gateway)).resolves.toBeUndefined();
   expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
 });
+
+it.each(["abandoned", "succeeded", "failed"])(
+  "does not let an older %s stream settle a later half-open probe",
+  async (outcome) => {
+    let now = 0;
+    let calls = 0;
+    const log = recorder();
+    const adapter: ProviderAdapter = {
+      call: (): Promise<NormalizedResponse> => Promise.resolve(ANSWER),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        const call = ++calls;
+        if (call === 2) throw new TimeoutError("provider outage");
+        yield { type: "delta", token: "answer" };
+        if (call === 1 && outcome === "failed") throw new TimeoutError("late failure");
+        yield { type: "done", response: ANSWER };
+      },
+    };
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        providers: [{ ...PROVIDER, maxRetries: 0 }],
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter,
+        log,
+        clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+      },
+    );
+    const older = gateway.chatStream(REQUEST);
+    await older.next();
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
+    now = 1000;
+    const probe = gateway.chatStream(REQUEST);
+    await probe.next();
+    if (outcome === "abandoned") await older.return(undefined);
+    else if (outcome === "failed") await expect(older.next()).rejects.toBeInstanceOf(TimeoutError);
+    else {
+      await older.next();
+      await older.next();
+    }
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(calls).toBe(3);
+    expect(log.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.circuit.rejected",
+        extra: expect.objectContaining({ reason: "probe-saturated", probesInFlight: 1 }) as unknown,
+      }),
+    );
+    await probe.next();
+    await probe.next();
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+  },
+);

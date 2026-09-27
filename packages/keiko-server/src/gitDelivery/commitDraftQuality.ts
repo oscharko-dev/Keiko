@@ -36,7 +36,7 @@ function compactDiff(sections: readonly string[], limit: number): string {
 }
 
 export interface PreparedCommitDraft {
-  readonly request: GatewayCallRequest;
+  readonly request: GatewayCallRequest | undefined;
   readonly promptTokens: number;
   readonly maxPromptTokens: number;
   readonly diffCompacted: boolean;
@@ -46,11 +46,13 @@ export function prepareCommitDraft(
   diff: string,
   capability: ModelCapability,
   build: (diff: string, compacted: boolean) => GatewayCallRequest,
-): PreparedCommitDraft | undefined {
+): PreparedCommitDraft {
   const profile = deriveContextProfileFromCapability(capability);
   const full = build(diff, false);
-  const maxPromptTokens =
-    profile.maxInputTokens - (full.maxOutputTokens ?? 0) - profile.safetyMarginTokens;
+  const maxPromptTokens = Math.max(
+    0,
+    profile.maxInputTokens - (full.maxOutputTokens ?? 0) - profile.safetyMarginTokens,
+  );
   const prepare = (request: GatewayCallRequest, diffCompacted: boolean): PreparedCommitDraft => ({
     request,
     diffCompacted,
@@ -72,12 +74,15 @@ export function prepareCommitDraft(
       low = limit + 1;
     } else high = limit - 1;
   }
-  return selected;
+  if (selected !== undefined) return selected;
+  const minimum = prepare(build(compactDiff(sections, 0), true), true);
+  const refused = minimum.promptTokens < original.promptTokens ? minimum : original;
+  return { ...refused, request: undefined };
 }
 
 function takeCommitTrailers(lines: string[]): string[] {
   const trailers: string[] = [];
-  while (/^[A-Za-z][A-Za-z0-9-]*:\s+\S/u.test(lines.at(-1)?.trim() ?? "")) {
+  while (/^(?:BREAKING CHANGE|[A-Za-z][A-Za-z0-9-]*):\s+\S/u.test(lines.at(-1)?.trim() ?? "")) {
     trailers.unshift(lines.pop()?.trim() ?? "");
   }
   return trailers;

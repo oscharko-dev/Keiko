@@ -558,7 +558,7 @@ function hasValidGitContext(value: Record<string, unknown>): boolean {
   if (gitClientOperation === undefined) return true;
   if (!isClientDiagnosticGitClientOperation(gitClientOperation)) return false;
   return (
-    !GIT_CLIENT_ADDITION_OUTCOMES.has(gitClientOperation.outcome) ||
+    !isRepositoryAdditionOperation(gitClientOperation.operation) ||
     isActivityLogCorrelationId(value.correlationId)
   );
 }

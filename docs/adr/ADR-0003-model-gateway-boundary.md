@@ -599,7 +599,7 @@ coding sidecar route adds a grace so the gateway settles its own timeout first. 
 first non-empty delta or terminal response. Empty role deltas do not commit the answer. Once any
 content is delivered, a failure is terminal: replay must never duplicate text or tool effects.
 Startup retries use the existing retry executor, configured retry count, backoff, cancellation,
-and activity-log events; every attempt reserves and settles its own spend budget. Cancellation before the first attempt and early consumer departure release their admitted circuit probe without counting as provider recovery or failure. Half-open
+and activity-log events; every attempt reserves and settles its own spend budget. Cancellation before the first attempt and early consumer departure release their admitted circuit probe without counting as provider recovery or failure. Every admission settles once and is bound to its circuit generation; old completions cannot release, close or reopen a later probe window. This applies to streamed and buffered calls, including spend refusal. Stream startup retries treat tool-catalog validation failures as terminal rather than replaying unchanged tool arguments. Half-open
 circuit probes get one attempt. All attempts and delays share one `streamRequestBudgetMs`
 deadline; each subsequent read receives only its remaining silence and total budget. Since #3591
 streaming is NOT left unbounded either —

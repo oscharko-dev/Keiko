@@ -1,3 +1,4 @@
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -606,6 +607,7 @@ describe("POST /api/diagnostics/client", () => {
     const body = JSON.stringify({
       message: "git-client: add-repository discarded: repository-clone succeeded",
       clientTs: CLIENT_TS,
+      correlationId: "ui_repo-discarded-0001",
       kind: "other",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
@@ -630,6 +632,8 @@ describe("POST /api/diagnostics/client", () => {
   it.each([
     ["repository-register", "succeeded"],
     ["repository-clone", "succeeded"],
+    ["repository-clone", "discarded-succeeded"],
+    ["repository-register", "discarded-succeeded"],
     ["repository-register", "failed"],
     ["repository-clone", "failed"],
     ["repository-register", "discarded-failed"],
@@ -671,7 +675,7 @@ describe("POST /api/diagnostics/client", () => {
       formatActivityLogProofLine(settled),
     );
     expectCompleteGitTimeline([started, settled]);
-    if (settlement === "succeeded") expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    if (settlement.endsWith("succeeded")) expect(clientDiagnosticEvents(sink)).toHaveLength(0);
     else
       expect(clientDiagnosticLine(sink)).toMatchObject({
         correlationId: "ui_repository-0001",
@@ -708,6 +712,92 @@ describe("POST /api/diagnostics/client", () => {
       );
     },
   );
+
+  it.each(["discarded-succeeded", "discarded-failed"])(
+    "refuses an uncorrelated %s settlement after a correlated start",
+    async (outcome) => {
+      const sink = captureServerLog();
+      const body = { message: "git-client lifecycle", clientTs: CLIENT_TS };
+      expect(
+        (
+          await handleClientDiagnosticIngest(
+            context(
+              JSON.stringify({
+                ...body,
+                correlationId: "ui_repo-0001",
+                gitClientOperation: { operation: "repository-clone", outcome: "started" },
+              }),
+            ),
+          )
+        ).status,
+      ).toBe(204);
+      expect(
+        (
+          await handleClientDiagnosticIngest(
+            context(
+              JSON.stringify({
+                ...body,
+                gitClientOperation: { operation: "repository-clone", outcome },
+              }),
+            ),
+          )
+        ).status,
+      ).toBe(400);
+      expect(sink.events.filter((event) => event.op === "client.git-operation.settled")).toEqual(
+        [],
+      );
+      expect(clientDiagnosticRejectedEvents(sink)).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    "started",
+    "succeeded",
+    "failed",
+    "discarded-succeeded",
+    "discarded-failed",
+    "select",
+    "markdown",
+    "voice",
+    "failure",
+  ])("records client delivery loss exactly once for %s reports", async (outcome) => {
+    captureServerLog();
+    const before = activityLogLossCounters()["client-post-throttled"];
+    const metadata =
+      outcome === "select"
+        ? { selectDismissal: { reason: "escape", focus: "trigger" } }
+        : outcome === "markdown"
+          ? { kind: "markdown-layout" }
+          : outcome === "voice"
+            ? { kind: "voice-dialogue", voiceDialogueStage: "started" }
+            : outcome === "failure"
+              ? {}
+              : { gitClientOperation: { operation: "repository-clone", outcome } };
+    const body = JSON.stringify({
+      message: "client report",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_repo-0001",
+      loss: { postsThrottled: 5 },
+      ...metadata,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+  });
+
+  it("keeps delivery loss when the enclosing report is rate-limited", async () => {
+    const sink = captureServerLog();
+    const before = activityLogLossCounters()["client-post-throttled"];
+    for (let index = 0; index < 61; index += 1) {
+      const body = JSON.stringify({
+        message: "report",
+        clientTs: CLIENT_TS,
+        ...(index === 60 ? { loss: { postsThrottled: 5 } } : {}),
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    }
+    expect(clientDiagnosticEvents(sink)).toHaveLength(60);
+    expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+  });
 
   it("records a superseded checkout selection as correlated routine evidence", async () => {
     const sink = captureServerLog();
@@ -897,6 +987,7 @@ describe("POST /api/diagnostics/client", () => {
     const settled = JSON.stringify({
       message: "git-client: add-repository discarded: repository-clone succeeded",
       clientTs: CLIENT_TS,
+      correlationId: "ui_repo-discarded-0001",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
     for (let index = 1; index <= 61; index += 1) {

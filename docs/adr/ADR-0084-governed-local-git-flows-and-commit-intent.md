@@ -136,18 +136,21 @@ The server normalizes the validated answer into a single-line subject, a blank l
 list, a blank line and the existing Keiko footer. Sampling uses temperature zero, with a seed only
 when the model declares support. These sampling parameters alone do not guarantee identical
 answers: a bounded, process-local cache retains up to 32 successful drafts per server dependency
-scope, keyed by the complete redacted diff, selected paths, workspace, policy, instruction and
+scope, keyed by a digest of the complete staged diff, selected paths, workspace, policy, instruction and
 model configuration. Concurrent identical requests serialize through the existing keyed mutex.
 Unchanged inputs reuse the validated text; errors and cancelled results are never retained. This
 cache is ephemeral and does not promise reproducibility after restart or eviction.
 
 One corrective generation is allowed after invalid output, or after output exhaustion when a
 larger allowance fits the model's declared output/context limits. Both generations share the
-original deadline and independently traverse gateway spend admission. No policy check is weakened
+same deadline, armed after acquiring the draft mutex, and independently traverse gateway spend admission. No policy check is weakened
 and no generic success message substitutes for an unusable answer. Completion evidence records
 prompt bounds, compaction, generation count and reuse without diff or message content. If only
 the repair prompt exceeds context, preserve the original model failure and its actual call bounds;
-do not report that already-processed selected changes exceeded context.
+do not report that already-processed selected changes exceeded context. Context refusal retains
+the measured minimum prompt and budget. Generated and reused outcomes carry the same body-free
+draft-key digest so their correlations can be joined; the cache key hashes the staged read before
+gateway processing and does not imply that the route redacted the diff.
 
 ## Alternatives Considered
 

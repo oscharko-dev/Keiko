@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e8ae2a5d8ec92c4acfd4668b6eccd6779bd6abb6d28cf7ee1d9cddd42def34bc" as const;
+  "b428cf65f2677a808435ff1175178264a73c956bc3f12e20f84dbe27edeafdd5" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -14143,6 +14143,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "boolean",
         dataClass: "closed-enum",
         required: false,
+      },
+      draftKeyDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
       },
     },
     causal: "correlation",
@@ -46504,6 +46510,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "draftKeyDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "failureCode",
               type: "string",
               dataClass: "closed-enum",
@@ -46558,7 +46570,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "loss-state",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

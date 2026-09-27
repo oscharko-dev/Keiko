@@ -1,3 +1,4 @@
+import * as commitDraftQuality from "./commitDraftQuality.js";
 // Route tests for the governed commit preview + execute routes (Issue #475, Epic #470).
 //
 // Proves the #475 commit-quality acceptance criteria at the BFF seam:
@@ -27,6 +28,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   CancelledError,
   ProviderOutputExhaustedError,
+  ProviderEmptyAnswerError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security";
 import { UI_HOST } from "../server.js";
@@ -82,6 +84,21 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+
+function captureDraftPreparation(): () => commitDraftQuality.PreparedCommitDraft {
+  const original = commitDraftQuality.prepareCommitDraft;
+  const results: commitDraftQuality.PreparedCommitDraft[] = [];
+  vi.spyOn(commitDraftQuality, "prepareCommitDraft").mockImplementation((...args) => {
+    const result = original(...args);
+    results.push(result);
+    return result;
+  });
+  return (): commitDraftQuality.PreparedCommitDraft => {
+    const last = results.at(-1);
+    if (last === undefined) throw new Error("Expected an actual draft preparation");
+    return last;
+  };
+}
 
 const PREVIEW = "/api/git-delivery/commit/preview";
 const DRAFT = "/api/git-delivery/commit/draft";
@@ -436,6 +453,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   store.close();
   rmSync(staticRoot, { recursive: true, force: true });
   for (const stateDir of settingsStateDirs.splice(0)) {
@@ -888,6 +906,7 @@ describe("commit draft — explicit model-backed generation", () => {
   });
 
   it("rejects invalid model output without falling back to a generic commit message", async () => {
+    const preparation = captureDraftPreparation();
     const events: ServerLogEvent[] = [];
     const handler = createHandleCommitDraft({
       execution: seams({
@@ -914,7 +933,7 @@ describe("commit draft — explicit model-backed generation", () => {
       error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
     });
     expect(JSON.stringify(res.body)).not.toContain("update staged changes");
-    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+    expect(events).toContainEqual({
       category: "diagnostic",
       op: "git.commit.draft.completed",
       correlationId: UNKNOWN_CORRELATION_ID,
@@ -929,6 +948,10 @@ describe("commit draft — explicit model-backed generation", () => {
         outcome: "failed",
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
         generationAttempts: 2,
+        promptTokens: preparation().promptTokens,
+        maxPromptTokens: preparation().maxPromptTokens,
+        diffCompacted: preparation().diffCompacted,
+        draftKeyDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
         maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
         deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
       },
@@ -1649,6 +1672,9 @@ describe("commit draft repeatability boundaries", () => {
       formatActivityLogProofLine(last ?? {}),
     );
     expect(persisted).toMatchObject({ reused: true, generationAttempts: 0 });
+    const completed = events.filter((event) => event.op === "git.commit.draft.completed");
+    expect(completed[0]?.extra?.draftKeyDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(completed[1]?.extra?.draftKeyDigest).toBe(completed[0]?.extra?.draftKeyDigest);
     const identity = serverLogProcessIdentity();
     const lines = events.map((event, index) =>
       formatRegisteredServerLogLine(event, new Date(), {
@@ -2469,6 +2495,7 @@ it("generates a commit draft with the gateway's provider-only capability fallbac
 });
 
 it("reports zero model attempts when even the minimum prompt exceeds the context", async () => {
+  const preparation = captureDraftPreparation();
   const events: ServerLogEvent[] = [];
   const call = vi.fn(() =>
     draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
@@ -2495,8 +2522,15 @@ it("reports zero model attempts when even the minimum prompt exceeds the context
   );
   expect(result.status).toBe(422);
   expect(call).not.toHaveBeenCalled();
+  expect(preparation().request).toBeUndefined();
+  expect(preparation().promptTokens).toBeGreaterThan(preparation().maxPromptTokens);
   expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
-    extra: { generationAttempts: 0 },
+    extra: {
+      generationAttempts: 0,
+      promptTokens: preparation().promptTokens,
+      maxPromptTokens: preparation().maxPromptTokens,
+      diffCompacted: preparation().diffCompacted,
+    },
   });
 });
 
@@ -2587,3 +2621,101 @@ it("preserves the model failure when only its repair prompt exceeds context", as
     extra: { failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT", generationAttempts: 1 },
   });
 });
+
+it("starts a queued draft's deadline only after its failed holder releases the mutex", async () => {
+  const deadlines: AbortController[] = [];
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+    const deadline = new AbortController();
+    deadlines.push(deadline);
+    return deadline.signal;
+  });
+  let factories = 0;
+  let calls = 0;
+  const handler = createHandleCommitDraft({
+    execution: seams({ stagedDiffReader: () => Promise.resolve("diff --git a/a b/a\n+change") }),
+  });
+  const dependencies = deps({
+    config: DRAFT_GATEWAY_CONFIG,
+    modelPortFactory: () => {
+      factories += 1;
+      return {
+        call: (_request, signal): Promise<NormalizedResponse> => {
+          calls += 1;
+          if (calls > 1)
+            return Promise.resolve(
+              draftResponse({ subject: "fix: recover draft", body: "Recover draft." }),
+            );
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                reject(new TimeoutError("holder timed out"));
+              },
+              { once: true },
+            );
+          });
+        },
+      };
+    },
+  });
+  try {
+    const first = handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies);
+    await vi.waitFor(() => {
+      expect(calls).toBe(1);
+    });
+    const second = handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies);
+    await vi.waitFor(() => {
+      expect(factories).toBe(2);
+    });
+    const armedWhileQueued = deadlines.length;
+    deadlines[0]?.abort(new DOMException("holder deadline", "TimeoutError"));
+    expect((await first).status).toBe(504);
+    expect((await second).status).toBe(200);
+    expect(armedWhileQueued).toBe(1);
+    expect(deadlines).toHaveLength(2);
+    expect(calls).toBe(2);
+  } finally {
+    timeout.mockRestore();
+  }
+});
+
+it.each(["empty-answer", "multiline-subject", "oversized-body"])(
+  "rejects and retries %s with an exact attempt count",
+  async (failure) => {
+    const events: ServerLogEvent[] = [];
+    const call = vi.fn(() => {
+      if (failure === "empty-answer") throw new ProviderEmptyAnswerError("draft-model");
+      return draftResponse({
+        subject: failure === "multiline-subject" ? "fix: first\nsecond" : "fix: valid subject",
+        body: failure === "oversized-body" ? "x".repeat(12_001) : "Valid body.",
+      });
+    });
+    const handler = createHandleCommitDraft({
+      execution: seams({ stagedDiffReader: () => Promise.resolve("diff --git a/a b/a\n+change") }),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const result = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => draftModelPort(call) }),
+    );
+    expect(result.status).toBe(502);
+    expect(result.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
+    });
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.commit.draft.completed",
+        status: 502,
+        extra: expect.objectContaining({
+          failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+          generationAttempts: 2,
+        }) as unknown,
+      }),
+    );
+  },
+);

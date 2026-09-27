@@ -210,6 +210,7 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
     diffCompacted: { type: "boolean", dataClass: "closed-enum", required: false },
     generationAttempts: { type: "integer", dataClass: "count", required: false },
     reused: { type: "boolean", dataClass: "closed-enum", required: false },
+    draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -690,6 +691,7 @@ interface CommitDraftBounds {
   readonly diffCompacted?: boolean;
   readonly generationAttempts?: number;
   readonly reused?: boolean;
+  readonly draftKeyDigest?: string;
   readonly maxOutputTokens: number;
   readonly deadlineMs: number;
 }
@@ -969,16 +971,12 @@ async function attemptCommitDraft(
   const bounds: CommitDraftBounds = {
     maxOutputTokens: resolved.maxOutputTokens,
     deadlineMs: resolved.deadlineMs,
-    generationAttempts: prepared === undefined ? attempt - 1 : attempt,
-    ...(prepared === undefined
-      ? {}
-      : {
-          promptTokens: prepared.promptTokens,
-          maxPromptTokens: prepared.maxPromptTokens,
-          diffCompacted: prepared.diffCompacted,
-        }),
+    generationAttempts: prepared.request === undefined ? attempt - 1 : attempt,
+    promptTokens: prepared.promptTokens,
+    maxPromptTokens: prepared.maxPromptTokens,
+    diffCompacted: prepared.diffCompacted,
   };
-  if (prepared === undefined)
+  if (prepared.request === undefined)
     return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE", bounds };
   try {
     const response = await resolved.model.call(prepared.request, signal);
@@ -1034,8 +1032,8 @@ async function generateModelCommitMessage(
   const { correlationId: _correlationId, ...identity } = input;
   const key = sha256Hex(JSON.stringify([identity, resolved.configDigest]));
   const cache = draftCache(deps);
-  const callSignal = AbortSignal.any([signal, AbortSignal.timeout(resolved.deadlineMs)]);
   return draftMutex.runExclusive([key], async (): Promise<ModelCommitDraftResult> => {
+    const callSignal = AbortSignal.any([signal, AbortSignal.timeout(resolved.deadlineMs)]);
     if (clientLeft(callSignal))
       return { ok: false, code: classifyCommitDraftModelFailure(callSignal.reason, callSignal) };
     const cached = cache.get(key);
@@ -1053,6 +1051,15 @@ async function generateModelCommitMessage(
         code: classifyCommitDraftModelFailure(callSignal.reason, callSignal),
         ...(result.bounds === undefined ? {} : { bounds: result.bounds }),
       };
+    result = {
+      ...result,
+      bounds: {
+        maxOutputTokens: resolved.maxOutputTokens,
+        deadlineMs: resolved.deadlineMs,
+        ...result.bounds,
+        draftKeyDigest: key,
+      },
+    };
     if (result.ok) {
       if (cache.size >= 32) {
         const oldest = cache.keys().next().value;

@@ -1161,11 +1161,18 @@ function projectClientLoss(
   extra: Record<string, unknown>,
 ): void {
   if (loss === undefined) return;
-  for (const [key, reason, field] of CLIENT_LOSS_PROJECTION) {
+  for (const [key, , field] of CLIENT_LOSS_PROJECTION) {
     const count = loss[key];
     if (count === undefined || count === 0) continue;
-    recordActivityLogLoss(reason, count);
     extra[field] = count;
+  }
+}
+
+function recordClientLoss(loss: ClientDiagnosticLossCounts | undefined): void {
+  if (loss === undefined) return;
+  for (const [key, reason] of CLIENT_LOSS_PROJECTION) {
+    const count = loss[key];
+    if (count !== undefined && count > 0) recordActivityLogLoss(reason, count);
   }
 }
 
@@ -1972,6 +1979,9 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     noticeRejectedReport("invalid-shape", ctx.correlationId);
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
+  // A 204 acknowledges the browser's drained counters even when the report is diverted or
+  // rate-limited. Record them once before either path, independently of per-line projection.
+  if (classified.shape === "message") recordClientLoss(classified.report.loss);
   const now = Date.now();
   const budget = reportBudget(classified);
   if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS[budget], now)) {

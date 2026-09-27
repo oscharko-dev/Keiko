@@ -38,6 +38,7 @@ import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import {
   CircuitBreaker,
+  type CircuitBreakerAdmission,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
@@ -579,20 +580,16 @@ function isNonProviderFault(error: unknown): boolean {
   return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
 }
 
-// A half-open probe that ends in a non-provider fault must still release the probe slot it
-// claimed — `CircuitBreaker.recordNonProviderFault()` does exactly that, without counting the call
-// as either a success or a failure (review finding on PR #3602: leaving the slot claimed forever
-// stuck the breaker half-open, rejecting every later call once every probe slot was in this state).
+// The admission owns exactly one outcome; cancellations and local refusal release only its own
+// probe, and a stale admission cannot mutate a later breaker generation.
 function recordProviderFailure(
-  breaker: CircuitBreaker,
+  admission: CircuitBreakerAdmission,
   error: unknown,
-  correlationId: string,
+  providerAdmitted: boolean,
 ): void {
-  if (isNonProviderFault(error)) {
-    breaker.recordNonProviderFault();
-    return;
-  }
-  breaker.recordFailure(correlationId);
+  admission.settle(
+    providerAdmitted && !isNonProviderFault(error) ? "failure" : "non-provider-fault",
+  );
 }
 
 interface RoutedCall {
@@ -1033,14 +1030,13 @@ export class Gateway {
     request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const ids = callIds(randomUUID(), request);
-    breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
+    const admission = breaker.assertAllowed(ids.correlationId);
     // streamFrom degrades to its buffered fallback without a native stream (#3591, PR #3602
     // review); the started line must report the bound that branch actually applies.
     const usesNativeStream = adapter.callStream !== undefined;
-    this.logCallStarted(ids, route, true, request.reasoningEffort, usesNativeStream);
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
@@ -1050,7 +1046,8 @@ export class Gateway {
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
     try {
-      for await (const chunk of this.streamFrom(adapter, request, route, ids)) {
+      this.logCallStarted(ids, route, true, request.reasoningEffort, usesNativeStream);
+      for await (const chunk of this.streamFrom(adapter, request, route, ids, admission)) {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
@@ -1060,13 +1057,13 @@ export class Gateway {
           yield chunk;
         }
       }
-      breaker.recordSuccess(ids.correlationId);
       settled = true;
     } catch (error) {
       settled = true;
       terminalUsage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       this.failStream(ids, route, chunkCount, elapsed(), error);
     } finally {
+      admission.settle("non-provider-fault");
       // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
       // generator through `return()`: the loop is left without running either outcome branch, so
       // without this line the log keeps `gateway.stream.started` with nothing after it — the exact
@@ -1248,7 +1245,7 @@ export class Gateway {
           streaming: true,
           chunkCount,
           // A mid-stream failure has already handed tokens to the caller and cannot be retried
-          // (chatStream is deliberately outside executeWithRetry); the count is how far it got.
+          // (only startup is inside executeWithRetry); the count is how far it got.
           afterFirstChunk: chunkCount > 0,
           outputExhausted: error instanceof ProviderOutputExhaustedError,
         },
@@ -1289,31 +1286,30 @@ export class Gateway {
     request: GatewayCallRequest,
     route: RoutedCall,
     ids: CallIds,
+    initialAdmission: CircuitBreakerAdmission,
   ): AsyncGenerator<GatewayStreamChunk> {
     const breaker = this.breakerFor(route.provider);
-    const maxRetries =
-      breaker.status(route.provider.modelId).state === "half-open" ? 0 : route.provider.maxRetries;
+    const maxRetries = initialAdmission.halfOpen ? 0 : route.provider.maxRetries;
+    let admission = initialAdmission;
     let attempt = 0;
     const opened = await executeWithRetry(
       async (_attemptMs, remainingMs) => {
-        if (attempt++ > 0) breaker.assertAllowed(ids.correlationId);
-        return this.openStreamAttempt(adapter, request, route, ids, remainingMs);
+        if (attempt++ > 0) admission = breaker.assertAllowed(ids.correlationId);
+        return this.openStreamAttempt(adapter, request, route, ids, remainingMs, admission);
       },
       {
         ...providerRetryConfig(route.provider),
         maxRetries,
+        // A catalog rejection needs an explicit repair, not replay of the same streamed request.
+        shouldRetry: (error): boolean =>
+          !admission.halfOpen && !(error instanceof GatewayToolCatalogError),
         timeoutMs: streamRequestBudgetMs(route.provider),
       },
       this.clock,
       request.cancellationSignal,
       this.random,
       { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
-    ).catch((error: unknown) => {
-      // Cancellation or budget exhaustion can precede the first callback. Only that path still
-      // owns the initial admission; attempted reads settle their own probe exactly once.
-      if (attempt === 0) breaker.recordNonProviderFault();
-      throw error;
-    });
+    );
     try {
       yield opened.first;
       yield* opened.iterator;
@@ -1328,13 +1324,21 @@ export class Gateway {
     route: RoutedCall,
     ids: CallIds,
     remainingMs: number | undefined,
+    admission: CircuitBreakerAdmission,
   ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
     const bounds = chatStreamBounds(route.provider);
     const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
-    const iterator = this.reservedStreamAttempt(adapter, request, route, ids, {
-      budgetMs,
-      silenceMs: Math.min(bounds.silenceMs, budgetMs),
-    });
+    const iterator = this.reservedStreamAttempt(
+      adapter,
+      request,
+      route,
+      ids,
+      {
+        budgetMs,
+        silenceMs: Math.min(bounds.silenceMs, budgetMs),
+      },
+      admission,
+    );
     try {
       let first = await iterator.next();
       while (!first.done && first.value.type === "delta" && first.value.token.length === 0) {
@@ -1354,12 +1358,12 @@ export class Gateway {
     route: RoutedCall,
     ids: CallIds,
     bounds: StreamReadBounds,
+    admission: CircuitBreakerAdmission,
   ): AsyncGenerator<GatewayStreamChunk> {
     let reservation: GatewaySpendReservation | undefined;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     let received = false;
-    let settled = false;
     try {
       reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       admitted = true;
@@ -1377,17 +1381,14 @@ export class Gateway {
         yield chunk;
       }
       if (!received) throw new TransportError("provider stream ended without an answer");
-      settled = true;
+      admission.settle("success");
     } catch (error) {
-      settled = true;
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
-      const breaker = this.breakerFor(route.provider);
-      if (admitted) recordProviderFailure(breaker, error, ids.correlationId);
-      else breaker.recordNonProviderFault();
+      recordProviderFailure(admission, error, admitted);
       throw error;
     } finally {
       // Closing an iterator early does not enter catch and is not proof of provider recovery.
-      if (!settled) this.breakerFor(route.provider).recordNonProviderFault();
+      admission.settle("non-provider-fault");
       reservation?.settle(usage);
     }
   }
@@ -1478,20 +1479,24 @@ export class Gateway {
     provider: ModelProviderConfig,
     bounds?: StreamReadBounds,
   ): Promise<NormalizedResponse> {
-    breaker.assertAllowed(correlationId);
-    const reservation = this.spendBudget?.reserve(capability, request, correlationId);
+    const admission = breaker.assertAllowed(correlationId);
+    let reservation: GatewaySpendReservation | undefined;
+    let admitted = false;
     let usage: UsageMetadata | undefined;
     try {
+      reservation = this.spendBudget?.reserve(capability, request, correlationId);
+      admitted = true;
       const response = await readAnswer(adapter, request, provider, bounds);
       usage = response.usage;
-      breaker.recordSuccess(correlationId);
+      admission.settle("success");
       return response;
     } catch (error) {
       usage = measuredCatalogFailureUsage(error, capability, correlationId);
       // A client-initiated cancel is not a provider fault — skip the breaker.
-      recordProviderFailure(breaker, error, correlationId);
+      recordProviderFailure(admission, error, admitted);
       throw error;
     } finally {
+      admission.settle("non-provider-fault");
       reservation?.settle(usage);
     }
   }

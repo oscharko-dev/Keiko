@@ -487,3 +487,53 @@ describe("schemaMismatchGuidance", () => {
     expect(schemaMismatchGuidance(undefined)).toBe("");
   });
 });
+
+it("does not replay a tool-call-only stream rejected by the catalog", async () => {
+  const events: ModelGatewayLogEvent[] = [];
+  const delta = {
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call-invalid",
+              type: "function",
+              function: { name: "keiko_changeset_edit", arguments: "{}" },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  };
+  const fetchImpl = vi.fn(() =>
+    Promise.resolve(
+      new Response(`data: ${JSON.stringify(delta)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    ),
+  );
+  const gateway = new Gateway(config(), {
+    clock: clock(),
+    fetchImpl,
+    log: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  const consume = async (): Promise<void> => {
+    for await (const chunk of gateway.chatStream(request())) expect(chunk).toBeUndefined();
+  };
+  await expect(consume()).rejects.toBeInstanceOf(GatewayToolCatalogError);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(events.filter((event) => event.op === "gateway.retry.scheduled")).toEqual([]);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      op: "gateway.stream.failed",
+      extra: expect.objectContaining({ chunkCount: 0 }) as unknown,
+    }),
+  );
+});

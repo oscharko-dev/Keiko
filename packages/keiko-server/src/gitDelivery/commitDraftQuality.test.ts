@@ -19,8 +19,8 @@ describe("commit draft evidence bounds", () => {
   it("preserves complete small diffs", () => {
     const patch = "diff --git a/a.ts b/a.ts\n+change";
     const prepared = prepareCommitDraft(patch, capability, build);
-    expect(prepared?.diffCompacted).toBe(false);
-    expect(prepared?.request).toEqual(build(patch, false));
+    expect(prepared.diffCompacted).toBe(false);
+    expect(prepared.request).toEqual(build(patch, false));
   });
 
   it("counts the response schema as part of the input budget", () => {
@@ -34,28 +34,28 @@ describe("commit draft evidence bounds", () => {
         schema: { type: "object", properties: { subject: { type: "string" } } },
       },
     }));
-    expect(structured?.promptTokens).toBeGreaterThan(plain?.promptTokens ?? 0);
+    expect(structured.promptTokens).toBeGreaterThan(plain.promptTokens);
   });
 
   it("retains beginning and end evidence for a large single file, including Unicode", () => {
     const patch = `diff --git a/a.ts b/a.ts\n+start-evidence\n${"+漢字änderung\n".repeat(12_000)}+end-evidence`;
     const prepared = prepareCommitDraft(patch, capability, build);
-    expect(prepared?.request.messages[0]?.content).toContain("start-evidence");
-    expect(prepared?.request.messages[0]?.content).toContain("end-evidence");
-    expect(prepared?.promptTokens).toBeLessThanOrEqual(prepared?.maxPromptTokens ?? 0);
-    expect(prepared?.diffCompacted).toBe(true);
+    expect(prepared.request?.messages[0]?.content).toContain("start-evidence");
+    expect(prepared.request?.messages[0]?.content).toContain("end-evidence");
+    expect(prepared.promptTokens).toBeLessThanOrEqual(prepared.maxPromptTokens);
+    expect(prepared.diffCompacted).toBe(true);
   });
 
   it("refuses an impossible prompt instead of silently dropping selected files", () => {
     expect(
       prepareCommitDraft("+change", { ...capability, contextWindow: 16 }, build),
-    ).toBeUndefined();
+    ).toMatchObject({ request: undefined });
   });
 
   it("bounds an unsectioned patch without losing the omission marker", () => {
     const prepared = prepareCommitDraft("+change\n".repeat(20_000), capability, build);
-    expect(prepared?.diffCompacted).toBe(true);
-    expect(prepared?.request.messages[0]?.content).toContain("Additional diff lines omitted");
+    expect(prepared.diffCompacted).toBe(true);
+    expect(prepared.request?.messages[0]?.content).toContain("Additional diff lines omitted");
   });
 });
 
@@ -79,8 +79,8 @@ describe("review regressions for large selections and commit trailers", () => {
     const patch = headers.map((header) => `${header}\n+${"change".repeat(100)}`).join("\n");
     const prepared = prepareCommitDraft(patch, capability, build);
     expect(prepared).toBeDefined();
-    expect(prepared?.promptTokens).toBeLessThanOrEqual(prepared?.maxPromptTokens ?? 0);
-    for (const header of headers) expect(prepared?.request.messages[0]?.content).toContain(header);
+    expect(prepared.promptTokens).toBeLessThanOrEqual(prepared.maxPromptTokens);
+    for (const header of headers) expect(prepared.request?.messages[0]?.content).toContain(header);
   });
 
   it("preserves a trailing signoff block without turning it into list items", () => {
@@ -93,4 +93,10 @@ describe("review regressions for large selections and commit trailers", () => {
     );
     expect(canonicalCommitBody(result)).toBe(result);
   });
+});
+
+it.each(["BREAKING CHANGE", "BREAKING-CHANGE"])("preserves the %s footer verbatim", (token) => {
+  const body = `- Drop the v1 export.\n\n${token}: the v1 export is removed.\nSigned-off-by: Dev <dev@example.invalid>`;
+  expect(canonicalCommitBody(body)).toBe(body);
+  expect(canonicalCommitBody(canonicalCommitBody(body))).toBe(body);
 });

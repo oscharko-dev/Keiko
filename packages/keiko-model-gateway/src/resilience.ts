@@ -294,6 +294,7 @@ export const systemClock: Clock = {
 };
 
 export interface RetryConfig {
+  readonly shouldRetry?: (error: Error) => boolean;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   // The end-to-end budget of the whole call: every attempt and every backoff sleep together.
@@ -348,7 +349,8 @@ function retryDecision(
   remainingMs: number,
   random: () => number,
 ): RetryDecision {
-  if (!isRetryableError(lastError)) return { stop: "terminal" };
+  if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
+    return { stop: "terminal" };
   if (attempt > config.maxRetries) return { stop: "max-retries" };
   const delayMs = retryDelayMs(lastError, attempt, config.retryBaseDelayMs, random);
   if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
@@ -646,8 +648,14 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
   };
 }
 
+export interface CircuitBreakerAdmission {
+  readonly halfOpen: boolean;
+  settle(outcome: "success" | "failure" | "non-provider-fault"): void;
+}
+
 export class CircuitBreaker {
   private state: CircuitState = "closed";
+  private generation = 0;
   private consecutiveFailures = 0;
   private openedAt: number | null = null;
   private probesRemaining = 0;
@@ -717,18 +725,38 @@ export class CircuitBreaker {
   // half-open as a side effect when cooldown has passed).
   // In half-open, at most config.halfOpenProbes concurrent probes are admitted; excess
   // callers receive CircuitOpenError until a probe slot is freed by recordSuccess/Failure.
-  assertAllowed(correlationId?: string): void {
+  assertAllowed(correlationId?: string): CircuitBreakerAdmission {
     if (this.state === "open") {
       this.enterHalfOpenOrReject(correlationId);
     }
     if (this.state === "half-open") {
       this.admitProbeOrReject(correlationId);
     }
+    return this.createAdmission(correlationId);
+  }
+
+  // Each admission settles once and only within the circuit generation that admitted it.
+  // A late response or cancellation from a previous outage cannot touch another call's probe.
+  private createAdmission(correlationId: string | undefined): CircuitBreakerAdmission {
+    const generation = this.generation;
+    let settled = false;
+    return {
+      halfOpen: this.state === "half-open",
+      settle: (outcome): void => {
+        if (settled) return;
+        settled = true;
+        if (generation !== this.generation) return;
+        if (outcome === "success") this.recordSuccess(correlationId);
+        else if (outcome === "failure") this.recordFailure(correlationId);
+        else this.recordNonProviderFault();
+      },
+    };
   }
 
   private enterHalfOpenOrReject(correlationId: string | undefined): void {
     if (this.openedAt !== null && this.clock.now() - this.openedAt >= this.config.cooldownMs) {
       this.state = "half-open";
+      this.generation += 1;
       this.probesRemaining = this.config.halfOpenProbes;
       this.probesInFlight = 0;
       this.log.write(
@@ -759,7 +787,7 @@ export class CircuitBreaker {
     this.probesInFlight += 1;
   }
 
-  recordSuccess(correlationId?: string): void {
+  private recordSuccess(correlationId?: string): void {
     if (this.state === "half-open") {
       this.probesInFlight = Math.max(0, this.probesInFlight - 1);
       this.probesRemaining -= 1;
@@ -771,7 +799,7 @@ export class CircuitBreaker {
     this.consecutiveFailures = 0;
   }
 
-  recordFailure(correlationId?: string): void {
+  private recordFailure(correlationId?: string): void {
     if (this.state === "half-open") {
       this.probesInFlight = Math.max(0, this.probesInFlight - 1);
       this.open(correlationId);
@@ -792,7 +820,7 @@ export class CircuitBreaker {
   // unreleased, the slot stays occupied forever: once every half-open probe is stuck this way the
   // breaker rejects every later call with `CircuitOpenError` although the provider may be healthy
   // (review finding on PR #3602). A no-op while closed or open: there is no probe slot to free.
-  recordNonProviderFault(): void {
+  private recordNonProviderFault(): void {
     if (this.state !== "half-open") return;
     this.probesInFlight = Math.max(0, this.probesInFlight - 1);
   }
@@ -813,6 +841,7 @@ export class CircuitBreaker {
   private open(correlationId: string | undefined): void {
     const previousState = this.state;
     this.state = "open";
+    this.generation += 1;
     this.openedAt = this.clock.now();
     this.probesRemaining = 0;
     this.probesInFlight = 0;
@@ -838,6 +867,7 @@ export class CircuitBreaker {
   private close(correlationId: string | undefined): void {
     const previousState = this.state;
     this.state = "closed";
+    this.generation += 1;
     this.consecutiveFailures = 0;
     this.openedAt = null;
     this.probesRemaining = 0;
