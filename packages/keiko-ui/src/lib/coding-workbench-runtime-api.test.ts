@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { genericDescriptionArtifact } from "../app/components/desktop/widgets/coding-workbench/_workbenchDescriptionStatusTestSupport";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
@@ -56,6 +57,58 @@ function snapshot(): Record<string, unknown> {
 describe("Coding Workbench runtime API", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetClientDiagnosticWriter();
+  });
+
+  it("repairs a restarted app session and retries only a start rejected before its body was read", async () => {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    const denied = jsonResponse(
+      {
+        error: {
+          code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+          message: "Runtime request was rejected.",
+        },
+      },
+      403,
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(denied)
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse(snapshot()));
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      requestId: "start-after-restart",
+      taskIntent: "add a bounded test",
+      requestedMode: "supervised-coding",
+    } as const;
+
+    await expect(startCodingWorkbenchRuntime(input)).resolves.toMatchObject({ runId: "run-1" });
+
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls.map(([path]) => path)).toEqual([
+      "/api/coding-workbench/runtime/runs",
+      "/api/coding-workbench/app-session/local-session",
+      "/api/coding-workbench/runtime/runs",
+    ]);
+    expect(calls[2]?.[1].body).toBe(calls[0]?.[1].body);
+    const deniedId = new Headers(calls[0]?.[1].headers).get("X-Keiko-Correlation-Id");
+    expect(new Headers(calls[2]?.[1].headers).get("X-Keiko-Correlation-Id")).toBe(deniedId);
+    expect(reports).toEqual([
+      {
+        message: "[keiko] coding start session repair: replayed",
+        meta: {
+          correlationId: deniedId,
+          sessionRepairReport: {
+            outcome: "replayed",
+            repairCorrelationId: expect.any(String),
+          },
+        },
+      },
+    ]);
   });
 
   it("preserves a closed issue refusal from the mounted error envelope without retrying as generic", async () => {

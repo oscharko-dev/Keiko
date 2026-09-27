@@ -36,7 +36,9 @@ import {
   type WorkbenchDescriptionDraftReview,
 } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { ApiError } from "./api";
-import { bffFetchJson } from "./http";
+import { bffFetchJson, bffRequestErrorKind, newClientCorrelationId } from "./http";
+import { repairLocalCodingAppSessionWithEvidence } from "./coding-app-session-client";
+import { reportClientDiagnostic } from "./client-diagnostics";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { runtimeIssueFailure, runtimeModelRefusal } from "./coding-workbench-issue-errors";
 import { secureRandomId } from "./secure-random";
@@ -190,6 +192,7 @@ function postSnapshot<T>(
   path: string,
   body: T,
   signal?: AbortSignal,
+  repairedCorrelationId?: string,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return bffFetchJson(
     path,
@@ -199,8 +202,64 @@ function postSnapshot<T>(
       body: JSON.stringify(body),
       ...(signal ? { signal } : {}),
     },
-    { validator: snapshotValidator, enrichError: enrichRuntimeIssueFailure },
+    {
+      validator: snapshotValidator,
+      enrichError: enrichRuntimeIssueFailure,
+      ...(repairedCorrelationId === undefined
+        ? {}
+        : { correlationId: repairedCorrelationId, repairSession: false }),
+    },
   );
+}
+
+// The start route rejects a stale app session before reading the request body. Its distinct error
+// code makes this one POST safe to repeat after the launcher-backed session has been repaired.
+// Other mutation failures may have applied work and must never be replayed here.
+function isPreBodyStartDenial(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 403 &&
+    error.code === "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"
+  );
+}
+
+async function retryStartAfterSessionRepair(
+  input: CodingWorkbenchRuntimeStartRequest,
+  denied: ApiError,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  const repair = await repairLocalCodingAppSessionWithEvidence();
+  const correlationId = denied.correlationId ?? newClientCorrelationId();
+  const report = (outcome: "repair-failed" | "replayed" | "replay-failed"): void => {
+    reportClientDiagnostic(`[keiko] coding start session repair: ${outcome}`, {
+      correlationId,
+      sessionRepairReport: {
+        outcome,
+        repairCorrelationId: repair.correlationId,
+        ...(outcome === "repair-failed" && repair.errorKind !== undefined
+          ? { errorKind: repair.errorKind }
+          : {}),
+      },
+    });
+  };
+  if (!repair.repaired) {
+    report("repair-failed");
+    throw denied;
+  }
+  try {
+    const snapshot = await postSnapshot(`${RUNTIME_ROOT}/runs`, input, undefined, correlationId);
+    report("replayed");
+    return snapshot;
+  } catch (error) {
+    reportClientDiagnostic("[keiko] coding start session repair: replay-failed", {
+      correlationId,
+      sessionRepairReport: {
+        outcome: "replay-failed",
+        repairCorrelationId: repair.correlationId,
+        errorKind: bffRequestErrorKind(error),
+      },
+    });
+    throw error;
+  }
 }
 
 /** The revision-bound envelope shared by every serialized inline runtime operation. */
@@ -251,10 +310,15 @@ export function getCodingWorkbenchRuntimeSnapshot(
   return bffFetchJson(runPath(runId), { cache: "no-store" }, { validator: snapshotValidator });
 }
 
-export function startCodingWorkbenchRuntime(
+export async function startCodingWorkbenchRuntime(
   input: CodingWorkbenchRuntimeStartRequest,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
-  return postSnapshot(`${RUNTIME_ROOT}/runs`, input);
+  try {
+    return await postSnapshot(`${RUNTIME_ROOT}/runs`, input);
+  } catch (error) {
+    if (!isPreBodyStartDenial(error)) throw error;
+    return retryStartAfterSessionRepair(input, error);
+  }
 }
 
 export function decideCodingWorkbenchRuntimeApproval(

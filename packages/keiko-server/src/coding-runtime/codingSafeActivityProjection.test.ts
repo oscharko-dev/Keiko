@@ -247,13 +247,13 @@ describe("bounded coding safe-activity projection", () => {
     },
   );
 
-  // A lab run of 1.1.8: Keiko settled a 10 ms read before OpenCode's earlier running update arrived
-  // over the event stream, and the late update was refused and counted as an omitted update, with an
-  // error-level diagnostic, after every fast tool call.
+  // Keiko's governed settlement wins over late OpenCode part states: both an earlier running update
+  // and OpenCode's HTTP-level success for a red verification are restatements, not missing activity.
   it.each([
     ["succeeded", "pending"],
     ["succeeded", "running"],
     ["failed", "running"],
+    ["failed", "succeeded"],
     ["denied", "running"],
     ["cancelled", "pending"],
   ] as const)(
