@@ -118,13 +118,42 @@ This placement ensures the kernel remains a narrow execution primitive that know
 - `KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY` mirrors this repository's own commit style (11 conventional-commit types; issue-key and signoff disabled). Teams with stricter policies override it via injected server config; no default behaviour changes until a policy is explicitly configured.
 - The governed-git branch uses ADR numbers 0058–0062. An independent voice-digital-twin branch independently used 0058–0069. Numbers are per-branch-local until a feat-to-dev merge; the merge coordinator must resolve the global sequence.
 
+### Explicit model-assisted draft generation (implementation correction, 2026-09-27)
+
+The implemented Git window offers a separate, user-triggered `/api/git-delivery/commit/draft`
+operation. Ordinary previews remain deterministic and never call the model. The draft reads only
+staged changes through the existing sandboxed Git reader. Its default output allowance is 4 MiB
+(explicit narrower policies still apply); truncation is rejected, never accepted as a complete read.
+
+Draft assembly uses the shared context-token counter, including the response schema, output
+reserve and model safety margin. Large patches receive excerpts from every file rather than a
+prefix of the entire patch. Excerpts are explicitly marked as incomplete; the complete staged-file
+list remains in the prompt. A selection whose minimal evidence cannot fit fails explicitly instead
+of silently dropping files. The model is instructed to describe evidenced changes and never infer
+successful verification from the presence of test files.
+
+The server normalizes the validated answer into a single-line subject, a blank line, a `-` bullet
+list, a blank line and the existing Keiko footer. Sampling uses temperature zero, with a seed only
+when the model declares support. These sampling parameters alone do not guarantee identical
+answers: a bounded, process-local cache retains up to 32 successful drafts per server dependency
+scope, keyed by the complete redacted diff, selected paths, workspace, policy, instruction and
+model configuration. Concurrent identical requests serialize through the existing keyed mutex.
+Unchanged inputs reuse the validated text; errors and cancelled results are never retained. This
+cache is ephemeral and does not promise reproducibility after restart or eviction.
+
+One corrective generation is allowed after invalid output, or after output exhaustion when a
+larger allowance fits the model's declared output/context limits. Both generations share the
+original deadline and independently traverse gateway spend admission. No policy check is weakened
+and no generic success message substitutes for an unusable answer. Completion evidence records
+prompt bounds, compaction, generation count and reuse without diff or message content.
+
 ## Alternatives Considered
 
 ### Alternative 1: Model-generated commit message suggestions
 
 - **Pros**: Higher-quality suggestions that consider full diff semantics; no need for heuristic rules.
 - **Cons**: Introduces a Model Gateway dependency on every commit preview call, adding latency, non-determinism, and a new failure mode (model unavailable → preview blocked). Violates Force 5 (deterministic-first posture) and the architecture pattern established across this epic. Suggestions that depend on raw diff content also threaten the content-free invariant if the model output is persisted.
-- **Why rejected**: Force 5 is explicit. Deterministic heuristics from typed structural facts are sufficient for the scoped warnings (#475) — quality warnings and a prefix scaffold, not a full drafted message. Model-assisted drafting can be a future opt-in behind a separate ADR.
+- **Why rejected**: Force 5 is explicit. Deterministic heuristics from typed structural facts are sufficient for the scoped warnings (#475) — quality warnings and a prefix scaffold, not a full drafted message. This rejection applies to automatic preview-time model calls. The separate explicit draft action is documented in the implementation correction above.
 
 ### Alternative 2: Single combined server route for all local mutations
 

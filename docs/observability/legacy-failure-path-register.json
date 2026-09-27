@@ -4755,12 +4755,6 @@
     },
     {
       "path": "packages/keiko-server/src/gitDelivery/commitRoutes.ts",
-      "owner": "generateModelCommitMessage",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gitDelivery/commitRoutes.ts",
       "owner": "parseCommitDraftJson",
       "kind": "unregistered-catch",
       "count": 1

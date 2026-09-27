@@ -595,8 +595,14 @@ the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
 left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
-coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) is never retried, so it has no
-end-to-end budget to derive a total from; since #3591 it is NOT left unbounded either —
+coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) may retry a retryable startup failure only before delivering its
+first non-empty delta or terminal response. Empty role deltas do not commit the answer. Once any
+content is delivered, a failure is terminal: replay must never duplicate text or tool effects.
+Startup retries use the existing retry executor, configured retry count, backoff, cancellation,
+and activity-log events; every attempt reserves and settles its own spend budget. Half-open
+circuit probes get one attempt. All attempts and delays share one `streamRequestBudgetMs`
+deadline; each subsequent read receives only its remaining silence and total budget. Since #3591
+streaming is NOT left unbounded either —
 `Gateway.chatStream()` builds its own `StreamReadBounds` from the provider's (possibly
 Coding-Workbench-raised) `timeoutMs`, floored to `GATEWAY_SILENCE_FLOOR_MS` for silence and
 `GATEWAY_STREAM_BUDGET_FLOOR_MS` for the total read, and passes them to `adapter.callStream()` —

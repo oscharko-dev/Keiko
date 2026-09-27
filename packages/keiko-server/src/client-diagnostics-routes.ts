@@ -62,7 +62,6 @@ import type {
   ClientBindingIngestRequest,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
-  ClientGitClientOperationOutcome,
   ClientGitRetryAttemptIngestRequest,
   ClientSessionRepairIngestRequest,
   ClientStageId,
@@ -428,15 +427,13 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "summary-read",
       ],
     },
-    // Routine outcomes (discarded-succeeded, retry-recovered, retry-superseded) never reach this
-    // line — `logClientGitOperationSettled` diverts them to `client.git-operation.settled` before
-    // this operation's fields are built, so only the two genuine failures are ever registered here
-    // (PR #3625 review).
+    // Routine outcomes never reach this failure line. Repository failures retain both the
+    // lifecycle settlement and this structured diagnostic with frames and cause evidence.
     gitClientOperationOutcome: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["discarded-failed", "retry-failed"],
+      values: ["discarded-failed", "retry-failed", "failed"],
     },
     // Only ever alongside `gitClientOperationOutcome: "retry-failed"`: the closed reason a resolved
     // (HTTP 200) unavailable response gave for the read that failed (PR #3625 review).
@@ -869,7 +866,14 @@ const CLIENT_GIT_OPERATION_SETTLED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["discarded-succeeded", "retry-recovered", "retry-superseded"],
+      values: [
+        "discarded-succeeded",
+        "retry-recovered",
+        "retry-superseded",
+        "succeeded",
+        "failed",
+        "discarded-failed",
+      ],
     },
   },
   causal: "correlation",
@@ -896,7 +900,13 @@ const CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["status-read", "branches-read", "summary-read"],
+      values: [
+        "status-read",
+        "branches-read",
+        "summary-read",
+        "repository-clone",
+        "repository-register",
+      ],
     },
   },
   causal: "correlation",
@@ -1323,31 +1333,25 @@ function projectGitContext(
   }
 }
 
-// The routine (non-failure) git-client operation outcomes: exactly the ones
-// `CLIENT_GIT_OPERATION_SETTLED_OPERATION` registers, narrower than the full
-// `ClientGitClientOperationOutcome` union so `logClientGitOperationSettled` below assigns straight
-// into that registration's own field type with no cast (PR #3625 review).
-type GitOperationRoutineOutcome = Exclude<
-  ClientGitClientOperationOutcome,
-  "discarded-failed" | "retry-failed"
->;
-
-function isGitOperationRoutineOutcome(
-  outcome: ClientGitClientOperationOutcome,
-): outcome is GitOperationRoutineOutcome {
-  return !CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome);
-}
-
-// PR #3625 review: a git-client operation settling as ROUTINE evidence (a discarded-succeeded
-// add-repository result, a recovered or superseded manual retry) is diverted here, before
-// `logClientDiagnostic` builds the failure-shaped `extra` below — mirrors
-// `logVoiceDialogueStage`/`logMarkdownLayout`'s own diversion.
+// Record the lifecycle before projecting failure details. A failed repository addition still
+// ends its attempt; returning false lets the same report retain the diagnostic's error evidence.
 function logClientGitOperationSettled(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
   const gitOp = request.gitClientOperation;
-  if (gitOp === undefined || !isGitOperationRoutineOutcome(gitOp.outcome)) return false;
+  if (
+    gitOp?.outcome === "started" &&
+    (gitOp.operation === "repository-clone" || gitOp.operation === "repository-register")
+  ) {
+    logClientGitOperationAttempted({
+      operation: gitOp.operation,
+      correlationId: clientDiagnosticCorrelation(request, correlationId).correlationId,
+    });
+    return true;
+  }
+  if (gitOp === undefined || gitOp.outcome === "started" || gitOp.outcome === "retry-failed")
+    return false;
   getServerLogger().info(
     activityLogEvent(
       CLIENT_GIT_OPERATION_SETTLED_OPERATION,
@@ -1360,7 +1364,7 @@ function logClientGitOperationSettled(
       },
     ),
   );
-  return true;
+  return !CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(gitOp.outcome);
 }
 
 // PR #3625 review: a select dismissal is always routine evidence — there is no failure variant, so
@@ -1794,7 +1798,11 @@ function logClientSessionRepair(
 // contract guard requires it), never the ingest POST's own — that id is what its later settlement
 // (`client.git-operation.settled` or, on a genuine failure, `client.diagnostic`) reuses to join the
 // pair on one timeline, so falling back to the ingest id here would silently break that join.
-function logClientGitOperationAttempted(request: ClientGitRetryAttemptIngestRequest): void {
+function logClientGitOperationAttempted(request: {
+  readonly operation:
+    ClientGitRetryAttemptIngestRequest["operation"] | "repository-clone" | "repository-register";
+  readonly correlationId: string;
+}): void {
   getServerLogger().info(
     activityLogEvent(
       CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION,

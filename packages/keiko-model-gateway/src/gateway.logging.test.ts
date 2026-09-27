@@ -497,7 +497,7 @@ describe("Gateway.chatStream — activity log", () => {
     };
     await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
     const streamCompleted = eventFor(log.events, "gateway.stream.completed");
-    expect(streamCompleted.extra).toMatchObject({ chunkCount: 3 });
+    expect(streamCompleted.extra).toMatchObject({ chunkCount: 2 });
     expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
   });
 

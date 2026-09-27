@@ -13,6 +13,9 @@ external observability tooling.
 
 ## How to use this guide
 
+For an Add repository dialog stuck on “Adding…” after a successful request, see
+[Recover a stalled repository-add dialog](repository-add-dialog.md).
+
 1. Find the entry whose **Symptom** matches the observed behavior.
 2. Confirm the **Root Cause** by running the listed **Diagnostic Steps**.
 3. Apply the **Resolution** for that root cause.

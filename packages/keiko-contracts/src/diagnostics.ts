@@ -1015,6 +1015,9 @@ export const CLIENT_GIT_CLIENT_OPERATION_OUTCOMES = [
   // bump) had already superseded it: neither a recovery nor a failure of the read itself, just
   // discarded evidence (PR #3625 review, GitClientWindow.tsx finding).
   "retry-superseded",
+  "started",
+  "succeeded",
+  "failed",
 ] as const;
 export type ClientGitClientOperationOutcome = (typeof CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)[number];
 
@@ -1031,13 +1034,18 @@ const GIT_CLIENT_DISCARD_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> 
   "discarded-succeeded",
   "discarded-failed",
 ]);
+const GIT_CLIENT_ADDITION_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> = new Set([
+  "started",
+  "succeeded",
+  "failed",
+]);
 
 // The outcomes that represent an actual failure, shared by the client-side POST throttle
 // (install-client-diagnostics.ts) and the server's rate-limit budget (client-diagnostics-routes.ts)
 // so the two budgets can never drift — exactly like the binding and session-repair outcome sets
 // above.
 export const CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> =
-  new Set(["discarded-failed", "retry-failed"]);
+  new Set(["discarded-failed", "retry-failed", "failed"]);
 
 export interface ClientDiagnosticGitClientOperation {
   readonly operation: ClientGitClientOperationKind;
@@ -1047,6 +1055,10 @@ export interface ClientDiagnosticGitClientOperation {
   // thrown/rejected one without the report ever carrying a message (PR #3625 review,
   // GitClientWindow.tsx finding). Never present on a discard, a recovery, or a superseded retry.
   readonly reason?: GitWireUnavailableReason | undefined;
+}
+
+function isRepositoryAdditionOperation(operation: string): boolean {
+  return operation === "repository-clone" || operation === "repository-register";
 }
 
 /**
@@ -1062,6 +1074,11 @@ export function isClientDiagnosticGitClientOperation(
   if (!isRecord(value)) return false;
   if (!isOneOf(value.operation, CLIENT_GIT_CLIENT_OPERATION_KINDS)) return false;
   if (!isOneOf(value.outcome, CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)) return false;
+  // Repository additions report their live lifecycle as well as post-dismissal settlements.
+  // Keep the existing retry/discard pairings closed for every other operation.
+  if (GIT_CLIENT_ADDITION_OUTCOMES.has(value.outcome)) {
+    return isRepositoryAdditionOperation(value.operation) && value.reason === undefined;
+  }
   if (
     GIT_CLIENT_DISCARD_OPERATIONS.has(value.operation) !==
     GIT_CLIENT_DISCARD_OUTCOMES.has(value.outcome)

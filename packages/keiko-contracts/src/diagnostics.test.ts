@@ -846,12 +846,12 @@ describe("client report budgets", () => {
     ).toEqual(["replayed", "stream-repaired", "repair-acknowledged"]);
   });
 
-  it("classifies exactly the discarded-failed and retry-failed outcomes as git-client failures", () => {
+  it("classifies live, discarded and retry failures as git-client failures", () => {
     expect(
       CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
         CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome),
       ),
-    ).toEqual(["discarded-failed", "retry-failed"]);
+    ).toEqual(["discarded-failed", "retry-failed", "failed"]);
   });
 
   // PR #3625 review: a retry superseded by a newer automatic read is discarded evidence, never a
@@ -864,6 +864,20 @@ describe("client report budgets", () => {
 });
 
 describe("git-client operation settlement vocabulary", () => {
+  it.each(["started", "succeeded", "failed"])("restricts %s to repository additions", (outcome) => {
+    for (const operation of CLIENT_GIT_CLIENT_OPERATION_KINDS) {
+      const report = { ...validRequest(), gitClientOperation: { operation, outcome } };
+      expect(isClientDiagnosticIngestRequest(report)).toBe(
+        operation === "repository-clone" || operation === "repository-register",
+      );
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...report,
+          gitClientOperation: { operation, outcome, reason: "git-error" },
+        }),
+      ).toBe(false);
+    }
+  });
   it("accepts every operation paired with every outcome from its own family", () => {
     const discardOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
       (operation) => operation.startsWith("repository-") || operation === "checkout-selection",

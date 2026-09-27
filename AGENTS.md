@@ -435,6 +435,12 @@ system that exists, never beside it:
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
   ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
   silently missing id.
+  Repository-add dialogs mint that id before clone/register, pass it to the request, and report
+  the attempt and settlement even when dismissed; effect replay is not a human dismissal.
+- **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
+  flags on `git.commit.draft.completed`; stream startup retries use the existing `gateway.retry.*`
+  events. Neither path records customer diffs or generated text.
+
 - **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
   log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their
   closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /

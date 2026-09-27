@@ -1,0 +1,88 @@
+import {
+  countContextTokens,
+  deriveContextProfileFromCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import type { GatewayCallRequest, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { splitUnifiedDiffSections } from "../gitDiffParser.js";
+
+const OMITTED = "\n[Additional diff lines omitted for the model context budget.]\n";
+
+function requestTokens(request: GatewayCallRequest, capability: ModelCapability): number {
+  const schemaTokens =
+    request.responseFormat === undefined
+      ? 0
+      : countContextTokens(JSON.stringify(request.responseFormat), capability.tokenAccounting);
+  return countGatewayPromptTokens(request, capability.tokenAccounting) + schemaTokens;
+}
+
+function excerpt(section: string, limit: number): string {
+  if (section.length <= limit) return section;
+  const head = Math.ceil(limit * 0.75);
+  return section.slice(0, head) + OMITTED + section.slice(-(limit - head));
+}
+
+// Allocate each file a share before spending more on a large file. In particular, a lockfile at
+// the beginning must never evict the code and tests at the end of a Stage all selection.
+function compactDiff(sections: readonly string[], limit: number): string {
+  return sections.map((section) => excerpt(section, limit)).join("\n");
+}
+
+export interface PreparedCommitDraft {
+  readonly request: GatewayCallRequest;
+  readonly promptTokens: number;
+  readonly maxPromptTokens: number;
+  readonly diffCompacted: boolean;
+}
+
+export function prepareCommitDraft(
+  diff: string,
+  capability: ModelCapability,
+  build: (diff: string, compacted: boolean) => GatewayCallRequest,
+): PreparedCommitDraft | undefined {
+  const profile = deriveContextProfileFromCapability(capability);
+  const full = build(diff, false);
+  const maxPromptTokens =
+    profile.maxInputTokens - (full.maxOutputTokens ?? 0) - profile.safetyMarginTokens;
+  const prepare = (request: GatewayCallRequest, diffCompacted: boolean): PreparedCommitDraft => ({
+    request,
+    diffCompacted,
+    maxPromptTokens,
+    promptTokens: requestTokens(request, capability),
+  });
+  const original = prepare(full, false);
+  if (original.promptTokens <= maxPromptTokens) return original;
+  const parsed = splitUnifiedDiffSections(diff).map((lines) => lines.join("\n"));
+  const sections = parsed.length === 0 ? [diff] : parsed;
+  let low = 128;
+  let high = sections.reduce((largest, section) => Math.max(largest, section.length), 0);
+  let selected: PreparedCommitDraft | undefined;
+  while (low <= high) {
+    const limit = Math.floor((low + high) / 2);
+    const candidate = prepare(build(compactDiff(sections, limit), true), true);
+    if (candidate.promptTokens <= maxPromptTokens) {
+      selected = candidate;
+      low = limit + 1;
+    } else high = limit - 1;
+  }
+  return selected;
+}
+
+// The model owns the wording; the server normalizes bullet markers, blank lines and hard-wrapped
+// paragraphs into one list. Content is never logged here.
+export function canonicalCommitBody(body: string): string {
+  const items: string[] = [];
+  let paragraph: string[] = [];
+  const flush = (): void => {
+    if (paragraph.length > 0) items.push(`- ${paragraph.join(" ")}`);
+    paragraph = [];
+  };
+  for (const line of body.replace(/\r\n?/gu, "\n").split("\n")) {
+    const text = line.trim();
+    const bullet = /^(?:[-*•]|\d+[.)])\s+/u.exec(text);
+    if (text === "" || bullet !== null) flush();
+    if (text !== "") paragraph.push(text.slice(bullet?.[0].length ?? 0));
+  }
+  flush();
+  return items.join("\n");
+}

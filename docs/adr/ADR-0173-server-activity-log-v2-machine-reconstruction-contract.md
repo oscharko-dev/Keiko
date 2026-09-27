@@ -821,6 +821,20 @@ proof updates, not acceptance of another arbitrary machine-shaped string.
 
 ### D13 — HTTP and SSE lifecycle detail, and a body-free browser diagnostic ingest (Wave 5, landed)
 
+Git draft resilience correction (2026-09-27): `git.commit.draft.completed` also records observed
+`promptTokens`, `maxPromptTokens`, `diffCompacted`, `generationAttempts` and `reused`. The values
+explain model-context compaction, a corrective generation and a cached result without retaining
+paths, prompts or draft bodies. Chat retries before the first delivered chunk use the existing
+`gateway.retry.*` operations under the same correlation; a partial answer is never replayed.
+
+Repository-add lifecycle correction (2026-09-27): clone/register emits
+`client.git-operation.attempted` before sending the request with that same correlation id.
+An active dialog reports `client.git-operation.settled` with `succeeded` or `failed`; failures also
+retain `client.diagnostic` with structured error evidence. Actual dismissal retains
+`discarded-succeeded`/`discarded-failed`; React effect replay is not dismissal. The existing
+ingest transport, routine/failure budgets, loss reporting and closed operation/outcome validation
+apply to all of these reports. No repository path or remote URL enters the evidence.
+
 Wave 5 closes the gap between "a request line exists" and "a request line is enough to reproduce the
 request":
 

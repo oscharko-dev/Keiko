@@ -8,7 +8,7 @@ import {
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
-import { Gateway } from "./gateway.js";
+import { Gateway, type GatewaySpendReservation } from "./gateway.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import { createScriptedGatewayClock } from "./replay.js";
@@ -422,5 +422,117 @@ describe("a completed but empty model answer (#3610)", () => {
     expect(events.find((event) => event.op === "chat.response.streamed")).toMatchObject({
       extra: { outcome: "failed", outputExhausted: false },
     });
+  });
+});
+
+// Exercise the OpenAI-compatible wire used by LiteLLM, without an Azure endpoint.
+describe("stream startup resilience", () => {
+  it("retries a temporary proxy rejection before delivering any answer", async () => {
+    let calls = 0;
+    const log = recorder();
+    const gateway = new Gateway(config(true), {
+      clock: createScriptedGatewayClock(),
+      log,
+      fetchImpl: (): Promise<Response> => {
+        calls += 1;
+        return Promise.resolve(
+          calls === 1
+            ? new Response(JSON.stringify({ error: { message: "temporarily overloaded" } }), {
+                status: 503,
+              })
+            : new Response(
+                encoder.encode(deltaLine("one answer") + finishLine("stop") + DONE_LINE),
+                {
+                  headers: { "content-type": "text/event-stream" },
+                },
+              ),
+        );
+      },
+    });
+    const chunks: GatewayStreamChunk[] = [];
+    for await (const chunk of gateway.chatStream(REQUEST)) chunks.push(chunk);
+    expect(calls).toBe(2);
+    expect(chunks.filter((chunk) => chunk.type === "delta")).toEqual([
+      { type: "delta", token: "one answer" },
+    ]);
+    expect(log.events.some((event) => event.op === "gateway.retry.scheduled")).toBe(true);
+  });
+
+  it("recovers from a silent first connection within the shared stream budget", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const reservations: ReturnType<typeof vi.fn>[] = [];
+    const gateway = new Gateway(config(true), {
+      spendBudget: {
+        reserve: (): GatewaySpendReservation => {
+          const settle = vi.fn();
+          reservations.push(settle);
+          return { settle };
+        },
+      },
+      fetchImpl: (): Promise<Response> => {
+        calls += 1;
+        return Promise.resolve(
+          new Response(
+            calls === 1
+              ? new ReadableStream<Uint8Array>()
+              : encoder.encode(deltaLine("recovered") + finishLine("stop") + DONE_LINE),
+            {
+              headers: { "content-type": "text/event-stream" },
+            },
+          ),
+        );
+      },
+    });
+    const chunks: GatewayStreamChunk[] = [];
+    const reading = (async (): Promise<void> => {
+      for await (const chunk of gateway.chatStream(REQUEST)) chunks.push(chunk);
+    })();
+    try {
+      await vi.advanceTimersByTimeAsync(GATEWAY_SILENCE_FLOOR_MS + 10);
+      await reading;
+      expect(calls).toBe(2);
+      expect(chunks.filter((chunk) => chunk.type === "delta")).toEqual([
+        { type: "delta", token: "recovered" },
+      ]);
+      expect(reservations).toHaveLength(2);
+      for (const settle of reservations) expect(settle).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a rejected credential", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("{}", { status: 401 })));
+    const gateway = new Gateway(config(true), { fetchImpl, clock: createScriptedGatewayClock() });
+    const reading = async (): Promise<void> => {
+      for await (const chunk of gateway.chatStream(REQUEST)) expect(chunk).toBeUndefined();
+    };
+    await expect(reading()).rejects.toMatchObject({ code: "GATEWAY_AUTHENTICATION" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("never replays text after a proxy drops a partially delivered answer", async () => {
+    let calls = 0;
+    const gateway = new Gateway(config(true), {
+      clock: createScriptedGatewayClock(),
+      fetchImpl: (): Promise<Response> => {
+        calls += 1;
+        return Promise.resolve(
+          new Response(encoder.encode(deltaLine("partial answer")), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      },
+    });
+    const received: string[] = [];
+    const consume = async (): Promise<void> => {
+      for await (const chunk of gateway.chatStream(REQUEST)) {
+        if (chunk.type === "delta") received.push(chunk.token);
+      }
+    };
+    await expect(consume()).rejects.toThrow();
+    expect(received).toEqual(["partial answer"]);
+    expect(calls).toBe(1);
   });
 });

@@ -45,6 +45,14 @@ evaluates the complete registered inventory by composing `check:op-catalog`,
 `arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
 a narrower change set never narrows what it proves.
 
+Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
+flags on `git.commit.draft.completed`; stream startup retries use the existing `gateway.retry.*`
+events. Neither path records customer diffs or generated text.
+
+Repository-add dialogs report the attempt and its live or discarded settlement using the request's
+correlation id. Test effect replay under React StrictMode separately from an actual dismissal:
+only the latter may discard a response.
+
 The generated registry also publishes the stable implementation-obligation categories and the
 failure-class coverage matrix consumed by permanent quality gates. Its release expectation is
 100% complete. Exemptions are not comments or wildcards: the sole registry exemption contract is

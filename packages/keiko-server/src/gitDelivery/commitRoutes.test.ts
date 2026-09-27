@@ -38,7 +38,12 @@ import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { createEditorSettingsControlService } from "../editor/settings/editorSettingsControl.js";
 import { createEditorSettingsStore } from "../editor/settings/editorSettingsStore.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import {
+  formatRegisteredServerLogLine,
+  serverLogProcessIdentity,
+  type ServerLogEvent,
+} from "@oscharko-dev/keiko-activity-log";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { RouteContext } from "../routes.js";
 import type {
@@ -47,6 +52,8 @@ import type {
   ModelCapability,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { Gateway } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createHandleCommitApprove,
@@ -796,8 +803,7 @@ describe("commit draft — explicit model-backed generation", () => {
       [
         "feat(ui): add explicit commit drafting",
         "",
-        "Add a user-triggered Keiko draft action for staged Git changes.",
-        "Keep automatic previews limited to validation and policy context.",
+        "- Add a user-triggered Keiko draft action for staged Git changes. Keep automatic previews limited to validation and policy context.",
         "",
         "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
       ].join("\n"),
@@ -907,7 +913,7 @@ describe("commit draft — explicit model-backed generation", () => {
       error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
     });
     expect(JSON.stringify(res.body)).not.toContain("update staged changes");
-    expect(events).toContainEqual({
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
       category: "diagnostic",
       op: "git.commit.draft.completed",
       correlationId: UNKNOWN_CORRELATION_ID,
@@ -921,6 +927,7 @@ describe("commit draft — explicit model-backed generation", () => {
         touchesTests: false,
         outcome: "failed",
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+        generationAttempts: 2,
         maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
         deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
       },
@@ -1370,6 +1377,288 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(completed?.extra).not.toHaveProperty("stagedFileCount");
     expect(completed?.extra).not.toHaveProperty("areaCount");
     expect(completed?.extra).not.toHaveProperty("touchesTests");
+  });
+});
+
+describe("commit draft resilience for all staged files", () => {
+  it("reuses a validated draft for identical inputs and refreshes after a staged edit", async () => {
+    let patch = "diff --git a/src/a.ts b/src/a.ts\n+first change";
+    let calls = 0;
+    const handler = createHandleCommitDraft({
+      execution: seams({ stagedDiffReader: () => Promise.resolve(patch) }),
+    });
+    const dependencies = deps({
+      config: DRAFT_GATEWAY_CONFIG,
+      modelPortFactory: () =>
+        draftModelPort(() => {
+          calls += 1;
+          return draftResponse({
+            subject: `fix: repair behavior ${String(calls)}`,
+            body: "Keep changes consistent.",
+          });
+        }),
+    });
+    const request = (): RouteContext => ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    const first = await handler(request(), dependencies);
+    const second = await handler(request(), dependencies);
+    expect(second.body).toEqual(first.body);
+    expect(calls).toBe(1);
+    patch += "\n+second change";
+    expect((await handler(request(), dependencies)).body).not.toEqual(first.body);
+    expect(calls).toBe(2);
+  });
+
+  it("keeps evidence from every file within a small model's context window", async () => {
+    const paths = ["a-lock.json", "src/payment.ts", "tests/payment.test.ts"];
+    const patch = paths
+      .map(
+        (path, index) =>
+          `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1 @@\n+evidence-${String(index)}\n${"+dependency change\n".repeat(index === 0 ? 9000 : 2)}`,
+      )
+      .join("\n");
+    let request: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader: () => Promise.resolve(paths),
+        stagedDiffReader: () => Promise.resolve(patch),
+      }),
+    });
+    const result = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: {
+          ...DRAFT_GATEWAY_CONFIG,
+          capabilities: [{ ...DRAFT_MODEL_CAPABILITY, contextWindow: 8192 }],
+        },
+        modelPortFactory: () =>
+          draftModelPort((input) => {
+            request = input;
+            return draftResponse({
+              subject: "fix: update payment handling",
+              body: "Update payment handling and its regression tests.",
+            });
+          }),
+      }),
+    );
+    expect(result.status).toBe(200);
+    const prompt = JSON.stringify(request?.messages);
+    for (let index = 0; index < paths.length; index += 1)
+      expect(prompt).toContain(`evidence-${String(index)}`);
+    expect(request).toBeDefined();
+    expect(
+      countGatewayPromptTokens({ messages: request?.messages ?? [] }) +
+        (request?.maxOutputTokens ?? 0),
+    ).toBeLessThan(8192);
+  });
+
+  it("repairs a malformed completed answer once and emits a canonical message", async () => {
+    let calls = 0;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+    const result = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort(() => {
+            calls += 1;
+            return calls === 1
+              ? draftResponse({ subject: "", body: "Rejected draft." })
+              : draftResponse({
+                  subject: "fix: stabilize payment handling",
+                  body: "* Handle missing values.  \r\n\r\n• Add regression coverage.",
+                });
+          }),
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(result.body).toMatchObject({
+      suggestedMessage: [
+        "fix: stabilize payment handling",
+        "",
+        "- Handle missing values.",
+        "- Add regression coverage.",
+        "",
+        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
+      ].join("\n"),
+    });
+  });
+});
+
+describe("commit draft repeatability boundaries", () => {
+  function fixedDraftHandler(): ReturnType<typeof createHandleCommitDraft> {
+    return createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+  }
+
+  it("coalesces concurrent requests without cancelling another caller", async () => {
+    const respond = vi.fn(() =>
+      draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
+    );
+    const dependencies = deps({
+      config: DRAFT_GATEWAY_CONFIG,
+      modelPortFactory: () => draftModelPort(respond),
+    });
+    const handler = fixedDraftHandler();
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies),
+      ),
+    );
+    expect(respond).toHaveBeenCalledOnce();
+    for (const result of results) expect(result.body).toEqual(results[0]?.body);
+  });
+
+  it("does not reuse drafts after instructions or provider configuration change", async () => {
+    const respond = vi.fn(() =>
+      draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
+    );
+    let config = DRAFT_GATEWAY_CONFIG;
+    const dependencies = deps({ config, modelPortFactory: () => draftModelPort(respond) });
+    const handler = fixedDraftHandler();
+    await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies);
+    await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId, instruction: "Emphasize the reason." }),
+      dependencies,
+    );
+    config = {
+      ...config,
+      providers: config.providers.map((provider) => ({ ...provider, timeoutMs: 2000 })),
+    };
+    Object.assign(dependencies, { config });
+    await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies);
+    expect(respond).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries an exhausted reasoning answer with room for content, within the declared window", async () => {
+    const allowances: number[] = [];
+    const dependencies = deps({
+      config: {
+        ...DRAFT_GATEWAY_CONFIG,
+        capabilities: [{ ...DRAFT_MODEL_CAPABILITY, maxOutputTokens: 0 }],
+      },
+      modelPortFactory: () =>
+        draftModelPort((request) => {
+          allowances.push(request.maxOutputTokens ?? 0);
+          const response = draftResponse({
+            subject: "fix: handle missing values",
+            body: "Handle missing values.",
+          });
+          return allowances.length === 1 ? { ...response, finishReason: "length" } : response;
+        }),
+    });
+    const result = await fixedDraftHandler()(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      dependencies,
+    );
+    expect(result.status).toBe(200);
+    expect(allowances).toHaveLength(2);
+    expect(allowances[1]).toBeGreaterThan(allowances[0] ?? 0);
+  });
+
+  it("generates and reuses a repaired draft through a real OpenAI-compatible streaming adapter", async () => {
+    const config: GatewayConfig = {
+      ...DRAFT_GATEWAY_CONFIG,
+      capabilities: [{ ...DRAFT_MODEL_CAPABILITY, structuredOutput: false, streaming: true }],
+    };
+    let calls = 0;
+    const gateway = new Gateway(config, {
+      fetchImpl: (_url, init): Promise<Response> => {
+        calls += 1;
+        if (typeof init?.body !== "string") throw new TypeError("expected a JSON request body");
+        const wire = JSON.parse(init.body) as {
+          stream: boolean;
+          temperature: number;
+          response_format?: unknown;
+        };
+        expect(wire).toMatchObject({ stream: true, temperature: 0 });
+        expect(wire.response_format).toBeUndefined();
+        const content =
+          calls === 1
+            ? "not a JSON draft"
+            : JSON.stringify({
+                subject: "fix: handle missing values",
+                body: "* Handle missing values.\n* Add regression tests.",
+              });
+        const data = { choices: [{ index: 0, delta: { content }, finish_reason: "stop" }] };
+        return Promise.resolve(
+          new Response(`data: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      },
+    });
+    const dependencies = deps({
+      config,
+      modelPortFactory: () => ({
+        call: (request, cancellationSignal): Promise<NormalizedResponse> =>
+          gateway.chat({ ...request, cancellationSignal }),
+      }),
+    });
+    const handler = fixedDraftHandler();
+    const first = await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies);
+    expect(first.status).toBe(200);
+    expect((first.body as GitDeliveryCommitDraftBody).suggestedMessage).toContain(
+      "- Handle missing values.\n- Add regression tests.",
+    );
+    expect(
+      (await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies)).body,
+    ).toEqual(first.body);
+    expect(calls).toBe(2);
+  });
+
+  it("records reuse and prompt bounds without recording customer content", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () =>
+          Promise.resolve("diff --git a/private.ts b/private.ts\n+customer-private-content"),
+      }),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const dependencies = deps({
+      config: DRAFT_GATEWAY_CONFIG,
+      modelPortFactory: () =>
+        draftModelPort(() =>
+          draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
+        ),
+    });
+    for (let index = 0; index < 2; index += 1) {
+      await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies);
+    }
+    const last = events.at(-1);
+    expect(last?.extra).toMatchObject({
+      reused: true,
+      generationAttempts: 0,
+      diffCompacted: false,
+    });
+    const persisted = expectActivityLogProof(
+      "git.commit.draft.completed.emitted-line",
+      formatActivityLogProofLine(last ?? {}),
+    );
+    expect(persisted).toMatchObject({ reused: true, generationAttempts: 0 });
+    const identity = serverLogProcessIdentity();
+    const lines = events.map((event, index) =>
+      formatRegisteredServerLogLine(event, new Date(), {
+        ...identity,
+        seq: index + 1,
+      }),
+    );
+    const report = analyzeLogText(lines.join(""));
+    expect(report.sufficiency).toMatchObject({ status: "complete", reasons: [] });
+    expect(JSON.stringify(events)).not.toContain("customer-private-content");
+    expect(JSON.stringify(events)).not.toContain("private.ts");
   });
 });
 

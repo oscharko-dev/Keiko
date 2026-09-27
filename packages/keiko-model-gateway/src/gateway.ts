@@ -660,10 +660,10 @@ function effectiveBufferedAttemptMs(provider: ModelProviderConfig): number {
   return Math.max(provider.timeoutMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
 }
 
-// The bounds of the ONE, unretried read `chatStream()` performs (ADR-0003): floored the same way
+// The bounds shared by a `chatStream()` call and its pre-content retries (ADR-0003): floored the same way
 // every interactive gateway surface is (#3591) — a slow gateway is not a broken gateway. Unlike
 // `streamedReadBounds` (the buffered `chat()` path's per-attempt bound), there is no retry budget
-// to derive a total from, so both bounds come straight from the provider's own (possibly
+// to multiply by, so both bounds come straight from the provider's own (possibly
 // Coding-Workbench-raised) `timeoutMs`: the silence bound floored to the silence floor, the budget
 // through `streamRequestBudgetMs` — the one derivation the route deadline behind a streamed call
 // shares (PR #3602 review).
@@ -1025,9 +1025,9 @@ export class Gateway {
   }
 
   // Streaming counterpart of chat(). Routes identically and guards with the circuit
-  // breaker, but is NOT wrapped in executeWithRetry: a mid-stream retry would replay
-  // already-emitted tokens. An adapter without a streaming variant falls back to a
-  // single delta+done synthesised from its buffered call().
+  // breaker. Startup failures may retry before the first delivered chunk; a mid-stream
+  // retry would replay already-emitted tokens and is never permitted. An adapter without a
+  // streaming variant falls back to a single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
     const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
@@ -1041,7 +1041,6 @@ export class Gateway {
     // review); the started line must report the bound that branch actually applies.
     const usesNativeStream = adapter.callStream !== undefined;
     this.logCallStarted(ids, route, true, request.reasoningEffort, usesNativeStream);
-    let reservation: GatewaySpendReservation | undefined;
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
@@ -1051,8 +1050,7 @@ export class Gateway {
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
     try {
-      reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
-      for await (const chunk of this.streamFrom(adapter, request, route.provider, ids)) {
+      for await (const chunk of this.streamFrom(adapter, request, route, ids)) {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
@@ -1069,7 +1067,6 @@ export class Gateway {
       terminalUsage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       this.failStream(ids, route, breaker, chunkCount, elapsed(), error);
     } finally {
-      reservation?.settle(terminalUsage);
       // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
       // generator through `return()`: the loop is left without running either outcome branch, so
       // without this line the log keeps `gateway.stream.started` with nothing after it — the exact
@@ -1292,11 +1289,89 @@ export class Gateway {
   private async *streamFrom(
     adapter: ProviderAdapter,
     request: GatewayCallRequest,
-    provider: ModelProviderConfig,
+    route: RoutedCall,
     ids: CallIds,
   ): AsyncGenerator<GatewayStreamChunk> {
+    const breaker = this.breakerFor(route.provider);
+    const maxRetries =
+      breaker.status(route.provider.modelId).state === "half-open" ? 0 : route.provider.maxRetries;
+    let attempt = 0;
+    const opened = await executeWithRetry(
+      async (_attemptMs, remainingMs) => {
+        if (attempt++ > 0) breaker.assertAllowed(ids.correlationId);
+        const bounds = chatStreamBounds(route.provider);
+        const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
+        const iterator = this.reservedStreamAttempt(adapter, request, route, ids, {
+          budgetMs,
+          silenceMs: Math.min(bounds.silenceMs, budgetMs),
+        });
+        try {
+          let first = await iterator.next();
+          while (!first.done && first.value.type === "delta" && first.value.token.length === 0) {
+            first = await iterator.next();
+          }
+          if (first.done) throw new TransportError("provider stream ended without an answer");
+          return { first: first.value, iterator };
+        } catch (error) {
+          await iterator.return(undefined);
+          throw error;
+        }
+      },
+      {
+        ...providerRetryConfig(route.provider),
+        maxRetries,
+        timeoutMs: streamRequestBudgetMs(route.provider),
+      },
+      this.clock,
+      request.cancellationSignal,
+      this.random,
+      { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
+    );
+    try {
+      yield opened.first;
+      yield* opened.iterator;
+    } finally {
+      await opened.iterator.return(undefined);
+    }
+  }
+
+  private async *reservedStreamAttempt(
+    adapter: ProviderAdapter,
+    request: GatewayCallRequest,
+    route: RoutedCall,
+    ids: CallIds,
+    bounds: StreamReadBounds,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    const reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
+    let usage: UsageMetadata | undefined;
+    try {
+      for await (const chunk of this.readProviderStream(
+        adapter,
+        request,
+        route.provider,
+        ids,
+        bounds,
+      )) {
+        if (chunk.type === "done") usage = chunk.response.usage;
+        yield chunk;
+      }
+    } catch (error) {
+      usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
+      throw error;
+    } finally {
+      reservation?.settle(usage);
+    }
+  }
+
+  private async *readProviderStream(
+    adapter: ProviderAdapter,
+    request: GatewayCallRequest,
+    provider: ModelProviderConfig,
+    ids: CallIds,
+    bounds: StreamReadBounds,
+  ): AsyncGenerator<GatewayStreamChunk> {
     if (adapter.callStream !== undefined) {
-      yield* adapter.callStream(request, provider, chatStreamBounds(provider));
+      yield* adapter.callStream(request, provider, bounds);
       return;
     }
     // Degradation: this adapter has no streaming variant, so the caller gets ONE synthetic delta
@@ -1320,7 +1395,7 @@ export class Gateway {
     // started line above already claimed a 300 s effective timeout.
     const bufferedProvider: ModelProviderConfig = {
       ...provider,
-      timeoutMs: effectiveBufferedAttemptMs(provider),
+      timeoutMs: Math.min(effectiveBufferedAttemptMs(provider), bounds.budgetMs),
     };
     const response = await adapter.call(request, bufferedProvider);
     yield { type: "delta", token: response.content };

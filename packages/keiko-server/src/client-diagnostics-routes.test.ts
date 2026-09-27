@@ -20,7 +20,12 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
-import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
+import {
+  redactLogFields,
+  formatRegisteredServerLogLine,
+  serverLogProcessIdentity,
+} from "@oscharko-dev/keiko-activity-log";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
 const CORRELATION_ID = "diagnostics-route-test";
 const CLIENT_TS = "2026-08-21T10:00:00.000Z";
@@ -84,6 +89,15 @@ function gitOperationEvent(
   const event = sink.events.find((candidate) => candidate.op === op);
   expect(event, `expected exactly one ${op} event`).toBeDefined();
   return event ?? { category: "diagnostic", op };
+}
+
+function expectCompleteGitTimeline(events: readonly ServerLogEvent[]): void {
+  const identity = serverLogProcessIdentity();
+  const lines = events.map((event, index) =>
+    formatRegisteredServerLogLine(event, new Date(), { ...identity, seq: index + 1 }),
+  );
+  const report = analyzeLogText(lines.join(""));
+  expect(report.sufficiency).toMatchObject({ status: "complete", reasons: [] });
 }
 
 function clientDiagnosticRejectedEvents(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
@@ -611,6 +625,60 @@ describe("POST /api/diagnostics/client", () => {
       completeness: "complete",
       loss: "none",
     });
+  });
+
+  it.each([
+    ["repository-register", "succeeded"],
+    ["repository-clone", "succeeded"],
+    ["repository-register", "failed"],
+    ["repository-clone", "failed"],
+    ["repository-register", "discarded-failed"],
+    ["repository-clone", "discarded-failed"],
+  ])("reconstructs the %s lifecycle when %s", async (operation, settlement) => {
+    const sink = captureServerLog();
+    for (const outcome of ["started", settlement]) {
+      const body = JSON.stringify({
+        message: "git-client: add-repository lifecycle",
+        clientTs: CLIENT_TS,
+        kind: "other",
+        correlationId: "ui_repository-0001",
+        gitClientOperation: { operation, outcome },
+        ...(outcome.endsWith("failed") ? { errorKind: "internal" } : {}),
+      });
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+    }
+    const started = gitOperationEvent(sink, "client.git-operation.attempted");
+    const settled = gitOperationEvent(sink, "client.git-operation.settled");
+    expect(started).toMatchObject({
+      correlationId: "ui_repository-0001",
+      level: "info",
+      extra: { operation },
+    });
+    expect(settled).toMatchObject({
+      correlationId: "ui_repository-0001",
+      level: "info",
+      extra: { operation, outcome: settlement },
+    });
+    expectActivityLogProof(
+      "client.git-operation.attempted.line",
+      formatActivityLogProofLine(started),
+    );
+    expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(settled),
+    );
+    expectCompleteGitTimeline([started, settled]);
+    if (settlement === "succeeded") expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    else
+      expect(clientDiagnosticLine(sink)).toMatchObject({
+        correlationId: "ui_repository-0001",
+        gitClientOperation: operation,
+        gitClientOperationOutcome: settlement,
+        errorKind: "internal",
+      });
   });
 
   it("records a superseded checkout selection as correlated routine evidence", async () => {

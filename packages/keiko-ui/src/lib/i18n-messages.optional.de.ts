@@ -140,6 +140,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Ordnerauswahl ist in dieser Keiko-Sitzung nicht verfügbar.",
   "gitClientWindow.addRepository.cancel": "Abbrechen",
   "gitClientWindow.addRepository.adding": "Wird hinzugefügt…",
+  "gitClientWindow.addRepository.failed": "Repository konnte nicht hinzugefügt werden",
   "gitClientWindow.repository.reconnectFailed":
     "Die Repository-Verbindung ist fehlgeschlagen: {detail}",
   "gitClientWindow.repository.workspaceUnavailable":

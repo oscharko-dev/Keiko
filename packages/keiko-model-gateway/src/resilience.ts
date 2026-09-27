@@ -79,7 +79,7 @@ export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
   return Math.max(timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
 }
 
-// The end-to-end budget of the ONE, unretried read `Gateway.chatStream()` performs: the provider's
+// The end-to-end budget of `Gateway.chatStream()`, including any pre-content startup retries: the provider's
 // `timeoutMs` (a coding-workbench-profiled caller raises it through `codingWorkbenchProviderTimeoutMs`
 // first), never below the silence floor its first byte is held to, and never below the
 // streamed-answer floor. `gateway.ts`'s `chatStreamBounds` takes its budget from here, and so does

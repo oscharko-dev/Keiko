@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "760e01428c40bee9627ff2f53d5fab8aba24955065d61e2feaf284b0608b4e88" as const;
+  "6ff29736103ca0c43b5f1f5991607cf57b53c2e8fe4a216e53ef66640a9f7d0a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2386,7 +2386,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["discarded-failed", "retry-failed"],
+        values: ["discarded-failed", "retry-failed", "failed"],
       },
       gitClientOperationReason: {
         type: "string",
@@ -2590,7 +2590,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["status-read", "branches-read", "summary-read"],
+        values: [
+          "status-read",
+          "branches-read",
+          "summary-read",
+          "repository-clone",
+          "repository-register",
+        ],
       },
     },
     causal: "correlation",
@@ -2635,7 +2641,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["discarded-succeeded", "retry-recovered", "retry-superseded"],
+        values: [
+          "discarded-succeeded",
+          "retry-recovered",
+          "retry-superseded",
+          "succeeded",
+          "failed",
+          "discarded-failed",
+        ],
       },
     },
     causal: "correlation",
@@ -14084,6 +14097,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "GIT_DELIVERY_COMMIT_BAD_REQUEST",
           "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
           "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
+          "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
           "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
           "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
           "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
@@ -14103,6 +14117,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       deadlineMs: {
         type: "integer",
         dataClass: "duration",
+        required: false,
+      },
+      promptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      maxPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      diffCompacted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      generationAttempts: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reused: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: false,
       },
     },
@@ -46459,9 +46498,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "diffCompacted",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "failureCode",
               type: "string",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "generationAttempts",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -46471,10 +46522,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "maxPromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "promptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reused",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "stagedFileCount",

@@ -1190,10 +1190,13 @@ describe("GitClientWindow — add-repository dialog", () => {
     await user.click(cloneBtns[cloneBtns.length - 1]!);
 
     await waitFor(() =>
-      expect(client.cloneRepository).toHaveBeenCalledWith({
-        repositoryUrl: "https://github.com/org/repo.git",
-        destinationPath: "/tmp/repo",
-      }),
+      expect(client.cloneRepository).toHaveBeenCalledWith(
+        {
+          repositoryUrl: "https://github.com/org/repo.git",
+          destinationPath: "/tmp/repo",
+        },
+        expect.any(String),
+      ),
     );
     await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
     expect(client.registerRepository).not.toHaveBeenCalled();
@@ -1226,7 +1229,10 @@ describe("GitClientWindow — add-repository dialog", () => {
     await user.click(within(dialog).getByRole("button", { name: "Open repository" }));
 
     await waitFor(() =>
-      expect(client.registerRepository).toHaveBeenCalledWith({ path: "/home/me/existing-repo" }),
+      expect(client.registerRepository).toHaveBeenCalledWith(
+        { path: "/home/me/existing-repo" },
+        expect.any(String),
+      ),
     );
     await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
   });

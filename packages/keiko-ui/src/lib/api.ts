@@ -1082,11 +1082,19 @@ export function projectResponseWarningMessage(response: ProjectResponse): string
     : `${warning.message} Support ID: ${warning.correlationId}`;
 }
 
-export async function createProject(input: CreateProjectInput): Promise<ProjectResponse> {
-  const response = await fetchJson<ProjectResponse>("/api/projects", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+export async function createProject(
+  input: CreateProjectInput,
+  correlationId?: string,
+): Promise<ProjectResponse> {
+  const response = await fetchJson<ProjectResponse>(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+    undefined,
+    correlationId,
+  );
   clearProjectCache();
   return response;
 }
@@ -1097,11 +1105,19 @@ export interface CloneRepositoryInput {
   name?: string;
 }
 
-export async function cloneRepository(input: CloneRepositoryInput): Promise<ProjectResponse> {
-  const response = await fetchJson<ProjectResponse>("/api/repositories/clone", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+export async function cloneRepository(
+  input: CloneRepositoryInput,
+  correlationId?: string,
+): Promise<ProjectResponse> {
+  const response = await fetchJson<ProjectResponse>(
+    "/api/repositories/clone",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+    undefined,
+    correlationId,
+  );
   clearProjectCache();
   return response;
 }
