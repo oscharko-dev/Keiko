@@ -35,7 +35,11 @@ import {
 } from "@oscharko-dev/keiko-security";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
-import { canonicalCommitBody, prepareCommitDraft } from "./commitDraftQuality.js";
+import {
+  canonicalCommitBody,
+  prepareCommitDraft,
+  type CommitBodyNormalizationEvidence,
+} from "./commitDraftQuality.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
   GitCommitChangeSummary,
@@ -211,6 +215,34 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
     generationAttempts: { type: "integer", dataClass: "count", required: false },
     reused: { type: "boolean", dataClass: "closed-enum", required: false },
     draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    normalizationVersion: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["1"],
+    },
+    normalizationRule: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["body-only", "terminal-trailers", "explicit-trailers"],
+    },
+    normalizationChanged: { type: "boolean", dataClass: "closed-enum", required: false },
+    bodyBulletCount: { type: "integer", dataClass: "count", required: false },
+    trailerLikeLineCount: { type: "integer", dataClass: "count", required: false },
+    trailerCount: { type: "integer", dataClass: "count", required: false },
+    trailerContinuationCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    trailerParagraphBreakCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    referenceTrailerCount: { type: "integer", dataClass: "count", required: false },
+    breakingTrailerCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -685,7 +717,7 @@ interface ResolvedCommitDraftModel {
 }
 
 // The bounds one draft's model call ran under; recorded on its `git.commit.draft.completed` line.
-interface CommitDraftBounds {
+interface CommitDraftBounds extends Partial<CommitBodyNormalizationEvidence> {
   readonly promptTokens?: number;
   readonly maxPromptTokens?: number;
   readonly diffCompacted?: boolean;
@@ -870,8 +902,16 @@ function draftTextField(
 }
 
 type ModelCommitDraftValidation =
-  | { readonly ok: true; readonly message: string }
-  | { readonly ok: false; readonly reason: "output-exhausted" | "invalid-output" };
+  | {
+      readonly ok: true;
+      readonly message: string;
+      readonly normalization: CommitBodyNormalizationEvidence;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "output-exhausted" | "invalid-output";
+      readonly normalization?: CommitBodyNormalizationEvidence;
+    };
 
 function modelCommitMessage(
   response: NormalizedResponse,
@@ -897,10 +937,11 @@ function modelCommitMessage(
   ) {
     return { ok: false, reason: "invalid-output" };
   }
-  const message = appendKeikoGeneratedFooter(`${subject}\n\n${canonicalCommitBody(body)}`);
+  const normalized = canonicalCommitBody(body);
+  const message = appendKeikoGeneratedFooter(`${subject}\n\n${normalized.body}`);
   return validateGitCommitMessage(message, policy).ok
-    ? { ok: true, message }
-    : { ok: false, reason: "invalid-output" };
+    ? { ok: true, message, normalization: normalized.evidence }
+    : { ok: false, reason: "invalid-output", normalization: normalized.evidence };
 }
 
 // #3591: classifies a failed model call into the three failure classes the UI must tell apart — a
@@ -981,10 +1022,11 @@ async function attemptCommitDraft(
   try {
     const response = await resolved.model.call(prepared.request, signal);
     const validated = modelCommitMessage(response, input.policy);
-    if (validated.ok) return { ok: true, message: validated.message, bounds };
+    const observedBounds = { ...bounds, ...validated.normalization };
+    if (validated.ok) return { ok: true, message: validated.message, bounds: observedBounds };
     return {
       ok: false,
-      bounds,
+      bounds: observedBounds,
       code:
         validated.reason === "output-exhausted"
           ? "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"

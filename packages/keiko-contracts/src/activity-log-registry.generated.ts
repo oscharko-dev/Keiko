@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1f694f844a1b6b67af2205a373fc14ace62b9b18998c5f282fe2b770eaf208d9" as const;
+  "7267249586b28404af8af9e352566abf1a5dc8873f67a37a855e811f61a1df80" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -14150,6 +14150,58 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: false,
         maxLength: 64,
+      },
+      normalizationVersion: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["1"],
+      },
+      normalizationRule: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["body-only", "terminal-trailers", "explicit-trailers"],
+      },
+      normalizationChanged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      bodyBulletCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerLikeLineCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerContinuationCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerParagraphBreakCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      referenceTrailerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      breakingTrailerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -46499,6 +46551,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "bodyBulletCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "breakingTrailerCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "deadlineMs",
               type: "integer",
               dataClass: "duration",
@@ -46541,6 +46605,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "normalizationChanged",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "normalizationRule",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "normalizationVersion",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
@@ -46548,6 +46630,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "promptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "referenceTrailerCount",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -46568,6 +46656,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "touchesTests",
               type: "boolean",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "trailerContinuationCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "trailerCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "trailerLikeLineCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "trailerParagraphBreakCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
           ],

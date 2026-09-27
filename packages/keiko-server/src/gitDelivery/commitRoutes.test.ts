@@ -2733,3 +2733,152 @@ it.each(["empty-answer", "multiline-subject", "oversized-body"])(
     );
   },
 );
+
+// Formatting evidence must describe the output on generation and reuse without retaining text.
+it.each([
+  {
+    body: "- Fix parser.\n\nMigration: use v2.\n  Follow these steps.",
+    counts: {
+      bodyBulletCount: 1,
+      trailerCount: 1,
+      trailerContinuationCount: 1,
+      trailerParagraphBreakCount: 0,
+      trailerLikeLineCount: 1,
+      referenceTrailerCount: 0,
+      breakingTrailerCount: 0,
+      normalizationRule: "terminal-trailers",
+      normalizationChanged: false,
+    },
+  },
+  {
+    body: "* Fix parser.\n\nRefs #123\n\nFurther details.",
+    counts: {
+      bodyBulletCount: 1,
+      trailerCount: 1,
+      trailerContinuationCount: 1,
+      trailerParagraphBreakCount: 1,
+      trailerLikeLineCount: 1,
+      referenceTrailerCount: 1,
+      breakingTrailerCount: 0,
+      normalizationRule: "explicit-trailers",
+      normalizationChanged: true,
+    },
+  },
+  {
+    body: "* Fix parser.\n\nNote: lexer unchanged.\n\n* Update docs.",
+    counts: {
+      bodyBulletCount: 3,
+      trailerCount: 0,
+      trailerContinuationCount: 0,
+      trailerParagraphBreakCount: 0,
+      trailerLikeLineCount: 1,
+      referenceTrailerCount: 0,
+      breakingTrailerCount: 0,
+      normalizationRule: "body-only",
+      normalizationChanged: true,
+    },
+  },
+  {
+    body: "- Fix parser.\n\nBREAKING CHANGE: v1 removed.\n  Migration: use v2.",
+    counts: {
+      bodyBulletCount: 1,
+      trailerCount: 1,
+      trailerContinuationCount: 1,
+      trailerParagraphBreakCount: 0,
+      trailerLikeLineCount: 2,
+      referenceTrailerCount: 0,
+      breakingTrailerCount: 1,
+      normalizationRule: "explicit-trailers",
+      normalizationChanged: false,
+    },
+  },
+])("persists normalization evidence on generation and reuse: $body", async ({ body, counts }) => {
+  const events: ServerLogEvent[] = [];
+  const respond = vi.fn(() => draftResponse({ subject: "fix: normalize parser draft", body }));
+  const handler = createHandleCommitDraft({
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/a.ts b/a.ts\n+change"),
+    }),
+    activityLog: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  const dependencies = deps({
+    config: DRAFT_GATEWAY_CONFIG,
+    modelPortFactory: () => draftModelPort(respond),
+  });
+  for (let index = 0; index < 2; index += 1) {
+    const result = await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies);
+    expect(result.status).toBe(200);
+    expect((result.body as GitDeliveryCommitDraftBody).suggestedMessage).toContain(
+      commitDraftQuality.canonicalCommitBody(body).body,
+    );
+  }
+  expect(respond).toHaveBeenCalledOnce();
+  const completed = events.filter((event) => event.op === "git.commit.draft.completed");
+  expect(completed).toHaveLength(2);
+  for (const [index, event] of completed.entries()) {
+    const persisted = expectActivityLogProof(
+      "git.commit.draft.completed.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({
+      outcome: "succeeded",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      normalizationVersion: "1",
+      ...counts,
+      ...(index === 1 ? { reused: true } : {}),
+    });
+    expect(JSON.stringify(persisted)).not.toContain("Further details.");
+    expect(JSON.stringify(persisted)).not.toContain("Refs #123");
+    expect(analyzeLogText(formatActivityLogProofLine(event)).sufficiency.status).toBe("complete");
+  }
+});
+
+it("retains observed normalization evidence when commit policy rejects the answer", async () => {
+  const events: ServerLogEvent[] = [];
+  const handler = createHandleCommitDraft({
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/a.ts b/a.ts\n+change"),
+    }),
+    activityLog: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  const result = await handler(
+    ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+    deps({
+      config: DRAFT_GATEWAY_CONFIG,
+      modelPortFactory: () =>
+        draftModelPort(() =>
+          draftResponse({
+            subject: "missing conventional prefix",
+            body: "* Fix parser.\n\nRefs #123\n\nFurther details.",
+          }),
+        ),
+    }),
+  );
+  expect(result.status).toBe(502);
+  const completed = events.find((event) => event.op === "git.commit.draft.completed");
+  const persisted = expectActivityLogProof(
+    "git.commit.draft.completed.emitted-line",
+    formatActivityLogProofLine(completed ?? {}),
+  );
+  expect(persisted).toMatchObject({
+    outcome: "failed",
+    failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+    errorKind: "validation-failed",
+    normalizationVersion: "1",
+    normalizationRule: "explicit-trailers",
+    normalizationChanged: true,
+    bodyBulletCount: 1,
+    trailerCount: 1,
+    referenceTrailerCount: 1,
+    trailerContinuationCount: 1,
+    generationAttempts: 2,
+  });
+});

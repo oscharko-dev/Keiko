@@ -4,7 +4,15 @@ import {
   createDefaultChatCapability,
   type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import { canonicalCommitBody, prepareCommitDraft } from "./commitDraftQuality.js";
+import {
+  canonicalCommitBody as normalizeCommitBody,
+  prepareCommitDraft,
+} from "./commitDraftQuality.js";
+
+// Keep the exact-output/idempotence pins over the text projection of the production result.
+function canonicalCommitBody(body: string): string {
+  return normalizeCommitBody(body).body;
+}
 
 function build(diff: string, compacted: boolean): GatewayCallRequest {
   return {
@@ -202,3 +210,19 @@ it.each(["BREAKING CHANGE", "BREAKING-CHANGE", "Migration"])(
     expect(canonicalCommitBody(canonicalCommitBody(body))).toBe(body);
   },
 );
+
+it.each(["Refs #123", "Refs: #123", "Reviewed-by: Dev <dev@example.invalid>"])(
+  "preserves unindented paragraphs in the explicit %s footer",
+  (token) => {
+    const body = `- Fix parser.\n\n${token}\n\nFurther details.\nMore details.\n\nSigned-off-by: Dev <dev@example.invalid>`;
+    expect(canonicalCommitBody(body)).toBe(body);
+    expect(canonicalCommitBody(canonicalCommitBody(body))).toBe(body);
+  },
+);
+
+it("keeps an indented reference inside ambiguous prose from claiming later body paragraphs", () => {
+  const body = "- Fix parser.\n\nNote: more context.\n\n  Refs #123\n\nExplain the reason.";
+  const expected = "- Fix parser.\n- Note: more context.\n- Refs #123\n- Explain the reason.";
+  expect(canonicalCommitBody(body)).toBe(expected);
+  expect(canonicalCommitBody(expected)).toBe(expected);
+});

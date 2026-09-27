@@ -454,7 +454,13 @@ answers still fail visibly. No error is cached and no placeholder commit text is
 
 The existing `git.commit.draft.completed` line carries `promptTokens`, `maxPromptTokens`,
 `diffCompacted`, `generationAttempts` and `reused` when observed. The fields are counts and flags;
-no customer paths, diff or generated text is recorded.
+no customer paths, diff or generated text is recorded. For a formatting report, compare
+`normalizationVersion`, `normalizationRule` and `normalizationChanged`, then `bodyBulletCount`,
+`trailerLikeLineCount`, `trailerCount`, `trailerContinuationCount`, `trailerParagraphBreakCount`,
+`referenceTrailerCount` and `breakingTrailerCount`. These separate footer retention from body-list
+normalization, and carry the same values on cache reuse. Missing normalization fields mean the
+formatter was not reached; zero means it ran and observed none. No footer label or reference value
+is logged.
 
 Chat startup now retries transient proxy failures and timeouts within the configured retry count
 and one shared stream budget. It never restarts a stream after delivering text. Authentication

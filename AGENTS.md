@@ -438,7 +438,7 @@ system that exists, never beside it:
   Repository-add dialogs mint that id before clone/register, validate it with the canonical Activity Log correlation guard, pass it to the request, and report
   the attempt and settlement even when dismissed; effect replay is not a human dismissal.
 - **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
-  flags on `git.commit.draft.completed`; stream startup retries use the existing `gateway.retry.*`
+  flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts; stream startup retries use the existing `gateway.retry.*`
   events. Refused prompts retain measured bounds, and generated/reused drafts share a body-free key digest. Browser delivery-loss counts are recorded once after rate admission and before routine diversion. Refused loss-bearing reports return 429 so the browser retains the counts for later delivery; the server alone counts that dropped report, avoiding a second client-post-failed count. Final pagehide loss reports use an independent bounded admission budget, so ordinary report storms cannot discard the closing tab's counters. Stream resources, circuit admissions, spend reservations and completion evidence settle before the terminal done packet reaches a consumer. Neither path records customer diffs or generated text.
 
 - **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the

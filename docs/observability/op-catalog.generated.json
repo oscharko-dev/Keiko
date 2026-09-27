@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1f694f844a1b6b67af2205a373fc14ace62b9b18998c5f282fe2b770eaf208d9",
+    "catalogDigest": "7267249586b28404af8af9e352566abf1a5dc8873f67a37a855e811f61a1df80",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -14873,6 +14873,58 @@
             "dataClass": "digest",
             "required": false,
             "maxLength": 64
+          },
+          "normalizationVersion": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["1"]
+          },
+          "normalizationRule": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["body-only", "terminal-trailers", "explicit-trailers"]
+          },
+          "normalizationChanged": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "bodyBulletCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerLikeLineCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerContinuationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerParagraphBreakCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "referenceTrailerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "breakingTrailerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -14881,8 +14933,8 @@
         "failureClasses": ["git-commit-draft"],
         "proofIds": ["git.commit.draft.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:161",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1085"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:165",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1127"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14935,8 +14987,8 @@
         "failureClasses": ["git-commit-preview"],
         "proofIds": ["git.commit.preview.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:134",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:380"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:138",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:412"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -56921,6 +56973,18 @@
                   "required": false
                 },
                 {
+                  "name": "bodyBulletCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "breakingTrailerCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "deadlineMs",
                   "type": "integer",
                   "dataClass": "duration",
@@ -56963,6 +57027,24 @@
                   "required": false
                 },
                 {
+                  "name": "normalizationChanged",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "normalizationRule",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "normalizationVersion",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -56970,6 +57052,12 @@
                 },
                 {
                   "name": "promptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "referenceTrailerCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -56990,6 +57078,30 @@
                   "name": "touchesTests",
                   "type": "boolean",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "trailerContinuationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "trailerCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "trailerLikeLineCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "trailerParagraphBreakCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 }
               ],
@@ -76580,54 +76692,54 @@
     {
       "op": "git.commit.draft.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:164",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:168",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.model",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:457",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:489",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:443",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:475",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.conflict-scan",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:471",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:503",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.mutation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:485",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:517",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.branch-protection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:415",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:447",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:137",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:141",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:429",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:461",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76658,7 +76770,7 @@
     {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1622",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1664",
       "package": "keiko-server"
     },
     {
@@ -76670,7 +76782,7 @@
     {
       "op": "git.delivery.commit.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1476",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1518",
       "package": "keiko-server"
     },
     {
