@@ -22,9 +22,8 @@ import { flagValue } from "./cli-arg-parsing.js";
 import { loadActivityLog } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
-import { activityLogFailureClassesOf } from "@oscharko-dev/keiko-activity-log/reader";
-import { describeErrorKind } from "./support-export.js";
 import {
+  activityLogFailureClassesOf,
   DEFAULT_SUPPORT_QUERY_LIMITS,
   renderSupportQuery,
   runSupportQuery,
@@ -37,16 +36,6 @@ import {
   type SupportQueryResult,
   type SupportQuerySelection,
   type SupportQueryWindow,
-} from "@oscharko-dev/keiko-activity-log/reader";
-import {
-  emitSupportManifestEvidence,
-  emitSupportQueryEvidence,
-  emitSupportQueryFailure,
-  type SupportQueryEvidenceSink,
-  type SupportQueryFailureStage,
-  type SupportQuerySurface,
-} from "./support-query-evidence.js";
-import {
   ActivityLogScanner,
   ensureSegmentManifests,
   listActivityLogStoreFiles,
@@ -55,6 +44,15 @@ import {
   type ActivityLogStoreFile,
   type SegmentManifestPassStats,
 } from "@oscharko-dev/keiko-activity-log/reader";
+import { describeErrorKind } from "./support-export.js";
+import {
+  emitSupportManifestEvidence,
+  emitSupportQueryEvidence,
+  emitSupportQueryFailure,
+  type SupportQueryEvidenceSink,
+  type SupportQueryFailureStage,
+  type SupportQuerySurface,
+} from "./support-query-evidence.js";
 
 export const SUPPORT_QUERY_USAGE = `Usage:
   keiko support query [--state-dir PATH] [--json]

@@ -34,9 +34,12 @@ import {
   writeNodeExecutableFixture,
 } from "./testing/executableFixture.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
-import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
+import {
+  redactLogFields,
+  createServerLogger,
+  setServerLogger,
+} from "@oscharko-dev/keiko-activity-log";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
-import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

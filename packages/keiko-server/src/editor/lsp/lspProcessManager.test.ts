@@ -22,9 +22,12 @@ import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import type { FakeLspBehavior, FakeLspController } from "./testing/fakeLspProcess.js";
 import { writeExecutableFixture } from "./testing/executableFixture.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
-import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
+import {
+  createServerLogger,
+  setServerLogger,
+  redactLogFields,
+} from "@oscharko-dev/keiko-activity-log";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
-import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

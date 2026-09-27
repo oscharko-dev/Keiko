@@ -13,8 +13,8 @@ import {
 import type {
   SupportQueryClass,
   SupportQueryResult,
+  SegmentManifestPassStats,
 } from "@oscharko-dev/keiko-activity-log/reader";
-import type { SegmentManifestPassStats } from "@oscharko-dev/keiko-activity-log/reader";
 
 const SURFACE_FIELD = {
   type: "string",

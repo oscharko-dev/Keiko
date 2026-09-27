@@ -16,6 +16,8 @@ import type { loadActivityLog } from "./lazy-modules.js";
 import {
   selectedLogContent,
   type SelectedLogContent,
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+  type SupportQueryResult,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   SupportUsageError,
@@ -29,10 +31,6 @@ import {
   type SupportSelectorArgs,
 } from "./support-query-cli.js";
 import { describeErrorKind } from "./support-export.js";
-import {
-  DEFAULT_SUPPORT_QUERY_LIMITS,
-  type SupportQueryResult,
-} from "@oscharko-dev/keiko-activity-log/reader";
 
 export { selectedLogContent } from "@oscharko-dev/keiko-activity-log/reader";
 export type {

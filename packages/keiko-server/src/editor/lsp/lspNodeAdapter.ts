@@ -54,8 +54,7 @@ import {
 } from "../processHardening.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 import { processServerLogSink } from "../../process-log-sink.js";
-import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import { errorKindOf, causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type { LspSpawnHandle } from "./lspTransport.js";
 
 const LSP_SPAWN_COMPLETED_OPERATION = defineActivityLogOperation({

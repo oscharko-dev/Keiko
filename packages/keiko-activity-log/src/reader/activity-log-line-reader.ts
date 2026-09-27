@@ -109,18 +109,21 @@ class PendingLine {
   }
 
   public takeInto(line: MutableActivityLogReadLine, terminated: boolean): void {
-    line.text =
-      this.discarded || this.parts.length === 0
-        ? ""
-        : this.parts.length === 1
-          ? (this.parts[0]?.toString("utf8") ?? "")
-          : Buffer.concat(this.parts, this.bytes).toString("utf8");
+    line.text = this.joinedText();
     line.terminated = terminated;
     line.byteLength = this.bytes;
     line.oversized = this.discarded;
     this.parts = [];
     this.bytes = 0;
     this.discarded = false;
+  }
+
+  // A discarded (oversized) or absent line decodes to nothing; a single part is decoded directly and
+  // only a line spread over several parts is concatenated first.
+  private joinedText(): string {
+    if (this.discarded || this.parts.length === 0) return "";
+    if (this.parts.length === 1) return this.parts[0]?.toString("utf8") ?? "";
+    return Buffer.concat(this.parts, this.bytes).toString("utf8");
   }
 }
 
@@ -165,42 +168,55 @@ class DescriptorLineCursor {
 
   public nextInto(line: MutableActivityLogReadLine): boolean {
     while (!this.closed) {
-      if (this.view !== undefined) {
-        const newline = this.view.indexOf(NEWLINE, this.start);
-        if (newline >= 0) {
-          const byteLength = newline - this.start;
-          if (this.pending.empty && byteLength <= this.maxLineBytes) {
-            // Most persisted lines are wholly inside one chunk. Decode that byte range directly so
-            // the hot path creates neither a Buffer view nor a one-element pending-parts array.
-            line.text = this.view.toString("utf8", this.start, newline);
-            line.terminated = true;
-            line.byteLength = byteLength;
-            line.oversized = false;
-          } else {
-            // A line completed across chunks (or exceeded the configured bound) still needs the
-            // bounded pending-line state before the read buffer may be reused.
-            this.pending.append(this.view.subarray(this.start, newline), false);
-            this.pending.takeInto(line, true);
-          }
-          this.start = newline + 1;
-          return true;
-        }
-        this.pending.append(this.view.subarray(this.start), true);
-      }
-
-      const count = readChunk(this.descriptor, this.chunk, this.position);
-      if (count === 0) {
-        this.close();
-        if (this.pending.empty) return false;
-        this.pending.takeInto(line, false);
-        return true;
-      }
-      this.position += count;
-      this.view = this.chunk.subarray(0, count);
-      this.start = 0;
-      this.options.onChunk?.(this.view);
+      if (this.view !== undefined && this.takeBufferedLine(this.view, line)) return true;
+      if (!this.readNextChunk()) return this.takeTornTail(line);
     }
     return false;
+  }
+
+  // Completes the next line from the current chunk. Without a newline in the rest of the chunk, that
+  // rest is kept pending (copied, because the chunk buffer is reused) and the caller reads on.
+  private takeBufferedLine(view: Buffer, line: MutableActivityLogReadLine): boolean {
+    const newline = view.indexOf(NEWLINE, this.start);
+    if (newline < 0) {
+      this.pending.append(view.subarray(this.start), true);
+      return false;
+    }
+    const byteLength = newline - this.start;
+    if (this.pending.empty && byteLength <= this.maxLineBytes) {
+      // Most persisted lines are wholly inside one chunk. Decode that byte range directly so the
+      // hot path creates neither a Buffer view nor a one-element pending-parts array.
+      line.text = view.toString("utf8", this.start, newline);
+      line.terminated = true;
+      line.byteLength = byteLength;
+      line.oversized = false;
+    } else {
+      // A line completed across chunks (or exceeded the configured bound) still needs the bounded
+      // pending-line state before the read buffer may be reused.
+      this.pending.append(view.subarray(this.start, newline), false);
+      this.pending.takeInto(line, true);
+    }
+    this.start = newline + 1;
+    return true;
+  }
+
+  // Reads the next chunk into the reusable buffer; false once the descriptor is exhausted.
+  private readNextChunk(): boolean {
+    const count = readChunk(this.descriptor, this.chunk, this.position);
+    if (count === 0) return false;
+    this.position += count;
+    this.view = this.chunk.subarray(0, count);
+    this.start = 0;
+    this.options.onChunk?.(this.view);
+    return true;
+  }
+
+  // At the end of the descriptor: closes the cursor and completes a final line that has no newline.
+  private takeTornTail(line: MutableActivityLogReadLine): boolean {
+    this.close();
+    if (this.pending.empty) return false;
+    this.pending.takeInto(line, false);
+    return true;
   }
 
   public close(): void {

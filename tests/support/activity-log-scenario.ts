@@ -41,8 +41,6 @@ import {
   analyzeLogText,
   type AnalyzeAllResult,
   type OpCluster,
-} from "@oscharko-dev/keiko-activity-log/reader";
-import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   type SupportQueryResult,
 } from "@oscharko-dev/keiko-activity-log/reader";

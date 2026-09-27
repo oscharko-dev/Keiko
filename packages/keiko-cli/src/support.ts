@@ -85,8 +85,6 @@ import {
   type ActivityLogTextLine,
   type ReproductionSeed,
   type ReproductionSeedSource,
-} from "@oscharko-dev/keiko-activity-log/reader";
-import {
   ActivityLogReadError,
   readActivityLogFileLines,
 } from "@oscharko-dev/keiko-activity-log/reader";

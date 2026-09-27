@@ -31,9 +31,12 @@ import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { LspSpawnPreparationInput } from "../lspProcessManager.js";
 import { JAVA_PROVIDER_SPEC, javaProtocolConfiguration, prepareJavaSpawn } from "./javaProvider.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
-import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
+import {
+  redactLogFields,
+  createServerLogger,
+  setServerLogger,
+} from "@oscharko-dev/keiko-activity-log";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
-import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

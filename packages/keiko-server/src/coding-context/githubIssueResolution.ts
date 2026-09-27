@@ -38,8 +38,7 @@ import { readGitDefaultBranch } from "@oscharko-dev/keiko-tools";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogLevel, ServerLogSink } from "../observability/index.js";
-import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import { errorKindOf, causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import {
   buildGitHubCodeContextArgv,

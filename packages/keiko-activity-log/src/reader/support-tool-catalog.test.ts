@@ -8,7 +8,7 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { createFileServerLogSink, formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
 import {
   validateToolLifecycleEvent,
   redactLogFields,
@@ -17,7 +17,6 @@ import * as lazyModules from "../../../keiko-cli/src/lazy-modules.js";
 import { runSupportCli } from "../../../keiko-cli/src/support.js";
 import type { ToolCatalogLogEvidence } from "./support-tool-catalog.js";
 import { defaultServerDiagnosticSink } from "@oscharko-dev/keiko-server/diagnostics-log";
-import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
 import { createCatalogToolBinder } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolDispatch";
 import type { CatalogToolBinderInput } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolPorts";
 // B3-24: catalogToolFixture.ts lives under packages/keiko-server/src/tool-catalog/__fixtures__/,

@@ -134,8 +134,7 @@ import {
 } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
-import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
-import { resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
+import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {

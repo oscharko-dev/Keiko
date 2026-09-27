@@ -19,7 +19,11 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { isActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { currentActivityLogReadiness } from "@oscharko-dev/keiko-activity-log";
+import {
+  currentActivityLogReadiness,
+  createServerLogger,
+  setServerLogger,
+} from "@oscharko-dev/keiko-activity-log";
 import {
   buildRedactor,
   createInMemoryUiStore,
@@ -35,7 +39,6 @@ import {
   type RequestLogContext,
 } from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import { createServerLogger, setServerLogger } from "@oscharko-dev/keiko-activity-log";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 import type { EditorHotExitStore } from "./editor/hotExitStore.js";

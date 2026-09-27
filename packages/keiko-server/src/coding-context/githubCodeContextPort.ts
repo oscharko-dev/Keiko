@@ -30,8 +30,7 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import { errorKindOf, causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { GITHUB_CODE_CONTEXT_ALLOWED_SUBCOMMANDS } from "./githubCodeContextConnector.js";
 import type {
   GitHubCodeContextApiPort,

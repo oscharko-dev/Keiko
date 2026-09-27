@@ -20,10 +20,12 @@ import {
   recordRegisteredFailureIncident,
 } from "@oscharko-dev/keiko-activity-log";
 import type { CliIo } from "./runner.js";
-import { ACTIVITY_LOG_READ_CHUNK_BYTES } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  ACTIVITY_LOG_READ_CHUNK_BYTES,
+  analyzeLogText,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { loadActivityLog } from "./lazy-modules.js";
 import { runSupportCli } from "./support.js";
-import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   MAX_SUPPORT_INCIDENT_WINDOW_BYTES,
   SupportIncidentWindowError,
