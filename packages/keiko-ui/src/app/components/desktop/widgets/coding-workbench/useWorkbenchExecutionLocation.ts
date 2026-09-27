@@ -93,6 +93,8 @@ interface LocationInput {
   readonly branch: string | undefined;
   readonly location: WorkbenchExecutionLocation;
   readonly activeInstance: WorkspaceInstance | null;
+  readonly branchLoading: boolean;
+  readonly branchError: boolean;
   readonly workspaceLoading: boolean;
   readonly workspaceError: boolean;
   readonly runIsActive: boolean;
@@ -105,6 +107,8 @@ function useStableLocationInput(input: LocationInput): LocationInput {
     branch,
     location,
     activeInstance,
+    branchLoading,
+    branchError,
     workspaceLoading,
     workspaceError,
     runIsActive,
@@ -116,6 +120,8 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       branch,
       location,
       activeInstance,
+      branchLoading,
+      branchError,
       workspaceLoading,
       workspaceError,
       runIsActive,
@@ -126,6 +132,8 @@ function useStableLocationInput(input: LocationInput): LocationInput {
       branch,
       location,
       activeInstance,
+      branchLoading,
+      branchError,
       workspaceLoading,
       workspaceError,
       runIsActive,
@@ -150,6 +158,8 @@ function shouldBind(
 ): boolean {
   return (
     !ready &&
+    !input.branchLoading &&
+    !input.branchError &&
     !input.workspaceLoading &&
     !input.workspaceError &&
     !input.runIsActive &&
@@ -161,6 +171,8 @@ function shouldBind(
 function selectionNeedsBinding(previous: LocationInput, current: LocationInput): boolean {
   return (
     !selectionChanged(previous, current) &&
+    !current.branchLoading &&
+    !current.branchError &&
     !current.workspaceLoading &&
     !current.workspaceError &&
     !current.runIsActive &&
@@ -223,27 +235,37 @@ async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
   }
 }
 
-function useBindingAttempt(
-  input: LocationInput,
-  ready: boolean,
-  key: string,
-): {
+interface BindingAttemptState {
   readonly pending: boolean;
   readonly errorKey: string | null;
+  readonly handledKey: string | null;
   readonly retry: () => void;
-} {
+}
+
+function useBindingAttempt(input: LocationInput, ready: boolean, key: string): BindingAttemptState {
   const stableInput = useStableLocationInput(input);
   const [pending, setPending] = useState(false);
   const [selectionEpoch, setSelectionEpoch] = useState(0);
+  const [handledKey, setHandledKey] = useState<string | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const inFlight = useRef<string | null>(null);
   const latest = useRef(stableInput);
   useLayoutEffect(() => {
     latest.current = stableInput;
   }, [stableInput]);
-  const { refresh, workspaceError } = input;
+  const { refresh, workspaceError, branchError } = input;
   useEffect(() => {
-    if (!shouldBind(stableInput, ready, errorKey, key) || inFlight.current !== null) return;
+    if (ready) {
+      setHandledKey(key);
+      return;
+    }
+    if (
+      handledKey === key ||
+      !shouldBind(stableInput, ready, errorKey, key) ||
+      inFlight.current !== null
+    )
+      return;
+    setHandledKey(key);
     inFlight.current = key;
     setPending(true);
     void runBindingAttempt({
@@ -255,12 +277,28 @@ function useBindingAttempt(
       setErrorKey,
       setSelectionEpoch,
     });
-  }, [errorKey, stableInput, key, ready, selectionEpoch]);
+  }, [errorKey, handledKey, stableInput, key, ready, selectionEpoch]);
   const retry = useCallback((): void => {
+    setHandledKey(null);
     setErrorKey(null);
-    if (workspaceError) void refresh();
-  }, [refresh, workspaceError]);
-  return { pending, errorKey, retry };
+    setSelectionEpoch((epoch) => epoch + 1);
+    if (workspaceError || branchError) void refresh();
+  }, [refresh, workspaceError, branchError]);
+  return { pending, errorKey, handledKey, retry };
+}
+
+function bindingError(
+  input: LocationInput,
+  ready: boolean,
+  pending: boolean,
+  key: string,
+  attempt: BindingAttemptState,
+): boolean {
+  return (
+    attempt.errorKey === key ||
+    input.workspaceError ||
+    (!ready && !pending && (input.branchError || attempt.handledKey === key))
+  );
 }
 
 export function useWorkbenchExecutionLocation(
@@ -271,11 +309,12 @@ export function useWorkbenchExecutionLocation(
     !input.workspaceLoading &&
     !input.workspaceError &&
     bindingReady(input.activeInstance, input.root, input.branch, input.location);
-  const { pending, errorKey, retry } = useBindingAttempt(input, ready, key);
+  const attempt = useBindingAttempt(input, ready, key);
+  const pending = attempt.pending || input.workspaceLoading || (!ready && input.branchLoading);
   return {
     ready,
-    pending: pending || input.workspaceLoading,
-    error: errorKey === key || input.workspaceError,
-    retry,
+    pending,
+    error: bindingError(input, ready, pending, key, attempt),
+    retry: attempt.retry,
   };
 }

@@ -42,6 +42,12 @@ function useRepositoryInvalidation(root: string | null, refresh: () => Promise<v
   }, [refresh, root]);
 }
 
+function stateForRoot(state: BranchReadState, root: string | null): BranchReadState {
+  return state.root === root
+    ? state
+    : { ...state, response: null, loading: root !== null, error: null };
+}
+
 export function useRepositoryBranchState(root: string | null): RepositoryBranchState {
   const [state, setState] = useState<BranchReadState>({
     root: null,
@@ -92,7 +98,7 @@ export function useRepositoryBranchState(root: string | null): RepositoryBranchS
 
   useRepositoryInvalidation(root, refresh);
 
-  const current = state.root === root ? state : { ...state, response: null };
+  const current = stateForRoot(state, root);
   return {
     ...current,
     branches: current.response?.branches ?? EMPTY_BRANCHES,

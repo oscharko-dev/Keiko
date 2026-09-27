@@ -302,6 +302,7 @@ function LocationChip({
       ariaLabel={t("codingWorkbench.repository.locationLabel")}
       leadingVisual={<LocationIcon size={15} aria-hidden="true" />}
       {...chipTrigger(placement, label, 22)}
+      menuPopoverMinWidth={260}
       showMenuHeader={false}
       menuPlacement="up"
     />

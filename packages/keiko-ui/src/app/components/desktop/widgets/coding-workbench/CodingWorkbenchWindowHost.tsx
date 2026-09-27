@@ -55,6 +55,19 @@ function resolvedTargetBranch(
   return targetBranch;
 }
 
+function isHistoryRestore(selection: string | undefined): boolean {
+  return selection !== undefined && !selection.startsWith("new:");
+}
+
+function handledHistoryPatch(restoringHistory: boolean): WindowCfgRecord {
+  return {
+    historySelection: undefined,
+    ...(restoringHistory
+      ? { executionLocation: undefined, targetBranch: undefined, targetBranchRoot: undefined }
+      : {}),
+  };
+}
+
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
 export function CodingWorkbenchWindowHost({
   cfg,
@@ -68,17 +81,18 @@ export function CodingWorkbenchWindowHost({
   // their own selection independent of subsequent Chat or Git context changes.
   const initialRoot = useRef(context.activeBinding === null ? context.selectedRoot : null);
   const root = cfgRoot ?? initialRoot.current;
-  const targetBranch = resolvedTargetBranch(cfg, root);
+  const historySelection =
+    typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
+  const restoringHistory = isHistoryRestore(historySelection);
+  const targetBranch = restoringHistory ? undefined : resolvedTargetBranch(cfg, root);
   const selectedLocation: WorkbenchExecutionLocation | undefined =
-    cfg.executionLocation === "local" || cfg.executionLocation === "worktree"
+    !restoringHistory && (cfg.executionLocation === "local" || cfg.executionLocation === "worktree")
       ? cfg.executionLocation
       : undefined;
   return (
     <CodingWorkbenchWindow
-      historySelection={typeof cfg.historySelection === "string" ? cfg.historySelection : undefined}
-      onHistorySelectionHandled={() =>
-        context.openWindow("coding", { historySelection: undefined })
-      }
+      historySelection={historySelection}
+      onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
       onOpenHistory={() => context.openWindow("codingHistory")}
       selectedRoot={root ?? undefined}
       selectedBranch={targetBranch}

@@ -790,6 +790,24 @@ function initialHistoryLocation(
   return activeExecutionLocation(workspace.activeInstance, root, selectedLocation);
 }
 
+function locationSelectionPending(
+  workspace: UseCodingWorkbenchRuntimeInput["workspace"],
+  history: CodingTaskSession,
+  selection: string | undefined,
+): boolean {
+  return workspaceBindingPendingOf(workspace) || history.pending || selection !== undefined;
+}
+
+function useCheckoutRefresh(
+  refreshBranches: () => Promise<void>,
+  refreshWorkspace: () => Promise<boolean>,
+): () => Promise<boolean> {
+  return useCallback(async (): Promise<boolean> => {
+    await refreshBranches();
+    return refreshWorkspace();
+  }, [refreshBranches, refreshWorkspace]);
+}
+
 export function CodingWorkbenchWindow({
   selectedRoot,
   selectedBranch,
@@ -868,15 +886,21 @@ export function CodingWorkbenchWindow({
     repositoryRoot,
     selectedLocation,
   );
+  const branchInventory = useRepositoryBranchState(
+    repositoryBranchReadRoot(runIsActive, repositoryRoot),
+  );
+  const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,
     location,
     activeInstance: activeWorkspace.activeInstance,
-    workspaceLoading: workspaceBindingPendingOf(activeWorkspace),
+    branchLoading: branchInventory.loading,
+    branchError: branchInventory.error !== null,
+    workspaceLoading: locationSelectionPending(activeWorkspace, history, historySelection),
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
-    refresh: activeWorkspace.refresh,
+    refresh: refreshCheckout,
   });
   const alert = visibleAlert(
     state,

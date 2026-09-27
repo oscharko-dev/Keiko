@@ -32,6 +32,105 @@ afterEach(() => {
 });
 
 describe("workbench execution location restoration", () => {
+  it("does not revert an external branch change on active-workspace refresh", async () => {
+    const initial = {
+      root: "/repo",
+      branch: "main",
+      location: "local" as const,
+      activeInstance: {
+        ...managed,
+        executionLocation: "local",
+        taskBranch: "main",
+      } as WorkspaceInstance | null,
+      workspaceLoading: false,
+      workspaceError: false,
+      branchLoading: false,
+      branchError: false,
+      runIsActive: false,
+      refresh,
+    };
+    const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: initial,
+    });
+    expect(result.current.ready).toBe(true);
+    await act(async () => {
+      rerender({ ...initial, activeInstance: null });
+    });
+    expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+    expect(result.current.ready).toBe(false);
+    expect(result.current.error).toBe(true);
+    mocks.selectLocalCheckout.mockResolvedValue({});
+    await act(async () => {
+      result.current.retry();
+    });
+    await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+  });
+
+  it.each(["loading", "failed"])("waits when the branch inventory is %s", async (status) => {
+    const initial = {
+      root: "/repo",
+      branch: "main",
+      location: "local" as const,
+      activeInstance: null,
+      workspaceLoading: false,
+      workspaceError: false,
+      branchLoading: status === "loading",
+      branchError: status === "failed",
+      runIsActive: false,
+      refresh,
+    };
+    const { rerender } = renderHook(useWorkbenchExecutionLocation, { initialProps: initial });
+    await act(async () => {});
+    expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+    mocks.selectLocalCheckout.mockResolvedValue({});
+    rerender({ ...initial, branchLoading: false, branchError: false });
+    await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+  });
+
+  it("refreshes a failed branch inventory when the user retries", async () => {
+    const { result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: {
+        root: "/repo",
+        branch: "main",
+        location: "local",
+        activeInstance: null,
+        branchLoading: false,
+        branchError: true,
+        workspaceLoading: false,
+        workspaceError: false,
+        runIsActive: false,
+        refresh,
+      },
+    });
+    expect(result.current.error).toBe(true);
+    await act(async () => result.current.retry());
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat a completed activation when refresh cannot restore its binding", async () => {
+    mocks.selectLocalCheckout.mockResolvedValue({});
+    const initial = {
+      root: "/repo",
+      branch: "main",
+      location: "local" as const,
+      activeInstance: null,
+      workspaceLoading: false,
+      workspaceError: false,
+      branchLoading: false,
+      branchError: false,
+      runIsActive: false,
+      refresh,
+    };
+    const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: initial,
+    });
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    rerender({ ...initial });
+    expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce();
+    expect(result.current.error).toBe(true);
+  });
+
   it("joins branch discovery and local activation under one correlation ID", async () => {
     mocks.fetchGitStatus.mockResolvedValue({ available: true, branch: "main", detached: false });
     mocks.selectLocalCheckout.mockResolvedValue({});
@@ -41,6 +140,8 @@ describe("workbench execution location restoration", () => {
         branch: undefined,
         location: "local" as const,
         activeInstance: null,
+        branchLoading: false,
+        branchError: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -66,6 +167,8 @@ describe("workbench execution location restoration", () => {
         branch: undefined,
         location: "local" as const,
         activeInstance: null,
+        branchLoading: false,
+        branchError: false,
         workspaceLoading: false,
         workspaceError: false,
         runIsActive: false,
@@ -89,6 +192,8 @@ describe("workbench execution location restoration", () => {
       branch: undefined,
       location: "worktree" as const,
       activeInstance: null as WorkspaceInstance | null,
+      branchLoading: false,
+      branchError: false,
       workspaceLoading: true,
       workspaceError: false,
       runIsActive: false,
@@ -99,7 +204,13 @@ describe("workbench execution location restoration", () => {
     });
     expect(result.current.pending).toBe(true);
     expect(mocks.fetchGitStatus).not.toHaveBeenCalled();
-    rerender({ ...initial, activeInstance: managed, workspaceLoading: false });
+    rerender({
+      ...initial,
+      activeInstance: managed,
+      branchLoading: false,
+      branchError: false,
+      workspaceLoading: false,
+    });
     expect(result.current.ready).toBe(true);
     expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
     expect(mocks.bindVerifiedTaskWorkspace).not.toHaveBeenCalled();
@@ -117,6 +228,8 @@ describe("workbench execution location restoration", () => {
       branch: undefined,
       location: "local" as "local" | "worktree",
       activeInstance: null as WorkspaceInstance | null,
+      branchLoading: false,
+      branchError: false,
       workspaceLoading: false,
       workspaceError: false,
       runIsActive: false,

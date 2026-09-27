@@ -153,6 +153,7 @@ async function verifyAndActivate(
       // the one generic verify sentence (#3381 review).
       reportClientDiagnostic(
         `[keiko] task workspace bind verify failed: status=${entry?.status ?? "missing-report-entry"}`,
+        { correlationId, errorKind: "validation-failed" },
       );
       return { ok: false, stage: "verify" };
     }

@@ -16,6 +16,7 @@ import type { CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 interface WindowProps {
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
+  readonly selectedLocation?: "local" | "worktree" | undefined;
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: () => void;
   readonly onOpenHistory?: () => void;
@@ -210,6 +211,27 @@ describe("CodingWorkbenchWindowHost", () => {
     const after = windowRendered.mock.calls.at(-1)?.[0];
     expect(after?.selectedRoot).toBe("/repos/b");
     expect(after?.selectedBranch).toBeUndefined();
+  });
+
+  it("clears saved location and branch when consuming a history selection", () => {
+    windowRendered.mockClear();
+    const context = renderHost({
+      repositoryPath: "/repos/a",
+      targetBranch: "main",
+      targetBranchRoot: "/repos/a",
+      executionLocation: "local",
+      historySelection: "managed-task",
+    });
+    const props = windowRendered.mock.calls.at(-1)?.[0];
+    expect(props?.selectedLocation).toBeUndefined();
+    expect(props?.selectedBranch).toBeUndefined();
+    props?.onHistorySelectionHandled?.();
+    expect(context.updateCfg).toHaveBeenCalledWith({
+      historySelection: undefined,
+      executionLocation: undefined,
+      targetBranch: undefined,
+      targetBranchRoot: undefined,
+    });
   });
 
   it("routes onOpenGit through openWindow with the derived Git target", () => {

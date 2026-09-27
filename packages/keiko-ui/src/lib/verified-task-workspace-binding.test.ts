@@ -62,6 +62,26 @@ describe("bindVerifiedTaskWorkspace", () => {
     resetClientDiagnosticWriter();
   });
 
+  it.each(["drifted", "missing"])("correlates the %s reconciliation refusal", async (status) => {
+    const diagnostics = vi.fn();
+    setClientDiagnosticWriter(diagnostics);
+    api.provision.mockResolvedValue({ instance: { workspaceId: "ws-1" } });
+    api.reconcile.mockResolvedValue({
+      entries: status === "missing" ? [] : [{ workspaceId: "ws-1", status }],
+    });
+    await expect(
+      bindVerifiedTaskWorkspace({ ...INPUT, correlationId: "checkout-attempt" }),
+    ).resolves.toEqual({ ok: false, stage: "verify" });
+    expect(diagnostics).toHaveBeenCalledWith(
+      expect.stringContaining("bind verify failed"),
+      expect.objectContaining({
+        correlationId: "checkout-attempt",
+        errorKind: "validation-failed",
+      }),
+    );
+    expect(api.activate).not.toHaveBeenCalled();
+  });
+
   it("provisions, verifies, and only then activates the managed workspace", async () => {
     const order: string[] = [];
     api.provision.mockImplementation(() => {
