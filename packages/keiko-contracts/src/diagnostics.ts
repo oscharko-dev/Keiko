@@ -466,6 +466,9 @@ const GIT_CHANGE_DESCRIPTION_OUTCOME_SET: ReadonlySet<string> = new Set(
   CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_OUTCOMES,
 );
 const BODY_FREE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
+// Local checkout bindings carry a server-derived SHA-256 identity after their namespace.
+// Accept that exact grammar here without opening other diagnostic ids to arbitrary colon data.
+const WORKSPACE_DIAGNOSTIC_ID_PATTERN = /^(?:[A-Za-z0-9._-]{1,128}|local:[a-f0-9]{64})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function isSetMember(value: unknown, values: ReadonlySet<string>): value is string {
@@ -497,7 +500,7 @@ function isClientDiagnosticWorkspaceTrustBinding(
     typeof value.repositoryId === "string" &&
     BODY_FREE_ID_PATTERN.test(value.repositoryId) &&
     typeof value.workspaceId === "string" &&
-    BODY_FREE_ID_PATTERN.test(value.workspaceId)
+    WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value.workspaceId)
   );
 }
 

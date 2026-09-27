@@ -3,6 +3,7 @@
 // that it does — and that it does nothing else — lives where a reviewer looks for it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
 import {
   clientDiagnosticPostFailureCount,
@@ -397,25 +398,29 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
     });
   });
 
-  it("keeps a body-free workspace trust identity structured on the diagnostic wire", () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const workspaceTrustBinding = {
-      repositoryId: "repository-a",
-      workspaceId: "workspace-a",
-    };
+  it.each(["workspace-a", `local:${"a".repeat(64)}`])(
+    "keeps workspace trust identity %s accepted on the diagnostic wire",
+    (workspaceId) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const workspaceTrustBinding = {
+        repositoryId: "repository-a",
+        workspaceId,
+      };
 
-    fanOutClientDiagnostic("[keiko] coding workbench repository trust bound", {
-      correlationId: "originating-run-correlation",
-      workspaceTrustBinding,
-    });
+      fanOutClientDiagnostic("[keiko] coding workbench repository trust bound", {
+        correlationId: "originating-run-correlation",
+        workspaceTrustBinding,
+      });
 
-    expect(lastPostedBody(fetchMock)).toMatchObject({
-      correlationId: "originating-run-correlation",
-      workspaceTrustBinding,
-    });
-  });
+      expect(lastPostedBody(fetchMock)).toMatchObject({
+        correlationId: "originating-run-correlation",
+        workspaceTrustBinding,
+      });
+      expect(isClientDiagnosticIngestRequest(lastPostedBody(fetchMock))).toBe(true);
+    },
+  );
 
   it("omits correlationId from the wire body when the caller supplies none", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

@@ -239,6 +239,27 @@ describe("isClientDiagnosticIngestRequest", () => {
     }
   });
 
+  it("accepts the Local identity namespace without accepting paths or arbitrary namespaced data", () => {
+    const request = (workspaceId: unknown): unknown => ({
+      ...validRequest(),
+      workspaceTrustBinding: { repositoryId: "repository-a", workspaceId },
+    });
+    expect(isClientDiagnosticIngestRequest(request(`local:${"a".repeat(64)}`))).toBe(true);
+    for (const invalid of [
+      undefined,
+      42,
+      "local:/customer/repository",
+      "file:///customer/repository",
+      "local:customer-name",
+      `local:${"a".repeat(63)}`,
+      `local:${"a".repeat(65)}`,
+      `local:${"g".repeat(64)}`,
+      `other:${"a".repeat(64)}`,
+    ]) {
+      expect(isClientDiagnosticIngestRequest(request(invalid))).toBe(false);
+    }
+  });
+
   // PR #3625 review: a Git-client operation settling after its own surface (an add-repository
   // dialog, a manual retry panel) is already gone. The two families — a discarded add-repository
   // result, a retried read — never mix: an operation from one family can never carry the other

@@ -1,4 +1,5 @@
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { WorkspaceLifecycleEvidenceRecord } from "./evidence.js";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -97,6 +98,20 @@ afterEach(() => {
 });
 
 describe("local checkout selection", () => {
+  it("produces a Local trust identity accepted by the diagnostic ingest contract", () => {
+    const { instance } = fixture().selectLocal({ root, branch: "main", requestedBy: "test" });
+    expect(
+      isClientDiagnosticIngestRequest({
+        message: "coding workbench repository trust bound",
+        clientTs: "2026-09-27T12:30:00.000Z",
+        workspaceTrustBinding: {
+          repositoryId: instance.repositoryId,
+          workspaceId: instance.workspaceId,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("switches the real checkout and restores a durable active binding", () => {
     const service = fixture();
     const selected = service.selectLocal({ root, branch: "feature", requestedBy: "test" });

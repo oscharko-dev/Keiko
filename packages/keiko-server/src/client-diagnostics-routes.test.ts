@@ -556,26 +556,32 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
-  it("preserves the validated workspace trust identity on the originating timeline", async () => {
-    const sink = captureServerLog();
-    const body = JSON.stringify({
-      message: "coding workbench repository trust bound",
-      clientTs: CLIENT_TS,
-      correlationId: "originating-run-correlation",
-      workspaceTrustBinding: {
-        repositoryId: "repository-a",
-        workspaceId: "workspace-a",
-      },
-    });
+  it.each(["workspace-a", `local:${"a".repeat(64)}`])(
+    "preserves the validated workspace trust identity %s on the originating timeline",
+    async (workspaceId) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        message: "coding workbench repository trust bound",
+        clientTs: CLIENT_TS,
+        correlationId: "originating-run-correlation",
+        workspaceTrustBinding: {
+          repositoryId: "repository-a",
+          workspaceId,
+        },
+      });
 
-    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
-    expect(clientDiagnosticLine(sink)).toMatchObject({
-      op: "client.diagnostic",
-      correlationId: "originating-run-correlation",
-      repositoryId: "repository-a",
-      workspaceId: "workspace-a",
-    });
-  });
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(clientDiagnosticLine(sink)).toMatchObject({
+        op: "client.diagnostic",
+        correlationId: "originating-run-correlation",
+        repositoryId: "repository-a",
+        workspaceId,
+      });
+    },
+  );
 
   // PR #3625 review: routine settlements — an add-repository result discarded after it actually
   // succeeded, a manual retry that recovered or was superseded — are routed to their own
