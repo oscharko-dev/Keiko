@@ -238,18 +238,28 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(lastPostedBody(fetchMock)["loss"]).toEqual({ postsThrottled: 2 });
   });
 
-  it("gives a failed POST's loss back and counts the failed POST itself", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network error")));
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    recordClientDiagnosticLoss("bufferEvicted", 2);
+  it.each(["network", "server-rate-limit"])(
+    "restores loss after a %s refusal and delivers it later",
+    async (failure) => {
+      const fetchMock =
+        failure === "network"
+          ? vi.fn().mockRejectedValueOnce(new TypeError("network error"))
+          : vi.fn().mockResolvedValueOnce(jsonResponse(429));
+      fetchMock.mockResolvedValue(jsonResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      recordClientDiagnosticLoss("bufferEvicted", 2);
 
-    fanOutClientDiagnostic("boot: gateway probe failed");
+      fanOutClientDiagnostic("boot: gateway probe failed");
 
-    await vi.waitFor(() => {
-      expect(clientDiagnosticPostFailureCount()).toBe(1);
-    });
-    expect(takeClientDiagnosticLoss()).toEqual({ bufferEvicted: 2, postsFailed: 1 });
-  });
+      await vi.waitFor(() => {
+        expect(clientDiagnosticPostFailureCount()).toBe(1);
+      });
+      fanOutClientDiagnostic("next admitted report");
+      expect(lastPostedBody(fetchMock)["loss"]).toEqual({ bufferEvicted: 2, postsFailed: 1 });
+      expect(takeClientDiagnosticLoss()).toBeUndefined();
+    },
+  );
 
   it("preserves a voice turn parent and rejects an unsafe parent identity", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

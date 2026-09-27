@@ -81,11 +81,16 @@ export function prepareCommitDraft(
 }
 
 function takeCommitTrailers(lines: string[]): string[] {
-  const trailers: string[] = [];
-  while (/^(?:BREAKING CHANGE|[A-Za-z][A-Za-z0-9-]*):\s+\S/u.test(lines.at(-1)?.trim() ?? "")) {
-    trailers.unshift(lines.pop()?.trim() ?? "");
+  let start = lines.length;
+  while (
+    start > 0 &&
+    /^(?:BREAKING CHANGE|[A-Za-z][A-Za-z0-9-]*):\s+\S/u.test(lines.at(start - 1)?.trim() ?? "")
+  ) {
+    start -= 1;
   }
-  return trailers;
+  // A trailer block occupies its own paragraph; an unseparated "Note: ..." remains prose.
+  if (start > 0 && lines.at(start - 1)?.trim() !== "") return [];
+  return lines.splice(start).map((line) => line.trim());
 }
 
 // The model owns the wording; normalize prose into a list while retaining Git trailer syntax.

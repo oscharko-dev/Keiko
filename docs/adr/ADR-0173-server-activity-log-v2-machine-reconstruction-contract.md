@@ -836,7 +836,9 @@ ingest transport, routine/failure budgets, loss reporting and closed operation/o
 apply to all of these reports. All clone/register lifecycle outcomes, including discarded settlements, require a correlation id accepted
 by the canonical Activity Log guard; malformed ids are rejected instead of assigning unrelated
 ingest identities to the attempt and settlement. Browser delivery-loss counts enter the existing
-process loss ledger once before routine diversion or rate limiting acknowledges the report.
+process loss ledger once after rate admission and before routine diversion. A rate-limited report
+carrying loss returns 429, without consuming its client-supplied counters; the browser restores them
+for later delivery. Reports without loss retain the bounded, body-free 204 drop behavior.
 Commit-draft refusal retains its measured prompt budget; generated and cached outcomes share a
 body-free draft-key digest. No repository path or remote URL enters the evidence.
 

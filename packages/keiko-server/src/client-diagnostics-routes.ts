@@ -1979,15 +1979,26 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     noticeRejectedReport("invalid-shape", ctx.correlationId);
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
-  // A 204 acknowledges the browser's drained counters even when the report is diverted or
-  // rate-limited. Record them once before either path, independently of per-line projection.
-  if (classified.shape === "message") recordClientLoss(classified.report.loss);
   const now = Date.now();
   const budget = reportBudget(classified);
   if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS[budget], now)) {
     noticeRateLimitedDrop(budget, now, ctx.correlationId);
+    // Do not acknowledge client-supplied loss we did not admit. The browser restores its
+    // counters on a non-2xx response and can carry them on a later admitted report.
+    if (classified.shape === "message" && classified.report.loss !== undefined) {
+      return {
+        status: 429,
+        body: errorBody(
+          "RATE_LIMITED",
+          "Diagnostic report rate limit exceeded.",
+          ctx.correlationId,
+        ),
+      };
+    }
     return { status: 204, body: null };
   }
+  // Record admitted counts exactly once, before any routine-report diversion.
+  if (classified.shape === "message") recordClientLoss(classified.report.loss);
   logClientReport(classified, ctx.correlationId);
   return { status: 204, body: null };
 }

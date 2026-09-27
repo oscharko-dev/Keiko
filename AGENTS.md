@@ -439,7 +439,7 @@ system that exists, never beside it:
   the attempt and settlement even when dismissed; effect replay is not a human dismissal.
 - **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
   flags on `git.commit.draft.completed`; stream startup retries use the existing `gateway.retry.*`
-  events. Refused prompts retain measured bounds, and generated/reused drafts share a body-free key digest. Browser delivery-loss counts are recorded before routine diversion or rate limiting. Neither path records customer diffs or generated text.
+  events. Refused prompts retain measured bounds, and generated/reused drafts share a body-free key digest. Browser delivery-loss counts are recorded once after rate admission and before routine diversion. Refused loss-bearing reports return 429 so the browser retains the counts for later delivery. Neither path records customer diffs or generated text.
 
 - **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
   log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their

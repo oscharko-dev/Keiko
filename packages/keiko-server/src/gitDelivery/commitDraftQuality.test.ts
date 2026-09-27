@@ -100,3 +100,24 @@ it.each(["BREAKING CHANGE", "BREAKING-CHANGE"])("preserves the %s footer verbati
   expect(canonicalCommitBody(body)).toBe(body);
   expect(canonicalCommitBody(canonicalCommitBody(body))).toBe(body);
 });
+
+describe("commit trailer paragraph boundaries", () => {
+  it.each(["Note: behavior unchanged.", "BREAKING CHANGE: remove the legacy parser."])(
+    "keeps unseparated trailing prose in its paragraph: %s",
+    (lastLine) => {
+      const body = `- Refactor parser.\n${lastLine}`;
+      const expected = `- Refactor parser. ${lastLine}`;
+      expect(canonicalCommitBody(body)).toBe(expected);
+      expect(canonicalCommitBody(expected)).toBe(expected);
+    },
+  );
+
+  it("preserves a trailer-only body and a blank-line-separated trailer block", () => {
+    const trailers =
+      "Signed-off-by: Dev <dev@example.invalid>\nCo-authored-by: Reviewer <reviewer@example.invalid>";
+    expect(canonicalCommitBody(trailers)).toBe(trailers);
+    expect(canonicalCommitBody(`- Refactor parser.\n   \n${trailers}`)).toBe(
+      `- Refactor parser.\n\n${trailers}`,
+    );
+  });
+});

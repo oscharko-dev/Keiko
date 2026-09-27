@@ -6,7 +6,7 @@ import {
 } from "../../../tests/support/buffered-server-log.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   expectActivityLogProof,
@@ -784,20 +784,40 @@ describe("POST /api/diagnostics/client", () => {
     expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
   });
 
-  it("keeps delivery loss when the enclosing report is rate-limited", async () => {
-    const sink = captureServerLog();
-    const before = activityLogLossCounters()["client-post-throttled"];
-    for (let index = 0; index < 61; index += 1) {
-      const body = JSON.stringify({
-        message: "report",
-        clientTs: CLIENT_TS,
-        ...(index === 60 ? { loss: { postsThrottled: 5 } } : {}),
-      });
-      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
-    }
-    expect(clientDiagnosticEvents(sink)).toHaveLength(60);
-    expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
-  });
+  // Retain the loss-preservation pin across server throttling: a 429 leaves counts with the
+  // browser until a later report is admitted, rather than acknowledging unbounded input.
+  it.each(["routine", "failure"])(
+    "preserves refused loss for later %s admission",
+    async (budget) => {
+      const sink = captureServerLog();
+      const before = activityLogLossCounters()["client-post-throttled"];
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const metadata =
+        budget === "routine" ? { selectDismissal: { reason: "escape", focus: "trigger" } } : {};
+      const report = { message: "report", clientTs: CLIENT_TS, ...metadata };
+      try {
+        for (let index = 0; index < 60; index += 1) {
+          expect((await handleClientDiagnosticIngest(context(JSON.stringify(report)))).status).toBe(
+            204,
+          );
+        }
+        const refused = JSON.stringify({ ...report, loss: { postsThrottled: 1_000_000 } });
+        for (let index = 0; index < 3; index += 1) {
+          expect((await handleClientDiagnosticIngest(context(refused))).status).toBe(429);
+        }
+        expect(activityLogLossCounters()["client-post-throttled"]).toBe(before);
+        expect(
+          sink.events.filter((event) => event.op === "client.diagnostic.rate-limited"),
+        ).toHaveLength(1);
+        now.mockReturnValue(1_700_000_060_001);
+        const retried = JSON.stringify({ ...report, loss: { postsThrottled: 5 } });
+        expect((await handleClientDiagnosticIngest(context(retried))).status).toBe(204);
+        expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
 
   it("records a superseded checkout selection as correlated routine evidence", async () => {
     const sink = captureServerLog();
