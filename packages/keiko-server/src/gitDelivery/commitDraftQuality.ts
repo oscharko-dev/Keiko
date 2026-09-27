@@ -201,15 +201,12 @@ export function canonicalCommitBody(body: string): {
   const normalized = [items.join("\n"), trailers.lines.join("\n")]
     .filter((block) => block !== "")
     .join("\n\n");
+  const normalizationRule = start < 0 ? "body-only" : "terminal-trailers";
   return {
     body: normalized,
     evidence: {
       normalizationVersion: "1",
-      normalizationRule: trailers.explicit
-        ? "explicit-trailers"
-        : start < 0
-          ? "body-only"
-          : "terminal-trailers",
+      normalizationRule: trailers.explicit ? "explicit-trailers" : normalizationRule,
       normalizationChanged: normalized !== body,
       bodyBulletCount: items.length,
       trailerLikeLineCount,
