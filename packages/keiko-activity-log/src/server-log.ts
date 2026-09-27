@@ -1600,10 +1600,12 @@ function activeLogKey(directory: string): string {
   }
 }
 
+// The slot is process-global, so its value is read like any foreign object: an accessor that throws
+// makes it an unrecognized owner, which fails closed with counted evidence rather than a raw error.
 function writerOwner(value: unknown): ProcessWriterOwner | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const graphToken = Reflect.get(value, "graphToken") as unknown;
-  const reject = Reflect.get(value, "reject") as unknown;
+  const graphToken = safeProperty(value, "graphToken");
+  const reject = safeProperty(value, "reject");
   return typeof graphToken === "object" && graphToken !== null && typeof reject === "function"
     ? { graphToken, reject: reject as ProcessWriterOwner["reject"] }
     : undefined;

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f22fedfe8bd6a3d6fce492555d87dac17ebedab3268eb13baef0f4f55ef243fe"
+    "catalogDigest": "ea47cc77f1d9aead41c3ada3cbd0162f8671b7543c00ee55113428994f57700e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2057,7 +2057,8 @@
     ],
     "server-log.write-failed.stderr-line": [
       "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts",
-      "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts"
+      "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts",
+      "packages/keiko-activity-log/src/server-log.writer-rejection.test.ts"
     ],
     "server.diagnostic.failure.activity-log-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
