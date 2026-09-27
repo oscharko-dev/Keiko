@@ -71,6 +71,7 @@ describe("Coding Workbench runtime API", () => {
           code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
           message: "Runtime request was rejected.",
         },
+        preBodySessionDenied: true,
       },
       403,
     );
@@ -109,6 +110,29 @@ describe("Coding Workbench runtime API", () => {
         },
       },
     ]);
+  });
+
+  it("does not replay a start refused after the server read its body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+            message: "Runtime request was rejected.",
+          },
+        },
+        403,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "post-body-refusal",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a closed issue refusal from the mounted error envelope without retrying as generic", async () => {

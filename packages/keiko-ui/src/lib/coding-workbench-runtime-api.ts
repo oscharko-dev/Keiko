@@ -186,6 +186,14 @@ function enrichRuntimeIssueFailure(error: ApiError, envelope: unknown): void {
   if (failure !== undefined) Object.assign(error, { issueBindingFailure: failure });
   const modelRefusalReason = runtimeModelRefusal(envelope);
   if (modelRefusalReason !== undefined) Object.assign(error, { modelRefusalReason });
+  if (
+    typeof envelope === "object" &&
+    envelope !== null &&
+    "preBodySessionDenied" in envelope &&
+    envelope.preBodySessionDenied === true
+  ) {
+    Object.assign(error, { preBodySessionDenied: true });
+  }
 }
 
 function postSnapshot<T>(
@@ -219,7 +227,9 @@ function isPreBodyStartDenial(error: unknown): error is ApiError {
   return (
     error instanceof ApiError &&
     error.status === 403 &&
-    error.code === "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"
+    error.code === "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED" &&
+    "preBodySessionDenied" in error &&
+    error.preBodySessionDenied === true
   );
 }
 

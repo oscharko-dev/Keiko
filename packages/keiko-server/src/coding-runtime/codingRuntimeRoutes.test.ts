@@ -511,6 +511,7 @@ describe("coding runtime routes", () => {
       deps,
     );
     expect(refused).toMatchObject({ status: 403 });
+    expect(refused.body).not.toHaveProperty("preBodySessionDenied");
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
@@ -1696,7 +1697,10 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     );
     expect(denied).toMatchObject({
       status: 403,
-      body: { error: { code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED" } },
+      body: {
+        error: { code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED" },
+        preBodySessionDenied: true,
+      },
     });
     expect((deps as unknown as { __calls: unknown[] }).__calls).toEqual([]);
     expect(JSON.stringify(denied.body)).not.toContain("secret");
