@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { fetchGitStatus } from "@/lib/api";
 import { selectLocalCheckout } from "@/lib/task-workspace-api";
@@ -90,7 +90,9 @@ export function useWorkbenchExecutionLocation(input: {
   const inFlight = useRef<string | null>(null);
   const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}`;
   const latest = useRef(input);
-  latest.current = input;
+  useLayoutEffect(() => {
+    latest.current = input;
+  }, [input]);
   const ready =
     !input.workspaceLoading &&
     !input.workspaceError &&
