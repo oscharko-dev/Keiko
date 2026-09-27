@@ -2447,7 +2447,10 @@ function ensureManagedProjectIdentity(input: {
   const projectRegistered = input.uiStore.listProjects().some((project) => project.path === path);
   const manifest = input.uiStore.findWorkspaceManifestRecordByProject(path);
   if (!projectRegistered || manifest === undefined) {
-    input.uiStore.createProject(path, `${basename(input.instance.repositoryRoot)} · Coding Workbench`);
+    input.uiStore.createProject(
+      path,
+      `${basename(input.instance.repositoryRoot)} · Coding Workbench`,
+    );
     return;
   }
   const liveRoot = inspectWorkspaceRootIdentity(path);
@@ -3874,17 +3877,6 @@ function buildPersistenceBundle(
       evidenceStore,
       redactString,
     );
-    const workspaceLifecycle =
-      services.workspaceLifecycle === undefined ||
-      persistence.activeWorkspacePointerStore === undefined ||
-      persistence.workspaceInstanceStore === undefined
-        ? services.workspaceLifecycle
-        : withLocalCheckout(
-            services.workspaceLifecycle,
-            persistence.activeWorkspacePointerStore,
-            store,
-            persistence.workspaceInstanceStore,
-          );
     return {
       uiStore: store,
       workspaceScriptTrust,
@@ -3893,7 +3885,7 @@ function buildPersistenceBundle(
       codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
       codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
-      workspaceLifecycle,
+      workspaceLifecycle: withOptionalLocalCheckout(persistence, services),
       managedTaskWorkspaceRoot: composedManagedWorktreeRoot(
         services.workspaceProvisioning,
         resolvedUiDbPath,
@@ -3912,6 +3904,24 @@ function buildPersistenceBundle(
     dispose?.();
     throw error;
   }
+}
+
+function withOptionalLocalCheckout(
+  persistence: ComposedPersistence,
+  services: TaskWorkspaceServices,
+): TaskWorkspaceServices["workspaceLifecycle"] {
+  if (
+    services.workspaceLifecycle === undefined ||
+    persistence.activeWorkspacePointerStore === undefined ||
+    persistence.workspaceInstanceStore === undefined
+  )
+    return services.workspaceLifecycle;
+  return withLocalCheckout(
+    services.workspaceLifecycle,
+    persistence.activeWorkspacePointerStore,
+    persistence.store,
+    persistence.workspaceInstanceStore,
+  );
 }
 
 function composeUiPersistence(
@@ -4325,7 +4335,9 @@ function activityAwareWorkspaceLifecycle(
     ...(selectLocal === undefined
       ? {}
       : {
-          selectLocal: (request: Parameters<typeof selectLocal>[0]): ReturnType<typeof selectLocal> => {
+          selectLocal: (
+            request: Parameters<typeof selectLocal>[0],
+          ): ReturnType<typeof selectLocal> => {
             purge();
             return selectLocal(request);
           },

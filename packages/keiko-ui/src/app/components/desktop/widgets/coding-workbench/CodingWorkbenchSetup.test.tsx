@@ -194,7 +194,26 @@ function renderWorkbench(
   runtimeHookMock.mockReturnValue({ state, actions: actions() });
   return render(
     <ActiveWorkspaceProvider value={api}>
-      <CodingWorkbenchWindow selectedRoot={selectedRoot} />
+      {selectedRoot === undefined || api.activeBinding !== null ? (
+        <CodingWorkbenchWindow selectedRoot={selectedRoot} />
+      ) : (
+        <CodingWorkbenchSetup
+          selectedRoot={selectedRoot}
+          selectedBaseBranch={branchRead.currentBranch}
+          refreshWorkspace={api.refresh}
+          runtimePosture="verified"
+          renderRepositoryControls={(pending): ReactNode => (
+            <>
+              <select aria-label="Choose coding repository" disabled={pending}>
+                <option>{selectedRoot.split("/").at(-1)}</option>
+              </select>
+              <select aria-label="Choose coding branch" disabled={pending}>
+                <option>{branchRead.currentBranch}</option>
+              </select>
+            </>
+          )}
+        />
+      )}
     </ActiveWorkspaceProvider>,
   );
 }

@@ -4668,7 +4668,14 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         workspaceLifecycle,
       };
 
-      expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
+      const admission = await handleEditorAgentActions(context(arranged.action), deps);
+      if (!matching) {
+        expect(admission.status).toBe(403);
+        expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+        expect(runtimeMutationLease.claim).not.toHaveBeenCalled();
+        return;
+      }
+      expect(admission.status).toBe(202);
       const result = await postActionResult(
         arranged.action,
         "succeeded",
@@ -4677,8 +4684,8 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         deps,
       );
 
-      expect(actionResultStatus(result.body)).toBe(matching ? "succeeded" : "failed");
-      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe(matching ? "A1\n" : "A0\n");
+      expect(actionResultStatus(result.body)).toBe("succeeded");
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
       expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
         expect.any(Object),
         matching,

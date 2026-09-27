@@ -609,6 +609,27 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it("records a superseded checkout selection as correlated routine evidence", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench checkout selection superseded",
+      clientTs: CLIENT_TS,
+      correlationId: "checkout-attempt-123",
+      kind: "other",
+      gitClientOperation: { operation: "checkout-selection", outcome: "discarded-succeeded" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    expect(event).toMatchObject({
+      level: "info",
+      correlationId: "checkout-attempt-123",
+      extra: { operation: "checkout-selection", outcome: "discarded-succeeded" },
+    });
+    expectActivityLogProof("client.git-operation.settled.line", formatActivityLogProofLine(event));
+  });
+
   // A manual retry that recovers carries the SAME id its attempt line minted, so the two join on
   // one timeline (PR #3625 review).
   it("persists a recovered manual retry as client.git-operation.settled with its correlation id", async () => {

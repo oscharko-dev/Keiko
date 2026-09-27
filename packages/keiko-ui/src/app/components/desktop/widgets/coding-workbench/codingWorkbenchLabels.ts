@@ -269,18 +269,20 @@ export function eventDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
-  const turnFailure = turnFailureDetail(event, t);
-  const failure =
-    turnFailure.length > 0
-      ? turnFailure
-      : event.failureCode === "runtime-failed"
-        ? t("codingWorkbench.event.failure.runtime")
-        : event.failureCode === undefined
-          ? ""
-          : t("codingWorkbench.event.failure.generic");
+  const failure = eventFailureDetail(event, t);
   return [failure, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
     .filter((part) => part.length > 0)
     .join(" ");
+}
+
+function eventFailureDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  const turnFailure = turnFailureDetail(event, t);
+  if (turnFailure.length > 0) return turnFailure;
+  if (event.failureCode === "runtime-failed") return t("codingWorkbench.event.failure.runtime");
+  return event.failureCode === undefined ? "" : t("codingWorkbench.event.failure.generic");
 }
 
 function turnFailureDetail(

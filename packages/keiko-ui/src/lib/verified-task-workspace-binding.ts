@@ -138,9 +138,13 @@ async function verifyAndActivate(
   root: string,
   workspaceId: string,
   requestedBy: string,
+  correlationId?: string,
 ): Promise<VerifiedTaskWorkspaceBindResult> {
   try {
-    const report = await reconcileTaskWorkspaces({ root });
+    const report = await reconcileTaskWorkspaces({
+      root,
+      ...(correlationId === undefined ? {} : { correlationId }),
+    });
     const entry = report.entries.find((item) => item.workspaceId === workspaceId);
     if (entry?.status !== "healthy") {
       // The same closed, content-free verdict the restore path names. Without it a repair that
@@ -157,7 +161,11 @@ async function verifyAndActivate(
     return boundedBindFailure("verify", error);
   }
   try {
-    await setActiveTaskWorkspace({ workspaceId, requestedBy });
+    await setActiveTaskWorkspace({
+      workspaceId,
+      requestedBy,
+      ...(correlationId === undefined ? {} : { correlationId }),
+    });
     return { ok: true };
   } catch (error) {
     warnBindStage("activate", error);
@@ -244,6 +252,7 @@ export async function bindVerifiedTaskWorkspace(
       taskId: input.taskId,
       ...(input.source === undefined ? { baseBranch: input.baseBranch } : { source: input.source }),
       requestedBy: input.requestedBy,
+      ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId }),
     });
     workspaceId = provisioned.instance.workspaceId;
   } catch (error) {
@@ -259,7 +268,7 @@ export async function bindVerifiedTaskWorkspace(
   } catch (error) {
     warnBindStage("provision-callback", error);
   }
-  return verifyAndActivate(input.root, workspaceId, input.requestedBy);
+  return verifyAndActivate(input.root, workspaceId, input.requestedBy, input.correlationId);
 }
 
 export interface VerifiedTaskWorkspaceRepairInput {

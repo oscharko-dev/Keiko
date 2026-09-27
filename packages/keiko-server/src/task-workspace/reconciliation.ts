@@ -573,9 +573,10 @@ function instancesFor(
   deps: WorkspaceReconciliationServiceDeps,
   repositoryRoot: string | undefined,
 ): readonly WorkspaceInstance[] {
-  const rows = repositoryRoot === undefined || repositoryRoot.length === 0
-    ? deps.store.listAll()
-    : deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  const rows =
+    repositoryRoot === undefined || repositoryRoot.length === 0
+      ? deps.store.listAll()
+      : deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
   return rows.filter((instance) => instance.executionLocation !== "local");
 }
 

@@ -2604,10 +2604,8 @@ function proveSpawnWorkspaceRoot(
 ): SpawnWorkspaceRootProof {
   if (resolveAccess === undefined) return { ok: true, cwd: workspaceRoot };
   try {
-    const access = resolveAccess();
-    return access !== undefined && access.canonicalRoot === workspaceRoot
-      ? { ok: true, cwd: access.canonicalRoot }
-      : { ok: false };
+    const canonicalRoot = resolveAccess()?.canonicalRoot;
+    return canonicalRoot === workspaceRoot ? { ok: true, cwd: canonicalRoot } : { ok: false };
   } catch {
     return { ok: false };
   }

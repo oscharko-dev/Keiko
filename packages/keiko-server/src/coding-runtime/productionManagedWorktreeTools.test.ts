@@ -2435,6 +2435,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
   }
 
   function searchFacade(input: {
+    readonly workspaceRoot: string;
     readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
     readonly authorityExpiresAt?: string;
     readonly activityLog?: { write: (event: ServerLogEvent) => void };
@@ -2455,7 +2456,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
         }),
       },
       authorityRef: { runId: "run-h1-search", envelopeDigest: DIGEST },
-      workspaceRoot: "/managed/worktree",
+      workspaceRoot: input.workspaceRoot,
       resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
       authorityExpiresAt: input.authorityExpiresAt ?? "2099-01-01T00:00:00.000Z",
       effectiveMode: "autonomous-delivery",
@@ -2492,6 +2493,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     );
     const events: ServerLogEvent[] = [];
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2578,6 +2580,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     readonly provenance: unknown;
   }> {
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: accessFor(root),
       ...(slot === undefined ? {} : { repositorySemanticSearch: slot }),
       ...(events === undefined
@@ -2631,8 +2634,10 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const bound = semanticSlot({
       search: (): IndexMatches => Promise.reject(new Error("index unreachable")),
     });
+    const root = twoMatchingFiles();
     const facade = searchFacade({
-      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      workspaceRoot: root,
+      resolveWorkspaceRootAccess: accessFor(root),
       repositorySemanticSearch: bound.slot,
       activityLog: { write: (event): void => void events.push(event) },
       diagnostics: { record: (record): void => void records.push(record) },
@@ -2688,8 +2693,10 @@ describe("H1 repository search mounted into production composition (#3386)", () 
         return Promise.reject(new Error("index unreachable"));
       },
     });
+    const root = twoMatchingFiles();
     const facade = searchFacade({
-      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      workspaceRoot: root,
+      resolveWorkspaceRootAccess: accessFor(root),
       repositorySemanticSearch: bound.slot,
       activityLog: { write: (event): void => void events.push(event) },
       diagnostics: { record: (record): void => void records.push(record) },
@@ -2749,6 +2756,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const root = tempWorkspace();
     writeFileSync(join(root, ".env"), "SECRET=sentinel-value\n");
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2775,6 +2783,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       writeFileSync(join(root, "src", name), "export const truncationProbe = true;\n");
     }
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2800,6 +2809,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const root = tempWorkspace();
     let calls = 0;
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined => {
         calls += 1;
         return calls === 1
@@ -2821,6 +2831,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
   it("fails closed with a distinct reason when the run's authority already expired", async () => {
     const root = tempWorkspace();
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,
@@ -2838,6 +2849,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
   it("cancels an already-aborted search before the workspace is ever touched", async () => {
     const root = tempWorkspace();
     const facade = searchFacade({
+      workspaceRoot: root,
       resolveWorkspaceRootAccess: () => ({
         kind: "managed-task" as const,
         canonicalRoot: root,

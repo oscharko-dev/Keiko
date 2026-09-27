@@ -135,6 +135,116 @@ describe("Coding Workbench runtime API", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["missing marker", undefined, 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["false marker", false, 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["string marker", "true", 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["numeric marker", 1, 403, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["wrong status", true, 409, "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED"],
+    ["wrong code", true, 403, "CODING_RUNTIME_INVALID_INTENT"],
+  ] as const)("never replays a start with %s", async (_case, marker, status, code) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: { code, message: "Runtime request was rejected." },
+          ...(marker === undefined ? {} : { preBodySessionDenied: marker }),
+        },
+        status,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "non-replayable-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a failed session repair without replaying the start", async () => {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+              message: "Runtime request was rejected.",
+            },
+            preBodySessionDenied: true,
+          },
+          403,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({}, 503));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "repair-failed-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(reports).toContainEqual({
+      message: "[keiko] coding start session repair: repair-failed",
+      meta: expect.objectContaining({
+        sessionRepairReport: expect.objectContaining({
+          outcome: "repair-failed",
+          errorKind: "unavailable",
+        }),
+      }),
+    });
+  });
+
+  it("reports a failed replay without attempting a third start", async () => {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+              message: "Runtime request was rejected.",
+            },
+            preBodySessionDenied: true,
+          },
+          403,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "UNAVAILABLE", message: "Unavailable" } }, 503),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      startCodingWorkbenchRuntime({
+        requestId: "replay-failed-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(reports).toContainEqual({
+      message: "[keiko] coding start session repair: replay-failed",
+      meta: expect.objectContaining({
+        sessionRepairReport: expect.objectContaining({
+          outcome: "replay-failed",
+          errorKind: "unavailable",
+        }),
+      }),
+    });
+  });
+
   it("preserves a closed issue refusal from the mounted error envelope without retrying as generic", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(

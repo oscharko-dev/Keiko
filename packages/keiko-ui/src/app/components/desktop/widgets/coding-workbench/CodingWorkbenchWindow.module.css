@@ -1507,19 +1507,13 @@ details[open] > .cmpActivitySummary::after {
 }
 
 .activityStatus {
-  display: grid;
-  width: fit-content;
-  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
   min-width: 0;
-  grid-template-columns: minmax(0, auto) auto;
-  gap: var(--space-2) var(--space-3);
+  gap: var(--space-1) var(--space-3);
   align-items: center;
   margin-top: var(--space-3);
-  border: 1px solid color-mix(in oklch, var(--feedback-info) 30%, var(--border-subtle));
-  border-radius: var(--radius-pill);
-  padding: var(--space-1) var(--space-3);
-  color: var(--text-secondary);
-  background: color-mix(in oklch, var(--feedback-info-surface) 64%, transparent);
+  color: var(--text-tertiary);
   font-size: var(--text-caption);
   line-height: var(--leading-normal);
 }
@@ -1528,14 +1522,12 @@ details[open] > .cmpActivitySummary::after {
 .activityStatus[data-activity-state="recovery"],
 .activityStatus[data-activity-state="unavailable"],
 .activityStatus[data-activity-state="disconnected"] {
-  border-color: color-mix(in oklch, var(--feedback-warning) 42%, var(--border-subtle));
-  background: color-mix(in oklch, var(--feedback-warning-surface) 72%, transparent);
+  color: var(--feedback-warning);
 }
 
 .activityStatus[data-activity-state="offline"],
 .activityStatus[data-activity-state="error"] {
-  border-color: color-mix(in oklch, var(--feedback-danger) 42%, var(--border-subtle));
-  background: color-mix(in oklch, var(--feedback-danger-surface) 72%, transparent);
+  color: var(--feedback-danger);
 }
 
 .activityStatus p {
@@ -1544,13 +1536,25 @@ details[open] > .cmpActivitySummary::after {
   overflow-wrap: anywhere;
 }
 
-.activityStatus .button {
-  grid-column: 2;
-  grid-row: 1 / span 3;
-  align-self: center;
-  min-height: calc(var(--control-height) - var(--space-1));
-  padding-inline: var(--space-4);
-  font-size: var(--text-caption);
+.cmpActivityRetry {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  color: var(--text-accent);
+  background: transparent;
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.cmpActivityRetry:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.cmpActivityRetry:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
 }
 
 .questionInline {
@@ -1802,16 +1806,6 @@ details[open] > .cmpActivitySummary::after {
     align-items: stretch;
   }
 
-  .activityStatus {
-    grid-template-columns: 1fr;
-  }
-
-  .activityStatus .button {
-    grid-column: 1;
-    grid-row: auto;
-    justify-self: stretch;
-  }
-
   .inlineActions {
     width: 100%;
   }
@@ -1846,7 +1840,6 @@ details[open] > .cmpActivitySummary::after {
   .setupPlan,
   .setupInput,
   .alert,
-  .activityStatus,
   .toolCard,
   .toolIcon,
   .planCard,

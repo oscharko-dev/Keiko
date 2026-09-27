@@ -2213,7 +2213,7 @@ describe("private OpenCode tool bridge", () => {
             signal?.addEventListener(
               "abort",
               () => {
-                reject(signal.reason);
+                reject(new Error("history read aborted", { cause: signal.reason }));
               },
               { once: true },
             );

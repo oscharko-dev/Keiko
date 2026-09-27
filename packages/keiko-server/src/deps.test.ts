@@ -1131,17 +1131,29 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     try {
       store.createProject(repositoryRoot);
       workspaceScriptTrust.grant(repositoryRoot);
-      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance, activityLog });
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        activityLog,
+      });
       const previous = store.findWorkspaceManifestRecordByProject(managedRoot);
       if (previous === undefined) throw new Error("Expected a managed root manifest.");
       const previousManifest = JSON.parse(previous.recordJson) as WorkspaceManifest;
-      expect(store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot))).toBeDefined();
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeDefined();
 
       workspaceScriptTrust.revoke(repositoryRoot);
       renameSync(managedRoot, `${managedRoot}-previous`);
       mkdirSync(managedRoot);
       writeFileSync(join(managedRoot, "package.json"), packageManifest);
-      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance, activityLog });
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        activityLog,
+      });
 
       const refreshed = store.findWorkspaceManifestRecordByProject(managedRoot);
       if (refreshed === undefined) throw new Error("Expected a reconnected manifest.");
@@ -1152,7 +1164,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       expect(refreshed.rootProjects[0]?.objectIdentityDigest).not.toBe(
         previous.rootProjects[0]?.objectIdentityDigest,
       );
-      expect(store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot))).toBeUndefined();
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeUndefined();
       expect(events.some((event) => event.op === "task-workspace.manifest.reconnected")).toBe(true);
     } finally {
       store.close();

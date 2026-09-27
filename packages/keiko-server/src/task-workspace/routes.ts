@@ -433,6 +433,9 @@ export async function handleSetActiveTaskWorkspace(
       }
       // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
       assertSafeFieldValue(requestedBy, "requestedBy");
+      if (deps.codingRuntimeOrchestrator?.hasLiveRun()) {
+        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+      }
       const result = await guard.setActive({
         workspaceId,
         requestedBy,

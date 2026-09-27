@@ -68,9 +68,9 @@ async function targetBranch(
   return status.branch;
 }
 
-async function bindWorktree(root: string, branch: string): Promise<void> {
+async function bindWorktree(root: string, branch: string, correlationId: string): Promise<void> {
   const taskId = codingWorkbenchSetupTaskId(branch);
-  const input = { root, baseBranch: branch, taskId, requestedBy: OPERATOR };
+  const input = { root, baseBranch: branch, taskId, requestedBy: OPERATOR, correlationId };
   let result = await bindVerifiedTaskWorkspace(input);
   if (!result.ok && result.stage === "provision" && result.code === "BRANCH_CONFLICT") {
     result = await bindVerifiedTaskWorkspace({
@@ -168,13 +168,13 @@ function selectionNeedsBinding(previous: LocationInput, current: LocationInput):
   );
 }
 
-function reportBindingFailure(error: unknown): void {
-  const correlationId = correlationIdOf(error);
+function reportBindingFailure(error: unknown, attemptCorrelationId: string): void {
+  const correlationId = correlationIdOf(error) ?? attemptCorrelationId;
   reportClientDiagnostic("[keiko] coding workbench checkout selection failed", {
     kind: "other",
     errorKind: bffRequestErrorKind(error),
     errorEvidence: clientErrorEvidence(error),
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
   });
 }
 
@@ -197,20 +197,24 @@ async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
     if (!selectionNeedsBinding(input, latest.current)) {
       reportClientDiagnostic("[keiko] coding workbench checkout selection superseded", {
         correlationId,
-        kind: "other",
-        errorKind: "cancelled",
+        gitClientOperation: { operation: "checkout-selection", outcome: "discarded-succeeded" },
       });
       return;
     }
     if (input.location === "local") {
-      await selectLocalCheckout({ root: input.root, branch, requestedBy: OPERATOR });
+      await selectLocalCheckout({
+        root: input.root,
+        branch,
+        requestedBy: OPERATOR,
+        correlationId,
+      });
     } else {
-      await bindWorktree(input.root, branch);
+      await bindWorktree(input.root, branch, correlationId);
     }
     if (!(await input.refresh())) throw new Error("WORKSPACE_REFRESH_UNAVAILABLE");
     setErrorKey(null);
   } catch (error) {
-    reportBindingFailure(error);
+    reportBindingFailure(error, correlationId);
     setErrorKey(key);
   } finally {
     inFlight.current = null;

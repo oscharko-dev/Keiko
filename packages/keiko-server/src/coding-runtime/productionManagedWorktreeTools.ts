@@ -2342,8 +2342,7 @@ function live(
     input.liveFacts();
     const access = input.resolveWorkspaceRootAccess();
     return (
-      access !== undefined &&
-      access.canonicalRoot === input.workspaceRoot &&
+      access?.canonicalRoot === input.workspaceRoot &&
       Date.now() < Date.parse(input.authorityExpiresAt)
     );
   } catch {

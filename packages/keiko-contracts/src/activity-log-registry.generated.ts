@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f7e1addcbdec5bf6da8f70e829aaf82776c68f926958aa275a36f7b6b6d4d8a5" as const;
+  "bfd2f6bf0f9e86b6396c9ee54fcfd2a942dba6e65c8016657e6475da7808509a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2337,6 +2337,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "repository-clone",
           "repository-register",
+          "checkout-selection",
           "status-read",
           "branches-read",
           "summary-read",
@@ -2585,6 +2586,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "repository-clone",
           "repository-register",
+          "checkout-selection",
           "status-read",
           "branches-read",
           "summary-read",
@@ -4684,6 +4686,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["coding-runtime-event-drop"],
     proofIds: ["coding-runtime.event.dropped.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-runtime.event.late-terminal",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.codingRuntimeOrchestrator.ingestCurrent",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      settledState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["succeeded", "failed", "cancelled", "taken-over"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-runtime-run-settlement"],
+    proofIds: ["coding-runtime.event.late-terminal.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -35259,24 +35299,58 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "coding-runtime-run-settlement",
       requirementContract: "coding-runtime-run-settlement",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end"],
+      lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
-        state: [],
+        state: ["coding-runtime.event.late-terminal"],
         end: ["coding-runtime.run.settled"],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "coding-runtime.event.late-terminal",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.run.settled",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.run.settled"],
+      resourceSignals: ["coding-runtime.event.late-terminal", "coding-runtime.run.settled"],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.event.late-terminal",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "settledState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.event.late-terminal.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.run.settled",
           owner: "keiko-server",
@@ -62638,6 +62712,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.editor-mutation.settled": "tools-workflows",
     "coding-runtime.editor-review.decided": "tools-workflows",
     "coding-runtime.event.dropped": "tools-workflows",
+    "coding-runtime.event.late-terminal": "tools-workflows",
     "coding-runtime.follow-up.dispatch-failed": "tools-workflows",
     "coding-runtime.history": "tools-workflows",
     "coding-runtime.history-projection": "tools-workflows",

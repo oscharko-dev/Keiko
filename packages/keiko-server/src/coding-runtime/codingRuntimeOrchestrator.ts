@@ -507,6 +507,30 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CODING_RUNTIME_LATE_TERMINAL_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.event.late-terminal",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.ingestCurrent",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    settledState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded", "failed", "cancelled", "taken-over"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-run-settlement"],
+  proofIds: ["coding-runtime.event.late-terminal.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1509,6 +1533,12 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "taken-over",
 ]);
 
+function isTerminalRuntimeState(
+  state: CodingWorkbenchRuntimeStateName,
+): state is "succeeded" | "failed" | "cancelled" | "taken-over" {
+  return TERMINAL_STATES.has(state);
+}
+
 /**
  * Server-side ceiling on how long one approval challenge may live.
  *
@@ -2279,6 +2309,17 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
     if (event.runId !== current?.runId) {
+      const settled = this.deps.snapshots.get(event.runId);
+      if (event.kind === "runtime-stopped" && settled && isTerminalRuntimeState(settled.state)) {
+        this.deps.activityLog?.write(
+          activityLogEvent(
+            CODING_RUNTIME_LATE_TERMINAL_OPERATION,
+            { correlationId: runtimeDiagnosticCorrelationId(event.runId) },
+            { runId: event.runId, settledState: settled.state },
+          ),
+        );
+        return { ok: true, snapshot: this.publicSnapshotWithDescription(settled) };
+      }
       recordRuntimeEventDropped(this.deps.activityLog, event, current);
       return this.fail("invalid-intent");
     }

@@ -361,7 +361,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.locationLocal": "Local",
   "codingWorkbench.repository.locationWorktree": "New local worktree",
   "codingWorkbench.repository.locationBinding": "Preparing the selected checkout…",
-  "codingWorkbench.repository.locationError": "The selected checkout could not be opened. Choose a branch in Git, then try again.",
+  "codingWorkbench.repository.locationError":
+    "The selected checkout could not be opened. Choose a branch in Git, then try again.",
   "codingWorkbench.repository.search": "Search repositories",
   "codingWorkbench.repository.searchBranch": "Search branches",
   "codingWorkbench.repository.noMatches": "No matching repositories.",

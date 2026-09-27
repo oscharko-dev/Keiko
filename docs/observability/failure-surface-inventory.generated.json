@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f7e1addcbdec5bf6da8f70e829aaf82776c68f926958aa275a36f7b6b6d4d8a5"
+    "catalogDigest": "bfd2f6bf0f9e86b6396c9ee54fcfd2a942dba6e65c8016657e6475da7808509a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 467,
-    "proofCount": 475,
-    "resolvedProofCount": 475,
+    "operationCount": 468,
+    "proofCount": 476,
+    "resolvedProofCount": 476,
     "failureClassCount": 323,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -265,6 +265,7 @@
         "coding-runtime.editor-mutation.settled",
         "coding-runtime.editor-review.decided",
         "coding-runtime.event.dropped",
+        "coding-runtime.event.late-terminal",
         "coding-runtime.follow-up.dispatch-failed",
         "coding-runtime.history",
         "coding-runtime.history-projection",
@@ -1180,6 +1181,9 @@
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
     ],
     "coding-runtime.event.dropped.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+    ],
+    "coding-runtime.event.late-terminal.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
     ],
     "coding-runtime.follow-up.dispatch-failed.emitted-line": [
@@ -2146,7 +2150,8 @@
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
     ],
     "task-workspace.lifecycle.line": [
-      "packages/keiko-server/src/task-workspace/activity-log.test.ts"
+      "packages/keiko-server/src/task-workspace/activity-log.test.ts",
+      "packages/keiko-server/src/task-workspace/local-checkout.test.ts"
     ],
     "task-workspace.manifest.reconnected.trust-revoked": [
       "packages/keiko-server/src/deps-activity.test.ts"

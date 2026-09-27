@@ -10,7 +10,10 @@ const mocks = vi.hoisted(() => ({
   selectLocalCheckout: vi.fn(),
   bindVerifiedTaskWorkspace: vi.fn(),
 }));
-vi.mock("@/lib/api", () => ({ fetchGitStatus: mocks.fetchGitStatus }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchGitStatus: mocks.fetchGitStatus,
+}));
 vi.mock("@/lib/task-workspace-api", () => ({ selectLocalCheckout: mocks.selectLocalCheckout }));
 vi.mock("@/lib/verified-task-workspace-binding", () => ({
   bindVerifiedTaskWorkspace: mocks.bindVerifiedTaskWorkspace,
@@ -29,6 +32,57 @@ afterEach(() => {
 });
 
 describe("workbench execution location restoration", () => {
+  it("joins branch discovery and local activation under one correlation ID", async () => {
+    mocks.fetchGitStatus.mockResolvedValue({ available: true, branch: "main", detached: false });
+    mocks.selectLocalCheckout.mockResolvedValue({});
+    renderHook(useWorkbenchExecutionLocation, {
+      initialProps: {
+        root: "/repo",
+        branch: undefined,
+        location: "local" as const,
+        activeInstance: null,
+        workspaceLoading: false,
+        workspaceError: false,
+        runIsActive: false,
+        refresh,
+      },
+    });
+
+    await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+    const correlationId = mocks.fetchGitStatus.mock.calls[0]?.[1]?.correlationId as string;
+    expect(mocks.selectLocalCheckout).toHaveBeenCalledWith({
+      root: "/repo",
+      branch: "main",
+      requestedBy: "studio-operator",
+      correlationId,
+    });
+  });
+
+  it("reports a failed branch discovery under its original attempt correlation", async () => {
+    mocks.fetchGitStatus.mockResolvedValue({ available: false });
+    renderHook(useWorkbenchExecutionLocation, {
+      initialProps: {
+        root: "/repo",
+        branch: undefined,
+        location: "local" as const,
+        activeInstance: null,
+        workspaceLoading: false,
+        workspaceError: false,
+        runIsActive: false,
+        refresh,
+      },
+    });
+
+    await waitFor(() => expect(reportClientDiagnostic).toHaveBeenCalled());
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench checkout selection failed",
+      expect.objectContaining({
+        correlationId: mocks.fetchGitStatus.mock.calls[0]?.[1]?.correlationId,
+      }),
+    );
+    expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+  });
+
   it("waits for the authoritative workspace before selecting a checkout", () => {
     const initial = {
       root: "/repo",
@@ -85,7 +139,7 @@ describe("workbench execution location restoration", () => {
       "[keiko] coding workbench checkout selection superseded",
       expect.objectContaining({
         correlationId: mocks.fetchGitStatus.mock.calls[0]?.[1]?.correlationId,
-        errorKind: "cancelled",
+        gitClientOperation: { operation: "checkout-selection", outcome: "discarded-succeeded" },
       }),
     );
   });

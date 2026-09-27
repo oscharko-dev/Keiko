@@ -1664,16 +1664,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: [],
+      state: ["coding-runtime.event.late-terminal"],
       end: ["coding-runtime.run.settled"],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["coding-runtime.run.settled"],
+    requiredCausalOperations: ["coding-runtime.event.late-terminal", "coding-runtime.run.settled"],
     requiredLossOperations: [],
-    requiredProofOperations: ["coding-runtime.run.settled"],
+    requiredProofOperations: ["coding-runtime.event.late-terminal", "coding-runtime.run.settled"],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["coding-runtime.run.settled"],
+    requiredResourceOperations: [
+      "coding-runtime.event.late-terminal",
+      "coding-runtime.run.settled",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

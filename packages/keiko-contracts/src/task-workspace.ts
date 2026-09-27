@@ -722,13 +722,7 @@ export function validateWorkspaceInstance(input: unknown): TaskWorkspaceValidati
     if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
   }
   if (!isTaskWorkspaceLifecycleState(input.lifecycleState)) reasons.push("lifecycleState invalid");
-  if (
-    input.executionLocation !== undefined &&
-    input.executionLocation !== "local" &&
-    input.executionLocation !== "worktree"
-  ) {
-    reasons.push("executionLocation invalid");
-  }
+  validateExecutionLocation(input.executionLocation, reasons);
   if (!isTaskWorkspaceHealth(input.health)) reasons.push("health invalid");
   if (input.lock !== null) validateWorkspaceLock(input.lock, reasons);
   if (input.lastVerifiedAt !== undefined && !isNonEmptyString(input.lastVerifiedAt)) {
@@ -743,6 +737,12 @@ export function validateWorkspaceInstance(input: unknown): TaskWorkspaceValidati
   }
   validateRecoveryHints(input.recoveryHints, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+function validateExecutionLocation(value: unknown, reasons: string[]): void {
+  if (value !== undefined && value !== "local" && value !== "worktree") {
+    reasons.push("executionLocation invalid");
+  }
 }
 
 // ─── WorkspaceBinding (the authoritative active project root) ────────────────────────

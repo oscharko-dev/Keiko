@@ -301,10 +301,7 @@ describe("eventDetail untrusted research content", () => {
         }),
         t,
       ),
-    ).toBe(
-      "codingWorkbench.event.detailOutcome " +
-        "codingWorkbench.event.detailUntrustedContent",
-    );
+    ).toBe("codingWorkbench.event.detailOutcome " + "codingWorkbench.event.detailUntrustedContent");
   });
 
   it("says nothing about content for a research denial, which took nothing in", () => {

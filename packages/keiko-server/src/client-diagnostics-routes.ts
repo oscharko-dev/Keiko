@@ -422,6 +422,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       values: [
         "repository-clone",
         "repository-register",
+        "checkout-selection",
         "status-read",
         "branches-read",
         "summary-read",
@@ -858,6 +859,7 @@ const CLIENT_GIT_OPERATION_SETTLED_OPERATION = defineActivityLogOperation({
       values: [
         "repository-clone",
         "repository-register",
+        "checkout-selection",
         "status-read",
         "branches-read",
         "summary-read",

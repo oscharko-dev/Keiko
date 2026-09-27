@@ -1873,15 +1873,23 @@ function changesetWorkspaceFs(
     );
     if (access?.canonicalRoot !== workspaceRoot) return undefined;
     if (access.kind === "managed-task") return access.fs;
-    const active = deps?.workspaceLifecycle?.getActive();
-    return active?.instance.executionLocation === "local" &&
-      active.instance.repositoryRoot === workspaceRoot &&
-      active.binding.activeRoot === workspaceRoot
-      ? access.fs
-      : undefined;
+    return localChangesetWorkspaceFs(workspaceRoot, access.fs, deps);
   } catch {
     return undefined;
   }
+}
+
+function localChangesetWorkspaceFs(
+  workspaceRoot: string,
+  fs: WorkspaceFs,
+  deps: EditorAgentRouteDeps | undefined,
+): WorkspaceFs | undefined {
+  const active = deps?.workspaceLifecycle?.getActive();
+  return active?.instance.executionLocation === "local" &&
+    active.instance.repositoryRoot === workspaceRoot &&
+    active.binding.activeRoot === workspaceRoot
+    ? fs
+    : undefined;
 }
 
 function runtimeMutationLeaseDeniedResult(action: EditorAgentAction): EditorAgentActionResult {

@@ -470,7 +470,7 @@ function ActivityStatus({
         </p>
       ) : null}
       {retryableActivity(activity.status) ? (
-        <button className={styles.button} type="button" onClick={activity.retry}>
+        <button className={styles.cmpActivityRetry} type="button" onClick={activity.retry}>
           {t("codingWorkbench.activity.retry")}
         </button>
       ) : null}

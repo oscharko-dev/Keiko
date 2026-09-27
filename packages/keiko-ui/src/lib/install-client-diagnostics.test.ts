@@ -930,6 +930,24 @@ describe("fanOutClientDiagnostic budgets", () => {
     expect(clientDiagnosticPostThrottledCount()).toBe(0);
   });
 
+  it("keeps genuine failure capacity after superseded Workbench selections", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let index = 1; index <= 25; index += 1) {
+      fanOutClientDiagnostic("[keiko] coding workbench checkout selection superseded", {
+        correlationId: `checkout-${index.toString().padStart(8, "0")}`,
+        gitClientOperation: { operation: "checkout-selection", outcome: "discarded-succeeded" },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(26);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
+
   // The failed counterpart spends the failure budget like any other genuine failure report, and is
   // bounded by it exactly like the pre-existing failure reports above.
   it("spends a discarded-failed git-client operation from the failure budget and bounds it there", () => {

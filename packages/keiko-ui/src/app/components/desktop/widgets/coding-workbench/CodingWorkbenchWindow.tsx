@@ -1189,9 +1189,9 @@ function LocationBindingNotices({
   return (
     <>
       {locationState.pending ? (
-        <p className={styles.cmpRepositorySelectorNotice} role="status">
+        <output className={styles.cmpRepositorySelectorNotice}>
           {t("codingWorkbench.repository.locationBinding")}
-        </p>
+        </output>
       ) : null}
       {locationState.error ? (
         <RetryMessage

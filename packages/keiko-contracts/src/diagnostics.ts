@@ -996,6 +996,7 @@ export function isClientSessionRepairIngestRequest(
 export const CLIENT_GIT_CLIENT_OPERATION_KINDS = [
   "repository-clone",
   "repository-register",
+  "checkout-selection",
   "status-read",
   "branches-read",
   "summary-read",
@@ -1021,6 +1022,7 @@ export type ClientGitClientOperationOutcome = (typeof CLIENT_GIT_CLIENT_OPERATIO
 const GIT_CLIENT_DISCARD_OPERATIONS: ReadonlySet<ClientGitClientOperationKind> = new Set([
   "repository-clone",
   "repository-register",
+  "checkout-selection",
 ]);
 const GIT_CLIENT_DISCARD_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> = new Set([
   "discarded-succeeded",
@@ -1085,7 +1087,7 @@ export function isClientDiagnosticGitClientOperation(
 // own field is declared over just these three values, with no further cast.
 export type ClientGitRetryOperation = Exclude<
   ClientGitClientOperationKind,
-  "repository-clone" | "repository-register"
+  "repository-clone" | "repository-register" | "checkout-selection"
 >;
 
 // Listed, not derived with a module-level `.filter()` of the kinds above: a bundler cannot prove that
