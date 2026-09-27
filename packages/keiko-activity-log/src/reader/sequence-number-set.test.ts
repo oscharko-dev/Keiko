@@ -14,14 +14,14 @@ function random(seed: number): () => number {
   };
 }
 
-function expectSameMembership(
+// The probes on which the subject and a plain Set disagree. One assertion per state keeps the
+// property run cheap while a failure still names every disagreeing probe.
+function membershipMismatches(
   subject: SequenceNumberSet,
   reference: ReadonlySet<number>,
   probes: readonly number[],
-): void {
-  for (const probe of probes) {
-    expect(subject.has(probe), `membership of ${String(probe)}`).toBe(reference.has(probe));
-  }
+): readonly number[] {
+  return probes.filter((probe) => subject.has(probe) !== reference.has(probe));
 }
 
 function addBoth(subject: SequenceNumberSet, reference: Set<number>, value: number): void {
@@ -49,7 +49,10 @@ describe("SequenceNumberSet", () => {
                 ? 1
                 : Math.floor(next() * 40);
         addBoth(subject, reference, value);
-        expectSameMembership(subject, reference, probes);
+        expect(
+          membershipMismatches(subject, reference, probes),
+          `seed ${String(seed)}, step ${String(step)}`,
+        ).toEqual([]);
       }
     }
   });
@@ -120,7 +123,9 @@ describe("SequenceNumberSet", () => {
     ];
     for (const value of values) {
       addBoth(subject, reference, value);
-      expectSameMembership(subject, reference, probes);
+      expect(membershipMismatches(subject, reference, probes), `after ${String(value)}`).toEqual(
+        [],
+      );
     }
   });
 });
