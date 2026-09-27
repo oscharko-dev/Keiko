@@ -272,3 +272,33 @@ Rejected. It would make browser-safe contracts a process-authority and credentia
 ### Add a coding-specific workspace or editor registry
 
 Rejected. Existing task-workspace and editor-agent authorities already own those invariants.
+
+## Amendment — Issue #2951 makes egress qualification part of runtime qualification (2026-09-12)
+
+Issue [#2951](https://github.com/oscharko-dev/Keiko/issues/2951) corrects D4–D5: process-tree
+ownership is necessary but is not proof of network confinement. Every coding-runtime launch now
+requires both the existing owned-tree qualification and a policy-specific OS egress decision before
+the spawn boundary is crossed.
+
+### D6 — Runtime/model source determines the exact egress profile
+
+`keiko-sidecar` with `keiko-model-gateway` is loopback-only: it may reach the authenticated Keiko
+gateway/BFF and never the public network. `codex-cli-adapter` with
+`chatgpt-codex-subscription-profile` retains its distinct reviewed enterprise-proxy or explicitly
+approved direct-egress policy; it must not be redirected through a nonexistent gateway proxy. A
+source/profile mismatch is invalid rather than coerced to a nearby policy.
+
+Environment variables can configure a reviewed proxy, CA identity, or direct-egress decision, but
+they are not enforcement. A long-lived runtime is available only when a release-qualified OS backend
+can enforce that exact policy and return launch-bound attestation. Missing backend, stale or invalid
+policy receipt, wrapper failure, or attestation mismatch prevents spawn. Autonomous delivery cannot
+continue without this boundary; less-authoritative modes may expose only their existing no-sidecar or
+read-only degraded behavior and never an unsandboxed runtime.
+
+### D7 — Network and tree lifecycles are one supervised lifecycle
+
+The wrapper is the root executable handed to the same native/dev owned-tree supervisor. Stop,
+takeover, signal, crash, restart, reconciliation, and cleanup therefore apply to the sandbox wrapper
+and all of its descendants; there is no separately owned sidecar outside the tree. Successful launch
+returns only content-free attestation binding the backend/platform, runtime/model sources, Authority
+Envelope digest, reviewed-egress receipt, and policy/proxy/CA digests.

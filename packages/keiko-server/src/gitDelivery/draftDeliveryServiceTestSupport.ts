@@ -16,7 +16,10 @@ import {
   type GitPrBody,
   type GitPullRequestBodyAdapter,
 } from "@oscharko-dev/keiko-tools";
-import { gitCommitMessageDigest } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  gitCommitMessageDigest,
+  readGitIndexTreeDigest,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import {
   codingWorkbenchIssueBindingDigest,
@@ -25,14 +28,34 @@ import {
 import { runMigrations } from "../store/schema.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
-import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
 import type { DraftDeliveryRunContext, DraftDeliveryServiceOptions } from "./draftDeliveryTypes.js";
 
 const DIGEST = "a".repeat(64);
 const REPOSITORY = "owner/repository";
-const GIT_EXECUTABLE =
-  process.platform === "win32" ? String.raw`C:\Program Files\Git\cmd\git.exe` : "/usr/bin/git";
+const GIT_EXECUTABLE = testGitExecutable();
+
+function testGitExecutable(): string {
+  const configured = process.env.KEIKO_TEST_GIT_EXECUTABLE?.trim();
+  return configured === undefined || configured.length === 0 ? "git" : configured;
+}
+
+function gitTestProcessEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? "" };
+  for (const name of [
+    "COMSPEC",
+    "NUMBER_OF_PROCESSORS",
+    "PATHEXT",
+    "SystemDrive",
+    "SystemRoot",
+    "WINDIR",
+  ]) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 export class DraftDeliveryFixture {
   public readonly root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-service-")));
   public readonly remote = realpathSync(mkdtempSync(join(tmpdir(), "keiko-draft-remote-")));
@@ -108,6 +131,7 @@ export class DraftDeliveryFixture {
     writeFileSync(join(this.root, "code.js"), "export const value = 2;\n");
     this.git(["add", "code.js"]);
     this.git(["commit", "-qm", "feat: bounded change"]);
+    this.git(["update-index", "--refresh", "-q"]);
     this.git(["remote", "add", "origin", `https://github.com/${REPOSITORY}.git`]);
   }
   private makeIssue(): CodingWorkbenchIssueBinding {
@@ -179,7 +203,10 @@ export class DraftDeliveryFixture {
     evidenceId = "verification-1",
     message = "feat: bounded change",
   ): Promise<void> {
-    const facts = await readVerifiedCommitFacts(this.context, this.options.execution ?? {});
+    const stagedTreeDigest = await readGitIndexTreeDigest({
+      workspace: this.context.workspace,
+      processEnv: this.options.execution?.processEnv,
+    });
     this.snapshots.recordVerifiedCommit({
       schemaVersion: "1",
       runId: "run-1",
@@ -189,11 +216,11 @@ export class DraftDeliveryFixture {
       workspaceDigest: DIGEST,
       repositoryDigest: this.issue.remoteDigest,
       issueBindingDigest: this.issue.bindingDigest,
-      baseSha: facts.baseSha,
+      baseSha: this.git(["rev-parse", this.context.baseRef]),
       parentSha: this.git(["rev-parse", "HEAD^"]),
-      stagedTreeDigest: facts.stagedTreeDigest,
-      committedTreeDigest: facts.stagedTreeDigest,
-      headSha: facts.headSha,
+      stagedTreeDigest,
+      committedTreeDigest: stagedTreeDigest,
+      headSha: this.git(["rev-parse", "HEAD"]),
       verificationEvidenceId: evidenceId,
       messageDigest: gitCommitMessageDigest(message),
       status: "succeeded",
@@ -206,6 +233,7 @@ export class DraftDeliveryFixture {
     writeFileSync(join(this.root, "code.js"), "export const value = 3;\n");
     this.git(["add", "code.js"]);
     this.git(["commit", "-qm", "fix: repair the failing check"]);
+    this.git(["update-index", "--refresh", "-q"]);
     await this.recordVerifiedCommit("commit-2", "verification-2", "fix: repair the failing check");
     return this.git(["rev-parse", "HEAD"]);
   }
@@ -299,6 +327,22 @@ export class DraftDeliveryFixture {
       },
     };
   }
+  private makeMutationDeps(): DraftDeliveryServiceOptions["mutationDeps"] {
+    return {
+      redactor: (value): unknown => value,
+      evidenceStore: {
+        put: (id, body): string => {
+          this.evidence.set(id, body);
+          return id;
+        },
+        get: (id): string | undefined => this.evidence.get(id),
+        list: (): readonly string[] => [...this.evidence.keys()],
+        delete: (id): void => {
+          this.evidence.delete(id);
+        },
+      },
+    };
+  }
   private makeOptions(): DraftDeliveryServiceOptions {
     const activityLog = {
       write: (event: ServerLogEvent): void => {
@@ -314,21 +358,12 @@ export class DraftDeliveryFixture {
     return {
       context: () => this.context,
       snapshots: this.snapshots,
-      execution: { ...shared, approvalStore: createInMemoryGitDeliveryApprovalStore() },
-      mutationDeps: {
-        redactor: (value): unknown => value,
-        evidenceStore: {
-          put: (id, body): string => {
-            this.evidence.set(id, body);
-            return id;
-          },
-          get: (id): string | undefined => this.evidence.get(id),
-          list: (): readonly string[] => [...this.evidence.keys()],
-          delete: (id): void => {
-            this.evidence.delete(id);
-          },
-        },
+      execution: {
+        ...shared,
+        approvalStore: createInMemoryGitDeliveryApprovalStore(),
+        processEnv: gitTestProcessEnv(),
       },
+      mutationDeps: this.makeMutationDeps(),
       onChanged: (record): void => {
         this.changes.push(record);
       },

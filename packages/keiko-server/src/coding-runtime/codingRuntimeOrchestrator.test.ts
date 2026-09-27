@@ -386,6 +386,7 @@ function fixture(
     resolve: vi.fn<CodingRuntimeLaunchResolver["resolve"]>(() => ({
       taskRef: "task-1",
       treeBindingId: "tree",
+      authorityEnvelopeDigest: "a".repeat(64),
       adapterKind: "codex-cli",
       runtimeSource: "codex-cli-adapter",
       modelSource: "keiko-model-gateway",
@@ -1235,6 +1236,7 @@ describe("CodingRuntimeOrchestrator", () => {
     return {
       taskRef: "task-1",
       treeBindingId: "tree",
+      authorityEnvelopeDigest: "a".repeat(64),
       adapterKind: "codex-cli",
       runtimeSource: "codex-cli-adapter",
       modelSource: "keiko-model-gateway",

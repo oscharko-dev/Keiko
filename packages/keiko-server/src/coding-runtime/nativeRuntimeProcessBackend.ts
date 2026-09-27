@@ -31,6 +31,7 @@ import {
 } from "./nativeRuntimeProcessPaths.js";
 import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRuntimeProcessTree.js";
 import type {
+  PreparedRuntimeSandboxLaunch,
   RuntimeProcessBackend,
   RuntimeProcessTree,
   RuntimeSupervisorLaunchRequest,
@@ -121,14 +122,19 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     this.identity = Object.freeze({ ...options.identity });
   }
 
-  public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
-    try {
-      assertGatewayConfinementUnsupported(this.options.gatewayConfinement, request);
-    } catch (error) {
-      recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
-      throw error;
+  public spawnOwnedTree(
+    request: RuntimeSupervisorLaunchRequest,
+    sandbox?: PreparedRuntimeSandboxLaunch,
+  ): RuntimeProcessTree {
+    if (sandbox === undefined) {
+      try {
+        assertGatewayConfinementUnsupported(this.options.gatewayConfinement, request);
+      } catch (error) {
+        recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
+        throw error;
+      }
+      recordNativeConfinementUnavailable(this.options.activityLog, request.runId, this.identity);
     }
-    recordNativeConfinementUnavailable(this.options.activityLog, request.runId, this.identity);
     const paths = validateLaunchPacketRequest(request, {
       ...this.options,
       safeRealFile,
@@ -137,7 +143,13 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
       invalidRequest,
     });
     const recoveryHandle = request.recoveryHandle;
-    const packet = encodeLaunchPacket(request, paths);
+    const packet =
+      sandbox === undefined
+        ? encodeLaunchPacket(request, paths)
+        : encodeLaunchPacket(
+            { ...request, executable: sandbox.command, args: sandbox.args },
+            { executable: sandbox.command, cwd: paths.cwd },
+          );
     const child = spawnVerifiedHelper(
       this.options.helperPath,
       this.options.expectedHelperSha256,
