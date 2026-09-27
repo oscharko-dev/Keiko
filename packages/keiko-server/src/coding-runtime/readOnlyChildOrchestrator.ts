@@ -41,8 +41,8 @@ import {
   deriveReadOnlyChildEnvelope,
 } from "./readOnlyChildEnvelope.js";
 import type { ChildAgentRequestV1, ReadOnlyChildEnvelope } from "./readOnlyChildEnvelope.js";
-import type { ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 /** A governance terminal from the gate or the orchestrator — every non-accepted outcome status. */
 export type ReadOnlyChildTerminal = Exclude<AuxiliaryOutcomeStatus, "accepted">;

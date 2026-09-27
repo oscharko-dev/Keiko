@@ -1,6 +1,6 @@
 // The closed file-name grammar of the one logical Activity Log directory (`<stateDir>/logs/`).
 //
-// The writer (keiko-server `observability/server-log.ts`) and every reader (support export and
+// The writer (keiko-activity-log `server-log.ts`) and every reader (support export and
 // analyze, the state-path ownership scan, repository scripts and end-to-end harnesses) must agree on
 // which names are Activity Log evidence and in which order they form the one logical log. A second
 // hand-written pattern in any of those places could admit a name the writer never creates, or miss

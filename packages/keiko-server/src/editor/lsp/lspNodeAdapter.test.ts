@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -33,13 +34,12 @@ import {
   writeNodeExecutableFixture,
 } from "./testing/executableFixture.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
-import { redactLogFields } from "../../observability/log-redaction.js";
-import type { ServerLogEvent } from "../../observability/server-log.js";
 import {
+  redactLogFields,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-} from "../../observability/server-logger.js";
+} from "@oscharko-dev/keiko-activity-log";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

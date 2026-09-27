@@ -1,6 +1,6 @@
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   CodingRuntimeSnapshot,

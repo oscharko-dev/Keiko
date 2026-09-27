@@ -82,7 +82,7 @@ import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown, newCorrelationId } from "./correlation.js";
 import { errorKindOf, getServerLogger, type ServerLogger } from "./observability/index.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {

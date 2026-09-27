@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 // Proves the production composition of `PrDescriptionServiceOptions.generation` (#3399 mounts
 // #3398's `generatePrDescription`, epic #3384 Frozen Product Decision 8):
 //   * No configured model profile composes to `undefined` — the ONE closed reason
@@ -21,13 +26,7 @@ import {
   resetGatewayInstanceCacheForTests,
   type RuntimeGatewayConfigSource,
 } from "../gateway-instance-cache.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "../observability/index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { createProductionPrDescriptionGeneration } from "./prDescriptionGeneration.js";
 

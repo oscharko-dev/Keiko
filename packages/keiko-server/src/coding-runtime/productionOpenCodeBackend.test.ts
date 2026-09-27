@@ -13,7 +13,7 @@ import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 afterEach(() => vi.restoreAllMocks());
 
 import { createOpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

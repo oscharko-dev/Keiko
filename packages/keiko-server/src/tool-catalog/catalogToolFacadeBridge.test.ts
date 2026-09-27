@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import { describe, expect, it, vi } from "vitest";
 import {
   EDITOR_AGENT_CONFLICT_CODES,
@@ -31,7 +33,7 @@ import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtim
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
-import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
+import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,

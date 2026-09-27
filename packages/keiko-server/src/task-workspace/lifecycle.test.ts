@@ -1,3 +1,7 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 // Coverage for the #446 active-binding lifecycle service. Proves the atomic switch (setActive sets the
 // derived-binding pointer), pause (clears the pointer + walks active→paused), resume (paused→active +
 // re-binds), handoff (clean-only, pointer untouched), the legal-transition gate, lock contention, the
@@ -28,12 +32,7 @@ import type {
 } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/index.js";
+import { type ServerLogEvent, type ServerLogSink } from "../observability/index.js";
 import { runWithWorkspaceLifecycleFailureLogging } from "./activity-log.js";
 import type { ManagedIdentityDrift } from "./gitdir-identity.js";
 

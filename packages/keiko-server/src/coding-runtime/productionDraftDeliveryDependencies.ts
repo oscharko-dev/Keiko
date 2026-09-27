@@ -39,8 +39,8 @@ import {
   gitDeliveryTerminationHandler,
   resolveProjectWorkspace,
 } from "../gitDelivery/execution.js";
-import type { ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";

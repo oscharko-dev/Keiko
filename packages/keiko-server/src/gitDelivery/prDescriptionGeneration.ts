@@ -21,7 +21,7 @@ import {
   type RuntimeGatewayConfigSource,
 } from "../gateway-instance-cache.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 /**
  * Builds the production `PrDescriptionServiceOptions.generation` value from the process-wide

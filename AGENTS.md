@@ -247,6 +247,9 @@ The shape (ADR-0019):
   in the repo. Everything else depends _inward_ toward it. Put cross-package types here.
 - **`keiko-security`** depends only on contracts. Most domain packages depend only on
   contracts + security.
+- **`keiko-activity-log`** owns the writer, segmented store, and reader engine. It depends only on
+  contracts + security; server and CLI compose it, while domain packages keep injected log ports
+  and UI never imports it (ADR-0179).
 - **`keiko-model-gateway`** is the _only_ place provider SDKs (`openai`, `@anthropic-ai/*`,
   `*-ai-sdk`) may be imported. This isolation is a hard gate — do not import a model SDK anywhere
   else (ADR-0019 trust-1).
@@ -384,7 +387,7 @@ The behaviour you add or change must leave body-free evidence in the activity lo
 system that exists, never beside it:
 
 - **Emit through the owning layer's existing port.** On the server: `ServerLogSink` /
-  `ServerLogEvent` ([`server-log.ts`](packages/keiko-server/src/observability/server-log.ts)) for
+  `ServerLogEvent` ([`server-log.ts`](packages/keiko-activity-log/src/server-log.ts)) for
   activity, `emitServerDiagnostic` / `defaultServerDiagnosticSink`
   ([`diagnostics-log.ts`](packages/keiko-server/src/diagnostics-log.ts)) for diagnostics. In domain
   packages: the injected log port of that package — `SecurityLogSink`, `KnowledgeLogSink`,
@@ -453,7 +456,7 @@ system that exists, never beside it:
 - **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
   hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
   secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the
-  existing redaction ([`log-redaction.ts`](packages/keiko-server/src/observability/log-redaction.ts));
+  existing redaction ([`log-redaction.ts`](packages/keiko-activity-log/src/log-redaction.ts));
   if a value cannot be made body-free, log its hash or its count, not the value.
 - **The log is part of the definition of done.** A change is complete only when the new behaviour
   can be reconstructed from the log alone. Prove it the way you prove the fix: a test asserts the

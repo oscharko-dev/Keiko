@@ -46,7 +46,7 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
-import { analyzeLogText } from "./support-analyze.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   parseSupportArgs,
   resolveOutPath,
@@ -59,6 +59,19 @@ import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
+
+// Recovery tests reload CLI modules to swap a fault-injected publication helper for the real
+// implementation.  Keep the real Activity Log namespace stable across that reload: a module
+// reset is not a new Node process, and the writer owner is intentionally process-lifetime.
+const activityLogRoot = await vi.importActual<typeof import("@oscharko-dev/keiko-activity-log")>(
+  "@oscharko-dev/keiko-activity-log",
+);
+vi.doMock("@oscharko-dev/keiko-activity-log", () => activityLogRoot);
+const serverRoot = await vi.importActual<typeof import("@oscharko-dev/keiko-server")>(
+  "@oscharko-dev/keiko-server",
+);
+vi.doMock("@oscharko-dev/keiko-server", () => serverRoot);
+
 const runSupportCli = runSupportCliImpl;
 
 const BUILT_CLI_ENTRY = fileURLToPath(new URL("../../../dist/cli/index.js", import.meta.url));

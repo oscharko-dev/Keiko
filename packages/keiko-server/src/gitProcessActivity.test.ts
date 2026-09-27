@@ -1,14 +1,11 @@
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logGitProcessOutcome, observedGitRunner } from "./gitProcessActivity.js";
-import {
-  createBufferedServerLogSink,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "./observability/index.js";
+import { type ServerLogEvent, type ServerLogSink } from "./observability/index.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

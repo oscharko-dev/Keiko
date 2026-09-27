@@ -824,7 +824,7 @@
     },
     {
       "id": "activity-redaction",
-      "path": "packages/keiko-server/src/observability/log-redaction.ts",
+      "path": "packages/keiko-activity-log/src/log-redaction.ts",
       "probe": "redact",
       "disposition": "retain owner",
       "ownerIssue": 3413,
@@ -888,7 +888,7 @@
     },
     {
       "id": "support-analyzer",
-      "path": "packages/keiko-cli/src/support-analyze.ts",
+      "path": "packages/keiko-activity-log/src/reader/support-analyze.ts",
       "probe": "analyzeLogText",
       "disposition": "retain owner",
       "ownerIssue": 3413,

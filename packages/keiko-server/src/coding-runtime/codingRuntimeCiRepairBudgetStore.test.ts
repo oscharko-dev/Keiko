@@ -21,8 +21,8 @@ import {
   type CiRepairBudgetRecord,
   type CiRepairBudgetResult,
 } from "./codingRuntimeCiRepairBudgetTypes.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
-import { redactLogFields } from "../observability/log-redaction.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

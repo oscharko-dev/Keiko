@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chmodSync,
@@ -33,7 +35,7 @@ import { gitHubCodeContextPortFor } from "./coding-context/githubIssueReaderAuth
 import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
-import { closeFileServerLogSinks, createFileServerLogSink } from "./observability/server-log.js";
+import { closeFileServerLogSinks, createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   addSourceToCapsule,
   createCapsule,
@@ -96,12 +98,7 @@ import { buildBinding } from "./task-workspace/binding.js";
 import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
 import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { RuntimeShutdownCleanup } from "./deps-activity.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
@@ -1810,10 +1807,11 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   it("leaves the shared description service unavailable when no model profile is configured (F7)", () => {
     const store = createInMemoryUiStore();
     const root = tmp("pr-description-unavailable-project-");
+    const evidenceDir = tmp("ev-pr-description-service-unavailable-");
     store.createProject(root);
     const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir: tmp("ev-pr-description-service-unavailable-"),
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
       env: {},
       store,
     });

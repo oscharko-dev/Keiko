@@ -12,6 +12,7 @@ import {
   classifyErrorKind,
   defineActivityLogOperation,
   isErrorKind,
+  validateActivityLogOperationFields,
   validateRegisteredActivityLogEvent,
   withActivityLogCorrelation,
   type ActivityLogFieldContract,
@@ -254,6 +255,23 @@ describe("typed Activity Log operation registration", () => {
         } as never),
       ),
     ).toThrow(new ActivityLogEventValidationError("invalid-field-type"));
+  });
+
+  it("rejects an undeclared field named like an Object.prototype member", () => {
+    const registration = activityLogOperationSchema("client.diagnostic");
+    if (registration === undefined) throw new Error("fixture operation is not registered");
+    const declared = { clientNoteDigest: "a".repeat(64), completeness: "complete", loss: "none" };
+    expect(() =>
+      validateActivityLogOperationFields(registration.op, registration.category, declared),
+    ).not.toThrow();
+    for (const name of ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"]) {
+      const fields: Record<string, unknown> = { ...declared };
+      Object.defineProperty(fields, name, { value: "smuggled", enumerable: true });
+      expect(
+        () => validateActivityLogOperationFields(registration.op, registration.category, fields),
+        name,
+      ).toThrow(new ActivityLogEventValidationError("unknown-field"));
+    }
   });
 
   it("normalizes legacy correlation ids while preserving causal requirements", () => {

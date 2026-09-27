@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a9b3a9ee86385d1ecd1fa9ae594a9d99164f91685ada87feccea7ed5fac6f203"
+    "catalogDigest": "5cd74f3fd50b4b84f6b58fe5487fed5114bb3f631fe92dca9b16220f960aeb2a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 464,
-    "proofCount": 472,
-    "resolvedProofCount": 472,
+    "operationCount": 465,
+    "proofCount": 473,
+    "resolvedProofCount": 473,
     "failureClassCount": 321,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -532,7 +532,7 @@
     },
     {
       "surface": "lifecycle-crash",
-      "owners": ["keiko-cli", "keiko-server"],
+      "owners": ["keiko-activity-log", "keiko-cli", "keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
         "activity-log.loss",
@@ -545,6 +545,7 @@
         "activity-log.retention.pruned",
         "activity-log.segment.recovered",
         "activity-log.segment.sealed",
+        "activity-log.writer-rejected",
         "memory.audit.state-cache.seeded",
         "portable.windows-alert.spawn-failed",
         "process.exiting",
@@ -954,41 +955,43 @@
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
-      "packages/keiko-server/src/observability/activity-log-loss-summary.test.ts"
+      "packages/keiko-activity-log/src/activity-log-loss-summary.test.ts"
     ],
     "activity-log.loss.exit-summary": [
-      "packages/keiko-server/src/observability/activity-log-loss-summary.test.ts",
-      "packages/keiko-server/src/observability/activity-log-wiring.test.ts"
+      "packages/keiko-activity-log/src/activity-log-loss-summary.test.ts"
     ],
     "activity-log.pin.created.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.pin.expired.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.pin.quota-exhausted.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.policy.conflict.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.pressure.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.readiness.startup-line": [
-      "packages/keiko-server/src/observability/activity-log-readiness.test.ts"
+      "packages/keiko-activity-log/src/activity-log-readiness.test.ts"
     ],
     "activity-log.readiness.transition-line": [
-      "packages/keiko-server/src/observability/activity-log-readiness.test.ts"
+      "packages/keiko-activity-log/src/activity-log-readiness.test.ts"
     ],
     "activity-log.retention.pruned.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.segment.recovered.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.segment.sealed.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
+    ],
+    "server-log.writer-ownership-rejected.registered-line": [
+      "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts"
     ],
     "atlassian.credential.rejected.reason": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
@@ -2044,16 +2047,18 @@
       "packages/keiko-security/src/windows-shortcuts.test.ts"
     ],
     "server-log.line-dropped.registered-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "server-log.safe-open.emitted-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "server-log.target-mutated.registered-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "server-log.write-failed.stderr-line": [
-      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts",
+      "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts",
+      "packages/keiko-activity-log/src/server-log.writer-rejection.test.ts"
     ],
     "server.diagnostic.failure.activity-log-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
@@ -2104,19 +2109,19 @@
       "packages/keiko-cli/src/support.activity-log-proof.test.ts"
     ],
     "support.incident.created.emitted-line": [
-      "packages/keiko-server/src/observability/support-incident.test.ts"
+      "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.deduplicated.emitted-line": [
-      "packages/keiko-server/src/observability/support-incident.test.ts"
+      "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.dismissed.emitted-line": [
-      "packages/keiko-server/src/observability/support-incident.test.ts"
+      "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.expired.emitted-line": [
-      "packages/keiko-server/src/observability/support-incident.test.ts"
+      "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.rejected.emitted-line": [
-      "packages/keiko-server/src/observability/support-incident.test.ts"
+      "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.manifest.rebuilt.manifest-evidence": [
       "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"

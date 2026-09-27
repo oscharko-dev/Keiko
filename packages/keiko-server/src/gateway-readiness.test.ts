@@ -20,9 +20,9 @@ import {
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 // A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
 const CODING_CHAT_DIGEST = modelIdEvidence("coding-chat").modelIdDigest;

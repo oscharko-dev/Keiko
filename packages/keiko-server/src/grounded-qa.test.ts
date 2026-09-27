@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Tests for the grounded Q&A BFF handler (Issue #185). Drives `handleGroundedAsk` directly
 // with a fake IncomingMessage and an injected orchestrator runner so the wire-shape contracts
 // (validation, scope guard, citation ordering, message persistence) are exercised without
@@ -98,12 +100,7 @@ import {
   CONVERSATION_MEMORY_FENCE_END,
   CONVERSATION_MEMORY_FENCE_START,
 } from "./conversation-prompt.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   createFakeSessionPairingPort,
   fakePairingRequestBody,

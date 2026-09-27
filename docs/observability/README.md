@@ -7,7 +7,10 @@ passing for an active writer. This page documents the
 log itself, how its lines join together across a request's lifecycle, and how to read it with
 `keiko support export` / `keiko support analyze`. It is the consumer-facing counterpart to
 [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md), which records
-the design decisions behind everything described here.
+the design decisions behind everything described here. The writer, segmented store, and support
+reader engine live in `@oscharko-dev/keiko-activity-log`; server routes and diagnostics plus CLI
+argument parsing, rendering, and publication remain their composition owners
+([ADR-0179](../adr/ADR-0179-activity-log-package-boundary.md)).
 
 ## File location, segments, and retention
 
@@ -397,7 +400,7 @@ on every pull request.
 
 Every field this log can carry passes through `redactLogFields` before it reaches disk. That
 guarantee has an honest, stated limit, reused verbatim from the redaction test suite's own header
-(`packages/keiko-server/src/observability/log-redaction.test.ts`) rather than restated in looser
+(`packages/keiko-activity-log/src/log-redaction.test.ts`) rather than restated in looser
 words here:
 
 > Scope, stated honestly: the guarantee is over CONTENT SHAPES (prose, markup/JSON, control
@@ -754,14 +757,30 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   directly from its segment and reporting any stored one that differs.
 - **Bounds.** Reads use one 64 KiB buffer and hold at most one line of up to 1 MiB. A closure holds
   at most 4096 correlations, a result at most `--max-bytes`. The correlation filter uses about 10
-  bits per key (roughly 1% false positives), at most 128 KiB. A checked-in long-history test builds
-  80 MiB of history in 40 sealed segments and runs the built command under a 112 MiB heap cap. Peak
-  resident memory may grow by at most 32 MiB over the same command on an empty state directory, and
-  instrumented reads prove that segments the manifests rule out are never opened. Measured on macOS
-  arm64 with Node 24: the empty-state baseline takes 0.94 s, of which about 0.93 s is loading the
-  server modules; a cold query that builds all 40 manifests takes 2.1 to 2.5 s; a warm query takes
-  1.1 to 1.2 s and opens 3 segments (two hold the closure, one is a filter false positive). Peak
-  memory grew by at most about 7 MiB over the baseline.
+  bits per key (roughly 1% false positives), at most 128 KiB. Scanning a segment retains only bounded
+  per-segment state: sequence numbers are kept as one contiguous run plus the values outside it, and
+  field validation walks each registration in place. A checked-in long-history test builds 80 MiB of
+  history in 40 sealed segments and runs the built command under a 112 MiB heap cap and an 8 MiB V8
+  semi-space cap. Peak resident memory may grow by at most 32 MiB over the same command on an empty
+  state directory, and instrumented reads prove that segments the manifests rule out are never
+  opened. The semi-space cap applies to every run alike. Without it, whether a query commits another
+  16 MiB of V8 new space depends on garbage-collection timing, because the empty command already sits
+  at V8's growth threshold; with it, a reader that retained even a third of the history still
+  exceeds the budget.
+
+  The command loads only `@oscharko-dev/keiko-activity-log`, never the server modules. A same-host
+  comparison with `dev` before the extraction (macOS arm64, Node 26.8.1, five alternating rounds over
+  the same 80 MiB history, one child process per value, no semi-space cap) measured time and peak
+  resident memory:
+
+  | Build                             |              Empty query |                 Cold query |                 Warm query |
+  | --------------------------------- | -----------------------: | -------------------------: | -------------------------: |
+  | Server modules loaded (before)    | 824–896 ms / 278–281 MiB | 1858–2322 ms / 281–287 MiB | 1023–1085 ms / 281–284 MiB |
+  | Activity Log package only (after) |   156–159 ms / 84–87 MiB |   1083–1121 ms / 96–98 MiB |     273–295 ms / 94–95 MiB |
+
+  The empty-state baseline fell from about 0.85 s to about 0.16 s: the server module graph it no
+  longer loads.
+
 - **Versioned output.** `--json` forms name themselves and their version: `keiko.support.query`,
   `keiko.support.manifest`, the stored `keiko.activity-log.segment-manifest`, and the export
   manifest line's `selection` member, `keiko.support.export-selection`, all at version 1.

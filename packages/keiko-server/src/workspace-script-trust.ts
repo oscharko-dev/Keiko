@@ -50,7 +50,7 @@ import type {
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
 import { isManagedTargetContained } from "./task-workspace/managed-root.js";
-import type { ServerLogSink } from "./observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {

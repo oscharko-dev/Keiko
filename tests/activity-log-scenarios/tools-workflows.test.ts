@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 // End-to-end Activity Log scenarios (#3532): the tools-workflows surface (coding-runtime,
 // tool-catalog, coding-app-session/coding-context, task-workspace and workspace-script-trust).
 //
@@ -13,7 +14,6 @@ import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 
 import { defaultServerDiagnosticSink } from "../../packages/keiko-server/src/diagnostics-log.js";
-import { resetServerLogger } from "../../packages/keiko-server/src/observability/index.js";
 import {
   logCommandTermination,
   processServerLogSink,

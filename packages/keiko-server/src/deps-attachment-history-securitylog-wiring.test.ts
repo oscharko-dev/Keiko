@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // Wiring test for `buildUiHandlerDeps`'s composition of the conversation-attachment store and the
 // editor local-history store (Wave 4a, epic #3233 §8).
 //
@@ -22,13 +27,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildUiHandlerDeps } from "./deps.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-  type BufferedServerLogSink,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const tmpDirs: string[] = [];
 

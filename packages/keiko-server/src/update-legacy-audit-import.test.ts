@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
-import { closeFileServerLogSinks, listActivityLogFiles } from "./observability/server-log.js";
+import { closeFileServerLogSinks, listActivityLogFiles } from "@oscharko-dev/keiko-activity-log";
 import { importLegacyUpdateAuditSnapshot } from "./update-legacy-audit-import.js";
 
 function legacyEventId(value: number): string {

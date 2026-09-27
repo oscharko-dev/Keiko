@@ -33,7 +33,7 @@ import {
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/mutex.js";
 
 const verificationWorkspaces = createWorkspaceMutexRegistry();

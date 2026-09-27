@@ -1,3 +1,5 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -39,12 +41,7 @@ import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolut
 import type { ChatGitChangeScope } from "./store/index.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";

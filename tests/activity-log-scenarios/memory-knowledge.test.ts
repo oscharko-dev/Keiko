@@ -1,3 +1,4 @@
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the memory/knowledge surface (keiko-local-knowledge's
 // indexing orchestrator, embedding batcher and discovery layer, plus the keiko-server
 // connected-context bridge). Each scenario drives a real production entry point with fault
@@ -56,7 +57,6 @@ import {
 } from "../../packages/keiko-server/src/grounded-orchestrator.js";
 import {
   createFileServerLogSink,
-  resetServerLogger,
   type ServerLogSink,
 } from "../../packages/keiko-server/src/observability/index.js";
 import { processServerLogSink } from "../../packages/keiko-server/src/process-log-sink.js";

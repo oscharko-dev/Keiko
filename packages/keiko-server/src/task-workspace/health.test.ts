@@ -1,3 +1,8 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
+
 // Integration coverage for the #448 read-only health service (Issue #448, Epic #443). Materializes
 // genuine managed worktrees via the real provisioning service + adapter, then proves the operational
 // health classification over live signals (healthy, dirty, missing, archived, cleanup-ready), orphan
@@ -66,12 +71,7 @@ function failProofFor(worktreePath: string, cause: Error): void {
     candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
   );
 }
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/server-log.js";
+import { type ServerLogEvent, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const __twMutex = createWorkspaceMutexRegistry();
 

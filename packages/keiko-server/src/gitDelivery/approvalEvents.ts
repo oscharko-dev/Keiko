@@ -18,7 +18,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 // A caller-supplied commit SHA a governed push / PR create / PR update request carries: a full Git
 // object id naming the commit the client previewed/approved. Consumed by `pushRoutes.ts`'s

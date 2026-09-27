@@ -1,14 +1,11 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
-import {
-  createBufferedServerLogSink,
-  createServerLogger,
-  resetServerLogger,
-  setServerLogger,
-} from "./observability/index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 describe("SSE_HEADERS", () => {
   it("disables intermediary buffering for low-latency event delivery", () => {

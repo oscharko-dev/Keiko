@@ -25,6 +25,7 @@ The root product depends on and bundles the following private runtime packages a
 details of the shipped artifact:
 
 ```text
+@oscharko-dev/keiko-activity-log
 @oscharko-dev/keiko-cli
 @oscharko-dev/keiko-connectors
 @oscharko-dev/keiko-contracts

@@ -22,7 +22,7 @@ import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "../editor/agentAuthorityRegistry.js";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 // Real directories: the grant identity is a digest of the realpath'd root, and a path that does
 // not resolve has no identity. `/workspace/project` used to stand here and passed only while the

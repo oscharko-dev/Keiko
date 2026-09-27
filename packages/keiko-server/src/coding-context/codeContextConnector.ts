@@ -14,7 +14,7 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/te
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   isJiraConnectorAuthorized,
   type QiConnectorConfig,

@@ -10,7 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "./correlation.js";
 import type { ServerLogSink } from "./observability/index.js";
-import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 
 export type WorkspaceRootDenialReason =

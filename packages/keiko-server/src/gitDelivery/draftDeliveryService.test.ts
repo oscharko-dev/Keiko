@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createVerifiedCommitService } from "./verifiedCommitService.js";
 import { commitFacadeFixture } from "./verifiedCommitFacadeTestSupport.js";
 import { publishDraftDeliveryRecord } from "../coding-runtime/productionDraftDeliveryRuntime.js";
-import { redactLogFields } from "../observability/log-redaction.js";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { parseCodingToolRequest } from "../coding-runtime/codingToolIpc.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

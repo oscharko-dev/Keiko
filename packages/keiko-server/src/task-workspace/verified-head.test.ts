@@ -1,3 +1,7 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 // Regression coverage for the #3382 verified-head restamp.
 //
 // The defect: `lastVerifiedHead` had exactly ONE production writer (a healthy reconciliation pass),
@@ -39,11 +43,7 @@ import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import { recordVerifiedManagedHead } from "./verified-head.js";
 import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
 import type { WorkspaceProvisioningServiceDeps, WorkspaceReconciliationService } from "./types.js";
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-} from "../observability/index.js";
+import { type ServerLogEvent } from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 

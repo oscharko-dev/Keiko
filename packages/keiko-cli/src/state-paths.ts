@@ -36,7 +36,7 @@ import { assertRealpathContained } from "./launcher-paths.js";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   isSegmentManifestFileName,
-} from "./support-segment-manifest-names.js";
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { LauncherError } from "./launcher-platforms.js";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
@@ -399,7 +399,7 @@ export function classifyPid(
 //     updates/runtime-state.json            keiko-server  update-local-state.ts
 //     updates/update-audit.jsonl            keiko-server  update-local-state.ts
 //     updates/snapshots/<id>/manifest.json  keiko-server  update-local-state.ts
-//     logs/activity-*.jsonl segments, pin-*.json keiko-server  observability/server-log.ts
+//     logs/activity-*.jsonl segments, pin-*.json keiko-activity-log  server-log.ts
 //     logs/server.log, server-<date>.log      legacy Activity Log files (read-only, aged out)
 //
 // The sealed `*.vault` ciphertext and its `*.key` keyfile (the env/keychain-tier fallback,
@@ -426,7 +426,7 @@ const CREDENTIALS_SUBDIR = "credentials"; // keiko-server/src/credentialVault.ts
 const MEMORY_SUBDIR = "memory"; // keiko-memory-vault/src/paths.ts (MEMORY_DIR_NAME)
 const LOCAL_KNOWLEDGE_SUBDIR = "local-knowledge"; // keiko-local-knowledge store-paths.ts (SUBSYSTEM_DIR)
 const EVIDENCE_SUBDIR = "evidence"; // keiko-evidence/src/store.ts (DEFAULT_EVIDENCE_DIR)
-const LOGS_SUBDIR = "logs"; // keiko-server/src/observability/server-log.ts (createFileServerLogSink)
+const LOGS_SUBDIR = "logs"; // keiko-activity-log/src/server-log.ts (createFileServerLogSink)
 const TOOL_RESULTS_SUBDIR = "tool-results"; // keiko-evidence/src/tool-result-artifact-store.ts
 const UPDATE_SUBDIR = "updates"; // keiko-server/src/update-local-state.ts (UPDATE_DIR)
 const FIGMA_VAULT_SUBDIR = "figma"; // keiko-server figmaTokenStore.ts (Figma PAT vault dir, under evidence)

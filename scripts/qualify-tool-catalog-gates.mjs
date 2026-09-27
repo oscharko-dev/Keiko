@@ -35,7 +35,7 @@ const LOCAL_GATE_COMMANDS = Object.freeze({
       "vitest",
       "run",
       "--",
-      "packages/keiko-cli/src/support-tool-catalog.test.ts",
+      "packages/keiko-activity-log/src/reader/support-tool-catalog.test.ts",
       "packages/keiko-server/src/tool-catalog/catalogToolBinder.test.ts",
       "packages/keiko-server/src/tool-catalog/catalogToolDispatch.test.ts",
       "packages/keiko-server/src/tool-catalog/catalogToolProduction.test.ts",

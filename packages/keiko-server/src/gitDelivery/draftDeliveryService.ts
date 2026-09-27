@@ -45,7 +45,7 @@ import { readDraftDeliveryChecks } from "./draftDeliveryChecks.js";
 import { executeDraftDeliveryEffect } from "./draftDeliveryEffects.js";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { errorKindOf } from "../observability/server-log.js";
+import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import { gitDeliveryActivityErrorKind } from "./execution.js";
 import { logDraftRelatedIssues } from "./draftRelatedIssuesActivity.js";
 

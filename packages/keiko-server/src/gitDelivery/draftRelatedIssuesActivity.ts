@@ -3,7 +3,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 export const DRAFT_RELATED_ISSUES_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",

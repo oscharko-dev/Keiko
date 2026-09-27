@@ -12,7 +12,7 @@ import { createCodingRuntimeCiReadinessStore } from "../coding-runtime/codingRun
 import { createCodingRuntimeCiRepairBudgetStore } from "../coding-runtime/codingRuntimeCiRepairBudgetStore.js";
 import { CodingRuntimeCiRepairController } from "../coding-runtime/codingRuntimeCiRepairController.js";
 import type { CiRepairBudgetContext } from "../coding-runtime/codingRuntimeCiRepairBudgetTypes.js";
-import { redactLogFields } from "../observability/log-redaction.js";
+import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
 import { CiObservationController, type CiObservationOptions } from "./ciObservationService.js";

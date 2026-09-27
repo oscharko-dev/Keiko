@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
-import type { ServerLogEvent } from "../observability/server-log.js";
-import { formatServerLogLine } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

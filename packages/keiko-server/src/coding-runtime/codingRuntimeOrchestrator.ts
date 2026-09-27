@@ -65,7 +65,7 @@ import {
   describeError,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type {
   CodingRuntimeLaunchResolver,
   CodingRuntimeOrchestratorDeps,

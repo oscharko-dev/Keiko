@@ -76,14 +76,18 @@ const INCLUDE_ONLY_OVERRIDE =
 // direction-8 (ui) fires three times because it pins three distinct Node-domain boundaries the
 // browser tier must not value-import: keiko-tools, keiko-quality-intelligence, and
 // keiko-local-knowledge (the two latter added for the native QI UI surface, issue #280). The
-// editor browser-tier rule (adr-0042-editor-not-node-domain-values) fires ten times against its
+// editor browser-tier rule (adr-0042-editor-not-node-domain-values) fires eleven times against its
 // dedicated editor-browser fixture, pinning model-gateway plus the ADR-0042 audit gap targets:
 // the five existing keiko-memory-* packages, keiko-verification, keiko-ui internals, and (added by
-// KEIKO-0638 to mirror the ui-browser fixture) keiko-quality-intelligence + keiko-local-knowledge.
+// KEIKO-0638 to mirror the ui-browser fixture) keiko-quality-intelligence + keiko-local-knowledge,
+// plus the Node-only Activity Log package. The same editor fixture also proves ADR-0179 rejects
+// Activity Log imports from domain packages, raising that rule's expected count to two.
 // The
 // import-policy expectations below cover literal import specifiers dependency-cruiser does not
 // expose as source graph edges in this repository configuration.
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
+  "adr-0179-activity-log-only-contracts-security": 1,
+  "adr-0179-domain-not-activity-log": 2,
   "adr-0019-direction-2c-tool-catalog-only-contracts-security": 1,
   "adr-0128-connectors-only-contracts-security": 1,
   "adr-0019-direction-1-contracts-leaf": 1,
@@ -110,7 +114,8 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-6-domain-not-server": 1,
   "adr-0019-direction-7-domain-not-cli": 1,
   "adr-0019-direction-8-ui-not-node-domain-values": 3,
-  "adr-0042-editor-not-node-domain-values": 10,
+  "adr-0019-direction-8a-ui-no-activity-log": 1,
+  "adr-0042-editor-not-node-domain-values": 11,
   "adr-0019-direction-9-root-product-composition-only": 1,
   // trust-1/4/5 target destinations outside the first-party namespace (provider SDKs under
   // node_modules, the node:fs and node:fs/promises builtins). Until audit KEIKO-0255 they were

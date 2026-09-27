@@ -50,7 +50,7 @@ import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { resolveOpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
-import type { ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
 

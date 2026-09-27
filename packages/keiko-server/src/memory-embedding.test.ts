@@ -1,3 +1,8 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 // #204 — memory embedding boundary tests.
 //
 // Covers: capability-aware model selection, embed-on-
@@ -36,11 +41,8 @@ import {
 } from "./memory-embedding.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
-  createBufferedServerLogSink,
   createServerLogger,
-  resetServerLogger,
   setServerLogger,
-  type BufferedServerLogSink,
   type ServerLogThreshold,
 } from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";

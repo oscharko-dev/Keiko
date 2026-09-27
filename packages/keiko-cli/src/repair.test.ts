@@ -341,60 +341,60 @@ function tamperPortableRecordToRepoRoot(
 }
 
 describe("runRepairCli — usage", () => {
-  it("prints help and exits 0", () => {
+  it("prints help and exits 0", async () => {
     const c = makeIo();
-    expect(runRepairCli(["--help"], c.io, {})).toBe(0);
+    expect(await runRepairCli(["--help"], c.io, {})).toBe(0);
     expect(c.out()).toContain("keiko repair");
   });
 
-  it("rejects an unknown flag with exit 2", () => {
+  it("rejects an unknown flag with exit 2", async () => {
     const c = makeIo();
-    expect(runRepairCli(["--bogus"], c.io, {})).toBe(2);
+    expect(await runRepairCli(["--bogus"], c.io, {})).toBe(2);
   });
 
-  it("rejects --config with no value (exit 2)", () => {
+  it("rejects --config with no value (exit 2)", async () => {
     const c = makeIo();
-    expect(runRepairCli(["--config"], c.io, {})).toBe(2);
+    expect(await runRepairCli(["--config"], c.io, {})).toBe(2);
   });
 });
 
 describe("runRepairCli — healthy", () => {
-  it("reports a healthy system and exits 0", () => {
+  it("reports a healthy system and exits 0", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("system is healthy");
     expect(c.out()).toContain("[ok] Install layout");
   });
 });
 
 describe("runRepairCli — stale pid", () => {
-  it("removes a stale pid file on apply and exits 0", () => {
+  it("removes a stale pid file on apply and exits 0", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     writeFileSync(join(stateDir, "ui.pid"), "4242\n", "utf8");
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("removed stale pid file");
     expect(existsSync(join(stateDir, "ui.pid"))).toBe(false);
   });
 
-  it("reports a stale pid in --dry-run without removing it and exits 1", () => {
+  it("reports a stale pid in --dry-run without removing it and exits 1", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     writeFileSync(join(stateDir, "ui.pid"), "4242\n", "utf8");
     const c = makeIo();
-    expect(runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[would-fix] UI process state");
     expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
   });
 
-  it("reports a running UI as ok", () => {
+  it("reports a running UI as ok", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
@@ -402,13 +402,13 @@ describe("runRepairCli — stale pid", () => {
     writeFileSync(join(stateDir, "ui.pid"), "4242\n", "utf8");
     const c = makeIo();
     const deps: RepairCliDeps = { ...healthyDeps(root), isProcessAlive: () => true };
-    expect(runRepairCli([], c.io, {}, deps)).toBe(0);
+    expect(await runRepairCli([], c.io, {}, deps)).toBe(0);
     expect(c.out()).toContain("running (pid 4242)");
   });
 });
 
 describe("runRepairCli — state directory permissions", () => {
-  it("tightens loose permissions to 0o700", (ctx) => {
+  it("tightens loose permissions to 0o700", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -416,12 +416,12 @@ describe("runRepairCli — state directory permissions", () => {
     mkdirSync(stateDir, { recursive: true });
     chmodSync(stateDir, 0o755);
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("tightened permissions");
     expect(statSync(stateDir).mode & 0o777).toBe(0o700);
   });
 
-  it("reports loose permissions in --dry-run without changing them and exits 1", (ctx) => {
+  it("reports loose permissions in --dry-run without changing them and exits 1", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -429,40 +429,40 @@ describe("runRepairCli — state directory permissions", () => {
     mkdirSync(stateDir, { recursive: true });
     chmodSync(stateDir, 0o755);
     const c = makeIo();
-    expect(runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
     expect(statSync(stateDir).mode & 0o777).toBe(0o755);
   });
 });
 
 describe("runRepairCli — launcher records", () => {
-  it("verifies an intact shortcut as ok", () => {
+  it("verifies an intact shortcut as ok", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     installLauncher(root);
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("shortcut(s) verified");
   });
 
-  it("prunes a dangling record when the shortcut file was deleted", () => {
+  it("prunes a dangling record when the shortcut file was deleted", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const shortcut = installLauncher(root);
     rmSync(shortcut, { force: true });
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("pruned 1 dangling record");
     const state = loadState(join(root, ".keiko"), { homedir: root });
     expect(state.entries).toHaveLength(0);
   });
 
-  it("flags a modified shortcut as an action item and exits 1", () => {
+  it("flags a modified shortcut as an action item and exits 1", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const shortcut = installLauncher(root);
     writeFileSync(shortcut, "tampered\n", "utf8");
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] Launcher records");
   });
 });
@@ -475,7 +475,7 @@ describe("runRepairCli — portable managed install", () => {
     rmSync(shortcut, { force: true });
     const c = makeIo();
 
-    expect(runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(0);
+    expect(await runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(0);
     expect(c.out()).toContain("Portable registration");
     expect(c.out()).toContain("repaired 1 user-local registration artifact");
     expect(existsSync(shortcut)).toBe(true);
@@ -494,7 +494,7 @@ describe("runRepairCli — portable managed install", () => {
     rmSync(shortcut, { force: true });
     const c = makeIo();
 
-    expect(runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(0);
+    expect(await runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(0);
     expect(c.out()).toContain("repaired 1 user-local registration artifact");
     expect(existsSync(shortcut)).toBe(true);
   });
@@ -506,9 +506,9 @@ describe("runRepairCli — portable managed install", () => {
     writeFileSync(shortcut, "tampered content\r\n", "utf8");
     const c = makeIo();
 
-    expect(runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home")))).toBe(
-      1,
-    );
+    expect(
+      await runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home"))),
+    ).toBe(1);
     expect(c.out()).toContain("[action] Portable registration");
     expect(c.out()).toContain("modified");
   });
@@ -520,9 +520,9 @@ describe("runRepairCli — portable managed install", () => {
     writeFileSync(join(managedRoot, "app", "rogue.txt"), "rogue\n", "utf8");
     const c = makeIo();
 
-    expect(runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home")))).toBe(
-      1,
-    );
+    expect(
+      await runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home"))),
+    ).toBe(1);
     expect(c.out()).toContain("[action] Portable managed install");
     expect(c.out()).toContain("app/rogue.txt");
     expect(existsSync(shortcut)).toBe(true);
@@ -534,7 +534,7 @@ describe("runRepairCli — portable managed install", () => {
     const { home } = await installPortableMacCustom(root);
     const c = makeIo();
 
-    expect(runRepairCli([], c.io, {}, portableRepairDeps(root, home))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, portableRepairDeps(root, home))).toBe(0);
     expect(c.out()).toContain(
       "Portable managed install: attested portable-managed install verified",
     );
@@ -556,7 +556,7 @@ describe("runRepairCli — portable managed install", () => {
     const invalidRoot = tamperPortableRecordToRepoRoot(managedRoot, shortcut, join(root, ".keiko"));
     const c = makeIo();
 
-    expect(runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(1);
+    expect(await runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(1);
     expect(existsSync(invalidRoot)).toBe(true);
     expect(existsSync(managedRoot)).toBe(true);
     expect(c.out()).toContain("[action] Portable managed install");
@@ -565,25 +565,27 @@ describe("runRepairCli — portable managed install", () => {
 });
 
 describe("runRepairCli — install layout", () => {
-  it("flags a missing build as an action item and exits 1", () => {
+  it("flags a missing build as an action item and exits 1", async () => {
     const root = makeRoot();
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] Install layout");
   });
 
-  it("accepts a global install reachable via KEIKO_UI_STATIC_ROOT", () => {
+  it("accepts a global install reachable via KEIKO_UI_STATIC_ROOT", async () => {
     const root = makeRoot();
     const staticRoot = join(root, "global-ui", "static");
     mkdirSync(staticRoot, { recursive: true });
     writeFileSync(join(staticRoot, "index.html"), "<html></html>\n", "utf8");
     const c = makeIo();
     // No local layout seeded — the install-layout check must resolve via the env var.
-    expect(runRepairCli([], c.io, { KEIKO_UI_STATIC_ROOT: staticRoot }, healthyDeps(root))).toBe(0);
+    expect(
+      await runRepairCli([], c.io, { KEIKO_UI_STATIC_ROOT: staticRoot }, healthyDeps(root)),
+    ).toBe(0);
     expect(c.out()).toContain("UI static export present");
   });
 
-  it("records normalized layout evidence before inspecting the install", () => {
+  it("records normalized layout evidence before inspecting the install", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const events: unknown[] = [];
@@ -594,7 +596,7 @@ describe("runRepairCli — install layout", () => {
     };
 
     expect(
-      runRepairCli([], c.io, env, {
+      await runRepairCli([], c.io, env, {
         ...healthyDeps(root),
         securityLogSinkFactory: (stateDir) => {
           expect(stateDir).toBe(join(root, ".keiko"));
@@ -618,21 +620,21 @@ describe("runRepairCli — install layout", () => {
 });
 
 describe("runRepairCli — summary message", () => {
-  it("tells the user to apply fixes when --dry-run finds only fixable items", () => {
+  it("tells the user to apply fixes when --dry-run finds only fixable items", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     writeFileSync(join(stateDir, "ui.pid"), "4242\n", "utf8");
     const c = makeIo();
-    expect(runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("apply the fixes above");
     expect(c.out()).not.toContain("review the items marked");
   });
 });
 
 describe("runRepairCli — launch path", () => {
-  it("flags a stale launch binary via the doctor report", () => {
+  it("flags a stale launch binary via the doctor report", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const deps: RepairCliDeps = {
@@ -640,62 +642,62 @@ describe("runRepairCli — launch path", () => {
       argv: [process.execPath, join(root, "some", "other", "stale-keiko")],
     };
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, deps)).toBe(1);
+    expect(await runRepairCli([], c.io, {}, deps)).toBe(1);
     expect(c.out()).toContain("[action] Launch path");
   });
 });
 
 describe("runRepairCli — gateway config", () => {
-  it("accepts a valid config file via --config", () => {
+  it("accepts a valid config file via --config", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "gateway.json");
     writeFileSync(cfg, '{"baseUrl":"https://x"}\n', "utf8");
     const c = makeIo();
-    expect(runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("Gateway config: valid JSON");
   });
 
-  it("flags a missing config file as an action item", () => {
+  it("flags a missing config file as an action item", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const c = makeIo();
-    expect(runRepairCli(["--config", join(root, "nope.json")], c.io, {}, healthyDeps(root))).toBe(
-      1,
-    );
+    expect(
+      await runRepairCli(["--config", join(root, "nope.json")], c.io, {}, healthyDeps(root)),
+    ).toBe(1);
     expect(c.out()).toContain("configured file not found");
   });
 
-  it("flags an invalid-JSON config file as an action item", () => {
+  it("flags an invalid-JSON config file as an action item", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "bad.json");
     writeFileSync(cfg, "{not json", "utf8");
     const c = makeIo();
-    expect(runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("not valid JSON");
   });
 
-  it("resolves a config file from KEIKO_CONFIG_FILE", () => {
+  it("resolves a config file from KEIKO_CONFIG_FILE", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "env-gateway.json");
     writeFileSync(cfg, "{}\n", "utf8");
     const c = makeIo();
-    expect(runRepairCli([], c.io, { KEIKO_CONFIG_FILE: cfg }, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, { KEIKO_CONFIG_FILE: cfg }, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("valid JSON");
   });
 });
 
 describe("runRepairCli — state dir argument", () => {
-  it("honors --state-dir when probing the pid file", () => {
+  it("honors --state-dir when probing the pid file", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const custom = join(root, "alt-state");
     mkdirSync(custom, { recursive: true, mode: 0o700 });
     writeFileSync(join(custom, "ui.pid"), "4242\n", "utf8");
     const c = makeIo();
-    expect(runRepairCli(["--state-dir", custom], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli(["--state-dir", custom], c.io, {}, healthyDeps(root))).toBe(0);
     expect(existsSync(join(custom, "ui.pid"))).toBe(false);
   });
 });
@@ -711,7 +713,7 @@ describe("runRepairCli — state dir argument", () => {
 // output line unambiguously.
 
 describe("runRepairCli — credential storage", () => {
-  it("reports action-required when a provider has a plaintext apiKey", () => {
+  it("reports action-required when a provider has a plaintext apiKey", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "plaintext-key.json");
@@ -724,13 +726,13 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("plaintext credentials present");
   });
 
-  it("reports action-required when figma.accessToken is a non-empty string", () => {
+  it("reports action-required when figma.accessToken is a non-empty string", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "figma-token.json");
@@ -744,13 +746,13 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("plaintext credentials present");
   });
 
-  it("reports action-required when reranker.apiKey is a non-empty string", () => {
+  it("reports action-required when reranker.apiKey is a non-empty string", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "reranker-token.json");
@@ -764,13 +766,13 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("plaintext credentials present");
   });
 
-  it("reports ok when providers use apiKeySecretRef backed by a vault entry and there is no figma block", () => {
+  it("reports ok when providers use apiKeySecretRef backed by a vault entry and there is no figma block", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "migrated.json");
@@ -784,13 +786,13 @@ describe("runRepairCli — credential storage", () => {
     seedVault(root, ["cred:claude-3"]);
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[ok] Credential storage");
     expect(c.out()).toContain("no plaintext credentials");
   });
 
-  it("reports action-required when a secret reference has no matching vault entry (interrupted migration)", () => {
+  it("reports action-required when a secret reference has no matching vault entry (interrupted migration)", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "orphaned.json");
@@ -804,14 +806,14 @@ describe("runRepairCli — credential storage", () => {
     // No vault store written → the reference is orphaned.
 
     const c = makeIo();
-    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("no encrypted entry");
   });
 
-  it("reports action-required when the credential vault index is unreadable", () => {
+  it("reports action-required when the credential vault index is unreadable", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "corrupt-vault.json");
@@ -826,14 +828,14 @@ describe("runRepairCli — credential storage", () => {
     writeFileSync(join(root, "credentials", "provider-credentials.vault"), "not-json", "utf8");
 
     const c = makeIo();
-    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("encrypted credential vault is unreadable");
   });
 
-  it("reports action-required when a reranker secret reference has no matching vault entry", () => {
+  it("reports action-required when a reranker secret reference has no matching vault entry", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "reranker-orphaned.json");
@@ -847,14 +849,14 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("no encrypted entry");
   });
 
-  it("reports ok when reranker apiKeySecretRef is backed by a vault entry", () => {
+  it("reports ok when reranker apiKeySecretRef is backed by a vault entry", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "reranker-migrated.json");
@@ -869,24 +871,24 @@ describe("runRepairCli — credential storage", () => {
     seedVault(root, ["model-gateway:reranker"]);
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[ok] Credential storage");
     expect(c.out()).toContain("no plaintext credentials");
   });
 
-  it("reports ok when no --config flag and no KEIKO_CONFIG_FILE env variable are set", () => {
+  it("reports ok when no --config flag and no KEIKO_CONFIG_FILE env variable are set", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     // Deliberately: no --config arg, no KEIKO_CONFIG_FILE, and no default local config file.
     const c = makeIo();
-    runRepairCli([], c.io, {}, healthyDeps(root));
+    await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[ok] Credential storage");
     expect(c.out()).toContain("no config file to inspect");
   });
 
-  it("detects plaintext credentials in the default ui state-dir config", () => {
+  it("detects plaintext credentials in the default ui state-dir config", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
@@ -899,14 +901,14 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("plaintext credentials present");
   });
 
-  it("reports orphaned Atlassian credential metadata in the default UI state", () => {
+  it("reports orphaned Atlassian credential metadata in the default UI state", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const dataDir = defaultUiDataDir(join(root, ".keiko"));
@@ -921,14 +923,14 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("credential reference(s) have no encrypted entry");
   });
 
-  it("reports orphaned Atlassian artifacts when the default UI config is absent", () => {
+  it("reports orphaned Atlassian artifacts when the default UI config is absent", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const dataDir = defaultUiDataDir(join(root, ".keiko"));
@@ -944,14 +946,14 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("credential reference(s) have no encrypted entry");
   });
 
-  it("reports orphaned Atlassian artifacts beside an absent home fallback config", () => {
+  it("reports orphaned Atlassian artifacts beside an absent home fallback config", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const credentialsDir = join(root, ".keiko", "credentials");
@@ -966,7 +968,7 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
@@ -974,7 +976,7 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain(join(root, ".keiko", "keiko.config.json"));
   });
 
-  it("fails closed on incomplete Atlassian credential metadata", () => {
+  it("fails closed on incomplete Atlassian credential metadata", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const dataDir = defaultUiDataDir(join(root, ".keiko"));
@@ -991,14 +993,14 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("credential state is unreadable");
   });
 
-  it("fails closed on a corrupt Atlassian credential vault", () => {
+  it("fails closed on a corrupt Atlassian credential vault", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const dataDir = defaultUiDataDir(join(root, ".keiko"));
@@ -1008,14 +1010,14 @@ describe("runRepairCli — credential storage", () => {
     writeFileSync(join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[0]), "{not-json", "utf8");
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("credential state is unreadable");
   });
 
-  it("inspects the default local config when no explicit config is set", () => {
+  it("inspects the default local config when no explicit config is set", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const localDir = join(root, ".keiko");
@@ -1029,14 +1031,14 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("plaintext credentials present");
   });
 
-  it("reports every broken default credential config", () => {
+  it("reports every broken default credential config", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
@@ -1056,7 +1058,7 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli([], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("plaintext credentials present");
@@ -1064,7 +1066,7 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out().match(/\[action\] Credential storage \(/gu)).toHaveLength(2);
   });
 
-  it("inspects KEIKO_UI_DATA_DIR/keiko.config.json when no explicit config is set", () => {
+  it("inspects KEIKO_UI_DATA_DIR/keiko.config.json when no explicit config is set", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const dataDir = join(root, "ui-data");
@@ -1078,21 +1080,21 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli([], c.io, { KEIKO_UI_DATA_DIR: dataDir }, healthyDeps(root));
+    const code = await runRepairCli([], c.io, { KEIKO_UI_DATA_DIR: dataDir }, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("plaintext credentials present");
   });
 
-  it("reports ok when the configured config file does not exist on disk", () => {
+  it("reports ok when the configured config file does not exist on disk", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const absent = join(root, "does-not-exist.json");
     // File is intentionally NOT written.
 
     const c = makeIo();
-    runRepairCli(["--config", absent], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", absent], c.io, {}, healthyDeps(root));
 
     // checkGatewayConfig will flag the missing file as [action], but
     // checkCredentialStorage must independently report ok "no config file to inspect".
@@ -1100,14 +1102,14 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("no config file to inspect");
   });
 
-  it("reports ok (not a duplicate action) when the config file contains invalid JSON", () => {
+  it("reports ok (not a duplicate action) when the config file contains invalid JSON", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "broken.json");
     writeFileSync(cfg, "{this is: not json!", "utf8");
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     // The gateway-config check already flags the parse error as [action];
     // checkCredentialStorage must NOT add a second action item — it returns ok.
@@ -1115,20 +1117,20 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("config not parseable");
   });
 
-  it("reports ok when providers array is empty and figma block is absent", () => {
+  it("reports ok when providers array is empty and figma block is absent", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "empty-providers.json");
     writeFileSync(cfg, JSON.stringify({ providers: [] }), "utf8");
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[ok] Credential storage");
     expect(c.out()).toContain("no plaintext credentials");
   });
 
-  it("reports ok when figma.accessToken is a whitespace-only string", () => {
+  it("reports ok when figma.accessToken is a whitespace-only string", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "figma-empty.json");
@@ -1142,13 +1144,13 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(c.out()).toContain("[ok] Credential storage");
     expect(c.out()).toContain("no plaintext credentials");
   });
 
-  it("exits 0 for a fully migrated config with apiKeySecretRef references backed by the vault", () => {
+  it("exits 0 for a fully migrated config with apiKeySecretRef references backed by the vault", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "fully-migrated.json");
@@ -1162,13 +1164,13 @@ describe("runRepairCli — credential storage", () => {
     seedVault(root, ["cred:gpt-4o"]);
 
     const c = makeIo();
-    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(0);
     expect(c.out()).toContain("[ok] Credential storage");
   });
 
-  it("exits 1 when a plaintext apiKey is the only action item in an otherwise healthy system", () => {
+  it("exits 1 when a plaintext apiKey is the only action item in an otherwise healthy system", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const cfg = join(root, "plaintext-only.json");
@@ -1181,7 +1183,7 @@ describe("runRepairCli — credential storage", () => {
     );
 
     const c = makeIo();
-    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+    const code = await runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
 
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
@@ -1205,7 +1207,7 @@ function modeOf(path: string): number {
 }
 
 describe("runRepairCli — runtime state artifacts", () => {
-  it("tightens loose permissions on Keiko-owned DB, evidence, and QI artifacts", (ctx) => {
+  it("tightens loose permissions on Keiko-owned DB, evidence, and QI artifacts", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1222,7 +1224,7 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(join(stateDir, "evidence"), 0o755);
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("[fixed] Runtime state artifacts");
     expect(modeOf(uiDb)).toBe(0o600);
     expect(modeOf(evidence)).toBe(0o600);
@@ -1233,7 +1235,7 @@ describe("runRepairCli — runtime state artifacts", () => {
   // #3530: a sealed Activity Log segment is read-only (0o400). Repair tightens by removing bits
   // only, so it leaves that stricter owner-only mode alone and never makes a sealed segment writable
   // again, while a group/world-readable log file loses exactly the bits beyond owner-only.
-  it("keeps a sealed Activity Log segment read-only while tightening loose log files", (ctx) => {
+  it("keeps a sealed Activity Log segment read-only while tightening loose log files", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1258,7 +1260,7 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(active, 0o644);
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("[fixed] Runtime state artifacts");
     expect(modeOf(sealed)).toBe(0o400);
     expect(modeOf(looseSealed)).toBe(0o400);
@@ -1266,7 +1268,7 @@ describe("runRepairCli — runtime state artifacts", () => {
   });
 
   // #3531: segment manifests are private Activity Log metadata; an operator file beside them is not.
-  it("narrows segment manifests like the other private stores and leaves foreign files", (ctx) => {
+  it("narrows segment manifests like the other private stores and leaves foreign files", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1286,12 +1288,12 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(foreign, 0o644);
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(modeOf(manifest)).toBe(0o600);
     expect(modeOf(foreign)).toBe(0o644);
   });
 
-  it("tightens the sealed credential and Figma vaults", (ctx) => {
+  it("tightens the sealed credential and Figma vaults", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1330,12 +1332,12 @@ describe("runRepairCli — runtime state artifacts", () => {
     for (const p of vaultFiles) chmodSync(p, 0o644);
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toMatch(/\[fixed\] Runtime state artifacts.*credential vault/);
     for (const p of vaultFiles) expect(modeOf(p)).toBe(0o600);
   });
 
-  it("tightens exact producer temp files while leaving customer temp lookalikes untouched", (ctx) => {
+  it("tightens exact producer temp files while leaving customer temp lookalikes untouched", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1362,12 +1364,12 @@ describe("runRepairCli — runtime state artifacts", () => {
     }
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     for (const p of ownedTemp) expect(modeOf(p)).toBe(0o600);
     for (const p of customerTemp) expect(modeOf(p)).toBe(0o644);
   });
 
-  it("reports loose artifacts in --dry-run without changing them and exits 1", (ctx) => {
+  it("reports loose artifacts in --dry-run without changing them and exits 1", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1377,12 +1379,12 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(evidence, 0o644);
 
     const c = makeIo();
-    expect(runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli(["--dry-run"], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[would-fix] Runtime state artifacts");
     expect(modeOf(evidence)).toBe(0o644);
   });
 
-  it("does not modify a customer file that merely lives under .keiko", (ctx) => {
+  it("does not modify a customer file that merely lives under .keiko", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1395,12 +1397,12 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(userFile, 0o644);
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(modeOf(evidence)).toBe(0o600);
     expect(modeOf(userFile)).toBe(0o644); // untouched
   });
 
-  it("refuses a symlinked state root without chmodding the target tree", (ctx) => {
+  it("refuses a symlinked state root without chmodding the target tree", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1420,7 +1422,7 @@ describe("runRepairCli — runtime state artifacts", () => {
 
     const c = makeIo();
     expect(
-      runRepairCli([], c.io, env, {
+      await runRepairCli([], c.io, env, {
         ...healthyDeps(root),
         securityLogSinkFactory: () => {
           sinkFactoryCalls += 1;
@@ -1436,18 +1438,18 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(outsideDb)).toBe(0o644);
   });
 
-  it("refuses a non-directory state root without crashing", () => {
+  it("refuses a non-directory state root without crashing", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     writeFileSync(join(root, ".keiko"), "not a directory", "utf8");
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] State directory");
     expect(c.out()).toContain("refusing to inspect non-directory state path");
   });
 
-  it("does not chmod customer lookalikes in known state subdirectories", (ctx) => {
+  it("does not chmod customer lookalikes in known state subdirectories", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1466,7 +1468,7 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(customerNamespace, 0o755);
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(modeOf(knownEvidence)).toBe(0o600);
     expect(modeOf(customerEvidence)).toBe(0o644);
     expect(modeOf(customerQi)).toBe(0o644);
@@ -1474,7 +1476,7 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(customerNamespace)).toBe(0o755);
   });
 
-  it("flags a symlink occupying a Keiko-owned path as an action item and exits 1", (ctx) => {
+  it("flags a symlink occupying a Keiko-owned path as an action item and exits 1", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1483,12 +1485,12 @@ describe("runRepairCli — runtime state artifacts", () => {
     symlinkSync(join(stateDir, "outside-target"), join(stateDir, "keiko-ui.db"));
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] Runtime state artifacts");
     expect(c.out()).toContain("symlink occupies a Keiko-owned path");
   });
 
-  it("flags a hardlink occupying a Keiko-owned path without chmodding the outside file", (ctx) => {
+  it("flags a hardlink occupying a Keiko-owned path without chmodding the outside file", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1499,13 +1501,13 @@ describe("runRepairCli — runtime state artifacts", () => {
     linkSync(outsideDb, join(stateDir, "keiko-ui.db"));
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] Runtime state artifacts");
     expect(c.out()).toContain("hardlink occupies a Keiko-owned path");
     expect(modeOf(outsideDb)).toBe(0o644);
   });
 
-  it("reports owner-only artifacts as healthy", (ctx) => {
+  it("reports owner-only artifacts as healthy", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -1517,11 +1519,11 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(uiDb, 0o600);
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(await runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("owner-only permissions");
   });
 
-  it("reports an unreadable runtime-state artifact instead of throwing", (ctx) => {
+  it("reports an unreadable runtime-state artifact instead of throwing", async (ctx) => {
     // #KEIKO-0301 must-fail-before-fix: the repair pipeline had no error containment,
     // so an EACCES / ENOENT from any filesystem call (statSync inside tightenNodes,
     // readdirSync inside walkOwnedDir, lstatSync inside classifyEntry) crashed the
@@ -1547,9 +1549,9 @@ describe("runRepairCli — runtime state artifacts", () => {
     try {
       const c = makeIo();
       // Must NOT throw (pre-fix would have thrown EACCES out of walkOwnedDir):
-      expect(() => runRepairCli([], c.io, {}, healthyDeps(root))).not.toThrow();
+      await expect(runRepairCli([], c.io, {}, healthyDeps(root))).resolves.toBeTypeOf("number");
       const c2 = makeIo();
-      const code = runRepairCli([], c2.io, {}, healthyDeps(root));
+      const code = await runRepairCli([], c2.io, {}, healthyDeps(root));
       // Repair reports an [action] line naming the affected check and exits 1.
       expect(code).toBe(1);
       expect(c2.out()).toContain("[action] Runtime state artifacts");

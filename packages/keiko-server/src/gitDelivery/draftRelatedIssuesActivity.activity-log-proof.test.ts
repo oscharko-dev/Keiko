@@ -4,7 +4,7 @@
 // owns -- rather than restating the event shape by hand.
 
 import { describe, expect, it } from "vitest";
-import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { logDraftRelatedIssues } from "./draftRelatedIssuesActivity.js";
 import {
   expectActivityLogProof,

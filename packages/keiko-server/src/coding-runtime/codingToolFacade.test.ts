@@ -1,3 +1,5 @@
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
@@ -7,7 +9,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,

@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runInvestigateCli, timelineToBugReportInput } from "./investigate.js";
 import { runCli } from "./runner.js";
 import type { CliIo } from "./runner.js";
-import { analyzeLogText, findTimeline, type LogTimeline } from "./support-analyze.js";
+import {
+  analyzeLogText,
+  findTimeline,
+  type LogTimeline,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createInMemoryEvidenceStore,

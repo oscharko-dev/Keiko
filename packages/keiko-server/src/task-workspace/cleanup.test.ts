@@ -1,3 +1,7 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
 // Integration + security coverage for the #448 governed cleanup service (Issue #448, Epic #443).
 // Exercises the real worktree adapter against disposable git repositories and the real provisioning
 // service to materialize genuine managed worktrees, then proves: request → complete of an owned,
@@ -48,12 +52,7 @@ import { assertManagedRootOwned } from "./managed-root.js";
 import type { WorkspaceCleanupService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/index.js";
+import { type ServerLogEvent, type ServerLogSink } from "../observability/index.js";
 import {
   inspectManagedGitdirIdentity,
   inspectManagedGitdirIdentityOutcome,

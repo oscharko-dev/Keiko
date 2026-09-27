@@ -21,7 +21,7 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import {
   admitCodingRuntimeIssue,
