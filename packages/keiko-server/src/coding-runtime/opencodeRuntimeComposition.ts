@@ -935,6 +935,9 @@ function readinessV2Ports(
         }
         return events;
       } catch (error) {
+        // Stopping the monitor aborts its in-flight read after the final history was captured.
+        // The adapter owns that cancellation; it is not a sidecar history failure.
+        if (signal.aborted) throw error;
         if (messages.length > 0) input.safeActivity?.recordDrops(messages.length);
         recordOpenCodeV2HistoryFailure(input.diagnostics, run.runId, error);
         throw error;

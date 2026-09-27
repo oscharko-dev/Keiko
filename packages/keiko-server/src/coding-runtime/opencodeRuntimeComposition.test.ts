@@ -354,7 +354,7 @@ interface StartBridgeControl {
   readonly activityLog?: ServerLogSink;
   readonly startTimeoutMs?: number;
   readonly historyResponse?: Promise<Response>;
-  readonly historyResponseFactory?: () => Promise<Response>;
+  readonly historyResponseFactory?: (signal?: AbortSignal) => Promise<Response>;
   readonly expectedStart?: Readonly<Record<string, unknown>>;
   readonly onSseCancel?: () => void;
   readonly onSseStart?: (controller: ReadableStreamDefaultController<Uint8Array>) => void;
@@ -535,7 +535,8 @@ async function startBridgeFixture(
     }
     if (path === "/api/session/ses_tool/message") {
       control?.historyCalls?.push({});
-      if (control?.historyResponseFactory !== undefined) return control.historyResponseFactory();
+      if (control?.historyResponseFactory !== undefined)
+        return control.historyResponseFactory(init?.signal ?? undefined);
       return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
     }
     if (path.endsWith("/prompt")) {
@@ -2168,6 +2169,49 @@ describe("private OpenCode tool bridge", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  it("does not diagnose a history read cancelled by normal run disposal", async () => {
+    const diagnostics = persistedDiagnostics();
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    let holdHistory = false;
+    let markHistoryStarted: (() => void) | undefined;
+    const historyStarted = new Promise<void>((resolve) => {
+      markHistoryStarted = resolve;
+    });
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: (signal): Promise<Response> => {
+          if (!holdHistory) return Promise.resolve(v2Envelope([]));
+          markHistoryStarted?.();
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+    );
+    holdHistory = true;
+    streams[0]?.enqueue(
+      new TextEncoder().encode(
+        'data: {"id":"evt_final","type":"session.execution.succeeded","data":{"sessionID":"ses_tool"}}\n\n',
+      ),
+    );
+    await historyStarted;
+    await fixture.stop();
+    expect(diagnostics.read()).not.toContain("coding-runtime.history");
+    expect(fixture.runtime.manager.health()).toEqual({ status: "stopped" });
   });
 
   // #3603: the gateway route refused the readiness challenge's model request (a deterministic
