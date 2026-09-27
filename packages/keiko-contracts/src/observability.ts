@@ -782,8 +782,10 @@ function rejectUnknownActivityLogFields(
   expected: ActivityLogOperationRegistration["fields"],
   fields: Readonly<Record<string, unknown>>,
 ): void {
+  // Own properties only: a field named like an Object.prototype member (`constructor`, `toString`)
+  // is still an undeclared field, never a registered one.
   for (const name in fields) {
-    if (Object.hasOwn(fields, name) && expected[name] === undefined) {
+    if (Object.hasOwn(fields, name) && !Object.hasOwn(expected, name)) {
       throw new ActivityLogEventValidationError("unknown-field");
     }
   }

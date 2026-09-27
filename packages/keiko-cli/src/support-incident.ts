@@ -3,8 +3,8 @@
 // This is the CLI face of the local SupportIncident store. It never transmits anything: `report`
 // records an explicit "Report a problem" candidate on this machine, `preview` prints exactly the
 // closed public-finding fields a user may choose to copy, and `show` prints the richer, still
-// body-free private projection. The candidate store and its triggers live in keiko-server
-// (observability/support-incident.ts), reached through the lazily loaded server module.
+// body-free private projection. The candidate store and its triggers live in keiko-activity-log
+// (support-incident.ts), reached through the lazily loaded Activity Log package, never the server.
 //
 // `resolveSupportIncident` is the one place a stored record becomes the canonical descriptor: it
 // reads the Activity Log segments the incident window covers (the same coverage rule the retention

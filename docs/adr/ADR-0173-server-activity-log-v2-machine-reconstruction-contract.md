@@ -1617,7 +1617,9 @@ rather than left implicit across the Decision section:
   `packages/keiko-activity-log/src/server-logger.ts` — the Activity Log choke points every new log
   field in this contract routes through.
 - `packages/keiko-server/src/observability/route-template.ts` — the server-only route-template
-  composition point this contract routes through.
+  composition point this contract routes through; the server installs its reducer into the Activity
+  Log redaction through `configureActivityLogRouteRedactor`, which fails closed until configured
+  (ADR-0179).
 - `packages/keiko-server/src/correlation.ts` and `packages/keiko-server/src/diagnostics-log.ts` — the
   existing correlation-id guard and diagnostic-projection machinery this contract wires further
   rather than replaces.

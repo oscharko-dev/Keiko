@@ -136,7 +136,7 @@ function recordTrace(trace: ActivityLogScenarioTrace): void {
 // Every #3532 scenario already exercises a registered failure class (asserted above). This second
 // pass creates the SAME local incident candidate a real Keiko install would create for that
 // failure, through the same production entry points #3533 defines
-// (packages/keiko-server/src/observability/support-incident.ts's recordRegisteredFailureIncident,
+// (packages/keiko-activity-log/src/support-incident.ts's recordRegisteredFailureIncident,
 // the registered-failure trigger's own recorder; recordUserReportedIncident as the fallback for a
 // scenario whose only evidence is an uncorrelated state signal, never a discrete failure op — a
 // heartbeat sampling process-stall/memory-pressure, never itself `lifecycle: "failure"`), then

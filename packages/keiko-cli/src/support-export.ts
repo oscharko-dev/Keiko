@@ -4,7 +4,7 @@
 // `auditLocalStateResult` in ./audit.ts produces for `keiko audit local-state --json`) and an
 // `evidenceIndexCount` (from `listEvidence` in @oscharko-dev/keiko-evidence). NO new redaction
 // logic is written here: every Activity Log line is already redacted at write time
-// (packages/keiko-server/src/observability/server-log.ts's `formatServerLogLine`), so this module
+// (packages/keiko-activity-log/src/server-log.ts's `formatServerLogLine`), so this module
 // reads and concatenates raw bytes rather than re-parsing and re-serializing them — re-encoding an
 // already-safe line risks introducing exactly the leak the redaction choke point exists to
 // prevent, the same "a fixture never re-derives what the producer owns" discipline AGENTS.md §7
@@ -515,7 +515,7 @@ export interface SupportBundleManifest {
 
 export interface ManifestInput {
   // The server activity log's own envelope schema version (`SERVER_LOG_SCHEMA_VERSION`,
-  // `packages/keiko-server/src/observability/server-log.ts`). Supplied by the caller — never
+  // `packages/keiko-activity-log/src/server-log.ts`). Supplied by the caller — never
   // read here — because this module stays pure/synchronous (this file's header comment) and is
   // exercised in tests without touching argv, process.*, or another package's runtime; `support.ts`
   // (the `keiko support export` command) is the one place allowed to lazily load `keiko-server`

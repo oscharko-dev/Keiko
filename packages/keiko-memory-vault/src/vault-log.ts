@@ -114,7 +114,7 @@ export function startMemoryVaultLogTimer(): () => number {
 
 // The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
 // `keiko-contracts` rather than declared here, so this reducer and the ones in `knowledge-log.ts`,
-// `log-port.ts`, `keiko-server/src/observability/server-log.ts` and
+// `log-port.ts`, `keiko-activity-log/src/server-log.ts` and
 // `keiko-model-gateway/src/observability.ts` cannot drift into accepting different things: an
 // identifier, a taxonomy code, a constructor name — never a sentence.
 //

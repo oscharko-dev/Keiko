@@ -37,6 +37,8 @@ const commands = [
   ["support", "query", "--state-dir", stateDir, "--correlation-id", "import-graph-3558-query", "--json"],
   ["support", "query", "--state-dir", stateDir, "--incident", "f".repeat(32), "--json"],
   ["support", "incident", "list", "--state-dir", stateDir, "--json"],
+  ["support", "manifest", "rebuild", "--state-dir", stateDir, "--json"],
+  ["support", "manifest", "verify", "--state-dir", stateDir, "--json"],
 ];
 const exitCodes = [];
 for (const args of commands) exitCodes.push(await cli.runCli(args, io, env));
@@ -88,7 +90,7 @@ describe("Activity Log-only support commands", () => {
     expect(run.error, run.stderr).toBeUndefined();
     expect(run.status, run.stderr).toBe(0);
     const report = importGraphReport(run.stderr);
-    expect(report.exitCodes).toEqual([0, 0, 0]);
+    expect(report.exitCodes).toEqual([0, 0, 0, 0, 0]);
     // Positive control: the hook saw the commands load the Activity Log package, so an empty
     // server list is evidence rather than a hook that never ran.
     expect(report.activityLog).toBeGreaterThan(0);

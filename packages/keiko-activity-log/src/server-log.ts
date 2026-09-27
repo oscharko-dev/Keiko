@@ -55,6 +55,7 @@ import {
 } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
 import {
   SAFE_ARTIFACT_FILE_FAILURE_KINDS,
   SafeArtifactFileError,
@@ -1540,6 +1541,11 @@ const SEALED_SEGMENT_MODE = 0o400;
 
 const activeLogs = new Map<string, ActiveLog>();
 
+// One writer per process (ADR-0179). The owner slot lives on `globalThis` under a `Symbol.for` key,
+// so every module graph evaluated in the process's main realm (a source copy and a built copy of
+// this package, for example) sees the same owner. A `worker_threads` worker or a `vm` context has
+// its own global object and cannot see the slot, while it shares the pid the orphan recovery keys
+// on; such a context must therefore never open a writer and hands its evidence to the main thread.
 const ACTIVITY_LOG_WRITER_OWNER_KEY = Symbol.for(
   "@oscharko-dev/keiko-activity-log/process-writer-owner",
 );
@@ -1598,6 +1604,11 @@ function emitWriterOwnershipRejection(stateDir: string): void {
 // deliberately omitted from the package entry point; callers outside this package use the guarded
 // high-level writer and incident APIs instead.
 export function claimActivityLogWriterOwnership(stateDir: string): void {
+  if (!isMainThread) {
+    // A worker shares this pid but not the owner slot (see ACTIVITY_LOG_WRITER_OWNER_KEY).
+    recordUnpersistedWriterRejection(new ActivityLogWriterOwnershipError());
+    throw new ActivityLogWriterOwnershipError();
+  }
   const existingValue = Reflect.get(globalThis, ACTIVITY_LOG_WRITER_OWNER_KEY) as unknown;
   if (existingValue === undefined) {
     const owner: ProcessWriterOwner = {

@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { once } from "node:events";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activityLogLossCounters,
@@ -251,6 +253,22 @@ async function exerciseForeignSlot(): Promise<void> {
   expect(activityLogLossCounters()["persistence-failed"]).toBe(1);
 }
 
+// A worker thread shares the pid but not the main realm's owner slot, so it must never open a writer.
+const WORKER_WRITER_ATTEMPT = `
+const { parentPort, workerData } = require("node:worker_threads");
+import(workerData.moduleUrl).then(
+  (writer) => {
+    try {
+      writer.createFileServerLogSink(workerData.stateDir, { level: "debug" });
+      parentPort.postMessage({ outcome: "opened" });
+    } catch (error) {
+      parentPort.postMessage({ outcome: "rejected", name: error.name });
+    }
+  },
+  (error) => parentPort.postMessage({ outcome: "load-failed", name: String(error) }),
+);
+`;
+
 function runIsolated(order: ChildMode): void {
   const run = spawnSync(
     process.execPath,
@@ -293,4 +311,24 @@ describe("process-wide Activity Log writer ownership", () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it("refuses to open a writer inside a worker thread", async (ctx) => {
+    if (CHILD_MODE !== undefined) ctx.skip();
+    if (!existsSync(fileURLToPath(DIST_ROOT_URL))) {
+      throw new Error("Built keiko-activity-log is missing; run npm run build:packages first");
+    }
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-writer-owner-worker-"));
+    roots.push(stateDir);
+    const worker = new Worker(WORKER_WRITER_ATTEMPT, {
+      eval: true,
+      workerData: { moduleUrl: DIST_ROOT_URL, stateDir },
+    });
+    try {
+      const [message] = (await once(worker, "message")) as [unknown];
+      expect(message).toEqual({ outcome: "rejected", name: "ActivityLogWriterOwnershipError" });
+      expect(existsSync(join(stateDir, "logs"))).toBe(false);
+    } finally {
+      await worker.terminate();
+    }
+  });
 });
