@@ -189,6 +189,13 @@ async function exerciseOrder(order: GraphOrder): Promise<void> {
       errorKind: "internal",
     }),
   ).toThrow(rejected.ActivityLogWriterOwnershipError);
+  expect(() => {
+    rejectedPublic.setServerLogger(
+      rejectedPublic.createServerLogger({ sink: { write: (): void => undefined } }),
+      "production-file",
+      stateDir,
+    );
+  }).toThrow(rejected.ActivityLogWriterOwnershipError);
   let inspected = false;
   expect(() =>
     rejected.appendDurableServerLogBatch(stateDir, {
@@ -224,7 +231,7 @@ async function exerciseOrder(order: GraphOrder): Promise<void> {
   const rejectionLines = lines.filter(
     (_line, index) => records[index]?.op === "activity-log.writer-rejected",
   );
-  expect(rejectionLines).toHaveLength(8);
+  expect(rejectionLines).toHaveLength(9);
   const { expectActivityLogProof } = await import("../../../tests/support/activity-log-proof.js");
   const rejection = expectActivityLogProof(
     "server-log.writer-ownership-rejected.registered-line",

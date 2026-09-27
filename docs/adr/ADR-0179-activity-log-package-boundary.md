@@ -38,7 +38,8 @@ process-wide owner slot on `globalThis` under a `Symbol.for` key, so a source co
 of the package evaluated in the same process see one owner. Every entry point that mutates the
 Activity Log store or the SupportIncident store claims ownership before its first filesystem
 mutation: opening a sink, creating or releasing a pin, appending a durable batch, and creating or
-sweeping incidents. Ownership is never released for the lifetime of the process.
+sweeping incidents. Declaring an injected logger the production file writer is a claim as well.
+Ownership is never released for the lifetime of the process.
 
 A second module graph fails closed with `ActivityLogWriterOwnershipError`, and the winning writer
 persists the registered, body-free `activity-log.writer-rejected` event (`reason:

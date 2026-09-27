@@ -45,6 +45,7 @@ import {
 import type { ServerLogEnv, ServerLogLevel, ServerLogThreshold } from "./log-level.js";
 import { configuredRuntimeStateDir, resolveRuntimeStateDir } from "./runtime-state-dir.js";
 import {
+  claimActivityLogWriterOwnership,
   closeFileServerLogSinks,
   createFileServerLogSink,
   nullServerLogSink,
@@ -469,12 +470,14 @@ export function activityLogWriterState(): ActivityLogWriterState {
 }
 
 // Explicit wiring and test setup. An explicitly injected logger is reported as a test writer unless
-// the caller states it is the production file writer.
+// the caller states it is the production file writer. That statement is a writer claim: a second
+// module graph cannot install a production writer behind the process owner's back (ADR-0179).
 export function setServerLogger(
   logger: ServerLogger,
   writer: ActivityLogWriterKind = "test-injected",
   stateDir?: string,
 ): void {
+  if (writer === "production-file") claimActivityLogWriterOwnership(stateDir ?? "");
   processSlot = { logger, writer, stateDir, configuredStateDir: undefined, explicit: true };
 }
 

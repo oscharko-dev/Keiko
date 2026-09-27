@@ -757,42 +757,29 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   directly from its segment and reporting any stored one that differs.
 - **Bounds.** Reads use one 64 KiB buffer and hold at most one line of up to 1 MiB. A closure holds
   at most 4096 correlations, a result at most `--max-bytes`. The correlation filter uses about 10
-  bits per key (roughly 1% false positives), at most 128 KiB. A checked-in long-history test builds
-  80 MiB of history in 40 sealed segments and runs the built command under a 112 MiB heap cap. Peak
-  resident memory may grow by at most 32 MiB over the same command on an empty state directory, and
-  instrumented reads prove that segments the manifests rule out are never opened.
+  bits per key (roughly 1% false positives), at most 128 KiB. Scanning a segment retains only bounded
+  per-segment state: sequence numbers are kept as one contiguous run plus the values outside it, and
+  field validation walks each registration in place. A checked-in long-history test builds 80 MiB of
+  history in 40 sealed segments and runs the built command under a 112 MiB heap cap and an 8 MiB V8
+  semi-space cap. Peak resident memory may grow by at most 32 MiB over the same command on an empty
+  state directory, and instrumented reads prove that segments the manifests rule out are never
+  opened. The semi-space cap applies to every run alike. Without it, whether a query commits another
+  16 MiB of V8 new space depends on garbage-collection timing, because the empty command already sits
+  at V8's growth threshold; with it, a reader that retained even a third of the history still
+  exceeds the budget.
 
-  Controlled same-host measurements on macOS arm64 with Node 24.18 compared the pre-move baseline
-  commit `5cc94e89a25a2cb98c233732dfba9916ce5b9498` with the #3558 working tree. Each value is one
-  child-process measurement of the same 80 MiB, 40-segment history:
+  The command loads only `@oscharko-dev/keiko-activity-log`, never the server modules. A same-host
+  comparison with `dev` before the extraction (macOS arm64, Node 26.8.1, five alternating rounds over
+  the same 80 MiB history, one child process per value, no semi-space cap) measured time and peak
+  resident memory:
 
-  | Build                       |                Empty query |                   Cold query |                  Warm query |
-  | --------------------------- | -------------------------: | ---------------------------: | --------------------------: |
-  | Pre-move baseline           |   1662 ms / 341.23 MiB RSS |     2676 ms / 342.53 MiB RSS |    1642 ms / 343.67 MiB RSS |
-  | #3558 before allocation fix |     289 ms / 89.69 MiB RSS |     1318 ms / 124.72 MiB RSS |     403 ms / 117.13 MiB RSS |
-  | #3558 allocation fix run 1  |  284 ms / 89.90625 MiB RSS |  1312 ms / 119.09375 MiB RSS |  410 ms / 115.96875 MiB RSS |
-  | #3558 allocation fix run 2  | 277 ms / 89.671875 MiB RSS | 1272 ms / 119.265625 MiB RSS | 398 ms / 116.015625 MiB RSS |
-  | #3558 allocation fix run 3  | 261 ms / 89.640625 MiB RSS |  1307 ms / 119.71875 MiB RSS |  399 ms / 115.59375 MiB RSS |
+  | Build                             |              Empty query |                 Cold query |                 Warm query |
+  | --------------------------------- | -----------------------: | -------------------------: | -------------------------: |
+  | Server modules loaded (before)    | 824–896 ms / 278–281 MiB | 1858–2322 ms / 281–287 MiB | 1023–1085 ms / 281–284 MiB |
+  | Activity Log package only (after) |   156–159 ms / 84–87 MiB |   1083–1121 ms / 96–98 MiB |     273–295 ms / 94–95 MiB |
 
-  The extraction materially lowers absolute RSS and elapsed time, but its first cold measurement
-  still grew by 35.03 MiB over the empty query. Profiling traced that remainder to transient native
-  allocations: each segment created another 64 KiB read buffer pending GC, ordinary lines were
-  copied before decoding, and each correlation-filter hash allocated a digest buffer. Reusing one
-  bounded read buffer, decoding a single line part directly, avoiding discarded scan wrappers, and
-  reading the same SHA-256 words from its hex form preserve the stored manifest and query formats.
-  Three consecutive uninstrumented runs grow by 29.1875, 29.59375, and 30.078125 MiB respectively,
-  all below the unchanged 32 MiB limit. The history, segment count, 112 MiB heap cap, empty-command
-  baseline, and absence of forced garbage collection remain unchanged.
-
-  A later canonical Linux run exposed additional platform-sensitive allocation pressure: the same
-  strict test measured 34.78125 MiB of cold-query RSS growth. Profiling traced the remaining hot-path
-  churn to per-line Buffer views and wrappers plus short-lived classifier collections. The reader now
-  decodes wholly contained lines directly, reuses one private callback value while draining a segment,
-  and classifies fields without temporary key and membership collections; the public iterator still
-  returns a distinct line value on every yield. Three consecutive final Linux measurements grew by
-  29.28515625, 31.73046875, and 29.90234375 MiB. Three clean, uninstrumented runs then passed on Linux
-  and three passed on macOS. The test's 80 MiB history, 40 segments, 112 MiB heap cap, empty-command
-  baseline, 32 MiB limit, and garbage-collection behavior were unchanged.
+  The empty-state baseline fell from about 0.85 s to about 0.16 s: the server module graph it no
+  longer loads.
 
 - **Versioned output.** `--json` forms name themselves and their version: `keiko.support.query`,
   `keiko.support.manifest`, the stored `keiko.activity-log.segment-manifest`, and the export
