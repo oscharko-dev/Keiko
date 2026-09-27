@@ -774,11 +774,13 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
     }),
     resolveWorkspaceRoot: () => input.workspaceRoot,
     resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
+    // A workspace-contained changeset is the routine medium-risk file-edit action. The editor
+    // still validates scope, paths, base hashes, and the live mutation lease before committing.
     requiresEditorReview: () =>
       codingWorkbenchPolicyEffectFor(
         input.effectiveModeNow?.() ?? input.effectiveMode,
         "workspace-contained",
-        "high",
+        "medium",
       ) !== "allowed",
     // KEIKO-0469: opt in to defense-in-depth binding enforcement so that a mutationGuard reaching
     // read/discover/edit without a producer-binding is denied at the preflight boundary rather

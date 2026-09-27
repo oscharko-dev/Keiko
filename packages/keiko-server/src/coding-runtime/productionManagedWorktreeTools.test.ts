@@ -579,13 +579,11 @@ describe("production managed worktree tools", () => {
   // #3612: the governed ask checks a changeset's base digests before the human sees it. The check
   // reads through the same secure read as keiko_workspace_read and answers with the very digest that
   // read reports, never a second formula.
-  // Owner decision 2026-09-26 (ADR-0124 D6): a file edit raises no ask of its own, so this change
-  // review is its one human approval. The mode policy (ADR-0138) decides at registration, before the
-  // editor action is queued, that the review is required: nothing is written until the human
-  // applies it.
+  // Owner decision (ADR-0124 D6): contained routine edits use the medium-risk policy. Ask mode
+  // reviews the diff; Supervised and Full access apply it through the same governed patch boundary.
   it.each([
     ["governed-assist", true],
-    ["supervised-coding", true],
+    ["supervised-coding", false],
     ["autonomous-delivery", false],
   ] as const)(
     "derives editor review policy for %s (requiresReview=%s)",

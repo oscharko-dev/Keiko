@@ -227,11 +227,12 @@ body-free. The approval registry validates the ask fail-closed with exact keys, 
 another call or session, or carries any other field, never reaches the human (#3612). An ask that
 arrives after the run's approval registry closed is cancelled and reaches no one.
 
-A file edit raises no governed ask in any mode (owner decision, 2026-09-26). Its one human approval
-is the change review the mode policy requires before anything is written: the edit port registers
-the mutation with `requiresReview` from the ADR-0138 matrix (`governed-assist` and
-`supervised-coding` review every workspace edit, `autonomous-delivery` applies without one) before
-the editor action is queued, and the editor route refuses a stale base
+A file edit raises no governed ask in any mode (owner decision, 2026-09-26). A routine,
+workspace-contained edit uses the ADR-0138 medium-risk policy at mutation registration:
+`governed-assist` reviews the exact change before writing, while `supervised-coding` and
+`autonomous-delivery` apply it through the same governed patch boundary without a per-edit
+decision. Higher-risk actions and hard denials retain their independent policy gates. The editor
+route refuses a stale base
 (`CONTENT_HASH_MISMATCH`, with re-read guidance for the model) before the review is shown. Until
 1.1.10 an edit in "Ask for approval" took two decisions for the same change — an ask with the file
 list, then Apply on the diff — and the edit ask carried the changeset's base digests so a stale base
