@@ -145,6 +145,7 @@ import {
 } from "./log-level.js";
 import type { ServerLogEnv, ServerLogLevel, ServerLogThreshold } from "./log-level.js";
 import { redactLogFields, redactLogLabel } from "./log-redaction.js";
+import { keikoStackFrames } from "./stack-frames.js";
 import { observeSupportIncidentTrigger } from "./support-incident.js";
 
 export {
@@ -497,10 +498,17 @@ const ACTIVITY_LOG_WRITER_REJECTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["process-writer-owned"],
     },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "loss",
   analyzerProjection: "failure-cluster",
   failureClasses: ["activity-log-contract"],
@@ -508,11 +516,28 @@ const ACTIVITY_LOG_WRITER_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function writerOwnershipRejectedEvent(): ServerLogEvent {
+// Two module graphs contending for the one process writer (ADR-0179).
+const WRITER_OWNERSHIP_ERROR_KIND: ActivityLogErrorKind = "conflict";
+
+// `rejected` and `correlationId` come from the rejected module graph, so they are read as untrusted
+// input: the frames are re-derived here and the correlation falls back to the sanctioned unknown id.
+function writerOwnershipRejectedEvent(rejected: unknown, correlationId: unknown): ServerLogEvent {
+  const frames = keikoStackFrames(rejected);
   return activityLogEvent(
     ACTIVITY_LOG_WRITER_REJECTED_OPERATION,
-    {},
-    { reason: "process-writer-owned", completeness: "complete", loss: "none" },
+    {
+      level: "error",
+      correlationId: correlationIdOrUnknown(
+        typeof correlationId === "string" ? correlationId : undefined,
+      ),
+      errorKind: WRITER_OWNERSHIP_ERROR_KIND,
+    },
+    {
+      reason: "process-writer-owned",
+      ...(frames.length === 0 ? {} : { frames }),
+      completeness: "complete",
+      loss: "none",
+    },
   );
 }
 
@@ -584,6 +609,8 @@ const SERVER_LOG_TARGET_MUTATED_OPERATION = defineActivityLogOperation({
 export interface ServerLogFailureContext {
   readonly op?: string | undefined;
   readonly correlationId?: string | undefined;
+  // The failed operation's own closed kind, when the caller knows it better than the thrown value.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
   readonly loss?: "event-dropped" | "event-location-unknown" | undefined;
   readonly identity?: ServerLogIdentity | undefined;
 }
@@ -718,7 +745,7 @@ function failureNoticeEvent(
     {
       level: "error",
       correlationId: correlationIdOrUnknown(context.correlationId),
-      errorKind: closedFailureNoticeErrorKind(error),
+      errorKind: context.errorKind ?? closedFailureNoticeErrorKind(error),
     },
     {
       ...(rejectionKind === undefined && context.op !== undefined
@@ -1553,7 +1580,9 @@ const WRITER_GRAPH_TOKEN = Object.freeze({});
 
 interface ProcessWriterOwner {
   readonly graphToken: object;
-  readonly reject: (stateDir: string) => void;
+  // Persists another graph's rejected claim: that graph's own error (whose stack names the rejected
+  // call) and the correlation of the operation it attempted. Both cross a module-graph boundary.
+  readonly reject: (stateDir: string, rejected: unknown, correlationId: unknown) => void;
 }
 
 export class ActivityLogWriterOwnershipError extends Error {
@@ -1576,38 +1605,46 @@ function writerOwner(value: unknown): ProcessWriterOwner | undefined {
   const graphToken = Reflect.get(value, "graphToken") as unknown;
   const reject = Reflect.get(value, "reject") as unknown;
   return typeof graphToken === "object" && graphToken !== null && typeof reject === "function"
-    ? { graphToken, reject: reject as (stateDir: string) => void }
+    ? { graphToken, reject: reject as ProcessWriterOwner["reject"] }
     : undefined;
 }
 
-function recordUnpersistedWriterRejection(error: unknown): void {
+function recordUnpersistedWriterRejection(rejected: unknown, correlationId: unknown): void {
   recordActivityLogLoss("persistence-failed");
-  reportServerLogFailure(error, {
+  reportServerLogFailure(rejected, {
     op: ACTIVITY_LOG_WRITER_REJECTED_OPERATION.op,
+    correlationId: typeof correlationId === "string" ? correlationId : undefined,
+    errorKind: WRITER_OWNERSHIP_ERROR_KIND,
     loss: "event-dropped",
   });
 }
 
-function emitWriterOwnershipRejection(stateDir: string): void {
+function emitWriterOwnershipRejection(
+  stateDir: string,
+  rejected: unknown,
+  correlationId: unknown,
+): void {
   const requested = activeLogs.get(activeLogKey(join(stateDir, "logs")));
   const active = requested ?? activeLogs.values().next().value;
   if (active === undefined) {
-    recordUnpersistedWriterRejection(new ActivityLogWriterOwnershipError());
+    recordUnpersistedWriterRejection(rejected, correlationId);
     return;
   }
   createFileSinkFacade(active, "debug", resolvePath(active.directory, "..")).write(
-    writerOwnershipRejectedEvent(),
+    writerOwnershipRejectedEvent(rejected, correlationId),
   );
 }
 
 // Internal package seam for other Activity Log modules that mutate the same on-disk graph. It is
 // deliberately omitted from the package entry point; callers outside this package use the guarded
-// high-level writer and incident APIs instead.
-export function claimActivityLogWriterOwnership(stateDir: string): void {
+// high-level writer and incident APIs instead. `correlationId` is the attempted operation's own
+// correlation; entry points without one leave it to the sanctioned unknown id.
+export function claimActivityLogWriterOwnership(stateDir: string, correlationId?: string): void {
   if (!isMainThread) {
     // A worker shares this pid but not the owner slot (see ACTIVITY_LOG_WRITER_OWNER_KEY).
-    recordUnpersistedWriterRejection(new ActivityLogWriterOwnershipError());
-    throw new ActivityLogWriterOwnershipError();
+    const rejected = new ActivityLogWriterOwnershipError();
+    recordUnpersistedWriterRejection(rejected, correlationId);
+    throw rejected;
   }
   const existingValue = Reflect.get(globalThis, ACTIVITY_LOG_WRITER_OWNER_KEY) as unknown;
   if (existingValue === undefined) {
@@ -1620,12 +1657,14 @@ export function claimActivityLogWriterOwnership(stateDir: string): void {
   }
   const existing = writerOwner(existingValue);
   if (existing?.graphToken === WRITER_GRAPH_TOKEN) return;
+  // One error is both thrown and evidenced, so the persisted frames are the stack the caller sees.
+  const rejected = new ActivityLogWriterOwnershipError();
   if (existing === undefined) {
-    recordUnpersistedWriterRejection(new ActivityLogWriterOwnershipError());
+    recordUnpersistedWriterRejection(rejected, correlationId);
   } else {
-    existing.reject(stateDir);
+    existing.reject(stateDir, rejected, correlationId);
   }
-  throw new ActivityLogWriterOwnershipError();
+  throw rejected;
 }
 
 // Merges the store's governing policy outcome into a per-process, env-resolved config: segment
@@ -3479,7 +3518,7 @@ export function pinActivityLogWindow(
   // This entry point can create the store, seal a segment and publish a pin without first creating
   // a sink. Claim outside the storage-error conversion so a duplicate module graph always fails
   // closed before any of those mutations.
-  claimActivityLogWriterOwnership(stateDir);
+  claimActivityLogWriterOwnership(stateDir, request.correlationId);
   let active: ActiveLog;
   try {
     active = storeForStateDir(stateDir, env);
@@ -3566,7 +3605,7 @@ export function releaseActivityLogPin(
 ): ActivityLogPinReleaseResult {
   // Validate only after ownership: even a rejected request must not let a second evaluated graph
   // reach this writer's store through a public mutating entry point.
-  claimActivityLogWriterOwnership(stateDir);
+  claimActivityLogWriterOwnership(stateDir, request.correlationId);
   if (!isActivityLogPinId(Reflect.get(request, "pinId"))) {
     return { status: "rejected", reason: "invalid-request" };
   }

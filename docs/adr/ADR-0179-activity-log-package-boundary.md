@@ -42,12 +42,17 @@ sweeping incidents. Declaring an injected logger the production file writer is a
 Ownership is never released for the lifetime of the process.
 
 A second module graph fails closed with `ActivityLogWriterOwnershipError`, and the winning writer
-persists the registered, body-free `activity-log.writer-rejected` event (`reason:
-process-writer-owned`). A foreign or malformed owner slot and a `worker_threads` worker, which shares
-the pid but not the main realm's slot, fail closed the same way; their rejection cannot reach the
-winning writer and is counted in the loss ledger instead. A `vm` context cannot be detected this
-way, so product code never opens a writer from one: worker and `vm` contexts hand their evidence to
-the main thread.
+persists the registered, body-free `activity-log.writer-rejected` failure line (`reason:
+process-writer-owned`, `errorKind: conflict`). The line carries the dist-anchored Keiko frames of the
+rejected call and the correlation of the operation that attempted it: a pin or incident request's
+own correlation, or the sanctioned `unknown-correlation-id` for opening a sink, declaring the
+production logger, and appending a durable batch. The analyzer therefore reconstructs a rejection
+in that operation's timeline as well as in its failure cluster. A foreign or malformed owner slot
+and a `worker_threads` worker, which shares the pid but not the main realm's slot, fail closed the
+same way; their rejection cannot reach the winning writer, so it is counted in the loss ledger and
+reported on the independent stderr notice with the same correlation and `errorKind: conflict`. A
+`vm` context cannot be detected this way, so product code never opens a writer from one: worker and
+`vm` contexts hand their evidence to the main thread.
 
 ### Route-template redaction
 

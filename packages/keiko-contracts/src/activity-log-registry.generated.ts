@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d28abde3e77cba3b06b5ec8e72e55bbbe87ffcfd08adafeadee2befb0e615c4f" as const;
+  "f22fedfe8bd6a3d6fce492555d87dac17ebedab3268eb13baef0f4f55ef243fe" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -791,8 +791,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["process-writer-owned"],
       },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
     },
-    causal: "none",
+    causal: "correlation",
     lifecycle: "loss",
     analyzerProjection: "failure-cluster",
     failureClasses: ["activity-log-contract"],
@@ -28255,7 +28262,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "activity-log.writer-rejected",
-          mode: "none",
+          mode: "correlation",
         },
         {
           op: "server-log.line-dropped",
@@ -28279,9 +28286,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-activity-log",
           category: "diagnostic",
           lifecycle: "loss",
-          causal: "none",
+          causal: "correlation",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
             {
               name: "reason",
               type: "string",
@@ -28289,9 +28302,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "loss-state",
+            "safe-platform-class",
+          ],
           frameCauseEvidence: {
-            frames: false,
+            frames: true,
             causeChain: false,
           },
           proofIds: ["server-log.writer-ownership-rejected.registered-line"],

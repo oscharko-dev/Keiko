@@ -1004,7 +1004,7 @@ function createCandidate(
   draft: CandidateDraft,
   options: SupportIncidentOptions,
 ): SupportIncidentCreation {
-  claimActivityLogWriterOwnership(stateDir);
+  claimActivityLogWriterOwnership(stateDir, draft.evidenceCorrelationId);
   const context: CandidateContext = {
     stateDir,
     nowMs: options.nowMs ?? Date.now(),
@@ -1184,7 +1184,7 @@ function sweepExpiredEntries(
   nowMs: number,
   correlationId: string,
 ): readonly SupportIncidentStoreEntry[] {
-  claimActivityLogWriterOwnership(stateDir);
+  claimActivityLogWriterOwnership(stateDir, correlationId);
   const entries = listSupportIncidentEntries(stateDir);
   const open = entries.filter((entry) => openEntry(entry, nowMs));
   for (const entry of entries) {

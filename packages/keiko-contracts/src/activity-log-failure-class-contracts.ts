@@ -45,7 +45,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       failure: [],
       loss: ["activity-log.writer-rejected", "server-log.line-dropped", "server-log.write-failed"],
     },
-    requiredCausalOperations: ["server-log.line-dropped", "server-log.write-failed"],
+    requiredCausalOperations: [
+      "activity-log.writer-rejected",
+      "server-log.line-dropped",
+      "server-log.write-failed",
+    ],
     requiredLossOperations: [
       "activity-log.writer-rejected",
       "server-log.line-dropped",
@@ -64,8 +68,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "count",
       "loss-state",
       "opaque-id",
+      "safe-platform-class",
     ],
-    requiredFrameOperations: [],
+    requiredFrameOperations: ["activity-log.writer-rejected"],
     requiredCauseOperations: [],
   },
   {

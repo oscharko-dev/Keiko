@@ -5,8 +5,9 @@ import { once } from "node:events";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogLossCounters,
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
@@ -29,6 +30,27 @@ type ChildMode = GraphOrder | "foreign-slot";
 
 const CHILD_MODE = process.env[CHILD_ORDER_ENV] as ChildMode | undefined;
 const WRITER_OWNER_KEY = Symbol.for("@oscharko-dev/keiko-activity-log/process-writer-owner");
+
+// The operation correlation each rejected call carries. Entry points without one (opening a sink,
+// declaring a production logger, appending a durable batch) fall back to the sanctioned unknown id.
+const REJECTED_CALL = {
+  pin: "writer-owner-pin-create",
+  release: "writer-owner-pin-release",
+  list: "writer-owner-incident-list",
+  dismiss: "writer-owner-incident-dismiss",
+  report: "writer-owner-incident-report",
+  failure: "writer-owner-incident-failure",
+} as const;
+// A frame of this test file is the call site that attempted to open the second writer.
+const CALLER_FRAME =
+  /^packages\/keiko-activity-log\/src\/server-log\.writer-ownership\.test\.ts:\d+:\d+$/;
+
+// The rejected graph's own claim frame: the built copy for source-first, the source copy otherwise.
+function rejectedClaimFrame(order: GraphOrder): RegExp {
+  return order === "source-first"
+    ? /^packages\/keiko-activity-log\/dist\/server-log\.js:\d+:\d+$/
+    : /^packages\/keiko-activity-log\/src\/server-log\.ts:\d+:\d+$/;
+}
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -168,25 +190,32 @@ async function exerciseOrder(order: GraphOrder): Promise<void> {
     rejected.pinActivityLogWindow(stateDir, {
       scope: { kind: "window", fromMs: Date.now() - 1_000, toMs: Date.now() + 1_000 },
       expiresAtMs: Date.now() + 60_000,
+      correlationId: REJECTED_CALL.pin,
     }),
   ).toThrow(rejected.ActivityLogWriterOwnershipError);
-  expect(() => rejected.releaseActivityLogPin(stateDir, { pinId: "0".repeat(24) })).toThrow(
-    rejected.ActivityLogWriterOwnershipError,
-  );
+  expect(() =>
+    rejected.releaseActivityLogPin(stateDir, {
+      pinId: "0".repeat(24),
+      correlationId: REJECTED_CALL.release,
+    }),
+  ).toThrow(rejected.ActivityLogWriterOwnershipError);
   const rejectedPublic = publicGraphs[1];
-  expect(() => rejectedPublic.listSupportIncidents(stateDir)).toThrow(
-    rejected.ActivityLogWriterOwnershipError,
-  );
-  expect(() => rejectedPublic.dismissSupportIncident(stateDir, incident.record.incidentId)).toThrow(
-    rejected.ActivityLogWriterOwnershipError,
-  );
-  expect(() => rejectedPublic.recordUserReportedIncident(stateDir)).toThrow(
-    rejected.ActivityLogWriterOwnershipError,
-  );
+  expect(() =>
+    rejectedPublic.listSupportIncidents(stateDir, { correlationId: REJECTED_CALL.list }),
+  ).toThrow(rejected.ActivityLogWriterOwnershipError);
+  expect(() =>
+    rejectedPublic.dismissSupportIncident(stateDir, incident.record.incidentId, {
+      correlationId: REJECTED_CALL.dismiss,
+    }),
+  ).toThrow(rejected.ActivityLogWriterOwnershipError);
+  expect(() =>
+    rejectedPublic.recordUserReportedIncident(stateDir, { correlationId: REJECTED_CALL.report }),
+  ).toThrow(rejected.ActivityLogWriterOwnershipError);
   expect(() =>
     rejectedPublic.recordRegisteredFailureIncident(stateDir, {
       op: "coding-runtime.readiness.failed",
       errorKind: "internal",
+      correlationId: REJECTED_CALL.failure,
     }),
   ).toThrow(rejected.ActivityLogWriterOwnershipError);
   expect(() => {
@@ -232,16 +261,87 @@ async function exerciseOrder(order: GraphOrder): Promise<void> {
     (_line, index) => records[index]?.op === "activity-log.writer-rejected",
   );
   expect(rejectionLines).toHaveLength(9);
+  const rejectedCall = expect.arrayContaining([
+    expect.stringMatching(rejectedClaimFrame(order)),
+    expect.stringMatching(CALLER_FRAME),
+  ]) as unknown;
+  await expectRejectionLines(rejectionLines, rejectedCall);
+  await expectRejectionAnalysis(lines, rejectedCall);
+}
+
+// Each rejection is a correlated failure line: the operation the rejected call belonged to, or the
+// sanctioned unknown id for an entry point that has none, with the frames of that rejected call.
+async function expectRejectionLines(
+  lines: readonly string[],
+  rejectedCall: unknown,
+): Promise<void> {
   const { expectActivityLogProof } = await import("../../../tests/support/activity-log-proof.js");
-  const rejection = expectActivityLogProof(
-    "server-log.writer-ownership-rejected.registered-line",
-    rejectionLines[0] ?? "",
+  const rejections = lines.map((line) =>
+    expectActivityLogProof("server-log.writer-ownership-rejected.registered-line", line),
   );
-  expect(rejection).toMatchObject({
-    reason: "process-writer-owned",
-    completeness: "complete",
-    loss: "none",
+  expect(rejections.map((record) => record.correlationId)).toEqual([
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    REJECTED_CALL.pin,
+    REJECTED_CALL.release,
+    REJECTED_CALL.list,
+    REJECTED_CALL.dismiss,
+    REJECTED_CALL.report,
+    REJECTED_CALL.failure,
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  ]);
+  for (const rejection of rejections) {
+    expect(rejection).toMatchObject({
+      level: "error",
+      category: "diagnostic",
+      errorKind: "conflict",
+      reason: "process-writer-owned",
+      completeness: "complete",
+      loss: "none",
+      frames: rejectedCall,
+    });
+  }
+}
+
+// The analyzer reconstructs the rejected call through its normal timeline and failure cluster.
+async function expectRejectionAnalysis(
+  lines: readonly string[],
+  rejectedCall: unknown,
+): Promise<void> {
+  const { analyzeLogText } = await import("./reader/support-analyze.js");
+  const analysis = analyzeLogText(`${lines.join("\n")}\n`);
+  expect(
+    analysis.clusters.find((cluster) => cluster.op === "activity-log.writer-rejected"),
+  ).toEqual({
+    category: "diagnostic",
+    op: "activity-log.writer-rejected",
+    errorKind: "conflict",
+    count: 9,
+    sampleCorrelationIds: [
+      ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      REJECTED_CALL.pin,
+      REJECTED_CALL.release,
+      REJECTED_CALL.list,
+      REJECTED_CALL.dismiss,
+    ],
   });
+  const pinTimeline = analysis.timelines.find(
+    (timeline) => timeline.correlationId === REJECTED_CALL.pin,
+  );
+  expect(pinTimeline?.lines.map((line) => line.op)).toEqual(["activity-log.writer-rejected"]);
+  expect(pinTimeline?.errorKinds).toEqual(["conflict"]);
+  expect(pinTimeline?.frames).toEqual(rejectedCall);
+}
+
+// The lines `run` writes to stderr, captured without reaching the real stream.
+function stderrLines(run: () => void): readonly string[] {
+  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  try {
+    run();
+    return stderr.mock.calls.map(([chunk]) => String(chunk).trimEnd());
+  } finally {
+    stderr.mockRestore();
+  }
 }
 
 // A foreign or version-skewed value in the process slot is not a writer this graph can defer to.
@@ -253,11 +353,40 @@ async function exerciseForeignSlot(): Promise<void> {
   Reflect.set(globalThis, WRITER_OWNER_KEY, { graphToken: "foreign" });
   const writer = await import("./server-log.js");
   resetActivityLogLossCountersForTests();
-  expect(() => writer.createFileServerLogSink(stateDir, { level: "debug" })).toThrow(
-    writer.ActivityLogWriterOwnershipError,
-  );
+  const written = stderrLines(() => {
+    // The notice is throttled process-wide; each rejection below starts from an unused slate.
+    writer.resetServerLogFailureNotices();
+    expect(() => writer.createFileServerLogSink(stateDir, { level: "debug" })).toThrow(
+      writer.ActivityLogWriterOwnershipError,
+    );
+    writer.resetServerLogFailureNotices();
+    expect(() =>
+      writer.pinActivityLogWindow(stateDir, {
+        scope: { kind: "window", fromMs: Date.now() - 1_000, toMs: Date.now() + 1_000 },
+        expiresAtMs: Date.now() + 60_000,
+        correlationId: REJECTED_CALL.pin,
+      }),
+    ).toThrow(writer.ActivityLogWriterOwnershipError);
+  });
   expect(existsSync(join(stateDir, "logs"))).toBe(false);
-  expect(activityLogLossCounters()["persistence-failed"]).toBe(1);
+  expect(activityLogLossCounters()["persistence-failed"]).toBe(2);
+  // The independent stderr notice keeps the rejected call's correlation and closed error kind.
+  const { expectActivityLogStderrProof } =
+    await import("../../../tests/support/activity-log-proof.js");
+  const notices = written.map((line) =>
+    expectActivityLogStderrProof("server-log.write-failed.stderr-line", line),
+  );
+  expect(notices.map((notice) => notice.correlationId)).toEqual([
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    REJECTED_CALL.pin,
+  ]);
+  for (const notice of notices) {
+    expect(notice).toMatchObject({
+      errorKind: "conflict",
+      failedOp: "activity-log.writer-rejected",
+      loss: "event-dropped",
+    });
+  }
 }
 
 // A worker thread shares the pid but not the main realm's owner slot, so it must never open a writer.
