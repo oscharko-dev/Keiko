@@ -82,17 +82,45 @@ export function prepareCommitDraft(
 
 const COMMIT_TRAILER_TOKEN = /^(?:BREAKING CHANGE|[A-Za-z][A-Za-z0-9-]*)(?::\s+| #)\S/u;
 
+function commitTrailerStart(lines: readonly string[]): number {
+  let start = -1;
+  let breakingChange = false;
+  let previousBlank = true;
+  for (const [index, line] of lines.entries()) {
+    const text = line.trim();
+    const boundary = previousBlank;
+    previousBlank = text === "";
+    if (!boundary || previousBlank) continue;
+    if (COMMIT_TRAILER_TOKEN.test(text)) {
+      if (start < 0) start = index;
+      breakingChange ||= /^BREAKING(?: CHANGE|-CHANGE):\s/u.test(text);
+    } else if (!breakingChange && line === line.trimStart()) {
+      // A later body paragraph invalidates earlier ambiguous labels such as Note: or Summary:.
+      start = -1;
+    }
+  }
+  return start;
+}
+
+function normalizeCommitTrailers(lines: readonly string[]): string[] {
+  let tokenIndent = lines[0]?.search(/\S/u) ?? 0;
+  return lines.map((line) => {
+    const text = line.trim();
+    const indent = line.search(/\S/u);
+    if (COMMIT_TRAILER_TOKEN.test(text) && indent <= tokenIndent) {
+      tokenIndent = indent;
+      return text;
+    }
+    return line.trimEnd();
+  });
+}
+
 function takeCommitTrailers(lines: string[]): string[] {
-  // Footers start at a paragraph boundary and may contain free-form multiline values
-  // (Conventional Commits 1.0.0, section 10). Preserve continuation indentation and blanks.
-  const start = lines.findIndex(
-    (line, index) =>
-      (index === 0 || lines.at(index - 1)?.trim() === "") && COMMIT_TRAILER_TOKEN.test(line.trim()),
-  );
+  // Retain the trailing token/continuation paragraph group. Explicit BREAKING CHANGE values
+  // may also span unindented paragraphs; ordinary prose labels do not claim later body text.
+  const start = commitTrailerStart(lines);
   if (start < 0) return [];
-  return lines
-    .splice(start)
-    .map((line) => (COMMIT_TRAILER_TOKEN.test(line.trim()) ? line.trim() : line.trimEnd()));
+  return normalizeCommitTrailers(lines.splice(start));
 }
 
 // The model owns the wording; normalize prose into a list while retaining Git trailer syntax.

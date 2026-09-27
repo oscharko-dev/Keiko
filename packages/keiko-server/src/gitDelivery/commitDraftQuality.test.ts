@@ -103,6 +103,36 @@ it.each(["BREAKING CHANGE", "BREAKING-CHANGE"])("preserves the %s footer verbati
 });
 
 describe("commit trailer paragraph boundaries", () => {
+  it.each([
+    [
+      "- Update the parser.\n\nNote: the lexer is unchanged.\n\n* Add regression tests\n* Update the\n  migration docs",
+      "- Update the parser.\n- Note: the lexer is unchanged.\n- Add regression tests\n- Update the migration docs",
+    ],
+    [
+      "Summary: rework the parser.\n\n* Add regression tests\n* Update docs",
+      "- Summary: rework the parser.\n- Add regression tests\n- Update docs",
+    ],
+    [
+      "Context: preserve compatibility.\n\nExplain the\nreason.\n\nRefs #123",
+      "- Context: preserve compatibility.\n- Explain the reason.\n\nRefs #123",
+    ],
+    [
+      "- Update parser.\n\nNote: unchanged lexer.\n\n2) Add tests.\n\nSigned-off-by: Dev <dev@example.invalid>",
+      "- Update parser.\n- Note: unchanged lexer.\n- Add tests.\n\nSigned-off-by: Dev <dev@example.invalid>",
+    ],
+  ])("normalizes trailer-like prose before later body paragraphs: %s", (body, expected) => {
+    expect(canonicalCommitBody(body)).toBe(expected);
+    expect(canonicalCommitBody(expected)).toBe(expected);
+  });
+
+  it("preserves the final footer group with separate tokens and indented continuation paragraphs", () => {
+    const footer =
+      "Custom: migration details.\nUnwrapped continuation.\n\n  Indented continuation paragraph.\n\nRefs #123\n\nSigned-off-by: Dev <dev@example.invalid>";
+    const body = `- Update parser.\n\n${footer}`;
+    expect(canonicalCommitBody(body)).toBe(body);
+    expect(canonicalCommitBody(canonicalCommitBody(body))).toBe(body);
+  });
+
   it.each(["Note: behavior unchanged.", "BREAKING CHANGE: remove the legacy parser."])(
     "keeps unseparated trailing prose in its paragraph: %s",
     (lastLine) => {
@@ -163,3 +193,12 @@ it("normalizes trailer tokens while retaining continuation indentation and refer
   ).toBe(expected);
   expect(canonicalCommitBody(expected)).toBe(expected);
 });
+
+it.each(["BREAKING CHANGE", "BREAKING-CHANGE", "Migration"])(
+  "retains token-shaped continuations inside a %s footer",
+  (token) => {
+    const body = `- Drop v1.\n\n${token}: v1 removed.\n  Migration: use v2.\n  Refs #123\nSigned-off-by: Dev <dev@example.invalid>`;
+    expect(canonicalCommitBody(body)).toBe(body);
+    expect(canonicalCommitBody(canonicalCommitBody(body))).toBe(body);
+  },
+);

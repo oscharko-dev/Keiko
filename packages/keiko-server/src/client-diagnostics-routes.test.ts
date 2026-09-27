@@ -2048,9 +2048,21 @@ describe("POST /api/diagnostics/client", () => {
 
 // A closing tab cannot retry in a later rate window. Final loss delivery needs reserved,
 // bounded admission independent of routine/failure storms.
+function expectFinalLossLine(sink: BufferedServerLogSink): void {
+  const index = sink.events.findIndex((event) => event.extra?.clientKind === "delivery-loss");
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(JSON.parse(sink.lines()[index] ?? "{}") as unknown).toMatchObject({
+    op: "client.diagnostic",
+    correlationId: CORRELATION_ID,
+    errorKind: "unknown",
+    clientKind: "delivery-loss",
+    clientPostsThrottled: 5,
+  });
+}
+
 it("admits a final loss flush after both ordinary budgets are exhausted", async () => {
   resetClientDiagnosticsIngestStateForTests();
-  captureServerLog();
+  const sink = captureServerLog();
   const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
   const before = activityLogLossCounters()["client-post-throttled"];
   try {
@@ -2079,6 +2091,7 @@ it("admits a final loss flush after both ordinary budgets are exhausted", async 
     });
     expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(204);
     expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+    expectFinalLossLine(sink);
     for (let index = 1; index < 60; index += 1) {
       expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(204);
     }
