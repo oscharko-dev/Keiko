@@ -2605,7 +2605,7 @@ function proveSpawnWorkspaceRoot(
   if (resolveAccess === undefined) return { ok: true, cwd: workspaceRoot };
   try {
     const access = resolveAccess();
-    return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
+    return access !== undefined && access.canonicalRoot === workspaceRoot
       ? { ok: true, cwd: access.canonicalRoot }
       : { ok: false };
   } catch {

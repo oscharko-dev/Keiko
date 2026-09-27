@@ -29,6 +29,7 @@ import { assertSafeFieldValue } from "./field-safety.js";
 import { IssueProvisioningError, issueProvisioningBase } from "./issueProvisioning.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type {
+  ActiveWorkspaceView,
   WorkspaceCleanupService,
   WorkspaceHealthService,
   WorkspaceLifecycleActionRequest,
@@ -442,6 +443,49 @@ export async function handleSetActiveTaskWorkspace(
         status: 200,
         body: redacted(deps, { instance: result.instance, binding: result.binding }),
       };
+    },
+  );
+}
+
+// The Workbench's Local choice binds the registered checkout itself. Git's ordinary safety checks
+// govern branch switching; a failed switch never changes the active workspace pointer.
+export async function handleSelectLocalCheckout(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireLifecycle(deps);
+  if (isRouteResult(guard)) return guard;
+  const selectLocal = guard.selectLocal;
+  if (selectLocal === undefined) return unavailable();
+  return runLoggedMutationHandler(
+    deps,
+    {
+      operation: "activate",
+      workspaceIdentitySeed: "route-local-checkout-request",
+      correlationId: ctx.correlationId,
+    },
+    async () => {
+      if (deps.codingRuntimeOrchestrator?.hasLiveRun()) {
+        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+      }
+      const body = await readJsonObject(ctx.req);
+      const root = requireSafeField(body.root, "root");
+      const branch = requireSafeField(body.branch, "branch");
+      const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
+      const resolved = await resolveRoot(deps.store, root, deps.redactor);
+      let active: ActiveWorkspaceView;
+      try {
+        active = selectLocal({ root: resolved.realRoot, branch, requestedBy, correlationId: ctx.correlationId });
+      } catch (error) {
+        if (error instanceof TaskWorkspaceError) throw error;
+        throw new TaskWorkspaceError(
+          "PROVISIONING_FAILED",
+          "The local checkout could not be selected. Check its branch and Git status.",
+          [],
+          { cause: error },
+        );
+      }
+      return { status: 200, body: redacted(deps, { active }) };
     },
   );
 }

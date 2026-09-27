@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   utimesSync,
@@ -24,6 +25,7 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryUserId,
+  WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
 import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -1109,6 +1111,49 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       // Idempotent: the second exposure re-registers nothing and emits no second line.
       expect(events).toHaveLength(1);
       expect(JSON.stringify(events)).not.toContain(repositoryRoot);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("reconnects a recreated managed root before the editor can use its stale manifest", () => {
+    const repositoryRoot = tmp("managed-root-reconnect-source-");
+    const managedRoot = tmp("managed-root-reconnect-target-");
+    const packageManifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), packageManifest);
+    writeFileSync(join(managedRoot, "package.json"), packageManifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+
+    try {
+      store.createProject(repositoryRoot);
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance, activityLog });
+      const previous = store.findWorkspaceManifestRecordByProject(managedRoot);
+      if (previous === undefined) throw new Error("Expected a managed root manifest.");
+      const previousManifest = JSON.parse(previous.recordJson) as WorkspaceManifest;
+      expect(store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot))).toBeDefined();
+
+      workspaceScriptTrust.revoke(repositoryRoot);
+      renameSync(managedRoot, `${managedRoot}-previous`);
+      mkdirSync(managedRoot);
+      writeFileSync(join(managedRoot, "package.json"), packageManifest);
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance, activityLog });
+
+      const refreshed = store.findWorkspaceManifestRecordByProject(managedRoot);
+      if (refreshed === undefined) throw new Error("Expected a reconnected manifest.");
+      const refreshedManifest = JSON.parse(refreshed.recordJson) as WorkspaceManifest;
+      expect(refreshedManifest.roots[0]?.identityDigest).not.toBe(
+        previousManifest.roots[0]?.identityDigest,
+      );
+      expect(refreshed.rootProjects[0]?.objectIdentityDigest).not.toBe(
+        previous.rootProjects[0]?.objectIdentityDigest,
+      );
+      expect(store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot))).toBeUndefined();
+      expect(events.some((event) => event.op === "task-workspace.manifest.reconnected")).toBe(true);
     } finally {
       store.close();
     }
@@ -3073,7 +3118,7 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     });
   }
 
-  it("resolves the ceiling from the option, then the environment, then governed-assist", () => {
+  it("resolves the ceiling from the option, then the environment, then all-mode availability", () => {
     const fromOption = depsWithEnv(
       { KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },
       "supervised-coding",
@@ -3082,10 +3127,10 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     const fromEnv = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: "supervised-coding" });
     expect(fromEnv.codingRuntimeDeploymentCeiling).toBe("supervised-coding");
     const fromDefault = depsWithEnv({});
-    expect(fromDefault.codingRuntimeDeploymentCeiling).toBe("governed-assist");
+    expect(fromDefault.codingRuntimeDeploymentCeiling).toBe("autonomous-delivery");
   });
 
-  it("ignores an unrecognized ceiling environment value fail-closed", () => {
+  it("rejects an unrecognized explicit ceiling environment value fail-closed", () => {
     for (const value of ["", "yolo", "AUTONOMOUS-DELIVERY", "supervised_coding"]) {
       const deps = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: value });
       expect(deps.codingRuntimeDeploymentCeiling).toBe("governed-assist");

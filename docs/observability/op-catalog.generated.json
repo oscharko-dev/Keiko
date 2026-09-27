@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a9b3a9ee86385d1ecd1fa9ae594a9d99164f91685ada87feccea7ed5fac6f203",
+    "catalogDigest": "8b01da6157e615e17efaf6f703174c2116ebe260082a886c540ee038d738c02e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -21067,7 +21067,7 @@
         "proofIds": ["memory.audit.state-cache.seeded.count"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/deps-activity.ts:10",
-        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:235"]
+        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:256"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -25686,8 +25686,8 @@
         "failureClasses": ["runtime-shutdown"],
         "proofIds": ["server.runtime.shutdown.lifecycle"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/deps-activity.ts:77",
-        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:291"]
+        "registrationSite": "packages/keiko-server/src/deps-activity.ts:98",
+        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:326"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27444,6 +27444,45 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "task-workspace.manifest.reconnected",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "deps-activity.logTaskWorkspaceManifestReconnected",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "workspaceId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 128
+          },
+          "trustRevoked": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["task-workspace-manifest-reconnect"],
+        "proofIds": ["task-workspace.manifest.reconnected.trust-revoked"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/deps-activity.ts:77",
+        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:311"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "task-workspace.repository.registered",
         "category": "security",
         "owner": "keiko-server",
@@ -27478,7 +27517,7 @@
         "proofIds": ["task-workspace.repository.registered.restricted"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/deps-activity.ts:56",
-        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:271"]
+        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:292"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27518,7 +27557,7 @@
         "proofIds": ["task-workspace.repository.registration-refused.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/deps-activity.ts:30",
-        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:257"]
+        "emitterSites": ["packages/keiko-server/src/deps-activity.ts:278"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37255,6 +37294,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "task-workspace-manifest-reconnect",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["task-workspace.manifest.reconnected"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["task-workspace.manifest.reconnected"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["task-workspace.manifest.reconnected"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["task-workspace.manifest.reconnected"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "task-workspace-repository-registration",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -38313,8 +38373,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 321,
-      "completeClassCount": 321,
+      "supportedClassCount": 322,
+      "completeClassCount": 322,
       "completeness": "complete",
       "classes": [
         {
@@ -69135,6 +69195,62 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "task-workspace-manifest-reconnect",
+          "requirementContract": "task-workspace-manifest-reconnect",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["task-workspace.manifest.reconnected"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "task-workspace.manifest.reconnected",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["task-workspace.manifest.reconnected"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "task-workspace.manifest.reconnected",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "trustRevoked",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "workspaceId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["task-workspace.manifest.reconnected.trust-revoked"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "task-workspace-repository-registration",
           "requirementContract": "task-workspace-repository-registration",
           "productSurfaces": ["keiko-server"],
@@ -76400,7 +76516,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1975",
+      "site": "packages/keiko-server/src/deps.ts:1981",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76770,7 +76886,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4128",
+      "site": "packages/keiko-server/src/deps.ts:4170",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76796,7 +76912,7 @@
     {
       "op": "server.runtime.shutdown",
       "category": "process",
-      "site": "packages/keiko-server/src/deps-activity.ts:80",
+      "site": "packages/keiko-server/src/deps-activity.ts:101",
       "package": "keiko-server"
     },
     {
@@ -76891,9 +77007,15 @@
       "package": "keiko-server"
     },
     {
+      "op": "task-workspace.manifest.reconnected",
+      "category": "security",
+      "site": "packages/keiko-server/src/deps-activity.ts:80",
+      "package": "keiko-server"
+    },
+    {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2778",
+      "site": "packages/keiko-server/src/deps.ts:2820",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -77857,6 +77979,7 @@
     "support.query.failed",
     "task-workspace.identity.creation-time-probe",
     "task-workspace.lifecycle",
+    "task-workspace.manifest.reconnected",
     "task-workspace.reconcile.startup",
     "task-workspace.repository.registered",
     "task-workspace.repository.registration-refused",

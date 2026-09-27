@@ -721,7 +721,9 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
       "keiko",
     );
-    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent("dev");
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent(
+      "task-1",
+    );
     expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
@@ -780,6 +782,9 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent(
+      "task-1",
+    );
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 

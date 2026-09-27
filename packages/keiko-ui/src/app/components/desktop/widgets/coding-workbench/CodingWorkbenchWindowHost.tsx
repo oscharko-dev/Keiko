@@ -3,6 +3,7 @@
 import { useRef, type ReactNode } from "react";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
 
 function openGit(context: WindowRenderContext, target: CodingWorkbenchGitTarget): void {
   const { root, binding, repositoryDialog, descriptionReview } = target;
@@ -68,6 +69,10 @@ export function CodingWorkbenchWindowHost({
   const initialRoot = useRef(context.activeBinding === null ? context.selectedRoot : null);
   const root = cfgRoot ?? initialRoot.current;
   const targetBranch = resolvedTargetBranch(cfg, root);
+  const selectedLocation: WorkbenchExecutionLocation | undefined =
+    cfg.executionLocation === "local" || cfg.executionLocation === "worktree"
+      ? cfg.executionLocation
+      : undefined;
   return (
     <CodingWorkbenchWindow
       historySelection={typeof cfg.historySelection === "string" ? cfg.historySelection : undefined}
@@ -77,16 +82,23 @@ export function CodingWorkbenchWindowHost({
       onOpenHistory={() => context.openWindow("codingHistory")}
       selectedRoot={root ?? undefined}
       selectedBranch={targetBranch}
+      selectedLocation={selectedLocation}
       onSelectRepository={(repositoryPath) => {
         // #A review: a selection is local window state until Start, not a failure — routine
         // diagnostics were removed here (they showed up server-side as warn-level client
         // failures for an ordinary pick). The run-start request already carries the bound
         // repository and target branch for the operation that actually matters.
-        context.updateCfg({ repositoryPath, targetBranch: undefined, targetBranchRoot: undefined });
+        context.updateCfg({
+          repositoryPath,
+          targetBranch: undefined,
+          targetBranchRoot: undefined,
+          executionLocation: undefined,
+        });
       }}
       onSelectBranch={(branch) => {
         context.updateCfg({ targetBranch: branch, targetBranchRoot: root ?? undefined });
       }}
+      onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
       onOpenGit={(target) => openGit(context, target)}
     />
   );

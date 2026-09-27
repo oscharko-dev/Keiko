@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a9b3a9ee86385d1ecd1fa9ae594a9d99164f91685ada87feccea7ed5fac6f203"
+    "catalogDigest": "8b01da6157e615e17efaf6f703174c2116ebe260082a886c540ee038d738c02e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 464,
-    "proofCount": 472,
-    "resolvedProofCount": 472,
-    "failureClassCount": 321,
+    "operationCount": 465,
+    "proofCount": 473,
+    "resolvedProofCount": 473,
+    "failureClassCount": 322,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -558,7 +558,8 @@
         "support.incident.deduplicated",
         "support.incident.dismissed",
         "support.incident.expired",
-        "support.incident.rejected"
+        "support.incident.rejected",
+        "task-workspace.manifest.reconnected"
       ],
       "scenarios": [
         "lifecycle-crash.crash",
@@ -913,6 +914,7 @@
     "support-publication": ["runtime-packages.dependency-failure"],
     "support-publication-acknowledgement": ["runtime-packages.dependency-failure"],
     "task-workspace-lifecycle": ["tools-workflows.dependency-failure"],
+    "task-workspace-manifest-reconnect": ["lifecycle-crash.dependency-failure"],
     "task-workspace-repository-registration": ["tools-workflows.rejection"],
     "tool-catalog-binding": ["tools-workflows.dependency-failure"],
     "tool-catalog-binding-unavailable": ["tools-workflows.dependency-failure"],
@@ -2132,6 +2134,9 @@
     ],
     "task-workspace.lifecycle.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
+    ],
+    "task-workspace.manifest.reconnected.trust-revoked": [
+      "packages/keiko-server/src/deps-activity.test.ts"
     ],
     "task-workspace.repository.registered.restricted": [
       "packages/keiko-server/src/deps-activity.test.ts"

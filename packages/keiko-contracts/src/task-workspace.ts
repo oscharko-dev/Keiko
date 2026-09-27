@@ -621,6 +621,8 @@ export interface WorkspaceInstance {
   readonly repositoryRoot: string;
   readonly baseBranch: string;
   readonly taskBranch: string;
+  /** Omitted on existing managed task workspaces. A local checkout is the repository root itself. */
+  readonly executionLocation?: "local" | "worktree";
   readonly managedWorktreePath: string;
   readonly gitdirIdentity: string;
   readonly lifecycleState: TaskWorkspaceLifecycleState;
@@ -684,6 +686,7 @@ export const WORKSPACE_INSTANCE_ALLOWED_KEYS: readonly string[] = [
   "repositoryRoot",
   "baseBranch",
   "taskBranch",
+  "executionLocation",
   "managedWorktreePath",
   "gitdirIdentity",
   "lifecycleState",
@@ -719,6 +722,13 @@ export function validateWorkspaceInstance(input: unknown): TaskWorkspaceValidati
     if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
   }
   if (!isTaskWorkspaceLifecycleState(input.lifecycleState)) reasons.push("lifecycleState invalid");
+  if (
+    input.executionLocation !== undefined &&
+    input.executionLocation !== "local" &&
+    input.executionLocation !== "worktree"
+  ) {
+    reasons.push("executionLocation invalid");
+  }
   if (!isTaskWorkspaceHealth(input.health)) reasons.push("health invalid");
   if (input.lock !== null) validateWorkspaceLock(input.lock, reasons);
   if (input.lastVerifiedAt !== undefined && !isNonEmptyString(input.lastVerifiedAt)) {

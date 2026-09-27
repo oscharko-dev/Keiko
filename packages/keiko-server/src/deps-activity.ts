@@ -74,6 +74,27 @@ const TASK_WORKSPACE_REPOSITORY_REGISTERED_OPERATION = defineActivityLogOperatio
   releaseImpact: "patch",
 });
 
+const TASK_WORKSPACE_MANIFEST_RECONNECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "task-workspace.manifest.reconnected",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "deps-activity.logTaskWorkspaceManifestReconnected",
+  fields: {
+    workspaceId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    trustRevoked: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["task-workspace-manifest-reconnect"],
+  proofIds: ["task-workspace.manifest.reconnected.trust-revoked"],
+  releaseImpact: "patch",
+});
+
 const SERVER_RUNTIME_SHUTDOWN_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -277,6 +298,20 @@ export function logTaskWorkspaceRepositoryRegistration(
         completeness: "complete",
         loss: "none",
       },
+    ),
+  );
+}
+
+export function logTaskWorkspaceManifestReconnected(
+  sink: ServerLogSink,
+  correlationId: string | undefined,
+  workspaceId: string,
+): void {
+  sink.write(
+    activityLogEvent(
+      TASK_WORKSPACE_MANIFEST_RECONNECTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { workspaceId, trustRevoked: true, completeness: "complete", loss: "none" },
     ),
   );
 }

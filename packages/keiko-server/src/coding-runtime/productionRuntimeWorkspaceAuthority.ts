@@ -414,15 +414,16 @@ function qualifiedWorkspaceRoot(
   const active = canonicalRoot(activeRoot);
   const root = canonicalRoot(instance.managedWorktreePath);
   const rel = relative(managed, root);
+  const localCheckout =
+    instance.executionLocation === "local" &&
+    root === canonicalRoot(instance.repositoryRoot);
   if (
     request !== active ||
     active !== root ||
     instance.lifecycleState !== "active" ||
     instance.health !== "healthy" ||
     instance.driftMarkers.length !== 0 ||
-    rel === "" ||
-    rel === ".." ||
-    rel.startsWith(`..${sep}`)
+    (!localCheckout && (rel === "" || rel === ".." || rel.startsWith(`..${sep}`)))
   ) {
     invalidWorkspace("workspace-instance");
   }

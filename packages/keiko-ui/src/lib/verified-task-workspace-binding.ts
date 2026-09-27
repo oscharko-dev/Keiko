@@ -201,6 +201,9 @@ export async function restoreVerifiedActiveTaskWorkspace(
 ): Promise<ActiveWorkspaceView | null> {
   const active = await getActiveTaskWorkspace();
   if (active === null) return null;
+  // Local bindings are re-proved by the server on every active read. The managed-worktree
+  // reconciliation report intentionally has no entry for the selected checkout.
+  if (active.instance.executionLocation === "local") return active;
   if (active.instance.workspaceId === options.verifiedWorkspaceId) return active;
   const report = await reconcileTaskWorkspaces({ root: active.instance.repositoryRoot });
   // Re-read after the pass: reconciliation is the repair authority, so the settled view must be

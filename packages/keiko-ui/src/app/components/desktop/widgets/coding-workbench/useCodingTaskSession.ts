@@ -20,6 +20,7 @@ import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary"
 import { secureRandomId } from "@/lib/secure-random";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import type { ClientDiagnosticCodingHistoryScope } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
 
 export interface CodingTaskSession {
   readonly detail: CodingHistoryDetail | null;
@@ -36,6 +37,7 @@ interface SessionInput {
   readonly active: boolean;
   readonly workspace: ActiveWorkspaceApi | null;
   readonly root: string | undefined;
+  readonly location?: WorkbenchExecutionLocation;
   readonly selection: string | undefined;
   readonly onSelectionHandled?: (() => void) | undefined;
 }
@@ -60,7 +62,7 @@ interface TaskLoader {
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const input = {
     ...options,
-    root: options.workspace?.activeInstance?.repositoryRoot ?? options.root,
+    root: options.root ?? options.workspace?.activeInstance?.repositoryRoot,
   };
   const ignoredRun = useRef<string | undefined>(undefined);
   const latest = useRef(input);
@@ -317,6 +319,7 @@ function useNewTask(
 }
 
 async function provisionNewTask(current: SessionInput): Promise<boolean | undefined> {
+  if (current.location === "local") return true;
   const root = current.root ?? current.workspace?.activeInstance?.repositoryRoot;
   const baseBranch = current.workspace?.activeInstance?.baseBranch;
   return root !== undefined && baseBranch !== undefined

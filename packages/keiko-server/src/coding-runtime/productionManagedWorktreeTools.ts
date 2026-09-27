@@ -2145,7 +2145,7 @@ export type VerificationLivenessRefusal = "signal-aborted" | "guard-rejected" | 
 export function verificationLivenessRefusal(
   input: Pick<
     ProductionManagedWorktreeToolInput,
-    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt" | "workspaceRoot"
   >,
   guard: Pick<CodingToolMutationGuard, "check">,
   signal: AbortSignal | undefined,
@@ -2294,13 +2294,15 @@ function buildEgressAuthority(
 function live(
   input: Pick<
     ProductionManagedWorktreeToolInput,
-    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt" | "workspaceRoot"
   >,
 ): boolean {
   try {
     input.liveFacts();
+    const access = input.resolveWorkspaceRootAccess();
     return (
-      input.resolveWorkspaceRootAccess()?.kind === "managed-task" &&
+      access !== undefined &&
+      access.canonicalRoot === input.workspaceRoot &&
       Date.now() < Date.parse(input.authorityExpiresAt)
     );
   } catch {

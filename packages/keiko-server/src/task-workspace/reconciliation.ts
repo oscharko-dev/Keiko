@@ -573,8 +573,10 @@ function instancesFor(
   deps: WorkspaceReconciliationServiceDeps,
   repositoryRoot: string | undefined,
 ): readonly WorkspaceInstance[] {
-  if (repositoryRoot === undefined || repositoryRoot.length === 0) return deps.store.listAll();
-  return deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  const rows = repositoryRoot === undefined || repositoryRoot.length === 0
+    ? deps.store.listAll()
+    : deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  return rows.filter((instance) => instance.executionLocation !== "local");
 }
 
 // Live reconcile: group the in-scope instances by repository root so each repository's adapter is built

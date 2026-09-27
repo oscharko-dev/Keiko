@@ -92,11 +92,12 @@ export function repositoryName(root: string): string {
 const FolderIcon = Icons.folder;
 const BranchIcon = Icons.branch;
 
-function controlWidth(label: string): string {
-  return `${Math.min(Math.max(label.length + 10, 17), 36)}ch`;
+function controlWidth(label: string, maximum: number): string {
+  return `${Math.min(Math.max(label.length + 4, 13), maximum)}ch`;
 }
 
 type SelectorPlacement = "composer" | "setup";
+export type WorkbenchExecutionLocation = "local" | "worktree";
 
 interface RepositoryOption {
   readonly value: string;
@@ -136,6 +137,7 @@ function repositoryOptions(
 function chipTrigger(
   placement: SelectorPlacement,
   label: string,
+  maximum: number,
 ): {
   readonly triggerClassName: string | undefined;
   readonly triggerStyle: CSSProperties | undefined;
@@ -144,7 +146,7 @@ function chipTrigger(
     ? { triggerClassName: styles.cmpSetupSelectorTrigger, triggerStyle: undefined }
     : {
         triggerClassName: styles.cmpRepositorySelectorTrigger,
-        triggerStyle: { width: controlWidth(label) },
+        triggerStyle: { width: controlWidth(label, maximum) },
       };
 }
 
@@ -178,7 +180,7 @@ function RepositoryChip({
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.choose")}
       leadingVisual={<FolderIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label)}
+      {...chipTrigger(placement, label, 22)}
       showMenuHeader={false}
       menuPopoverMinWidth={280}
       menuPlacement="up"
@@ -255,7 +257,7 @@ function BranchChip({
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.chooseBranch")}
       leadingVisual={<BranchIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label)}
+      {...chipTrigger(placement, label, 26)}
       showMenuHeader={false}
       menuPopoverMinWidth={340}
       menuPopoverMaxHeight={280}
@@ -263,6 +265,38 @@ function BranchChip({
       searchPlaceholder={t("codingWorkbench.repository.searchBranch")}
       searchEmptyLabel={t("codingWorkbench.repository.noBranchMatches")}
       mono
+    />
+  );
+}
+
+function LocationChip({
+  location,
+  locked,
+  onSelect,
+  t,
+  placement,
+}: {
+  readonly location: WorkbenchExecutionLocation;
+  readonly locked: boolean;
+  readonly onSelect: (location: WorkbenchExecutionLocation) => void;
+  readonly t: CodingWorkbenchTranslate;
+  readonly placement: SelectorPlacement;
+}): ReactNode {
+  const local = t("codingWorkbench.repository.locationLocal");
+  const worktree = t("codingWorkbench.repository.locationWorktree");
+  const label = location === "local" ? local : worktree;
+  const LocationIcon = Icons.terminal;
+  return (
+    <KeikoSelect
+      value={location}
+      sections={[{ options: [{ value: "local", label: local }, { value: "worktree", label: worktree }] }]}
+      onValueChange={(value): void => onSelect(value === "worktree" ? "worktree" : "local")}
+      disabled={locked}
+      ariaLabel={t("codingWorkbench.repository.locationLabel")}
+      leadingVisual={<LocationIcon size={15} aria-hidden="true" />}
+      {...chipTrigger(placement, label, 22)}
+      showMenuHeader={false}
+      menuPlacement="up"
     />
   );
 }
@@ -429,6 +463,8 @@ interface CodingWorkbenchRepositorySelectorProps {
   readonly locked: boolean;
   readonly onSelect: (root: string) => void;
   readonly onSelectBranch: (branch: string) => void;
+  readonly location: WorkbenchExecutionLocation;
+  readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly onOpenGit: () => void;
   readonly placement?: SelectorPlacement;
 }
@@ -439,6 +475,8 @@ export function CodingWorkbenchRepositorySelector({
   locked,
   onSelect,
   onSelectBranch,
+  location,
+  onSelectLocation,
   onOpenGit,
   placement = "composer",
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
@@ -453,6 +491,15 @@ export function CodingWorkbenchRepositorySelector({
           locked={locked}
           catalog={catalog}
           onSelect={onSelect}
+          t={t}
+          placement={placement}
+        />
+      </SelectorField>
+      <SelectorField placement={placement} label={t("codingWorkbench.repository.locationLabel")}>
+        <LocationChip
+          location={location}
+          locked={locked || root === null}
+          onSelect={onSelectLocation}
           t={t}
           placement={placement}
         />

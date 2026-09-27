@@ -7494,6 +7494,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "task-workspace-manifest-reconnect",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["task-workspace.manifest.reconnected"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["task-workspace.manifest.reconnected"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["task-workspace.manifest.reconnected"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["task-workspace.manifest.reconnected"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "task-workspace-repository-registration",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

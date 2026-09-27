@@ -965,7 +965,12 @@ function runWorkspaceRootAccessResolver(
 ): () => WorkspaceRootAccess | undefined {
   return (): WorkspaceRootAccess | undefined => {
     const access = input.resolveWorkspaceRootAccess(context.workspaceRoot);
-    return access?.kind === "managed-task" && access.canonicalRoot === context.workspaceRoot
+    if (access?.canonicalRoot !== context.workspaceRoot) return undefined;
+    if (access.kind === "managed-task") return access;
+    const active = input.workspaceAuthority.workspaceLifecycle.getActive();
+    return active?.instance.executionLocation === "local" &&
+      active.instance.workspaceId === context.workspaceId &&
+      active.binding.activeRoot === context.workspaceRoot
       ? access
       : undefined;
   };

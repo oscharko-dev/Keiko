@@ -23,10 +23,10 @@ authority as the run's mode.
 **Root Cause**
 
 Every run is clamped to the installation's deployment ceiling before its Authority Envelope is
-minted: the effective mode is the lower of the selected mode and the ceiling. The shipped ceiling is
-`governed-assist` (Ask for approval), so a wider selection takes effect only once the installation
-raises its ceiling. The composer keeps the selection, so it applies to the next run that starts after
-the ceiling allows it. A run that is already live keeps the authority it was minted with.
+minted: the effective mode is the lower of the selected mode and the ceiling. All three modes are
+available by default. This notice means the installation explicitly set a narrower ceiling, or an
+invalid explicit ceiling failed closed to `governed-assist`. The composer keeps the selection for
+the next run. A run that is already live keeps the authority it was minted with.
 
 **Diagnostic Steps**
 
@@ -44,19 +44,18 @@ for what each mode allows.
 
 **Resolution**
 
-1. Decide which authority this installation may grant. The ceiling is part of the human-control
-   invariant: it is the local operator's decision, never a default to widen silently.
-2. Stop Keiko, then start it again with the ceiling set, for example:
+1. Check whether the installation explicitly configured a narrower ceiling. The user's selected
+   mode is the authority decision for each new run; a narrower installation policy still applies.
+2. If the narrower setting is unintended, remove it and restart Keiko. No ceiling setting is
+   required to offer all three modes. To impose a narrower ceiling deliberately, for example:
 
    ```bash
-   KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery keiko ui
+   KEIKO_CODING_DEPLOYMENT_CEILING=supervised-coding keiko ui
    ```
 
-   Accepted values are `governed-assist`, `supervised-coding` and `autonomous-delivery`; an
-   unrecognized value is ignored and the ceiling stays `governed-assist`. Select
-   `autonomous-delivery` when the installation operator explicitly wants all three modes available
-   for new Coding Workbench runs. Carry the setting forward on each restart; repository binding
-   and the composer selection do not raise the installation ceiling.
+   Accepted values are `governed-assist`, `supervised-coding` and `autonomous-delivery`. An
+   unrecognized explicit value fails closed to `governed-assist`. Repository binding and the
+   composer selection do not override an explicitly narrower installation ceiling.
 
 3. Start a new run. The composer no longer shows the limit notice, and `coding-runtime.run.started`
    reports the selected mode as the effective mode.

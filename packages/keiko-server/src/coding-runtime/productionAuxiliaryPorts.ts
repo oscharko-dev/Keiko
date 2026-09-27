@@ -167,7 +167,7 @@ function workspaceAuthorityCheckedRead(
 function hasExactWorkspaceAccess(input: WorkspaceBoundReadInput): boolean {
   try {
     const access = input.resolveWorkspaceRootAccess();
-    return access?.kind === "managed-task" && access.canonicalRoot === input.workspaceRoot;
+    return access !== undefined && access.canonicalRoot === input.workspaceRoot;
   } catch {
     return false;
   }

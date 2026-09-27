@@ -143,6 +143,18 @@ export async function setActiveTaskWorkspace(input: {
   });
 }
 
+export async function selectLocalCheckout(input: {
+  readonly root: string;
+  readonly branch: string;
+  readonly requestedBy: string;
+}): Promise<ActiveWorkspaceView> {
+  const body = await taskWorkspaceFetch<{ active: ActiveWorkspaceView }>(
+    "/api/task-workspaces/local",
+    { method: "POST", body: JSON.stringify(input) },
+  );
+  return body.active;
+}
+
 export async function clearActiveTaskWorkspace(): Promise<void> {
   await taskWorkspaceFetch<{ active: null }>("/api/task-workspaces/active", { method: "DELETE" });
 }

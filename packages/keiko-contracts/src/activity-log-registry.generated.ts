@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a9b3a9ee86385d1ecd1fa9ae594a9d99164f91685ada87feccea7ed5fac6f203" as const;
+  "8b01da6157e615e17efaf6f703174c2116ebe260082a886c540ee038d738c02e" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -26208,6 +26208,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "task-workspace.manifest.reconnected",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "deps-activity.logTaskWorkspaceManifestReconnected",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      workspaceId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      trustRevoked: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["task-workspace-manifest-reconnect"],
+    proofIds: ["task-workspace.manifest.reconnected.trust-revoked"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "task-workspace.repository.registered",
     category: "security",
     owner: "keiko-server",
@@ -28200,8 +28237,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 321,
-  completeClassCount: 321,
+  supportedClassCount: 322,
+  completeClassCount: 322,
   completeness: "complete",
   classes: [
     {
@@ -58744,6 +58781,62 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "task-workspace-manifest-reconnect",
+      requirementContract: "task-workspace-manifest-reconnect",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["task-workspace.manifest.reconnected"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "task-workspace.manifest.reconnected",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["task-workspace.manifest.reconnected"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "task-workspace.manifest.reconnected",
+          owner: "keiko-server",
+          category: "security",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "trustRevoked",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "workspaceId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["task-workspace.manifest.reconnected.trust-revoked"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "task-workspace-repository-registration",
       requirementContract: "task-workspace-repository-registration",
       productSurfaces: ["keiko-server"],
@@ -62701,6 +62794,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "support.query.failed": "runtime-packages",
     "task-workspace.identity.creation-time-probe": "tools-workflows",
     "task-workspace.lifecycle": "tools-workflows",
+    "task-workspace.manifest.reconnected": "lifecycle-crash",
     "task-workspace.repository.registered": "tools-workflows",
     "task-workspace.repository.registration-refused": "tools-workflows",
     "tool-catalog.bind-ready": "tools-workflows",
