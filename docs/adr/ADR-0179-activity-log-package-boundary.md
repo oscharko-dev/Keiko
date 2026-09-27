@@ -50,9 +50,9 @@ production logger, and appending a durable batch. The analyzer therefore reconst
 in that operation's timeline as well as in its failure cluster. A foreign or malformed owner slot
 and a `worker_threads` worker, which shares the pid but not the main realm's slot, fail closed the
 same way; their rejection cannot reach the winning writer, so it is counted in the loss ledger and
-reported on the independent stderr notice with the same correlation and `errorKind: conflict`. A
-`vm` context cannot be detected this way, so product code never opens a writer from one: worker and
-`vm` contexts hand their evidence to the main thread.
+reported on the independent stderr notice with the same correlation, `errorKind: conflict`, and
+the frames of the rejected call. A `vm` context cannot be detected this way, so product code never
+opens a writer from one: worker and `vm` contexts hand their evidence to the main thread.
 
 ### Route-template redaction
 

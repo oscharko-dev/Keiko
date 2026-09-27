@@ -70,7 +70,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "opaque-id",
       "safe-platform-class",
     ],
-    requiredFrameOperations: ["activity-log.writer-rejected"],
+    requiredFrameOperations: ["activity-log.writer-rejected", "server-log.write-failed"],
     requiredCauseOperations: [],
   },
   {
@@ -125,8 +125,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "count",
       "loss-state",
       "opaque-id",
+      "safe-platform-class",
     ],
-    requiredFrameOperations: [],
+    requiredFrameOperations: ["server-log.write-failed"],
     requiredCauseOperations: [],
   },
   {

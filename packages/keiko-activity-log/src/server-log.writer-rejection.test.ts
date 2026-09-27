@@ -30,6 +30,12 @@ import {
 const WRITER_OWNER_KEY = Symbol.for("@oscharko-dev/keiko-activity-log/process-writer-owner");
 const THIS_FILE_FRAME =
   /^packages\/keiko-activity-log\/src\/server-log\.writer-rejection\.test\.ts:\d+:\d+$/;
+const CLAIM_FRAME = /^packages\/keiko-activity-log\/src\/server-log\.ts:\d+:\d+$/;
+// A rejected claim's notice names the claim and the call that attempted it.
+const REJECTED_CLAIM_FRAMES = expect.arrayContaining([
+  expect.stringMatching(CLAIM_FRAME),
+  expect.stringMatching(THIS_FILE_FRAME),
+]) as unknown;
 
 interface OwnerSlot {
   readonly reject: (stateDir: string, rejected: unknown, correlationId: unknown) => void;
@@ -164,6 +170,7 @@ describe("Activity Log writer rejection inside one process", () => {
       errorKind: "conflict",
       failedOp: "activity-log.writer-rejected",
       loss: "event-dropped",
+      frames: REJECTED_CLAIM_FRAMES,
     });
   });
 
@@ -184,6 +191,7 @@ describe("Activity Log writer rejection inside one process", () => {
       correlationId: "no-log-claim",
       errorKind: "conflict",
       failedOp: "activity-log.writer-rejected",
+      frames: expect.arrayContaining([expect.stringMatching(THIS_FILE_FRAME)]) as unknown,
     });
   });
 
@@ -209,6 +217,7 @@ describe("Activity Log writer rejection inside one process", () => {
       correlationId: "worker-claim",
       errorKind: "conflict",
       failedOp: "activity-log.writer-rejected",
+      frames: REJECTED_CLAIM_FRAMES,
     });
   });
 });

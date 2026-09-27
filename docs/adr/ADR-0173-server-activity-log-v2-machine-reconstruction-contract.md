@@ -173,8 +173,9 @@ sink invocations, so the throttle hides the failure's _repetition_, never its _s
 notice travels a fixed **channel order**, each one independent of the one before it: the **file
 sink** is the primary write path and is what the notice reports on; failing that, the **stderr
 notice** carries the redacted classification (`op`, `failedOp`, `correlationId`, `errorKind`,
-`suppressedNotices`) to the process's stderr stream; and if `process.stderr.write` itself throws
-(a closed descriptor, a broken pipe — the stderr stream is not guaranteed writable either), the same
+`suppressedNotices`) and the failure's dist-anchored Keiko `frames` to the process's stderr
+stream; and if `process.stderr.write` itself throws (a closed descriptor, a broken pipe — the
+stderr stream is not guaranteed writable either), the same
 fields are re-surfaced through a third, independent channel: `process.emitWarning` with
 `code: "KEIKO_LOG_NOTICE_FAILED"`, which dispatches Node's `'warning'` event synchronously to any
 listener and does not depend on stderr being writable. That count is delivered one of two ways — on

@@ -449,6 +449,13 @@ const SERVER_LOG_FAILURE_OPERATION = defineActivityLogOperation({
   emitter: "server-log.failureNoticeEvent",
   fields: {
     failedOp: { type: "string", dataClass: "opaque-id", required: false, maxLength: 160 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
     rejectionKind: {
       type: "string",
       dataClass: "closed-enum",
@@ -690,6 +697,7 @@ function emitLogNoticeFailedWarning(notice: Record<string, unknown>): void {
         correlationId: notice.correlationId,
         errorKind: notice.errorKind,
         rejectionKind: notice.rejectionKind,
+        frames: notice.frames,
         writerCapability: notice.writerCapability,
         compatibilityState: notice.compatibilityState,
         completeness: notice.completeness,
@@ -740,6 +748,9 @@ function failureNoticeEvent(
   suppressed: number,
   rejectionKind: ActivityLogEventFailureKind | undefined,
 ): ServerLogEvent {
+  // The notice is the only evidence of a failure that never reached the log, so it keeps the
+  // failure's own dist-anchored Keiko frames: they name the call that failed.
+  const frames = keikoStackFrames(error);
   return activityLogEvent(
     SERVER_LOG_FAILURE_OPERATION,
     {
@@ -752,6 +763,7 @@ function failureNoticeEvent(
         ? { failedOp: redactLogLabel(context.op) }
         : {}),
       ...(rejectionKind === undefined ? {} : { rejectionKind }),
+      ...(frames.length === 0 ? {} : { frames }),
       completeness: "unknown",
       loss: context.loss ?? "event-dropped",
       ...(suppressed > 0 ? { suppressedNotices: suppressed } : {}),

@@ -29,11 +29,14 @@ import {
   ActivityLogEventValidationError,
   activityLogEvent,
   activityLogLossCounters,
+  activityLogOperationSchema,
   activityLogSegmentFileName,
+  attachActivityLogEventRegistration,
   defineActivityLogOperation,
   formatActivityLogSegmentId,
   parseActivityLogFileName,
   resetActivityLogLossCountersForTests,
+  type ActivityLogOperationRegistration,
   type ActivityLogSegmentIdentity,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
@@ -91,49 +94,15 @@ function invalidServerLogIdentity(
 }
 
 const TEST_EVENT_MARKER_PREFIX = "test-event:";
-const TEST_FILE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "server-log.write-failed",
-  category: "diagnostic",
-  owner: "keiko-activity-log",
-  emitter: "server-log.failureNoticeEvent",
-  fields: {
-    failedOp: { type: "string", dataClass: "opaque-id", required: false, maxLength: 160 },
-    rejectionKind: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "unregistered-operation",
-        "registration-mismatch",
-        "missing-identity",
-        "invalid-identity",
-        "fields-not-object",
-        "missing-field",
-        "unknown-field",
-        "invalid-field-type",
-        "invalid-field-bound",
-        "invalid-field-vocabulary",
-      ],
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["shutdown-flush"],
-    },
-    suppressedNotices: { type: "integer", dataClass: "count", required: false },
-  },
-  causal: "correlation",
-  lifecycle: "loss",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["activity-log-persistence", "activity-log-contract"],
-  proofIds: ["server-log.write-failed.stderr-line"],
-  releaseImpact: "patch",
-});
+// Test events travel as registered `server-log.write-failed` lines. The registration is the generated
+// registry's own entry, never a restated copy: a copy stops matching the moment the production
+// registration changes, and the sink then rejects every test write as a registration mismatch.
+function writeFailedRegistration(): ActivityLogOperationRegistration {
+  const registration = activityLogOperationSchema("server-log.write-failed");
+  if (registration === undefined) throw new Error("server-log.write-failed is not registered");
+  return registration;
+}
+const TEST_FILE_OPERATION = writeFailedRegistration();
 
 function testEventMarker(event: ServerLogEvent): string {
   return `${TEST_EVENT_MARKER_PREFIX}${event.category}:${event.op}`.slice(0, 160);
@@ -144,21 +113,21 @@ function registeredTestEvent(event: ServerLogEvent): ServerLogEvent {
     event.correlationId !== undefined && /^[A-Za-z0-9._-]{8,128}$/u.test(event.correlationId)
       ? event.correlationId
       : "server-log-test-event";
-  return activityLogEvent(
-    TEST_FILE_OPERATION,
-    {
-      ...(event.level === undefined ? {} : { level: event.level }),
-      correlationId,
-      ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
-      ...(event.status === undefined ? {} : { status: event.status }),
-      errorKind: "write-failed",
-    },
-    {
+  const wrapped: ServerLogEvent = {
+    ...(event.level === undefined ? {} : { level: event.level }),
+    category: "diagnostic",
+    op: TEST_FILE_OPERATION.op,
+    correlationId,
+    ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+    ...(event.status === undefined ? {} : { status: event.status }),
+    errorKind: "write-failed",
+    extra: {
       failedOp: testEventMarker(event),
       completeness: "unknown",
       loss: "event-dropped",
     },
-  );
+  };
+  return attachActivityLogEventRegistration(wrapped, TEST_FILE_OPERATION);
 }
 
 function createFileServerLogSink(
@@ -552,8 +521,8 @@ const WRITER_WORKER_SOURCE = `
 const [moduleUrl, contractsUrl, stateDir, workerId, count, mode, pinMode, lifetimeMs, parentPid] =
   process.argv.slice(1);
 const { createFileServerLogSink, pinActivityLogWindow } = await import(moduleUrl);
-const { activityLogEvent, defineActivityLogOperation } = await import(contractsUrl);
-const operation = defineActivityLogOperation(${JSON.stringify(TEST_FILE_OPERATION)});
+const { activityLogEvent, activityLogOperationSchema } = await import(contractsUrl);
+const operation = activityLogOperationSchema(${JSON.stringify(TEST_FILE_OPERATION.op)});
 const event = (index) => activityLogEvent(operation, {
   level: "error",
   correlationId: "worker-" + workerId + "-events",
@@ -1200,6 +1169,15 @@ describe("server activity log", () => {
       expect(calls[0]?.[1]).toMatchObject({ code: "KEIKO_LOG_NOTICE_FAILED" });
       const options = calls[0]?.[1] as { detail?: string } | undefined;
       expect(options?.detail).toContain("job-42-correlation");
+      // The last channel still names the failed call through its dist-anchored Keiko frames.
+      const detail = JSON.parse(options?.detail ?? "{}") as { readonly frames?: unknown };
+      expect(detail.frames).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^packages\/keiko-activity-log\/src\/server-log\.test\.ts:\d+:\d+$/,
+          ),
+        ]),
+      );
       // Body-free: the thrown pipe error's own text must never reach the warning.
       expect(JSON.stringify(warn.mock.calls)).not.toContain("broken pipe");
     } finally {

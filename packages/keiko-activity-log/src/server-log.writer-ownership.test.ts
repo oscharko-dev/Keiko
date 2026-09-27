@@ -380,11 +380,16 @@ async function exerciseForeignSlot(): Promise<void> {
     ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
     REJECTED_CALL.pin,
   ]);
+  const rejectedCall = expect.arrayContaining([
+    expect.stringMatching(rejectedClaimFrame("dist-first")),
+    expect.stringMatching(CALLER_FRAME),
+  ]) as unknown;
   for (const notice of notices) {
     expect(notice).toMatchObject({
       errorKind: "conflict",
       failedOp: "activity-log.writer-rejected",
       loss: "event-dropped",
+      frames: rejectedCall,
     });
   }
 }
@@ -392,18 +397,43 @@ async function exerciseForeignSlot(): Promise<void> {
 // A worker thread shares the pid but not the main realm's owner slot, so it must never open a writer.
 const WORKER_WRITER_ATTEMPT = `
 const { parentPort, workerData } = require("node:worker_threads");
-import(workerData.moduleUrl).then(
-  (writer) => {
-    try {
-      writer.createFileServerLogSink(workerData.stateDir, { level: "debug" });
-      parentPort.postMessage({ outcome: "opened" });
-    } catch (error) {
-      parentPort.postMessage({ outcome: "rejected", name: error.name });
-    }
+Promise.all([import(workerData.moduleUrl), import(workerData.writerUrl)]).then(
+  ([activityLog, writer]) => {
+    const outcomes = [];
+    const attempt = (open) => {
+      try {
+        open();
+        outcomes.push("opened");
+      } catch (error) {
+        outcomes.push(error.name);
+      }
+    };
+    attempt(() => activityLog.createFileServerLogSink(workerData.stateDir, { level: "debug" }));
+    // Lift the notice throttle so the second rejection is reported rather than only counted.
+    writer.resetServerLogFailureNotices();
+    attempt(() =>
+      writer.pinActivityLogWindow(workerData.stateDir, {
+        scope: { kind: "window", fromMs: Date.now() - 1000, toMs: Date.now() + 1000 },
+        expiresAtMs: Date.now() + 60000,
+        correlationId: workerData.correlationId,
+      }),
+    );
+    parentPort.postMessage({ outcomes });
   },
-  (error) => parentPort.postMessage({ outcome: "load-failed", name: String(error) }),
+  (error) => parentPort.postMessage({ outcomes: ["load-failed", String(error)] }),
 );
 `;
+
+// The notices a worker writes to its own stderr, collected until that stream ends with the worker.
+async function workerStderrLines(worker: Worker): Promise<readonly string[]> {
+  const chunks: string[] = [];
+  worker.stderr.setEncoding("utf8");
+  for await (const chunk of worker.stderr) chunks.push(String(chunk));
+  return chunks
+    .join("")
+    .split("\n")
+    .filter((line) => line.length > 0);
+}
 
 function runIsolated(order: ChildMode): void {
   const run = spawnSync(
@@ -457,12 +487,42 @@ describe("process-wide Activity Log writer ownership", () => {
     roots.push(stateDir);
     const worker = new Worker(WORKER_WRITER_ATTEMPT, {
       eval: true,
-      workerData: { moduleUrl: DIST_ROOT_URL, stateDir },
+      stderr: true,
+      workerData: {
+        moduleUrl: DIST_ROOT_URL,
+        writerUrl: DIST_MODULE_URL,
+        stateDir,
+        correlationId: REJECTED_CALL.pin,
+      },
     });
     try {
+      const notices = workerStderrLines(worker);
       const [message] = (await once(worker, "message")) as [unknown];
-      expect(message).toEqual({ outcome: "rejected", name: "ActivityLogWriterOwnershipError" });
+      expect(message).toEqual({
+        outcomes: ["ActivityLogWriterOwnershipError", "ActivityLogWriterOwnershipError"],
+      });
       expect(existsSync(join(stateDir, "logs"))).toBe(false);
+      // The rejection cannot reach the main thread's writer, so the worker's own stderr notice
+      // carries the rejected call's correlation, closed error kind and the built claim's frames.
+      const { expectActivityLogStderrProof } =
+        await import("../../../tests/support/activity-log-proof.js");
+      const reported = (await notices).map((line) =>
+        expectActivityLogStderrProof("server-log.write-failed.stderr-line", line),
+      );
+      expect(reported.map((notice) => notice.correlationId)).toEqual([
+        ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        REJECTED_CALL.pin,
+      ]);
+      for (const notice of reported) {
+        expect(notice).toMatchObject({
+          errorKind: "conflict",
+          failedOp: "activity-log.writer-rejected",
+          loss: "event-dropped",
+          frames: expect.arrayContaining([
+            expect.stringMatching(rejectedClaimFrame("source-first")),
+          ]) as unknown,
+        });
+      }
     } finally {
       await worker.terminate();
     }

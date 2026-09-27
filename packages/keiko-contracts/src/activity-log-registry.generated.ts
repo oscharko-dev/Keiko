@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ea47cc77f1d9aead41c3ada3cbd0162f8671b7543c00ee55113428994f57700e" as const;
+  "f0b50aa0bad69811a00f32b158470c644dfd9960fa174cf7d1a0acf3038de8a2" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -24191,6 +24191,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 160,
       },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
       rejectionKind: {
         type: "string",
         dataClass: "closed-enum",
@@ -28361,6 +28368,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
               name: "reason",
               type: "string",
               dataClass: "closed-enum",
@@ -28385,9 +28398,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "count",
             "loss-state",
             "opaque-id",
+            "safe-platform-class",
           ],
           frameCauseEvidence: {
-            frames: false,
+            frames: true,
             causeChain: false,
           },
           proofIds: ["server-log.write-failed.stderr-line"],
@@ -28679,6 +28693,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
               name: "reason",
               type: "string",
               dataClass: "closed-enum",
@@ -28703,9 +28723,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "count",
             "loss-state",
             "opaque-id",
+            "safe-platform-class",
           ],
           frameCauseEvidence: {
-            frames: false,
+            frames: true,
             causeChain: false,
           },
           proofIds: ["server-log.write-failed.stderr-line"],
