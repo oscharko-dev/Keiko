@@ -13,7 +13,12 @@ import type { ChatGitChangeScope } from "./store/index.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 
 const FIXTURE_NOW = Date.parse("2026-09-05T12:00:00.000Z");
-const GIT_EXECUTABLE = process.env.KEIKO_TEST_GIT_EXECUTABLE?.trim() || "git";
+const GIT_EXECUTABLE = testGitExecutable();
+
+function testGitExecutable(): string {
+  const configured = process.env.KEIKO_TEST_GIT_EXECUTABLE?.trim();
+  return configured === undefined || configured.length === 0 ? "git" : configured;
+}
 
 function git(root: string, args: readonly string[]): string {
   return execFileSync(GIT_EXECUTABLE, args, {

@@ -33,7 +33,12 @@ import type { DraftDeliveryRunContext, DraftDeliveryServiceOptions } from "./dra
 
 const DIGEST = "a".repeat(64);
 const REPOSITORY = "owner/repository";
-const GIT_EXECUTABLE = process.env.KEIKO_TEST_GIT_EXECUTABLE?.trim() || "git";
+const GIT_EXECUTABLE = testGitExecutable();
+
+function testGitExecutable(): string {
+  const configured = process.env.KEIKO_TEST_GIT_EXECUTABLE?.trim();
+  return configured === undefined || configured.length === 0 ? "git" : configured;
+}
 
 function gitTestProcessEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? "" };
@@ -322,6 +327,22 @@ export class DraftDeliveryFixture {
       },
     };
   }
+  private makeMutationDeps(): DraftDeliveryServiceOptions["mutationDeps"] {
+    return {
+      redactor: (value): unknown => value,
+      evidenceStore: {
+        put: (id, body): string => {
+          this.evidence.set(id, body);
+          return id;
+        },
+        get: (id): string | undefined => this.evidence.get(id),
+        list: (): readonly string[] => [...this.evidence.keys()],
+        delete: (id): void => {
+          this.evidence.delete(id);
+        },
+      },
+    };
+  }
   private makeOptions(): DraftDeliveryServiceOptions {
     const activityLog = {
       write: (event: ServerLogEvent): void => {
@@ -342,20 +363,7 @@ export class DraftDeliveryFixture {
         approvalStore: createInMemoryGitDeliveryApprovalStore(),
         processEnv: gitTestProcessEnv(),
       },
-      mutationDeps: {
-        redactor: (value): unknown => value,
-        evidenceStore: {
-          put: (id, body): string => {
-            this.evidence.set(id, body);
-            return id;
-          },
-          get: (id): string | undefined => this.evidence.get(id),
-          list: (): readonly string[] => [...this.evidence.keys()],
-          delete: (id): void => {
-            this.evidence.delete(id);
-          },
-        },
-      },
+      mutationDeps: this.makeMutationDeps(),
       onChanged: (record): void => {
         this.changes.push(record);
       },
