@@ -6,4 +6,7 @@ export {
   resetServerLogger,
 } from "../../packages/keiko-activity-log/dist/server-logger.js";
 export { resetServerLogFailureNotices } from "../../packages/keiko-activity-log/dist/server-log.js";
-export { setSupportIncidentTriggerForTests } from "../../packages/keiko-activity-log/dist/support-incident.js";
+export {
+  drainSupportIncidentCandidates,
+  setSupportIncidentTriggerForTests,
+} from "../../packages/keiko-activity-log/dist/support-incident.js";
