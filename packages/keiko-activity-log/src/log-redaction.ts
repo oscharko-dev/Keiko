@@ -95,6 +95,7 @@ export type ActivityLogRouteRedactor = (pathname: string, maxLength: number) => 
 
 const FAIL_CLOSED_ROUTE_REDACTOR: ActivityLogRouteRedactor = () => undefined;
 let activityLogRouteRedactor: ActivityLogRouteRedactor = FAIL_CLOSED_ROUTE_REDACTOR;
+let activityLogRouteRedactorId: string | undefined;
 
 export class ActivityLogRouteRedactorConflictError extends Error {
   public override readonly name = "ActivityLogRouteRedactorConflictError";
@@ -105,23 +106,29 @@ export class ActivityLogRouteRedactorConflictError extends Error {
 }
 
 /**
- * Installs the server-owned route-template reducer without importing the server graph. Until a
- * composition root configures it, every path-shaped value is replaced by REDACTED_PATH, so a process
- * that never loads the server (the CLI support commands) fails closed. The first configuration wins:
- * repeating it with the same reducer is a no-op, and a different reducer throws instead of silently
- * replacing the redaction every later line depends on.
+ * Installs a composition root's route-template reducer without importing its module graph. Until one
+ * is configured, every path-shaped value is replaced by REDACTED_PATH, so a process that never loads
+ * the server (the CLI support commands) fails closed. `id` names the reducer rather than the
+ * function object, because a source copy and a built copy of the same composition root carry
+ * distinct but identical functions. The first configuration wins: the same id again keeps the
+ * installed reducer, and a different id throws instead of silently replacing the redaction every
+ * later line depends on.
  */
-export function configureActivityLogRouteRedactor(redactor: ActivityLogRouteRedactor): void {
-  if (activityLogRouteRedactor === redactor) return;
-  if (activityLogRouteRedactor !== FAIL_CLOSED_ROUTE_REDACTOR) {
-    throw new ActivityLogRouteRedactorConflictError();
-  }
+export function configureActivityLogRouteRedactor(
+  id: string,
+  redactor: ActivityLogRouteRedactor,
+): void {
+  if (id.length === 0) throw new TypeError("An Activity Log route redactor needs a non-empty id.");
+  if (activityLogRouteRedactorId === id) return;
+  if (activityLogRouteRedactorId !== undefined) throw new ActivityLogRouteRedactorConflictError();
+  activityLogRouteRedactorId = id;
   activityLogRouteRedactor = redactor;
 }
 
 /** Restores the package's fail-closed default. A test seam: never exported by the package root. */
 export function resetActivityLogRouteRedactor(): void {
   activityLogRouteRedactor = FAIL_CLOSED_ROUTE_REDACTOR;
+  activityLogRouteRedactorId = undefined;
 }
 
 // A log field value is an identifier, a code, a host or a status — never prose. 160 characters is

@@ -24,7 +24,10 @@ import {
   resetActivityLogRouteRedactor,
 } from "./log-redaction.js";
 import { ACTIVITY_LOG_FRAME_FIELD_NAME } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { redactRoutePath } from "../../keiko-server/src/observability/route-template.js";
+import {
+  redactRoutePath,
+  ROUTE_TEMPLATE_REDACTOR_ID,
+} from "../../keiko-server/src/observability/route-template.js";
 
 // Credential-shaped fixtures are ASSEMBLED at runtime, never written as literals. A literal here
 // is a genuine finding for the repository secret scanner, and silencing that scanner to keep a
@@ -38,7 +41,7 @@ const AWS_ACCESS_KEY_ID = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
 
 describe("log field redaction", () => {
   beforeEach(() => {
-    configureActivityLogRouteRedactor(redactRoutePath);
+    configureActivityLogRouteRedactor(ROUTE_TEMPLATE_REDACTOR_ID, redactRoutePath);
   });
 
   afterEach(() => {

@@ -54,11 +54,13 @@ the main thread.
 The route vocabulary stays with the server. The package's redaction replaces every path-shaped value
 with `REDACTED_PATH` until a composition root installs a reducer through
 `configureActivityLogRouteRedactor`; the server installs `redactRoutePath` when its observability
-module loads. The first configuration wins: repeating it with the same reducer is a no-op, and a
-different reducer throws `ActivityLogRouteRedactorConflictError` instead of silently replacing path
-redaction. A process that never loads the server, such as the CLI support commands, keeps the
-fail-closed default, so the operations it emits carry only closed values, counts, identifiers, and
-digests, never a field that depends on route-template reduction.
+module loads. Each installation names its reducer with a stable id (`keiko-server/route-template`),
+because a source copy and a built copy of the server carry distinct but identical functions. The
+first configuration wins: the same id again keeps the installed reducer, and a different id throws
+`ActivityLogRouteRedactorConflictError` instead of silently replacing path redaction. A process that
+never loads the server, such as the CLI support commands, keeps the fail-closed default, so the
+operations it emits carry only closed values, counts, identifiers, and digests, never a field that
+depends on route-template reduction.
 
 ### Composition boundaries
 

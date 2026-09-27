@@ -32,7 +32,7 @@ import {
   REDACTED_PATH,
   type ServerLogSink,
 } from "@oscharko-dev/keiko-activity-log";
-import { redactRoutePath } from "./observability/route-template.js";
+import { redactRoutePath, ROUTE_TEMPLATE_REDACTOR_ID } from "./observability/route-template.js";
 import { CORRELATION_RESPONSE_HEADER, resolveCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
@@ -42,7 +42,7 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 
-configureActivityLogRouteRedactor(redactRoutePath);
+configureActivityLogRouteRedactor(ROUTE_TEMPLATE_REDACTOR_ID, redactRoutePath);
 
 // Canonical values live in the contracts leaf (GEN-PERF-CLI-001) so the CLI can
 // read them without loading this module graph; imported and re-exported here so
