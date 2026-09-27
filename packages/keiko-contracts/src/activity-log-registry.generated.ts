@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8b01da6157e615e17efaf6f703174c2116ebe260082a886c540ee038d738c02e" as const;
+  "7f97b2de46eb90722332b00dde5b6153f3c123711ffe6a00b694a10194a073b0" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4574,6 +4574,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "process-lifecycle",
     failureClasses: ["coding-editor-mutation"],
     proofIds: ["coding-runtime.editor-mutation.settled.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-runtime.editor-review.decided",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "coding-runtime.productionManagedWorktreeTools.editorReviewRequirement",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      mode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+      },
+      risk: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["medium"],
+      },
+      disposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["allowed", "review-required"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["coding-editor-mutation"],
+    proofIds: ["coding-runtime.editor-review.decided.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -32186,10 +32230,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "coding-editor-mutation",
       requirementContract: "coding-editor-mutation",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end", "failure"],
+      lifecycleTransitions: ["end", "failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: [],
+        state: ["coding-runtime.editor-review.decided"],
         end: ["coding-runtime.editor-mutation.settled"],
         failure: ["coding-runtime.edit.refused"],
         loss: [],
@@ -32203,9 +32247,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "coding-runtime.editor-mutation.settled",
           mode: "correlation",
         },
+        {
+          op: "coding-runtime.editor-review.decided",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.editor-mutation.settled"],
+      resourceSignals: [
+        "coding-runtime.editor-mutation.settled",
+        "coding-runtime.editor-review.decided",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -32265,6 +32316,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.editor-mutation.settled.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.editor-review.decided",
+          owner: "keiko-server",
+          category: "security",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "disposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "mode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "risk",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.editor-review.decided.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -62438,6 +62525,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.dev-lane.refused": "tools-workflows",
     "coding-runtime.edit.refused": "tools-workflows",
     "coding-runtime.editor-mutation.settled": "tools-workflows",
+    "coding-runtime.editor-review.decided": "tools-workflows",
     "coding-runtime.event.dropped": "tools-workflows",
     "coding-runtime.follow-up.dispatch-failed": "tools-workflows",
     "coding-runtime.history": "tools-workflows",

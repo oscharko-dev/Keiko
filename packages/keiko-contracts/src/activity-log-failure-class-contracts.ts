@@ -892,7 +892,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: [],
+      state: ["coding-runtime.editor-review.decided"],
       end: ["coding-runtime.editor-mutation.settled"],
       // #3610: a governed edit refusal is a warn-level decision line, never a server failure.
       failure: ["coding-runtime.edit.refused"],
@@ -901,14 +901,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "coding-runtime.edit.refused",
       "coding-runtime.editor-mutation.settled",
+      "coding-runtime.editor-review.decided",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "coding-runtime.edit.refused",
       "coding-runtime.editor-mutation.settled",
+      "coding-runtime.editor-review.decided",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["coding-runtime.editor-mutation.settled"],
+    requiredResourceOperations: [
+      "coding-runtime.editor-mutation.settled",
+      "coding-runtime.editor-review.decided",
+    ],
     requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],

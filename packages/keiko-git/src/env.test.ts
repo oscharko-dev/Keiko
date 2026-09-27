@@ -11,6 +11,8 @@ describe("gitEnv", () => {
     expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
     expect(env.GIT_OPTIONAL_LOCKS).toBe("0");
+    expect(env.GIT_NO_LAZY_FETCH).toBe("1");
+    expect(env.GIT_ALLOW_PROTOCOL).toBe("");
     if (process.platform !== "win32") {
       expect(env.HOME).toBe("/nonexistent");
       expect(env.XDG_CONFIG_HOME).toBe("/nonexistent");

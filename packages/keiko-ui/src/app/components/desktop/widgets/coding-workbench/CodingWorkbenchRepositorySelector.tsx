@@ -502,6 +502,38 @@ function LocationSelectorField({
   );
 }
 
+function BranchSelectorField({
+  root,
+  branch,
+  locked,
+  state,
+  onSelect,
+  placement,
+  t,
+}: {
+  readonly root: string | null;
+  readonly branch: string | null;
+  readonly locked: boolean;
+  readonly state: RepositoryBranchState;
+  readonly onSelect: (branch: string) => void;
+  readonly placement: SelectorPlacement;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <SelectorField placement={placement} label={t("codingWorkbench.repository.branchLabel")}>
+      <BranchChip
+        root={root}
+        branch={branch}
+        locked={locked}
+        branchState={state}
+        onSelect={onSelect}
+        t={t}
+        placement={placement}
+      />
+    </SelectorField>
+  );
+}
+
 export function CodingWorkbenchRepositorySelector({
   root,
   branch,
@@ -535,17 +567,15 @@ export function CodingWorkbenchRepositorySelector({
         t={t}
         placement={placement}
       />
-      <SelectorField placement={placement} label={t("codingWorkbench.repository.branchLabel")}>
-        <BranchChip
-          root={root}
-          branch={branch}
-          locked={branchLocked}
-          branchState={branchState}
-          onSelect={onSelectBranch}
-          t={t}
-          placement={placement}
-        />
-      </SelectorField>
+      <BranchSelectorField
+        root={root}
+        branch={branch}
+        locked={branchLocked}
+        state={branchState}
+        onSelect={onSelectBranch}
+        t={t}
+        placement={placement}
+      />
       <SelectorRecovery
         placement={placement}
         root={root}

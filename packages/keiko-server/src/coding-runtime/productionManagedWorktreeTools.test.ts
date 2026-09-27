@@ -589,6 +589,7 @@ describe("production managed worktree tools", () => {
     "derives editor review policy for %s (requiresReview=%s)",
     async (effectiveMode: CodingWorkbenchMode, requiresReview: boolean) => {
       const order: string[] = [];
+      const activity: ServerLogEvent[] = [];
       const register = vi.fn((): boolean => {
         order.push("register");
         return true;
@@ -635,6 +636,7 @@ describe("production managed worktree tools", () => {
           discard: vi.fn((): boolean => true),
           waitForMutation: () => Promise.resolve("succeeded"),
         },
+        activityLog: { write: (event): void => void activity.push(event) },
         invocationRegistry: createCodingToolInvocationRegistry(),
         verificationRunner: { runToReport: vi.fn() },
         onRuntimeEvent: vi.fn(),
@@ -656,6 +658,19 @@ describe("production managed worktree tools", () => {
       ).resolves.toMatchObject({ status: "completed" });
       expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview }));
       expect(order).toEqual(["register", "action"]);
+      const reviewDecision = activity.find(
+        (event) => event.op === "coding-runtime.editor-review.decided",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.editor-review.decided.emitted-line",
+          formatActivityLogProofLine(reviewDecision ?? {}),
+        ),
+      ).toMatchObject({
+        mode: effectiveMode,
+        risk: "medium",
+        disposition: requiresReview ? "review-required" : "allowed",
+      });
     },
   );
 
