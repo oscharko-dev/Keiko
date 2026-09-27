@@ -1200,3 +1200,29 @@ it.each(["started", "succeeded", "failed"])(
     ).toBe(true);
   },
 );
+
+describe.each(["repository-clone", "repository-register"])(
+  "%s lifecycle join keys",
+  (operation) => {
+    it.each(["started", "succeeded", "failed"])("rejects unsafe IDs for %s", (outcome) => {
+      for (const correlationId of ["x", "1234567", "unsafe id", "unsafe/id", "x".repeat(129)]) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            correlationId,
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(false);
+      }
+      for (const correlationId of ["12345678", "ui.repository-0001_test", "x".repeat(128)]) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            correlationId,
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(true);
+      }
+    });
+  },
+);

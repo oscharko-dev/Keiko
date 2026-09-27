@@ -833,7 +833,9 @@ An active dialog reports `client.git-operation.settled` with `succeeded` or `fai
 retain `client.diagnostic` with structured error evidence. Actual dismissal retains
 `discarded-succeeded`/`discarded-failed`; React effect replay is not dismissal. The existing
 ingest transport, routine/failure budgets, loss reporting and closed operation/outcome validation
-apply to all of these reports. No repository path or remote URL enters the evidence.
+apply to all of these reports. The new active lifecycle outcomes require a correlation id accepted
+by the canonical Activity Log guard; malformed ids are rejected instead of assigning unrelated
+ingest identities to the attempt and settlement. No repository path or remote URL enters the evidence.
 
 Wave 5 closes the gap between "a request line exists" and "a request line is enough to reproduce the
 request":

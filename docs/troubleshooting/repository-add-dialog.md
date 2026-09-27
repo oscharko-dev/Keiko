@@ -31,3 +31,6 @@ Apply the dialog lifecycle fix and reopen the dialog. An already registered repo
 selected from the repository list. Before repeating a clone, check for the completed destination.
 The fix resets the guard on effect setup, preserves dismissal protection, surfaces failures with
 retry available, and records the attempt and settlement through the existing Activity Log.
+
+New repository lifecycle reports reject missing or malformed correlation ids at ingest; they never
+fallback to independently generated ingest ids that cannot join an attempt to its settlement.

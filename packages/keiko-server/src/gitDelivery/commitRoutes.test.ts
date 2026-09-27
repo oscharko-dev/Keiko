@@ -2524,3 +2524,66 @@ it("accepts a generated DCO signoff under the configured message policy", async 
     expect.stringContaining("\nSigned-off-by: Dev <dev@example.invalid>"),
   );
 });
+
+async function smallestDraftContextWindow(): Promise<number> {
+  const handler = createHandleCommitDraft({
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/a b/a"),
+    }),
+  });
+  let low = 1;
+  let high = 8192;
+  while (low < high) {
+    const contextWindow = Math.floor((low + high) / 2);
+    const result = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: {
+          ...DRAFT_GATEWAY_CONFIG,
+          capabilities: [{ ...DRAFT_MODEL_CAPABILITY, contextWindow }],
+        },
+        modelPortFactory: () =>
+          draftModelPort(() =>
+            draftResponse({ subject: "fix: update behavior", body: "Update behavior." }),
+          ),
+      }),
+    );
+    if (result.status === 200) high = contextWindow;
+    else low = contextWindow + 1;
+  }
+  return low;
+}
+
+it("preserves the model failure when only its repair prompt exceeds context", async () => {
+  // Derive the boundary through the actual route, never a copy of its token-budget formula.
+  const contextWindow = await smallestDraftContextWindow();
+  const events: ServerLogEvent[] = [];
+  const call = vi.fn(() => draftResponse({ subject: "", body: "Unusable draft." }));
+  const handler = createHandleCommitDraft({
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/a b/a"),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    }),
+  });
+  const result = await handler(
+    ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+    deps({
+      config: {
+        ...DRAFT_GATEWAY_CONFIG,
+        capabilities: [{ ...DRAFT_MODEL_CAPABILITY, contextWindow }],
+      },
+      modelPortFactory: () => draftModelPort(call),
+    }),
+  );
+  expect(call).toHaveBeenCalledOnce();
+  expect(result.body).toMatchObject({
+    error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
+  });
+  expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+    extra: { failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT", generationAttempts: 1 },
+  });
+});

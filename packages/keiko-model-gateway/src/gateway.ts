@@ -1297,23 +1297,7 @@ export class Gateway {
     const opened = await executeWithRetry(
       async (_attemptMs, remainingMs) => {
         if (attempt++ > 0) breaker.assertAllowed(ids.correlationId);
-        const bounds = chatStreamBounds(route.provider);
-        const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
-        const iterator = this.reservedStreamAttempt(adapter, request, route, ids, {
-          budgetMs,
-          silenceMs: Math.min(bounds.silenceMs, budgetMs),
-        });
-        try {
-          let first = await iterator.next();
-          while (!first.done && first.value.type === "delta" && first.value.token.length === 0) {
-            first = await iterator.next();
-          }
-          if (first.done) throw new TransportError("provider stream ended without an answer");
-          return { first: first.value, iterator };
-        } catch (error) {
-          await iterator.return(undefined);
-          throw error;
-        }
+        return this.openStreamAttempt(adapter, request, route, ids, remainingMs);
       },
       {
         ...providerRetryConfig(route.provider),
@@ -1324,12 +1308,43 @@ export class Gateway {
       request.cancellationSignal,
       this.random,
       { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
-    );
+    ).catch((error: unknown) => {
+      // Cancellation or budget exhaustion can precede the first callback. Only that path still
+      // owns the initial admission; attempted reads settle their own probe exactly once.
+      if (attempt === 0) breaker.recordNonProviderFault();
+      throw error;
+    });
     try {
       yield opened.first;
       yield* opened.iterator;
     } finally {
       await opened.iterator.return(undefined);
+    }
+  }
+
+  private async openStreamAttempt(
+    adapter: ProviderAdapter,
+    request: GatewayCallRequest,
+    route: RoutedCall,
+    ids: CallIds,
+    remainingMs: number | undefined,
+  ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
+    const bounds = chatStreamBounds(route.provider);
+    const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
+    const iterator = this.reservedStreamAttempt(adapter, request, route, ids, {
+      budgetMs,
+      silenceMs: Math.min(bounds.silenceMs, budgetMs),
+    });
+    try {
+      let first = await iterator.next();
+      while (!first.done && first.value.type === "delta" && first.value.token.length === 0) {
+        first = await iterator.next();
+      }
+      if (first.done) throw new TransportError("provider stream ended without an answer");
+      return { first: first.value, iterator };
+    } catch (error) {
+      await iterator.return(undefined);
+      throw error;
     }
   }
 
@@ -1344,6 +1359,7 @@ export class Gateway {
     let admitted = false;
     let usage: UsageMetadata | undefined;
     let received = false;
+    let settled = false;
     try {
       reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       admitted = true;
@@ -1354,18 +1370,24 @@ export class Gateway {
         ids,
         bounds,
       )) {
-        received ||= chunk.type === "done" || chunk.token.length > 0;
-        if (chunk.type === "done") usage = chunk.response.usage;
+        if (chunk.type === "done") {
+          usage = chunk.response.usage;
+          received = true;
+        } else if (chunk.token.length > 0) received = true;
         yield chunk;
       }
       if (!received) throw new TransportError("provider stream ended without an answer");
+      settled = true;
     } catch (error) {
+      settled = true;
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       const breaker = this.breakerFor(route.provider);
       if (admitted) recordProviderFailure(breaker, error, ids.correlationId);
       else breaker.recordNonProviderFault();
       throw error;
     } finally {
+      // Closing an iterator early does not enter catch and is not proof of provider recovery.
+      if (!settled) this.breakerFor(route.provider).recordNonProviderFault();
       reservation?.settle(usage);
     }
   }

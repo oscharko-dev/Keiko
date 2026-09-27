@@ -625,3 +625,44 @@ it("releases a half-open stream probe when spend admission refuses the attempt",
   await expect(consumeStream(gateway)).resolves.toBeUndefined();
   expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
 });
+
+it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", async (outcome) => {
+  let now = 0;
+  const fake = streamingFake([new TimeoutError("provider outage")]);
+  const log = recorder();
+  const gateway = new Gateway(
+    {
+      ...config(true),
+      providers: [{ ...PROVIDER, maxRetries: 0 }],
+      circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+    },
+    {
+      adapter: fake.adapter,
+      log,
+      clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+    },
+  );
+  await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
+  now = 1000;
+  const stream = gateway.chatStream({
+    ...REQUEST,
+    logContext: { correlationId: "cancelled-probe-0001" },
+    ...(outcome === "cancelled" ? { cancellationSignal: AbortSignal.abort() } : {}),
+  });
+  if (outcome === "cancelled") {
+    await expect(stream.next()).rejects.toMatchObject({ code: "GATEWAY_CANCELLED" });
+    expect(fake.bounds).toHaveLength(1);
+  } else {
+    expect((await stream.next()).value).toEqual({ type: "delta", token: "answer" });
+    await stream.return(undefined);
+  }
+  expect(log.events).toContainEqual(
+    expect.objectContaining({
+      op: outcome === "cancelled" ? "gateway.stream.failed" : "gateway.stream.abandoned",
+      correlationId: "cancelled-probe-0001",
+    }),
+  );
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+  await expect(consumeStream(gateway)).resolves.toBeUndefined();
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+});

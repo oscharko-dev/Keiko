@@ -645,7 +645,7 @@ describe("POST /api/diagnostics/client", () => {
         gitClientOperation: { operation, outcome },
         ...(outcome.endsWith("failed") ? { errorKind: "internal" } : {}),
       });
-      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+      expect(await handleClientDiagnosticIngest(context(body, `ingest-${outcome}`))).toEqual({
         status: 204,
         body: null,
       });
@@ -680,6 +680,34 @@ describe("POST /api/diagnostics/client", () => {
         errorKind: "internal",
       });
   });
+
+  describe.each(["repository-clone", "repository-register"])(
+    "%s join-key rejection",
+    (operation) => {
+      it.each(["started", "succeeded", "failed"])(
+        "rejects malformed %s IDs without unjoinable events",
+        async (outcome) => {
+          const sink = captureServerLog();
+          const body = JSON.stringify({
+            message: "git-client: add-repository lifecycle",
+            clientTs: CLIENT_TS,
+            correlationId: "x",
+            gitClientOperation: { operation, outcome },
+          });
+          expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+          expect(
+            sink.events.filter((event) => event.op.startsWith("client.git-operation.")),
+          ).toEqual([]);
+          expect(clientDiagnosticRejectedEvents(sink)).toEqual([
+            expect.objectContaining({
+              correlationId: CORRELATION_ID,
+              extra: expect.objectContaining({ rejection: "invalid-shape" }) as unknown,
+            }),
+          ]);
+        },
+      );
+    },
+  );
 
   it("records a superseded checkout selection as correlated routine evidence", async () => {
     const sink = captureServerLog();

@@ -7,9 +7,9 @@
 // the specific failed server request it is reporting on, instead of fuzzy timestamp matching. It
 // is DESIGNED to be populated from the same correlation id already threaded into every
 // `ApiError`/SSE event (`packages/keiko-ui/src/lib/http.ts`), and is re-validated server-side with
-// `isValidCorrelationId` before it is trusted — this guard only admits its general SHAPE (a short,
-// bounded string), never the full correlation-id policy, which is server plumbing
-// (`packages/keiko-server/src/correlation.ts`), not a wire concern.
+// `isValidCorrelationId` before it is trusted. Generic crash reports retain their bounded-string
+// compatibility shape; repository lifecycle events require the canonical Activity Log correlation
+// guard so an attempt and its settlement cannot fall back to unrelated ingest identities.
 //
 // `install-client-diagnostics.ts` is the only place a `ClientDiagnosticIngestRequest` is built.
 // `reportClientDiagnostic` (client-diagnostics.ts) takes optional structured metadata: the
@@ -31,7 +31,11 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
-import { isActivityLogErrorKind, type ActivityLogErrorKind } from "./observability.js";
+import {
+  isActivityLogCorrelationId,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
+} from "./observability.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
@@ -274,9 +278,6 @@ export function clientErrorClass(error: unknown): string {
 const CORRELATION_ID_MAX_LENGTH = 128;
 const ISO_INSTANT_MAX_LENGTH = 40;
 
-// Deliberately less strict than `correlation.ts`'s SAFE_CORRELATION_ID: this file only asserts the
-// wire SHAPE (a short, non-empty string) so the leaf never has to import server plumbing. The
-// server re-validates with `isValidCorrelationId` before trusting the value for anything.
 const ISO_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/;
 
 export const CLIENT_VOICE_CAPTURE_REASONS = [
@@ -558,7 +559,7 @@ function hasValidGitContext(value: Record<string, unknown>): boolean {
   if (!isClientDiagnosticGitClientOperation(gitClientOperation)) return false;
   return (
     !GIT_CLIENT_ADDITION_OUTCOMES.has(gitClientOperation.outcome) ||
-    isCorrelationIdShape(value.correlationId)
+    isActivityLogCorrelationId(value.correlationId)
   );
 }
 

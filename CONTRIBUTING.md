@@ -49,6 +49,7 @@ Commit drafts record model-context bounds, compaction, generation count and reus
 flags on `git.commit.draft.completed`; stream startup retries use the existing `gateway.retry.*`
 events. Neither path records customer diffs or generated text.
 
+Repository-add lifecycle join ids must pass the canonical Activity Log correlation guard.
 Repository-add dialogs report the attempt and its live or discarded settlement using the request's
 correlation id. Test effect replay under React StrictMode separately from an actual dismissal:
 only the latter may discard a response.

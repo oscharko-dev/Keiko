@@ -1013,6 +1013,16 @@ function repairCommitDraftModel(
   return maxOutputTokens > model.maxOutputTokens ? { ...model, maxOutputTokens } : undefined;
 }
 
+function selectCommitDraftRecovery(
+  original: ModelCommitDraftResult,
+  repaired: ModelCommitDraftResult,
+): ModelCommitDraftResult {
+  // Refusing our larger repair prompt cannot invalidate changes the first model call read.
+  return !repaired.ok && repaired.code === "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE"
+    ? original
+    : repaired;
+}
+
 async function generateModelCommitMessage(
   deps: UiHandlerDeps,
   input: CommitDraftInput,
@@ -1034,7 +1044,8 @@ async function generateModelCommitMessage(
     let result = await attemptCommitDraft(deps, resolved, input, callSignal, 1);
     const recovery = repairCommitDraftModel(resolved, result);
     if (recovery !== undefined && !clientLeft(callSignal)) {
-      result = await attemptCommitDraft(deps, recovery, input, callSignal, 2);
+      const repaired = await attemptCommitDraft(deps, recovery, input, callSignal, 2);
+      result = selectCommitDraftRecovery(result, repaired);
     }
     if (clientLeft(callSignal))
       return {

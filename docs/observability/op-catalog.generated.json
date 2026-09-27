@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0640fd070cf701cb2bc7d7c243f17b46b36819f0dba01e0bd2a989d0ea4530f0",
+    "catalogDigest": "e8ae2a5d8ec92c4acfd4668b6eccd6779bd6abb6d28cf7ee1d9cddd42def34bc",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13149,7 +13149,7 @@
         "proofIds": ["gateway.route.rejected.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:499",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1493"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1515"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13447,7 +13447,7 @@
         "proofIds": ["gateway.stream.buffered-fallback.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:474",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1388"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1410"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14875,7 +14875,7 @@
         "proofIds": ["git.commit.draft.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:161",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1067"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1078"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -76643,7 +76643,7 @@
     {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1604",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1615",
       "package": "keiko-server"
     },
     {
@@ -76655,7 +76655,7 @@
     {
       "op": "git.delivery.commit.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1458",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1469",
       "package": "keiko-server"
     },
     {

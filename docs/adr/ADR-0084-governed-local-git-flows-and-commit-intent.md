@@ -145,7 +145,9 @@ One corrective generation is allowed after invalid output, or after output exhau
 larger allowance fits the model's declared output/context limits. Both generations share the
 original deadline and independently traverse gateway spend admission. No policy check is weakened
 and no generic success message substitutes for an unusable answer. Completion evidence records
-prompt bounds, compaction, generation count and reuse without diff or message content.
+prompt bounds, compaction, generation count and reuse without diff or message content. If only
+the repair prompt exceeds context, preserve the original model failure and its actual call bounds;
+do not report that already-processed selected changes exceeded context.
 
 ## Alternatives Considered
 

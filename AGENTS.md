@@ -435,7 +435,7 @@ system that exists, never beside it:
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
   ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
   silently missing id.
-  Repository-add dialogs mint that id before clone/register, pass it to the request, and report
+  Repository-add dialogs mint that id before clone/register, validate it with the canonical Activity Log correlation guard, pass it to the request, and report
   the attempt and settlement even when dismissed; effect replay is not a human dismissal.
 - **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
   flags on `git.commit.draft.completed`; stream startup retries use the existing `gateway.retry.*`
