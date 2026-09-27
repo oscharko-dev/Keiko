@@ -1715,6 +1715,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-runtime-session-continuity",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-runtime.sidecar-session.bound"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-runtime.sidecar-session.bound"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-runtime.sidecar-session.bound"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-runtime.sidecar-session.bound"],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "loss-state",
+      "opaque-id",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-runtime-shutdown",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

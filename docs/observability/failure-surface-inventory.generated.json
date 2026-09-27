@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ebd2204ab4ec18584416178498f492c5a997be4bf5b437387142f49a849b90f4"
+    "catalogDigest": "f7e1addcbdec5bf6da8f70e829aaf82776c68f926958aa275a36f7b6b6d4d8a5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 466,
-    "proofCount": 474,
-    "resolvedProofCount": 474,
-    "failureClassCount": 322,
+    "operationCount": 467,
+    "proofCount": 475,
+    "resolvedProofCount": 475,
+    "failureClassCount": 323,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -294,6 +294,7 @@
         "coding-runtime.run.shutdown",
         "coding-runtime.run.started",
         "coding-runtime.safe-activity",
+        "coding-runtime.sidecar-session.bound",
         "coding-runtime.skill-discovery",
         "coding-runtime.task-replacement",
         "coding-runtime.tool-authority.denied",
@@ -698,6 +699,7 @@
     "coding-runtime-repository-rerank": ["tools-workflows.dependency-failure"],
     "coding-runtime-run-settlement": ["tools-workflows.dependency-failure"],
     "coding-runtime-run-start": ["tools-workflows.dependency-failure"],
+    "coding-runtime-session-continuity": ["tools-workflows.dependency-failure"],
     "coding-runtime-shutdown": ["tools-workflows.crash"],
     "coding-runtime-skill-discovery": ["tools-workflows.dependency-failure"],
     "coding-runtime-task-replacement": ["tools-workflows.dependency-failure"],
@@ -1266,6 +1268,9 @@
     ],
     "coding-runtime.safe-activity.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"
+    ],
+    "coding-runtime.sidecar-session.bound.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.skill-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionAuxiliaryPorts.test.ts"

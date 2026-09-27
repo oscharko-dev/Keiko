@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ebd2204ab4ec18584416178498f492c5a997be4bf5b437387142f49a849b90f4" as const;
+  "f7e1addcbdec5bf6da8f70e829aaf82776c68f926958aa275a36f7b6b6d4d8a5" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -6771,6 +6771,49 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["coding-safe-activity-projection"],
     proofIds: ["coding-runtime.safe-activity.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-runtime.sidecar-session.bound",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.opencodeRuntimeComposition.readinessV2Ports.subscribe",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      binding: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["created", "reused"],
+      },
+      streamCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      sessionId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 256,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-runtime-session-continuity"],
+    proofIds: ["coding-runtime.sidecar-session.bound.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -28281,8 +28324,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 322,
-  completeClassCount: 322,
+  supportedClassCount: 323,
+  completeClassCount: 323,
   completeness: "complete",
   classes: [
     {
@@ -35474,6 +35517,74 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.run.started.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-session-continuity",
+      requirementContract: "coding-runtime-session-continuity",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.sidecar-session.bound"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.sidecar-session.bound",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.sidecar-session.bound"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.sidecar-session.bound",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "binding",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "sessionId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "streamCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.sidecar-session.bound.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -62556,6 +62667,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.run.shutdown": "tools-workflows",
     "coding-runtime.run.started": "tools-workflows",
     "coding-runtime.safe-activity": "tools-workflows",
+    "coding-runtime.sidecar-session.bound": "tools-workflows",
     "coding-runtime.skill-discovery": "tools-workflows",
     "coding-runtime.task-replacement": "tools-workflows",
     "coding-runtime.tool-authority.denied": "tools-workflows",

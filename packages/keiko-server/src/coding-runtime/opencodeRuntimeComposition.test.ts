@@ -1224,11 +1224,13 @@ describe("private OpenCode run control", () => {
   it("reuses the fixed V2 session when the event stream reconnects", async () => {
     const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
     const sessionCreateCalls: string[] = [];
+    const activityLog = createBufferedServerLogSink();
     const fixture = await startBridgeFixture(facade, undefined, {
       onSseStart: (controller): void => {
         streams.push(controller);
       },
       sessionCreateCalls,
+      activityLog,
     });
     try {
       expect(sessionCreateCalls).toEqual(["ses_tool"]);
@@ -1238,6 +1240,23 @@ describe("private OpenCode run control", () => {
       });
       expect(sessionCreateCalls).toEqual(["ses_tool"]);
       expect(fixture.runtime.manager.health()).toMatchObject({ status: "ready" });
+      const bindings = activityLog.events
+        .filter((event) => event.op === "coding-runtime.sidecar-session.bound")
+        .map((event) =>
+          expectActivityLogProof(
+            "coding-runtime.sidecar-session.bound.emitted-line",
+            formatActivityLogProofLine(event),
+          ),
+        );
+      expect(bindings).toMatchObject([
+        {
+          correlationId: FIXTURE_RUN_ID,
+          binding: "created",
+          streamCount: 1,
+          sessionId: "ses_tool",
+        },
+        { correlationId: FIXTURE_RUN_ID, binding: "reused", streamCount: 2, sessionId: "ses_tool" },
+      ]);
     } finally {
       await fixture.stop();
     }

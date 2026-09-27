@@ -90,6 +90,35 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.sidecar-session.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.readinessV2Ports.subscribe",
+  fields: {
+    binding: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["created", "reused"],
+    },
+    streamCount: { type: "integer", dataClass: "count", required: true },
+    sessionId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-session-continuity"],
+  proofIds: ["coding-runtime.sidecar-session.bound.emitted-line"],
+  releaseImpact: "patch",
+});
 
 function v2Record(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -877,6 +906,7 @@ function readinessV2Ports(
 ): Parameters<typeof createOpenCodeRuntimeAdapter>[0]["readiness"] {
   let fixedSessionId: string | undefined;
   let sessionCreation: Promise<string> | undefined;
+  let streamCount = 0;
   let startupRead = false;
   const history = createOpenCodeV2HistoryProjection({
     runId: run.runId,
@@ -915,6 +945,19 @@ function readinessV2Ports(
       // Keep the creation promise so concurrent subscriptions cannot create competing sessions.
       sessionCreation ??= createAndEchoV2Session(client, run.workspaceRoot, request.signal);
       fixedSessionId = await sessionCreation;
+      streamCount += 1;
+      if (fixedSessionId !== "")
+        input.activityLog?.write(
+          activityLogEvent(
+            SIDECAR_SESSION_BOUND_OPERATION,
+            { correlationId: run.runId },
+            {
+              binding: streamCount === 1 ? "created" : "reused",
+              streamCount,
+              sessionId: fixedSessionId,
+            },
+          ),
+        );
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
       for await (const event of client.events(combined)) {
