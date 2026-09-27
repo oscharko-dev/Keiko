@@ -34,7 +34,10 @@ to Ask for approval. This exposes all three modes without requiring a configurat
 narrower deployment configuration continues to clamp the selection. Memory and unconfigured
 non-Coding admission retain their fail-closed default; Coding availability is not authorization
 for unattended Memory acceptance or maintenance. Missing or invalid requested modes and missing
-or invalid envelope ceilings remain fail-closed.
+or invalid envelope ceilings remain fail-closed. Git-change description turns use the explicit
+accepted Coding mode and the Coding deployment ceiling; their authority must not be clamped
+through the independent Memory capture policy, even though the Chat wire carries that mode in
+the shared request field. Existing description-scope and envelope validation still apply.
 
 ## Context
 

@@ -20,7 +20,10 @@ import type {
   ChatMessageContentPart,
 } from "@oscharko-dev/keiko-contracts";
 import { isDiscussionMode } from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
-import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  isCodingWorkbenchMode,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   electConversationDefault,
   preferredConversationModelOrder,
@@ -2971,13 +2974,13 @@ export function admitGitChangeScopedTurn(
 }
 
 export function acceptedGitChangeChatMode(
-  deps: UiHandlerDeps,
+  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling">,
   request: Pick<SendDesktopChatRequest, "memory">,
 ): CodingWorkbenchMode | undefined {
   const requestedMode = request.memory?.mode;
   return requestedMode === undefined
     ? undefined
-    : resolveMemoryCaptureAutonomyMode(deps, requestedMode);
+    : resolveEffectiveCodingWorkbenchMode(requestedMode, deps.codingRuntimeDeploymentCeiling);
 }
 
 // ─── Issue #3400 — apply routes only through the description application service (#3399) ────────

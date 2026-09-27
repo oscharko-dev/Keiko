@@ -1,3 +1,4 @@
+import { buildUnifiedQuickAccessCommands } from "./quickAccessCommands";
 // German locale coverage for the three shell surfaces a user actually operates windows with.
 //
 // Before this suite, a user who selected Deutsch got a mixed-language shell: settings, header,
@@ -22,7 +23,6 @@ import { translateOptionalWidget } from "@/lib/optional-widget-i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { buildAppShellCommands } from "./AppShell";
-import { buildUnifiedQuickAccessCommands } from "./quickAccessRegistry";
 import { Palette } from "./modals/Palette";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
 import { UnifiedQuickAccessPalette } from "./modals/UnifiedQuickAccessPalette";

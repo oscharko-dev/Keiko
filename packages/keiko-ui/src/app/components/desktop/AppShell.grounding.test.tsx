@@ -305,7 +305,7 @@ vi.mock("./Workspace", () => ({
 }));
 
 vi.mock("./modals/UnifiedQuickAccessPalette", () => ({
-  UnifiedQuickAccessPalette: (): ReactNode => <div data-testid="quick-access-palette" />,
+  DesktopQuickAccessPalette: (): ReactNode => <div data-testid="quick-access-palette" />,
 }));
 
 vi.mock("./modals/GatewaySetupDialog", (): { readonly GatewaySetupDialog: () => ReactNode } => {

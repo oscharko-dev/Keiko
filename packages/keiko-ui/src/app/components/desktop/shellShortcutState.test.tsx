@@ -1,3 +1,4 @@
+import { buildUnifiedQuickAccessCommands } from "./quickAccessCommands";
 // Epic #518 / Issue #527 + 0.3.0 release audit — the shell's LIVE keyboard state.
 //
 // `resolveShellShortcutState` produces the two things AppShell consumes: the binding table it feeds
@@ -33,7 +34,7 @@ import {
   detectShortcutConflicts,
   useKeyboardShortcuts,
 } from "./hooks/useKeyboardShortcuts";
-import { buildUnifiedQuickAccessCommands, type Command } from "./quickAccessRegistry";
+import type { Command } from "./quickAccessRegistry";
 import { EDITOR_PALETTE_COMMANDS, type EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { translate } from "@/lib/i18n";
 

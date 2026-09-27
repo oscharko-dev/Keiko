@@ -78,7 +78,6 @@ import { OPEN_EDITOR_SETTINGS_EVENT } from "./widgets/panels/settingsPanelEvents
 import {
   QUICK_ACCESS_CARD_TYPES,
   QUICK_ACCESS_TOOL_TYPES,
-  buildUnifiedQuickAccessCommands,
   paletteWindowOrder,
   type Command,
 } from "./quickAccessRegistry";
@@ -208,7 +207,7 @@ const GatewaySetupDialog = dynamic(
 );
 
 const UnifiedQuickAccessPalette = dynamic(
-  () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
+  () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.DesktopQuickAccessPalette),
   { ssr: false, loading: () => null },
 );
 
@@ -1729,10 +1728,6 @@ function AppShellInner(): ReactNode {
   );
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;
-  const quickAccessCommands = useMemo(
-    () => buildUnifiedQuickAccessCommands(commands, activeEditorHost, t, shellShortcutState.labels),
-    [activeEditorHost, commands, shellShortcutState.labels, t],
-  );
   const quickAccessRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
   const quickAccessWorkspace = useWorkspaceManifest(
     quickAccessMode === null ? undefined : quickAccessRoot,
@@ -1865,7 +1860,9 @@ function AppShellInner(): ReactNode {
                       initialMode={quickAccessMode}
                       root={quickAccessRoot}
                       roots={quickAccessRoots}
-                      commands={quickAccessCommands}
+                      appCommands={commands}
+                      editorHost={activeEditorHost}
+                      shortcutLabels={shellShortcutState.labels}
                       openEditorFile={ws.api.openEditorFile}
                       opener={quickAccessOpener}
                       onClose={closeQuickAccess}

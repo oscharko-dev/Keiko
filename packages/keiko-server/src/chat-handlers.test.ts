@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
+  acceptedGitChangeChatMode,
   applyGitChangeDescription,
   chatTurnShapeFields,
   captureDesktopChatExecutionAdmission,
@@ -53,6 +54,52 @@ import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 // A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
 const BREAKER_CHAT_DIGEST = modelIdEvidence("breaker-chat").modelIdDigest;
+describe("Git change Chat mode selection", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "preserves the explicit %s selection under the Coding ceiling",
+    (mode) => {
+      const deps = {
+        codingRuntimeDeploymentCeiling: "autonomous-delivery" as const,
+        memoryDeploymentCeiling: "governed-assist" as const,
+      };
+      expect(
+        acceptedGitChangeChatMode(deps, {
+          memory: { enabled: false, budgetTokens: 0, mode, context: {} },
+        }),
+      ).toBe(mode);
+    },
+  );
+
+  it.each([undefined, "governed-assist", "supervised-coding"] as const)(
+    "retains the Coding ceiling %s even when Memory permits full access",
+    (ceiling) => {
+      const deps = {
+        ...(ceiling === undefined ? {} : { codingRuntimeDeploymentCeiling: ceiling }),
+        memoryDeploymentCeiling: "autonomous-delivery" as const,
+      };
+      expect(
+        acceptedGitChangeChatMode(deps, {
+          memory: {
+            enabled: false,
+            budgetTokens: 0,
+            mode: "autonomous-delivery",
+            context: {},
+          },
+        }),
+      ).toBe(ceiling ?? "governed-assist");
+    },
+  );
+
+  it("does not infer acceptance when the request has no selected mode", () => {
+    expect(
+      acceptedGitChangeChatMode(
+        { codingRuntimeDeploymentCeiling: "autonomous-delivery" },
+        { memory: undefined },
+      ),
+    ).toBeUndefined();
+  });
+});
+
 const VALID_GROUNDING_SCOPE_IDENTITY = `gsi-v1:${"a".repeat(64)}`;
 const INVALID_CLIENT_TURN_ID = {
   status: 400,
