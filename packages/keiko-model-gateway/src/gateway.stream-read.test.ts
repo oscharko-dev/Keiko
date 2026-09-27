@@ -4,11 +4,13 @@
 // `timeoutMs` and generated a second time.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CircuitOpenError,
+  ConfigInvalidError,
   ProviderEmptyAnswerError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
-import { Gateway } from "./gateway.js";
+import { Gateway, type GatewaySpendReservation } from "./gateway.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import { createScriptedGatewayClock } from "./replay.js";
@@ -423,4 +425,403 @@ describe("a completed but empty model answer (#3610)", () => {
       extra: { outcome: "failed", outputExhausted: false },
     });
   });
+});
+
+// Exercise the OpenAI-compatible wire used by LiteLLM, without an Azure endpoint.
+describe("stream startup resilience", () => {
+  it("retries a temporary proxy rejection before delivering any answer", async () => {
+    let calls = 0;
+    const log = recorder();
+    const gateway = new Gateway(config(true), {
+      clock: createScriptedGatewayClock(),
+      log,
+      fetchImpl: (): Promise<Response> => {
+        calls += 1;
+        return Promise.resolve(
+          calls === 1
+            ? new Response(JSON.stringify({ error: { message: "temporarily overloaded" } }), {
+                status: 503,
+              })
+            : new Response(
+                encoder.encode(deltaLine("one answer") + finishLine("stop") + DONE_LINE),
+                {
+                  headers: { "content-type": "text/event-stream" },
+                },
+              ),
+        );
+      },
+    });
+    const chunks: GatewayStreamChunk[] = [];
+    for await (const chunk of gateway.chatStream(REQUEST)) chunks.push(chunk);
+    expect(calls).toBe(2);
+    expect(chunks.filter((chunk) => chunk.type === "delta")).toEqual([
+      { type: "delta", token: "one answer" },
+    ]);
+    expect(log.events.some((event) => event.op === "gateway.retry.scheduled")).toBe(true);
+  });
+
+  it("recovers from a silent first connection within the shared stream budget", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const reservations: ReturnType<typeof vi.fn>[] = [];
+    const gateway = new Gateway(config(true), {
+      spendBudget: {
+        reserve: (): GatewaySpendReservation => {
+          const settle = vi.fn();
+          reservations.push(settle);
+          return { settle };
+        },
+      },
+      fetchImpl: (): Promise<Response> => {
+        calls += 1;
+        return Promise.resolve(
+          new Response(
+            calls === 1
+              ? new ReadableStream<Uint8Array>()
+              : encoder.encode(deltaLine("recovered") + finishLine("stop") + DONE_LINE),
+            {
+              headers: { "content-type": "text/event-stream" },
+            },
+          ),
+        );
+      },
+    });
+    const chunks: GatewayStreamChunk[] = [];
+    const reading = (async (): Promise<void> => {
+      for await (const chunk of gateway.chatStream(REQUEST)) chunks.push(chunk);
+    })();
+    try {
+      await vi.advanceTimersByTimeAsync(GATEWAY_SILENCE_FLOOR_MS + 10);
+      await reading;
+      expect(calls).toBe(2);
+      expect(chunks.filter((chunk) => chunk.type === "delta")).toEqual([
+        { type: "delta", token: "recovered" },
+      ]);
+      expect(reservations).toHaveLength(2);
+      for (const settle of reservations) expect(settle).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a rejected credential", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("{}", { status: 401 })));
+    const gateway = new Gateway(config(true), { fetchImpl, clock: createScriptedGatewayClock() });
+    const reading = async (): Promise<void> => {
+      for await (const chunk of gateway.chatStream(REQUEST)) expect(chunk).toBeUndefined();
+    };
+    await expect(reading()).rejects.toMatchObject({ code: "GATEWAY_AUTHENTICATION" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("never replays text after a proxy drops a partially delivered answer", async () => {
+    let calls = 0;
+    const gateway = new Gateway(config(true), {
+      clock: createScriptedGatewayClock(),
+      fetchImpl: (): Promise<Response> => {
+        calls += 1;
+        return Promise.resolve(
+          new Response(encoder.encode(deltaLine("partial answer")), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      },
+    });
+    const received: string[] = [];
+    const consume = async (): Promise<void> => {
+      for await (const chunk of gateway.chatStream(REQUEST)) {
+        if (chunk.type === "delta") received.push(chunk.token);
+      }
+    };
+    await expect(consume()).rejects.toThrow();
+    expect(received).toEqual(["partial answer"]);
+    expect(calls).toBe(1);
+  });
+});
+
+async function consumeStream(gateway: Gateway): Promise<void> {
+  for await (const chunk of gateway.chatStream(REQUEST)) expect(chunk).toBeDefined();
+}
+
+describe("stream retry circuit accounting", () => {
+  it("counts each failed startup attempt exactly once", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("{}", { status: 503 })));
+    const gateway = new Gateway(config(true), { fetchImpl, clock: createScriptedGatewayClock() });
+    await expect(consumeStream(gateway)).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(gateway.circuitStatus(REQUEST.modelId)).toMatchObject({
+      state: "open",
+      consecutiveFailures: 3,
+    });
+  });
+
+  it("does not extend the cooldown when a concurrent call opens the breaker during backoff", async () => {
+    let now = 0;
+    const fake = streamingFake([
+      new TimeoutError("first failure"),
+      new CircuitOpenError("adapter failure"),
+    ]);
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter: fake.adapter,
+        clock: {
+          now: (): number => now,
+          sleep: async (): Promise<void> => {
+            await expect(consumeStream(gateway)).rejects.toThrow();
+            now = 100;
+          },
+        },
+      },
+    );
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(gateway.circuitStatus(REQUEST.modelId)).toMatchObject({
+      state: "open",
+      openedAt: 0,
+      consecutiveFailures: 1,
+    });
+  });
+
+  it("still counts an adapter-thrown CircuitOpenError as a provider failure", async () => {
+    const fake = streamingFake([new CircuitOpenError("adapter failure")]);
+    const gateway = new Gateway(config(true), {
+      adapter: fake.adapter,
+      clock: createScriptedGatewayClock(),
+    });
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(gateway.circuitStatus(REQUEST.modelId).consecutiveFailures).toBe(1);
+  });
+});
+
+it.each(["streaming", "buffered"])(
+  "releases a half-open %s probe when spend admission refuses the attempt",
+  async (mode) => {
+    let now = 0;
+    let refused = false;
+    const fake = streamingFake([new TimeoutError("provider outage")]);
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        providers: [{ ...PROVIDER, maxRetries: 0 }],
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter: fake.adapter,
+        clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+        spendBudget: {
+          reserve: (): GatewaySpendReservation => {
+            if (refused) throw new ConfigInvalidError("spend admission refused");
+            return { settle: (): void => undefined };
+          },
+        },
+      },
+    );
+    const consume = async (): Promise<void> => {
+      if (mode === "streaming") await consumeStream(gateway);
+      else await gateway.chat(REQUEST);
+    };
+    await expect(consume()).rejects.toBeInstanceOf(TimeoutError);
+    now = 1000;
+    refused = true;
+    await expect(consume()).rejects.toBeInstanceOf(ConfigInvalidError);
+    refused = false;
+    await expect(consume()).resolves.toBeUndefined();
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+  },
+);
+
+it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", async (outcome) => {
+  let now = 0;
+  const fake = streamingFake([new TimeoutError("provider outage")]);
+  const log = recorder();
+  const gateway = new Gateway(
+    {
+      ...config(true),
+      providers: [{ ...PROVIDER, maxRetries: 0 }],
+      circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+    },
+    {
+      adapter: fake.adapter,
+      log,
+      clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+    },
+  );
+  await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
+  now = 1000;
+  const stream = gateway.chatStream({
+    ...REQUEST,
+    logContext: { correlationId: "cancelled-probe-0001" },
+    ...(outcome === "cancelled" ? { cancellationSignal: AbortSignal.abort() } : {}),
+  });
+  if (outcome === "cancelled") {
+    await expect(stream.next()).rejects.toMatchObject({ code: "GATEWAY_CANCELLED" });
+    expect(fake.bounds).toHaveLength(1);
+  } else {
+    expect((await stream.next()).value).toEqual({ type: "delta", token: "answer" });
+    await stream.return(undefined);
+  }
+  expect(log.events).toContainEqual(
+    expect.objectContaining({
+      op: outcome === "cancelled" ? "gateway.stream.failed" : "gateway.stream.abandoned",
+      correlationId: "cancelled-probe-0001",
+    }),
+  );
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+  await expect(consumeStream(gateway)).resolves.toBeUndefined();
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+});
+
+it.each(["abandoned", "succeeded", "failed"])(
+  "does not let an older %s stream settle a later half-open probe",
+  async (outcome) => {
+    let now = 0;
+    let calls = 0;
+    const log = recorder();
+    const adapter: ProviderAdapter = {
+      call: (): Promise<NormalizedResponse> => Promise.resolve(ANSWER),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        const call = ++calls;
+        if (call === 2) throw new TimeoutError("provider outage");
+        yield { type: "delta", token: "answer" };
+        if (call === 1 && outcome === "failed") throw new TimeoutError("late failure");
+        yield { type: "done", response: ANSWER };
+      },
+    };
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        providers: [{ ...PROVIDER, maxRetries: 0 }],
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter,
+        log,
+        clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+      },
+    );
+    const older = gateway.chatStream(REQUEST);
+    await older.next();
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
+    now = 1000;
+    const probe = gateway.chatStream(REQUEST);
+    await probe.next();
+    if (outcome === "abandoned") await older.return(undefined);
+    else if (outcome === "failed") await expect(older.next()).rejects.toBeInstanceOf(TimeoutError);
+    else {
+      await older.next();
+      await older.next();
+    }
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(calls).toBe(3);
+    expect(log.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.circuit.rejected",
+        extra: expect.objectContaining({ reason: "probe-saturated", probesInFlight: 1 }) as unknown,
+      }),
+    );
+    await probe.next();
+    await probe.next();
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+  },
+);
+
+// The Coding Workbench consumer returns at the done packet without advancing or closing
+// the generator. All terminal resources and evidence must already be settled at that point.
+it.each(["native", "buffered", "terminal-only"])(
+  "settles a %s stream before handing done to its consumer",
+  async (mode) => {
+    let now = 0;
+    const closed = vi.fn();
+    const settle = vi.fn();
+    const log = recorder();
+    const call = vi
+      .fn<() => Promise<NormalizedResponse>>()
+      .mockRejectedValueOnce(new TimeoutError("outage"))
+      .mockResolvedValue(ANSWER);
+    const adapter: ProviderAdapter = {
+      call,
+      ...(mode !== "buffered"
+        ? {
+            callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+              try {
+                const response: NormalizedResponse = await call();
+                if (mode !== "terminal-only") yield { type: "delta", token: response.content };
+                yield { type: "done", response };
+              } finally {
+                closed();
+              }
+            },
+          }
+        : {}),
+    };
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        providers: [{ ...PROVIDER, maxRetries: 0 }],
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter,
+        log,
+        clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+        spendBudget: { reserve: (): GatewaySpendReservation => ({ settle }) },
+      },
+    );
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
+    now = 1000;
+    settle.mockClear();
+    closed.mockClear();
+    const stream = gateway.chatStream(REQUEST);
+    if (mode !== "terminal-only") {
+      expect(await stream.next()).toMatchObject({ value: { type: "delta" } });
+    }
+    expect(await stream.next()).toMatchObject({ value: { type: "done" } });
+    expect(gateway.circuitStatus(REQUEST.modelId)).toMatchObject({
+      state: "closed",
+      consecutiveFailures: 0,
+    });
+    expect(settle).toHaveBeenCalledExactlyOnceWith(ANSWER.usage);
+    expect(closed).toHaveBeenCalledTimes(mode === "buffered" ? 0 : 1);
+    expect(log.events.filter((event) => event.op === "gateway.stream.completed")).toHaveLength(1);
+    expect(log.events.filter((event) => event.op === "gateway.stream.abandoned")).toHaveLength(0);
+    // A late cleanup must not settle the same reservation or emit an outcome twice.
+    await stream.return(undefined);
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(log.events.filter((event) => event.op === "gateway.stream.completed")).toHaveLength(1);
+    await expect(consumeStream(gateway)).resolves.toBeUndefined();
+  },
+);
+
+it("does not retry a failed half-open probe reached during startup backoff", async () => {
+  let now = 0;
+  const fake = streamingFake([new TimeoutError("outage"), new TimeoutError("probe failure")]);
+  const log = recorder();
+  const gateway = new Gateway(
+    {
+      ...config(true),
+      circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+    },
+    {
+      adapter: fake.adapter,
+      log,
+      clock: {
+        now: (): number => now,
+        sleep: (): Promise<void> => {
+          now += 1000;
+          return Promise.resolve();
+        },
+      },
+    },
+  );
+  await expect(consumeStream(gateway)).rejects.toThrow("probe failure");
+  expect(fake.bounds).toHaveLength(2);
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("open");
+  expect(log.events.filter((event) => event.op === "gateway.retry.exhausted")).toEqual([
+    expect.objectContaining({ extra: expect.objectContaining({ reason: "terminal" }) as unknown }),
+  ]);
 });

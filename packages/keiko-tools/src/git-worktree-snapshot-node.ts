@@ -801,7 +801,14 @@ export async function readGitCommitIdentity(
  */
 /** Bounded staged patch for the existing interactive review parser; never evidence or a PR snapshot. */
 export async function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promise<string> {
-  return runRead(buildReadContext(deps), [
+  // Stage-all selections routinely include lockfiles larger than the generic 256 KiB command
+  // output allowance. Keep the read bounded to the existing Git metadata ceiling; explicit
+  // narrower policies still win, and runRead rejects truncation instead of returning a prefix.
+  const policy = {
+    ...(deps.policy ?? DEFAULT_SANDBOX_POLICY),
+    maxOutputBytes: Math.min(deps.policy?.maxOutputBytes ?? 4_194_304, 4_194_304),
+  };
+  return runRead(buildReadContext({ ...deps, policy }), [
     "diff",
     "--cached",
     "--no-ext-diff",

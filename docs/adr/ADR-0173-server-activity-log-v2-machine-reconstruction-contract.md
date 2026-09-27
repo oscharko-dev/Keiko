@@ -821,6 +821,27 @@ proof updates, not acceptance of another arbitrary machine-shaped string.
 
 ### D13 — HTTP and SSE lifecycle detail, and a body-free browser diagnostic ingest (Wave 5, landed)
 
+Git draft resilience correction (2026-09-27): `git.commit.draft.completed` also records observed
+`promptTokens`, `maxPromptTokens`, `diffCompacted`, `generationAttempts` and `reused`. The values
+explain model-context compaction, a corrective generation and a cached result without retaining
+paths, prompts or draft bodies. Once normalization runs, the selected result also carries `normalizationVersion`, `normalizationRule`, `normalizationChanged`, `bodyBulletCount`, `trailerLikeLineCount`, `trailerCount`, `trailerContinuationCount`, `trailerParagraphBreakCount`, `referenceTrailerCount` and `breakingTrailerCount`. The rule is a closed class and counts are bounded by the validated 12,000-character model body. Successful generation and cache reuse carry the same structural evidence; a policy-rejected normalized answer retains it, while failures before normalization omit it. Each preparation/generation attempt separately emits `git.commit.draft.attempt.completed` under the same correlation, with `attempt`, outcome, closed failure code, bounds and that attempt's normalization evidence. The completion line describes only the selected result; attempt lines retain earlier rejected normalizations and the cause of repair, including when recovery fails before formatting or is refused before a second model call. Cache hits emit no attempt line. The timeline therefore distinguishes retained footers from normalized body items without storing labels, references or content. Chat retries before the first delivered chunk use the existing
+`gateway.retry.*` operations under the same correlation; a partial answer is never replayed.
+
+Repository-add lifecycle correction (2026-09-27): clone/register emits
+`client.git-operation.attempted` before sending the request with that same correlation id.
+An active dialog reports `client.git-operation.settled` with `succeeded` or `failed`; failures also
+retain `client.diagnostic` with structured error evidence. Actual dismissal retains
+`discarded-succeeded`/`discarded-failed`; React effect replay is not dismissal. The existing
+ingest transport, routine/failure budgets, loss reporting and closed operation/outcome validation
+apply to all of these reports. All clone/register lifecycle outcomes, including discarded settlements, require a correlation id accepted
+by the canonical Activity Log guard; malformed ids are rejected instead of assigning unrelated
+ingest identities to the attempt and settlement. Browser delivery-loss counts enter the existing
+process loss ledger once after rate admission and before routine diversion. A rate-limited report
+carrying loss returns 429, without consuming its client-supplied counters; the browser restores them
+for later delivery. The server records this refused report once as `client-rate-suppressed`; a recognized `RATE_LIMITED`/429 response restores carried counters without also adding `client-post-failed`. Network errors, other HTTP errors and unclassified 429 responses still count as failed POSTs. Reports without loss retain the bounded, body-free 204 drop behavior. The final pagehide flush uses the closed `delivery-loss` kind with required validated loss counters. It spends a separate fixed 60-per-minute process budget, using the existing limiter and per-budget drop notices. Exhausting routine or failure traffic cannot prevent that final accounting; exhausting the loss budget itself still refuses counts with 429. This reserves admission without allowing unlimited client-count injection. It does not promise delivery during transport failure or saturation of the reserved budget.
+Commit-draft refusal retains its measured prompt budget; generated and cached outcomes share a
+body-free draft-key digest. No repository path or remote URL enters the evidence.
+
 Wave 5 closes the gap between "a request line exists" and "a request line is enough to reproduce the
 request":
 

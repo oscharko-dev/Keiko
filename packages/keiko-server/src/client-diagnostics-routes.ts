@@ -18,8 +18,8 @@
 // Rate limiting reuses `createInlineCompletionRateLimiter` (the editor's existing token-bucket
 // primitive — AGENTS.md §5 forbids a second one) as a single, process-wide bucket: a flapping tab
 // or a hostile page must not be able to grow the activity log without bound. The response is 204
-// whether a report was accepted or dropped by the limiter — the limit itself is never disclosed to
-// the browser — and a dropped report is still counted, mirroring `server-log.ts`'s own
+// for accepted reports and drops without carried loss. Refused loss-bearing reports return 429
+// so the browser can retain their counts. Every dropped report is still counted, mirroring `server-log.ts`'s own
 // `reportServerLogFailure` throttle-and-count-suppressed shape: the first drop after a quiet window
 // is logged immediately, later drops in the same window are counted silently, and the count is
 // flushed on the next window's first drop — or, at the latest, by
@@ -62,7 +62,6 @@ import type {
   ClientBindingIngestRequest,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
-  ClientGitClientOperationOutcome,
   ClientGitRetryAttemptIngestRequest,
   ClientSessionRepairIngestRequest,
   ClientStageId,
@@ -112,12 +111,15 @@ const MAX_CLIENT_DIAGNOSTIC_BODY_BYTES = 4_096;
 // page. `minIntervalMs: 0` disables the limiter's own burst/cooldown gate, so only the sliding
 // window cap below applies.
 //
-// Two sliding windows (#3557): routine evidence (a stage, a binding that resolved, a session repair
+// Independent sliding windows: final loss flushes retain reserved admission when either
+// ordinary budget is full. Their own fixed budget still bounds hostile loss-count injection.
+// Routine evidence (a stage, a binding that resolved, a session repair
 // that recovered) spends its own budget, so a page load's dozen stage reports can never use up the
 // budget a failure report needs.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS = {
   failure: "client-diagnostics",
   routine: "client-diagnostics-routine",
+  loss: "client-diagnostics-loss",
 } as const;
 
 const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
@@ -135,7 +137,7 @@ const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["failure", "routine"],
+      values: ["failure", "routine", "loss"],
     },
     trigger: {
       type: "string",
@@ -338,6 +340,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "voice-dialogue",
         "voice-playback",
         "markdown-layout",
+        "delivery-loss",
         "other",
       ],
     },
@@ -428,15 +431,13 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "summary-read",
       ],
     },
-    // Routine outcomes (discarded-succeeded, retry-recovered, retry-superseded) never reach this
-    // line — `logClientGitOperationSettled` diverts them to `client.git-operation.settled` before
-    // this operation's fields are built, so only the two genuine failures are ever registered here
-    // (PR #3625 review).
+    // Routine outcomes never reach this failure line. Repository failures retain both the
+    // lifecycle settlement and this structured diagnostic with frames and cause evidence.
     gitClientOperationOutcome: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["discarded-failed", "retry-failed"],
+      values: ["discarded-failed", "retry-failed", "failed"],
     },
     // Only ever alongside `gitClientOperationOutcome: "retry-failed"`: the closed reason a resolved
     // (HTTP 200) unavailable response gave for the read that failed (PR #3625 review).
@@ -869,7 +870,14 @@ const CLIENT_GIT_OPERATION_SETTLED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["discarded-succeeded", "retry-recovered", "retry-superseded"],
+      values: [
+        "discarded-succeeded",
+        "retry-recovered",
+        "retry-superseded",
+        "succeeded",
+        "failed",
+        "discarded-failed",
+      ],
     },
   },
   causal: "correlation",
@@ -896,7 +904,13 @@ const CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["status-read", "branches-read", "summary-read"],
+      values: [
+        "status-read",
+        "branches-read",
+        "summary-read",
+        "repository-clone",
+        "repository-register",
+      ],
     },
   },
   causal: "correlation",
@@ -985,20 +999,21 @@ function quietRejectionThrottles(): Map<ClientDiagnosticRejection, NoticeThrottl
   return new Map(CLIENT_DIAGNOSTIC_REJECTIONS.map((rejection) => [rejection, quietThrottle()]));
 }
 
-type ClientReportBudget = "failure" | "routine";
+type ClientReportBudget = "failure" | "routine" | "loss";
 
 // One notice throttle per budget: routine overflow never suppresses the notice of a dropped
 // failure report, which then keeps its own correlation id and budget class.
 let dropNotices: Record<ClientReportBudget, NoticeThrottle> = {
   failure: quietThrottle(),
   routine: quietThrottle(),
+  loss: quietThrottle(),
 };
 let rejectionNotices = quietRejectionThrottles();
 
 /** Test-only: puts the shared rate limiter and notice counters back to a clean start. */
 export function resetClientDiagnosticsIngestStateForTests(): void {
   rateLimiter = createInlineCompletionRateLimiter(CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG);
-  dropNotices = { failure: quietThrottle(), routine: quietThrottle() };
+  dropNotices = { failure: quietThrottle(), routine: quietThrottle(), loss: quietThrottle() };
   rejectionNotices = quietRejectionThrottles();
 }
 
@@ -1105,7 +1120,7 @@ function noticeRejectedReport(
  * process: the trailing counts reach the log instead of waiting for a next window that never comes.
  */
 export function flushClientDiagnosticsIngestCounts(): void {
-  for (const budget of ["failure", "routine"] as const) {
+  for (const budget of ["failure", "routine", "loss"] as const) {
     const drops = openThrottleWindow(dropNotices[budget], null);
     if (drops > 0) writeRateLimitedNotice(undefined, budget, drops, "shutdown-flush");
   }
@@ -1129,6 +1144,7 @@ const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
   "voice-dialogue": "internal",
   "voice-playback": "unavailable",
   "markdown-layout": "unknown",
+  "delivery-loss": "unknown",
   other: "unknown",
 } as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
 
@@ -1151,11 +1167,18 @@ function projectClientLoss(
   extra: Record<string, unknown>,
 ): void {
   if (loss === undefined) return;
-  for (const [key, reason, field] of CLIENT_LOSS_PROJECTION) {
+  for (const [key, , field] of CLIENT_LOSS_PROJECTION) {
     const count = loss[key];
     if (count === undefined || count === 0) continue;
-    recordActivityLogLoss(reason, count);
     extra[field] = count;
+  }
+}
+
+function recordClientLoss(loss: ClientDiagnosticLossCounts | undefined): void {
+  if (loss === undefined) return;
+  for (const [key, reason] of CLIENT_LOSS_PROJECTION) {
+    const count = loss[key];
+    if (count !== undefined && count > 0) recordActivityLogLoss(reason, count);
   }
 }
 
@@ -1323,31 +1346,25 @@ function projectGitContext(
   }
 }
 
-// The routine (non-failure) git-client operation outcomes: exactly the ones
-// `CLIENT_GIT_OPERATION_SETTLED_OPERATION` registers, narrower than the full
-// `ClientGitClientOperationOutcome` union so `logClientGitOperationSettled` below assigns straight
-// into that registration's own field type with no cast (PR #3625 review).
-type GitOperationRoutineOutcome = Exclude<
-  ClientGitClientOperationOutcome,
-  "discarded-failed" | "retry-failed"
->;
-
-function isGitOperationRoutineOutcome(
-  outcome: ClientGitClientOperationOutcome,
-): outcome is GitOperationRoutineOutcome {
-  return !CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome);
-}
-
-// PR #3625 review: a git-client operation settling as ROUTINE evidence (a discarded-succeeded
-// add-repository result, a recovered or superseded manual retry) is diverted here, before
-// `logClientDiagnostic` builds the failure-shaped `extra` below — mirrors
-// `logVoiceDialogueStage`/`logMarkdownLayout`'s own diversion.
+// Record the lifecycle before projecting failure details. A failed repository addition still
+// ends its attempt; returning false lets the same report retain the diagnostic's error evidence.
 function logClientGitOperationSettled(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
   const gitOp = request.gitClientOperation;
-  if (gitOp === undefined || !isGitOperationRoutineOutcome(gitOp.outcome)) return false;
+  if (
+    gitOp?.outcome === "started" &&
+    (gitOp.operation === "repository-clone" || gitOp.operation === "repository-register")
+  ) {
+    logClientGitOperationAttempted({
+      operation: gitOp.operation,
+      correlationId: clientDiagnosticCorrelation(request, correlationId).correlationId,
+    });
+    return true;
+  }
+  if (gitOp === undefined || gitOp.outcome === "started" || gitOp.outcome === "retry-failed")
+    return false;
   getServerLogger().info(
     activityLogEvent(
       CLIENT_GIT_OPERATION_SETTLED_OPERATION,
@@ -1360,7 +1377,7 @@ function logClientGitOperationSettled(
       },
     ),
   );
-  return true;
+  return !CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(gitOp.outcome);
 }
 
 // PR #3625 review: a select dismissal is always routine evidence — there is no failure variant, so
@@ -1794,7 +1811,11 @@ function logClientSessionRepair(
 // contract guard requires it), never the ingest POST's own — that id is what its later settlement
 // (`client.git-operation.settled` or, on a genuine failure, `client.diagnostic`) reuses to join the
 // pair on one timeline, so falling back to the ingest id here would silently break that join.
-function logClientGitOperationAttempted(request: ClientGitRetryAttemptIngestRequest): void {
+function logClientGitOperationAttempted(request: {
+  readonly operation:
+    ClientGitRetryAttemptIngestRequest["operation"] | "repository-clone" | "repository-register";
+  readonly correlationId: string;
+}): void {
   getServerLogger().info(
     activityLogEvent(
       CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION,
@@ -1841,6 +1862,7 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
 // and a select menu's Escape dismissal, which has no failure variant at all (PR #3625 review,
 // KeikoSelect.tsx finding).
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
+  if (report.kind === "delivery-loss") return "loss";
   if (report.selectDismissal !== undefined) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";
@@ -1968,8 +1990,22 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
   const budget = reportBudget(classified);
   if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS[budget], now)) {
     noticeRateLimitedDrop(budget, now, ctx.correlationId);
+    // Do not acknowledge client-supplied loss we did not admit. The browser restores its
+    // counters on a non-2xx response and can carry them on a later admitted report.
+    if (classified.shape === "message" && classified.report.loss !== undefined) {
+      return {
+        status: 429,
+        body: errorBody(
+          "RATE_LIMITED",
+          "Diagnostic report rate limit exceeded.",
+          ctx.correlationId,
+        ),
+      };
+    }
     return { status: 204, body: null };
   }
+  // Record admitted counts exactly once, before any routine-report diversion.
+  if (classified.shape === "message") recordClientLoss(classified.report.loss);
   logClientReport(classified, ctx.correlationId);
   return { status: 204, body: null };
 }

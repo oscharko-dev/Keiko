@@ -45,6 +45,15 @@ evaluates the complete registered inventory by composing `check:op-catalog`,
 `arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
 a narrower change set never narrows what it proves.
 
+Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
+flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
+events. Neither path records customer diffs or generated text.
+
+All repository-add lifecycle join ids, including discarded settlements, must pass the canonical Activity Log correlation guard. Browser delivery-loss counts enter the shared ledger once after rate admission and before routine diversion. Rate-limited reports carrying loss return 429 so the browser restores their counters for later admission; their server-owned drop must not be counted again as a failed POST. Final pagehide loss reports have their own bounded server budget, independent of routine/failure traffic. Gateway streams settle circuit/spend state, close provider iterators and emit completion before yielding done, since production consumers need not advance again. Commit-draft refusals retain measured prompt bounds and generated/reused outcomes share a body-free key digest.
+Repository-add dialogs report the attempt and its live or discarded settlement using the request's
+correlation id. Test effect replay under React StrictMode separately from an actual dismissal:
+only the latter may discard a response.
+
 The generated registry also publishes the stable implementation-obligation categories and the
 failure-class coverage matrix consumed by permanent quality gates. Its release expectation is
 100% complete. Exemptions are not comments or wildcards: the sole registry exemption contract is

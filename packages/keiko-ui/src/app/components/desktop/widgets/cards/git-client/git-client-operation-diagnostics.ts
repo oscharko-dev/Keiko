@@ -37,8 +37,8 @@ export interface GitClientOperationDiagnosticOptions {
 }
 
 /**
- * Reports a Git-client operation settling after its own surface (a dialog, a panel) is already
- * gone: which operation, and how it settled — never the repository, path or URL involved. `message`
+ * Reports a Git-client operation's attempt or settlement, including a response discarded after
+ * its surface closed: which operation and outcome, never the repository, path or URL. `message`
  * is the already-redacted, body-free console text `reportClientDiagnostic` requires; only the
  * closed `gitClientOperation` fields, `correlationId`, `errorKind` and `errorEvidence` reach the
  * activity log.

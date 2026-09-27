@@ -22,11 +22,24 @@
 
 import type { IncomingMessage } from "node:http";
 import {
+  findConfiguredCapability,
   selectConfiguredModel,
   type GatewayCallRequest,
   type NormalizedResponse,
+  type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
-import { ProviderOutputExhaustedError, TimeoutError } from "@oscharko-dev/keiko-security";
+import {
+  ProviderEmptyAnswerError,
+  ProviderOutputExhaustedError,
+  TimeoutError,
+} from "@oscharko-dev/keiko-security";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
+import {
+  canonicalCommitBody,
+  prepareCommitDraft,
+  type CommitBodyNormalizationEvidence,
+} from "./commitDraftQuality.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
   GitCommitChangeSummary,
@@ -111,6 +124,7 @@ export type GitDeliveryCommitErrorCode =
   | "GIT_DELIVERY_COMMIT_BAD_REQUEST"
   | "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE"
   | "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD"
+  | "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE"
   | "GIT_DELIVERY_COMMIT_DRAFT_FAILED"
   | "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT"
   | "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
@@ -148,6 +162,75 @@ const COMMIT_PREVIEW_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const COMMIT_DRAFT_MODEL_FIELDS = {
+  outcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["succeeded", "failed"],
+  },
+  failureCode: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "GIT_DELIVERY_COMMIT_BAD_REQUEST",
+      "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
+      "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
+      "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
+      "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
+      "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+      "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+      "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+      "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+      "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+      "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+      "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
+      "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
+    ],
+  },
+  // #3591 (1.1.7): the bounds the model call ran under, present once a model was resolved — the
+  // output allowance sent (the raised draft budget, clamped to the model's declared limit) and
+  // the route's own deadline behind the gateway's floors — so an exhausted or timed-out draft
+  // can be reconstructed from this line alone.
+  maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+  deadlineMs: { type: "integer", dataClass: "duration", required: false },
+  promptTokens: { type: "integer", dataClass: "count", required: false },
+  maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+  diffCompacted: { type: "boolean", dataClass: "closed-enum", required: false },
+  generationAttempts: { type: "integer", dataClass: "count", required: false },
+  reused: { type: "boolean", dataClass: "closed-enum", required: false },
+  draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  normalizationVersion: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["1"],
+  },
+  normalizationRule: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["body-only", "terminal-trailers", "explicit-trailers"],
+  },
+  normalizationChanged: { type: "boolean", dataClass: "closed-enum", required: false },
+  bodyBulletCount: { type: "integer", dataClass: "count", required: false },
+  trailerLikeLineCount: { type: "integer", dataClass: "count", required: false },
+  trailerCount: { type: "integer", dataClass: "count", required: false },
+  trailerContinuationCount: {
+    type: "integer",
+    dataClass: "count",
+    required: false,
+  },
+  trailerParagraphBreakCount: {
+    type: "integer",
+    dataClass: "count",
+    required: false,
+  },
+  referenceTrailerCount: { type: "integer", dataClass: "count", required: false },
+  breakingTrailerCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
 const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -163,37 +246,7 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
     stagedFileCount: { type: "integer", dataClass: "count", required: false },
     areaCount: { type: "integer", dataClass: "count", required: false },
     touchesTests: { type: "boolean", dataClass: "closed-enum", required: false },
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["succeeded", "failed"],
-    },
-    failureCode: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "GIT_DELIVERY_COMMIT_BAD_REQUEST",
-        "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
-        "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
-        "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
-        "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
-        "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
-        "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
-        "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
-        "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
-        "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
-        "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
-        "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
-      ],
-    },
-    // #3591 (1.1.7): the bounds the model call ran under, present once a model was resolved — the
-    // output allowance sent (the raised draft budget, clamped to the model's declared limit) and
-    // the route's own deadline behind the gateway's floors — so an exhausted or timed-out draft
-    // can be reconstructed from this line alone.
-    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
-    deadlineMs: { type: "integer", dataClass: "duration", required: false },
+    ...COMMIT_DRAFT_MODEL_FIELDS,
   },
   causal: "correlation",
   lifecycle: "end",
@@ -203,11 +256,31 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const COMMIT_DRAFT_ATTEMPT_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.commit.draft.attempt.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/commitRoutes.logCommitDraftAttempt",
+  fields: {
+    ...COMMIT_DRAFT_MODEL_FIELDS,
+    attempt: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-commit-draft"],
+  proofIds: ["git.commit.draft.attempt.completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
 // #3591: an output-exhausted answer is not shape-invalid (the model simply spent its whole budget
 // before finishing), but it is just as unusable as a malformed one, so it shares the
 // "validation-failed" errorKind with GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT — the precise class
 // still survives on the record via the `failureCode` field below.
 function commitDraftErrorKind(code: GitDeliveryCommitErrorCode): ActivityLogErrorKind {
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE") return "validation-failed";
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE") return "unavailable";
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT") return "timeout";
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED") return "cancelled";
@@ -226,6 +299,8 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryCommitErrorCode, string>> = {
   GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE: "The governed commit request exceeds the maximum size.",
   GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD:
     "The request contained a forbidden field. Requests may not carry credentials, headers, or URLs.",
+  GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE:
+    "The selected changes exceed this model’s context window even after compacting every file. Choose a model with a larger context window.",
   GIT_DELIVERY_COMMIT_DRAFT_FAILED: "Keiko could not generate a commit draft from the staged diff.",
   GIT_DELIVERY_COMMIT_DRAFT_CANCELLED:
     "The commit draft was cancelled because the client disconnected before it was ready.",
@@ -251,7 +326,6 @@ const errResult = (status: number, code: GitDeliveryCommitErrorCode): RouteResul
 
 const UTF8 = new TextEncoder();
 const KEIKO_GENERATED_FOOTER = "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)";
-const COMMIT_DRAFT_DIFF_MAX_CHARS = 90_000;
 const COMMIT_DRAFT_INSTRUCTION_MAX_CHARS = 1_500;
 // #3591 (1.1.7): a LiteLLM-fronted vLLM gateway at peak load can take 30-120s or longer to answer.
 // The flat 30s AbortSignal this route used to pass as `cancellationSignal` capped the WHOLE buffered
@@ -642,7 +716,9 @@ const COMMIT_DRAFT_SYSTEM_PROMPT = [
   "Return only JSON with string fields subject and body.",
   "The subject must be concise, factual, imperative/present tense, and policy-compliant.",
   "Use a conventional-commit prefix when the policy requires or permits one.",
-  "The body must explain the concrete staged changes and mention tests only when evidenced.",
+  "The body must be a concise list of concrete changes, using one - bullet per change and no headings.",
+  "Cover all selected files, group related changes, and mention tests only when evidenced; added tests do not prove they passed.",
+  "When diffTruncated is true, excerpts from every file are supplied. Do not invent details from omitted lines.",
   "Do not invent verification, reviews, deployments, issue closures, URLs, branding, or attribution.",
   "Do not add a Generated-with footer; Keiko adds the required footer after validation.",
 ].join("\n");
@@ -656,18 +732,30 @@ interface ResolvedCommitDraftModel {
   readonly model: NonNullable<ReturnType<UiHandlerDeps["modelPortFactory"]>>;
   readonly modelId: string;
   readonly useResponseFormat: boolean;
+  readonly capability: ModelCapability;
+  readonly configDigest: string;
   readonly maxOutputTokens: number;
   // The route's backstop behind the gateway's own retry budget for this model.
   readonly deadlineMs: number;
 }
 
 // The bounds one draft's model call ran under; recorded on its `git.commit.draft.completed` line.
-interface CommitDraftBounds {
+interface CommitDraftBounds extends Partial<CommitBodyNormalizationEvidence> {
+  readonly promptTokens?: number;
+  readonly maxPromptTokens?: number;
+  readonly diffCompacted?: boolean;
+  readonly generationAttempts?: number;
+  readonly reused?: boolean;
+  readonly draftKeyDigest?: string;
   readonly maxOutputTokens: number;
   readonly deadlineMs: number;
 }
 
 interface CommitDraftModelInput {
+  readonly supportsSeeding?: boolean;
+  readonly projectId: string;
+  readonly diffCompacted?: boolean;
+  readonly repair?: boolean;
   readonly modelId: string;
   readonly useResponseFormat: boolean;
   readonly maxOutputTokens: number;
@@ -684,7 +772,6 @@ type ModelCommitDraftResult =
   | {
       readonly ok: false;
       readonly code: GitDeliveryCommitErrorCode;
-      readonly error?: unknown;
       readonly bounds?: CommitDraftBounds;
     };
 
@@ -722,15 +809,25 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
   const modelId = structuredModelId ?? selectConfiguredModel(config, { kind: "chat" });
   if (modelId === undefined) return undefined;
   const model = deps.modelPortFactory(modelId);
-  if (model === undefined) return undefined;
+  const capability = findConfiguredCapability(config, modelId);
+  if (model === undefined || capability === undefined) return undefined;
   return {
     model,
+    capability,
+    configDigest: sha256Hex(JSON.stringify(config)),
     modelId,
     useResponseFormat: structuredModelId !== undefined,
-    maxOutputTokens: commitDraftOutputTokens(config.capabilities ?? [], modelId),
+    maxOutputTokens: Math.min(
+      commitDraftOutputTokens([capability], modelId),
+      commitDraftWindowOutputLimit(capability),
+    ),
     // The draft only buffers, so its backstop follows the buffered budget alone (PR #3602 review).
     deadlineMs: gatewayRouteDeadlineMs(config, modelId, ["buffered"]),
   };
+}
+
+function commitDraftWindowOutputLimit(capability: ModelCapability): number {
+  return Math.max(1, Math.floor((capability.contextWindow || 16_000) / 4));
 }
 
 // #3591 review: the raised draft budget must not exceed what the model declares. The spend-budget
@@ -746,14 +843,6 @@ function commitDraftOutputTokens(
     : COMMIT_DRAFT_MAX_OUTPUT_TOKENS;
 }
 
-function boundedStagedDiff(diff: string): {
-  readonly value: string;
-  readonly truncated: boolean;
-} {
-  if (diff.length <= COMMIT_DRAFT_DIFF_MAX_CHARS) return { value: diff, truncated: false };
-  return { value: diff.slice(0, COMMIT_DRAFT_DIFF_MAX_CHARS), truncated: true };
-}
-
 function commitDraftPolicyEvidence(
   policy: GitCommitMessagePolicy,
 ): Readonly<Record<string, unknown>> {
@@ -766,16 +855,15 @@ function commitDraftPolicyEvidence(
 }
 
 function commitDraftEvidence(input: CommitDraftModelInput): string {
-  const diff = boundedStagedDiff(input.stagedDiff);
   return JSON.stringify({
     operatorInstruction: input.instruction ?? "",
     stagedFiles: input.stagedPaths,
     stagedFileCount: input.summary.stagedFileCount,
     areaCount: input.summary.areaCount,
     touchesTests: input.summary.touchesTests,
-    diffTruncated: diff.truncated,
+    diffTruncated: input.diffCompacted ?? false,
     commitPolicy: commitDraftPolicyEvidence(input.policy),
-    stagedDiff: diff.value,
+    stagedDiff: input.stagedDiff,
   });
 }
 
@@ -783,12 +871,20 @@ function buildCommitDraftModelRequest(input: CommitDraftModelInput): GatewayCall
   return {
     modelId: input.modelId,
     messages: [
-      { role: "system", content: COMMIT_DRAFT_SYSTEM_PROMPT },
+      {
+        role: "system",
+        content:
+          COMMIT_DRAFT_SYSTEM_PROMPT +
+          (input.repair === true
+            ? "\nThe previous answer was unusable. Return complete JSON with a single-line policy-compliant subject and a non-empty body. Keep it concise; do not include reasoning or Markdown fences."
+            : ""),
+      },
       { role: "user", content: commitDraftEvidence(input) },
     ],
     ...(input.useResponseFormat ? { responseFormat: COMMIT_DRAFT_RESPONSE_FORMAT } : {}),
     maxOutputTokens: input.maxOutputTokens,
-    temperature: 0.2,
+    temperature: 0,
+    ...(input.supportsSeeding === true ? { seed: 0 } : {}),
     stream: false,
     logContext: { correlationId: input.correlationId },
     // Applies the gateway's coding-workbench provider-timeout floor (#3591) — see
@@ -829,8 +925,16 @@ function draftTextField(
 }
 
 type ModelCommitDraftValidation =
-  | { readonly ok: true; readonly message: string }
-  | { readonly ok: false; readonly reason: "output-exhausted" | "invalid-output" };
+  | {
+      readonly ok: true;
+      readonly message: string;
+      readonly normalization: CommitBodyNormalizationEvidence;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "output-exhausted" | "invalid-output";
+      readonly normalization?: CommitBodyNormalizationEvidence;
+    };
 
 function modelCommitMessage(
   response: NormalizedResponse,
@@ -848,11 +952,19 @@ function modelCommitMessage(
   if (!isPlainObject(candidate)) return { ok: false, reason: "invalid-output" };
   const subject = draftTextField(candidate, "subject");
   const body = draftTextField(candidate, "body");
-  if (subject === undefined || body === undefined) return { ok: false, reason: "invalid-output" };
-  const message = appendKeikoGeneratedFooter(`${subject}\n\n${body}`);
+  if (
+    subject === undefined ||
+    body === undefined ||
+    subject.includes("\n") ||
+    body.length > 12_000
+  ) {
+    return { ok: false, reason: "invalid-output" };
+  }
+  const normalized = canonicalCommitBody(body);
+  const message = appendKeikoGeneratedFooter(`${subject}\n\n${normalized.body}`);
   return validateGitCommitMessage(message, policy).ok
-    ? { ok: true, message }
-    : { ok: false, reason: "invalid-output" };
+    ? { ok: true, message, normalization: normalized.evidence }
+    : { ok: false, reason: "invalid-output", normalization: normalized.evidence };
 }
 
 // #3591: classifies a failed model call into the three failure classes the UI must tell apart — a
@@ -864,6 +976,7 @@ function classifyCommitDraftModelFailure(
   error: unknown,
   signal: AbortSignal,
 ): GitDeliveryCommitErrorCode {
+  if (error instanceof ProviderEmptyAnswerError) return "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT";
   if (error instanceof ProviderOutputExhaustedError) {
     return "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED";
   }
@@ -883,42 +996,177 @@ function routeDeadlineFired(signal: AbortSignal): boolean {
   return signal.aborted && reason instanceof DOMException && reason.name === "TimeoutError";
 }
 
-async function generateModelCommitMessage(
-  deps: UiHandlerDeps,
-  input: Omit<CommitDraftModelInput, "modelId" | "useResponseFormat" | "maxOutputTokens">,
-  signal: AbortSignal,
-): Promise<ModelCommitDraftResult> {
-  const resolved = resolveCommitDraftModel(deps);
-  if (resolved === undefined) {
-    return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE" };
+type CommitDraftInput = Omit<
+  CommitDraftModelInput,
+  "modelId" | "useResponseFormat" | "maxOutputTokens"
+>;
+type SuccessfulDraft = Extract<ModelCommitDraftResult, { readonly ok: true }>;
+const draftCaches = new WeakMap<UiHandlerDeps, Map<string, SuccessfulDraft>>();
+const draftMutex = createWorkspaceMutexRegistry();
+
+function draftCache(deps: UiHandlerDeps): Map<string, SuccessfulDraft> {
+  let cache = draftCaches.get(deps);
+  if (cache === undefined) {
+    cache = new Map();
+    draftCaches.set(deps, cache);
   }
+  return cache;
+}
+
+async function attemptCommitDraft(
+  deps: UiHandlerDeps,
+  resolved: ResolvedCommitDraftModel,
+  input: CommitDraftInput,
+  signal: AbortSignal,
+  attempt: number,
+): Promise<ModelCommitDraftResult> {
+  const prepared = prepareCommitDraft(input.stagedDiff, resolved.capability, (diff, compacted) =>
+    buildCommitDraftModelRequest({
+      ...input,
+      stagedDiff: diff,
+      diffCompacted: compacted,
+      modelId: resolved.modelId,
+      useResponseFormat: resolved.useResponseFormat,
+      maxOutputTokens: resolved.maxOutputTokens,
+      supportsSeeding: resolved.capability.supportsSeeding === true,
+      repair: attempt > 1,
+    }),
+  );
   const bounds: CommitDraftBounds = {
     maxOutputTokens: resolved.maxOutputTokens,
     deadlineMs: resolved.deadlineMs,
+    generationAttempts: prepared.request === undefined ? attempt - 1 : attempt,
+    promptTokens: prepared.promptTokens,
+    maxPromptTokens: prepared.maxPromptTokens,
+    diffCompacted: prepared.diffCompacted,
   };
-  // The route deadline is armed only now, for THIS model's budget, and composed with the client
-  // disconnect signal; its reason (a TimeoutError DOMException) tells the two apart below.
-  const callSignal = AbortSignal.any([signal, AbortSignal.timeout(resolved.deadlineMs)]);
+  if (prepared.request === undefined)
+    return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE", bounds };
   try {
-    const response = await resolved.model.call(
-      buildCommitDraftModelRequest({
-        ...input,
-        modelId: resolved.modelId,
-        useResponseFormat: resolved.useResponseFormat,
-        maxOutputTokens: resolved.maxOutputTokens,
-      }),
-      callSignal,
-    );
+    const response = await resolved.model.call(prepared.request, signal);
     const validated = modelCommitMessage(response, input.policy);
-    if (validated.ok) return { ok: true, message: validated.message, bounds };
-    const code: GitDeliveryCommitErrorCode =
-      validated.reason === "output-exhausted"
-        ? "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
-        : "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT";
-    return { ok: false, code, bounds };
+    const observedBounds = { ...bounds, ...validated.normalization };
+    if (validated.ok) return { ok: true, message: validated.message, bounds: observedBounds };
+    return {
+      ok: false,
+      bounds: observedBounds,
+      code:
+        validated.reason === "output-exhausted"
+          ? "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
+          : "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+    };
   } catch (error) {
-    return { ok: false, code: classifyCommitDraftModelFailure(error, callSignal), error, bounds };
+    reportCommitDraftModelFailure(deps, input.correlationId, error);
+    return { ok: false, code: classifyCommitDraftModelFailure(error, signal), bounds };
   }
+}
+
+function repairCommitDraftModel(
+  model: ResolvedCommitDraftModel,
+  result: ModelCommitDraftResult,
+): ResolvedCommitDraftModel | undefined {
+  if (result.ok) return undefined;
+  if (result.code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT") return model;
+  if (result.code !== "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED") return undefined;
+  const maxOutputTokens = Math.min(
+    8_000,
+    model.capability.maxOutputTokens || 8_000,
+    commitDraftWindowOutputLimit(model.capability),
+  );
+  return maxOutputTokens > model.maxOutputTokens ? { ...model, maxOutputTokens } : undefined;
+}
+
+function selectCommitDraftRecovery(
+  original: ModelCommitDraftResult,
+  repaired: ModelCommitDraftResult,
+): ModelCommitDraftResult {
+  // Refusing our larger repair prompt cannot invalidate changes the first model call read.
+  return !repaired.ok && repaired.code === "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE"
+    ? original
+    : repaired;
+}
+
+async function generateModelCommitMessage(
+  deps: UiHandlerDeps,
+  input: CommitDraftInput,
+  signal: AbortSignal,
+  log: ServerLogSink,
+): Promise<ModelCommitDraftResult> {
+  const resolved = resolveCommitDraftModel(deps);
+  if (resolved === undefined)
+    return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE" };
+  const { correlationId: _correlationId, ...identity } = input;
+  const key = sha256Hex(JSON.stringify([identity, resolved.configDigest]));
+  const cache = draftCache(deps);
+  return draftMutex.runExclusive([key], async (): Promise<ModelCommitDraftResult> => {
+    const callSignal = AbortSignal.any([signal, AbortSignal.timeout(resolved.deadlineMs)]);
+    if (clientLeft(callSignal))
+      return { ok: false, code: classifyCommitDraftModelFailure(callSignal.reason, callSignal) };
+    const cached = cache.get(key);
+    if (cached !== undefined)
+      return { ...cached, bounds: { ...cached.bounds, reused: true, generationAttempts: 0 } };
+    let result = await attemptCommitDraft(deps, resolved, input, callSignal, 1);
+    logCommitDraftAttempt(log, input.correlationId, result, 1);
+    const recovery = repairCommitDraftModel(resolved, result);
+    if (recovery !== undefined && !clientLeft(callSignal)) {
+      const repaired = await attemptCommitDraft(deps, recovery, input, callSignal, 2);
+      logCommitDraftAttempt(log, input.correlationId, repaired, 2);
+      result = selectCommitDraftRecovery(result, repaired);
+    }
+    if (clientLeft(callSignal))
+      return {
+        ok: false,
+        code: classifyCommitDraftModelFailure(callSignal.reason, callSignal),
+        ...(result.bounds === undefined ? {} : { bounds: result.bounds }),
+      };
+    result = {
+      ...result,
+      bounds: {
+        maxOutputTokens: resolved.maxOutputTokens,
+        deadlineMs: resolved.deadlineMs,
+        ...result.bounds,
+        draftKeyDigest: key,
+      },
+    };
+    if (result.ok) rememberCommitDraft(cache, key, result);
+    return result;
+  });
+}
+
+function rememberCommitDraft(
+  cache: Map<string, SuccessfulDraft>,
+  key: string,
+  result: SuccessfulDraft,
+): void {
+  if (cache.size >= 32) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, result);
+}
+
+function logCommitDraftAttempt(
+  log: ServerLogSink,
+  correlationId: string,
+  result: ModelCommitDraftResult,
+  attempt: number,
+): void {
+  log.write(
+    activityLogEvent(
+      COMMIT_DRAFT_ATTEMPT_COMPLETED_OPERATION,
+      {
+        correlationId,
+        status: result.ok ? 200 : commitDraftFailureStatus(result.code),
+        ...(result.ok ? {} : { errorKind: commitDraftErrorKind(result.code) }),
+      },
+      {
+        attempt,
+        outcome: result.ok ? "succeeded" : "failed",
+        ...(result.ok ? {} : { failureCode: result.code }),
+        ...result.bounds,
+      },
+    ),
+  );
 }
 
 // `summary` is undefined only when the draft ended before the staged changeset was read (a client
@@ -1000,21 +1248,18 @@ function commitDraftFailureStatus(code: GitDeliveryCommitErrorCode): number {
   // Matches repositoryInitializationRoutes.ts / gitRepositoryRoutes.ts: a bounded operation that
   // did not finish in time reports 504, never the generic 503 an unavailable model reports; a
   // client that left reports 499 like the chat stream and grounded routes do.
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE") return 422;
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT") return 504;
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED") return 499;
   return COMMIT_DRAFT_BAD_GATEWAY_CODES.has(code) ? 502 : 503;
 }
 
 function modelDraftFailureResult(
-  deps: UiHandlerDeps,
   log: ServerLogSink,
   correlationId: string,
   summary: GitCommitChangeSummary,
   suggested: Extract<ModelCommitDraftResult, { readonly ok: false }>,
 ): RouteResult {
-  if (suggested.error !== undefined) {
-    reportCommitDraftModelFailure(deps, correlationId, suggested.error);
-  }
   return draftFailureResult(
     log,
     correlationId,
@@ -1048,7 +1293,7 @@ async function computeModelCommitDraft(
   // Re-checked after every await that can outlast a disconnect (PR #3602 review): a client that
   // left while a worktree read was pending gets no further read and no model call.
   if (clientLeft(signal)) return draftCancelled(log, correlationId, summary);
-  if (summary.stagedFileCount === 0 || stagedPaths.length === 0) {
+  if (stagedPaths.length === 0) {
     return draftFailureResult(
       log,
       correlationId,
@@ -1062,6 +1307,7 @@ async function computeModelCommitDraft(
   const suggested = await generateModelCommitMessage(
     deps,
     {
+      projectId: workspace.root,
       policy,
       stagedPaths,
       summary,
@@ -1070,10 +1316,9 @@ async function computeModelCommitDraft(
       correlationId,
     },
     signal,
+    log,
   );
-  if (!suggested.ok) {
-    return modelDraftFailureResult(deps, log, correlationId, summary, suggested);
-  }
+  if (!suggested.ok) return modelDraftFailureResult(log, correlationId, summary, suggested);
   logCommitDraft(log, correlationId, summary, 200, undefined, suggested.bounds);
   const body: GitDeliveryCommitDraftBody = {
     schemaVersion: "1",

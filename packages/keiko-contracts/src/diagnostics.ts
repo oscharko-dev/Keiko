@@ -7,9 +7,9 @@
 // the specific failed server request it is reporting on, instead of fuzzy timestamp matching. It
 // is DESIGNED to be populated from the same correlation id already threaded into every
 // `ApiError`/SSE event (`packages/keiko-ui/src/lib/http.ts`), and is re-validated server-side with
-// `isValidCorrelationId` before it is trusted — this guard only admits its general SHAPE (a short,
-// bounded string), never the full correlation-id policy, which is server plumbing
-// (`packages/keiko-server/src/correlation.ts`), not a wire concern.
+// `isValidCorrelationId` before it is trusted. Generic crash reports retain their bounded-string
+// compatibility shape; repository lifecycle events require the canonical Activity Log correlation
+// guard so an attempt and its settlement cannot fall back to unrelated ingest identities.
 //
 // `install-client-diagnostics.ts` is the only place a `ClientDiagnosticIngestRequest` is built.
 // `reportClientDiagnostic` (client-diagnostics.ts) takes optional structured metadata: the
@@ -31,7 +31,11 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
-import { isActivityLogErrorKind, type ActivityLogErrorKind } from "./observability.js";
+import {
+  isActivityLogCorrelationId,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
+} from "./observability.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
@@ -71,6 +75,7 @@ export const CLIENT_DIAGNOSTIC_KINDS = [
   "voice-dialogue",
   "voice-playback",
   "markdown-layout",
+  "delivery-loss",
   "other",
 ] as const;
 export type ClientDiagnosticKind = (typeof CLIENT_DIAGNOSTIC_KINDS)[number];
@@ -274,9 +279,6 @@ export function clientErrorClass(error: unknown): string {
 const CORRELATION_ID_MAX_LENGTH = 128;
 const ISO_INSTANT_MAX_LENGTH = 40;
 
-// Deliberately less strict than `correlation.ts`'s SAFE_CORRELATION_ID: this file only asserts the
-// wire SHAPE (a short, non-empty string) so the leaf never has to import server plumbing. The
-// server re-validates with `isValidCorrelationId` before trusting the value for anything.
 const ISO_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/;
 
 export const CLIENT_VOICE_CAPTURE_REASONS = [
@@ -554,7 +556,12 @@ function hasValidGitContext(value: Record<string, unknown>): boolean {
   const { gitChangeDescription, workspaceTrustBinding, gitClientOperation } = value;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
-  return isOptional(gitClientOperation, isClientDiagnosticGitClientOperation);
+  if (gitClientOperation === undefined) return true;
+  if (!isClientDiagnosticGitClientOperation(gitClientOperation)) return false;
+  return (
+    !isRepositoryAdditionOperation(gitClientOperation.operation) ||
+    isActivityLogCorrelationId(value.correlationId)
+  );
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
@@ -567,7 +574,13 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!hasValidGitContext(value)) return false;
   if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
-  return hasValidCodingContext(value) && isOptional(loss, isClientDiagnosticLossCounts);
+  return hasValidCodingContext(value) && hasValidClientLoss(value.kind, loss);
+}
+
+function hasValidClientLoss(kind: unknown, loss: unknown): boolean {
+  return kind === "delivery-loss"
+    ? isClientDiagnosticLossCounts(loss)
+    : isOptional(loss, isClientDiagnosticLossCounts);
 }
 
 export function isClientDiagnosticIngestRequest(
@@ -1015,6 +1028,9 @@ export const CLIENT_GIT_CLIENT_OPERATION_OUTCOMES = [
   // bump) had already superseded it: neither a recovery nor a failure of the read itself, just
   // discarded evidence (PR #3625 review, GitClientWindow.tsx finding).
   "retry-superseded",
+  "started",
+  "succeeded",
+  "failed",
 ] as const;
 export type ClientGitClientOperationOutcome = (typeof CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)[number];
 
@@ -1031,13 +1047,18 @@ const GIT_CLIENT_DISCARD_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> 
   "discarded-succeeded",
   "discarded-failed",
 ]);
+const GIT_CLIENT_ADDITION_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> = new Set([
+  "started",
+  "succeeded",
+  "failed",
+]);
 
 // The outcomes that represent an actual failure, shared by the client-side POST throttle
 // (install-client-diagnostics.ts) and the server's rate-limit budget (client-diagnostics-routes.ts)
 // so the two budgets can never drift — exactly like the binding and session-repair outcome sets
 // above.
 export const CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> =
-  new Set(["discarded-failed", "retry-failed"]);
+  new Set(["discarded-failed", "retry-failed", "failed"]);
 
 export interface ClientDiagnosticGitClientOperation {
   readonly operation: ClientGitClientOperationKind;
@@ -1047,6 +1068,10 @@ export interface ClientDiagnosticGitClientOperation {
   // thrown/rejected one without the report ever carrying a message (PR #3625 review,
   // GitClientWindow.tsx finding). Never present on a discard, a recovery, or a superseded retry.
   readonly reason?: GitWireUnavailableReason | undefined;
+}
+
+function isRepositoryAdditionOperation(operation: string): boolean {
+  return operation === "repository-clone" || operation === "repository-register";
 }
 
 /**
@@ -1062,6 +1087,11 @@ export function isClientDiagnosticGitClientOperation(
   if (!isRecord(value)) return false;
   if (!isOneOf(value.operation, CLIENT_GIT_CLIENT_OPERATION_KINDS)) return false;
   if (!isOneOf(value.outcome, CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)) return false;
+  // Repository additions report their live lifecycle as well as post-dismissal settlements.
+  // Keep the existing retry/discard pairings closed for every other operation.
+  if (GIT_CLIENT_ADDITION_OUTCOMES.has(value.outcome)) {
+    return isRepositoryAdditionOperation(value.operation) && value.reason === undefined;
+  }
   if (
     GIT_CLIENT_DISCARD_OPERATIONS.has(value.operation) !==
     GIT_CLIENT_DISCARD_OUTCOMES.has(value.outcome)

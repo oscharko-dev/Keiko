@@ -137,6 +137,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Folder selection is not available in this Keiko session.",
   "gitClientWindow.addRepository.cancel": "Cancel",
   "gitClientWindow.addRepository.adding": "Adding…",
+  "gitClientWindow.addRepository.failed": "Could not add repository",
   "gitClientWindow.repository.reconnectFailed": "Repository reconnection failed: {detail}",
   "gitClientWindow.repository.workspaceUnavailable":
     "This repository is not currently connected to a workspace. Connect it again to continue.",

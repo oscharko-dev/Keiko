@@ -31,6 +31,7 @@ import {
   readGitWorktreeSnapshot,
   readStagedPaths,
 } from "./git-worktree-snapshot-node.js";
+import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import { indexStatMatches, readGitIndexWriteTimeNs } from "./git-index-stat.js";
 
 // Owner audit finding b2-7: the racy-clean guard in `indexStatMatches` existed but was never
@@ -134,6 +135,22 @@ describe("readGitRawWorktreeSnapshot documented tracking limits", () => {
         readGitCommitIdentity(deps, "HEAD"),
     ];
     for (const read of readers) expect(await read(contextual)).toEqual(await read(clean));
+  });
+
+  it("reads every staged file when a lockfile exceeds the ordinary command output cap", async () => {
+    writeFileSync(join(root, "a-lock.txt"), "dependency-data\n".repeat(22_000));
+    writeFileSync(join(root, "z-feature.txt"), "last-selected-file-evidence\n");
+    git(["add", "a-lock.txt", "z-feature.txt"]);
+    const patch = await readGitStagedDiff({ workspace, processEnv: { PATH: process.env.PATH } });
+    expect(patch).toContain("last-selected-file-evidence");
+    expect(patch).toContain("a-lock.txt");
+    await expect(
+      readGitStagedDiff({
+        workspace,
+        processEnv: { PATH: process.env.PATH },
+        policy: DEFAULT_SANDBOX_POLICY,
+      }),
+    ).rejects.toBeInstanceOf(GitWorktreeReadError);
   });
 
   it("refuses credential-redacted metadata without disabling content redaction", async () => {

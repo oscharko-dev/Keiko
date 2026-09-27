@@ -118,13 +118,48 @@ This placement ensures the kernel remains a narrow execution primitive that know
 - `KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY` mirrors this repository's own commit style (11 conventional-commit types; issue-key and signoff disabled). Teams with stricter policies override it via injected server config; no default behaviour changes until a policy is explicitly configured.
 - The governed-git branch uses ADR numbers 0058–0062. An independent voice-digital-twin branch independently used 0058–0069. Numbers are per-branch-local until a feat-to-dev merge; the merge coordinator must resolve the global sequence.
 
+### Explicit model-assisted draft generation (implementation correction, 2026-09-27)
+
+The implemented Git window offers a separate, user-triggered `/api/git-delivery/commit/draft`
+operation. Ordinary previews remain deterministic and never call the model. The draft reads only
+staged changes through the existing sandboxed Git reader. Its default output allowance is 4 MiB
+(explicit narrower policies still apply); truncation is rejected, never accepted as a complete read.
+
+Draft assembly uses the shared context-token counter, including the response schema, output
+reserve and model safety margin. Large patches receive excerpts from every file rather than a
+prefix of the entire patch. Excerpts are explicitly marked as incomplete; the complete staged-file
+list remains in the prompt. A selection whose minimal evidence cannot fit fails explicitly instead
+of silently dropping files. The model is instructed to describe evidenced changes and never infer
+successful verification from the presence of test files.
+
+The server normalizes the validated answer into a single-line subject, a blank line, a `-` bullet
+list, a blank line and the existing Keiko footer. Trailer values retain continuation lines and paragraph breaks (Conventional Commits 1.0.0 §10); their block begins at a paragraph boundary, and reference-style `Refs #123` separators are also preserved. Ordinary trailer tokens belong to the final group of token-led or indented continuation paragraphs. A later unindented body paragraph returns earlier ambiguous labels such as `Note:` or `Summary:` to the normalized list. Explicit `BREAKING CHANGE`/`BREAKING-CHANGE`, reference tokens with a `#` value (including `Refs #123` and `Refs: #123`), and hyphenated trailer names such as `Reviewed-by` may also span unindented paragraphs. Plain colon labels remain ambiguous and follow the terminal-paragraph rule; they do not absorb subsequent body prose. Trailers, including `BREAKING CHANGE`, retain
+their paragraph only when separated from prose by a blank line or occupying the whole body. Sampling uses temperature zero, with a seed only
+when the model declares support. These sampling parameters alone do not guarantee identical
+answers: a bounded, process-local cache retains up to 32 successful drafts per server dependency
+scope, keyed by a digest of the complete staged diff, selected paths, workspace, policy, instruction and
+model configuration. Concurrent identical requests serialize through the existing keyed mutex.
+Unchanged inputs reuse the validated text; errors and cancelled results are never retained. This
+cache is ephemeral and does not promise reproducibility after restart or eviction.
+
+One corrective generation is allowed after invalid output, or after output exhaustion when a
+larger allowance fits the model's declared output/context limits. Both generations share the
+same deadline, armed after acquiring the draft mutex, and independently traverse gateway spend admission. No policy check is weakened
+and no generic success message substitutes for an unusable answer. Completion evidence records
+prompt bounds, compaction, generation count and reuse without diff or message content. The same line records normalization version/rule, whether formatting changed, input trailer-like line count, output bullet/trailer counts, continuation/paragraph-break counts, and reference/breaking-marker counts. These describe the selected normalization result and persist unchanged on cache reuse; absent fields mean the selected result did not reach normalization. Each preparation/generation attempt records `git.commit.draft.attempt.completed` with its ordinal, outcome, closed failure code, bounds and any normalization evidence under the request correlation. This preserves the first rejection and its formatting even if recovery fails before normalization, is refused by the context budget, or returns a different result. Cache hits emit no attempt event. If only
+the repair prompt exceeds context, preserve the original model failure and its actual call bounds;
+do not report that already-processed selected changes exceeded context. Context refusal retains
+the measured minimum prompt and budget. Generated and reused outcomes carry the same body-free
+draft-key digest so their correlations can be joined; the cache key hashes the staged read before
+gateway processing and does not imply that the route redacted the diff.
+
 ## Alternatives Considered
 
 ### Alternative 1: Model-generated commit message suggestions
 
 - **Pros**: Higher-quality suggestions that consider full diff semantics; no need for heuristic rules.
 - **Cons**: Introduces a Model Gateway dependency on every commit preview call, adding latency, non-determinism, and a new failure mode (model unavailable → preview blocked). Violates Force 5 (deterministic-first posture) and the architecture pattern established across this epic. Suggestions that depend on raw diff content also threaten the content-free invariant if the model output is persisted.
-- **Why rejected**: Force 5 is explicit. Deterministic heuristics from typed structural facts are sufficient for the scoped warnings (#475) — quality warnings and a prefix scaffold, not a full drafted message. Model-assisted drafting can be a future opt-in behind a separate ADR.
+- **Why rejected**: Force 5 is explicit. Deterministic heuristics from typed structural facts are sufficient for the scoped warnings (#475) — quality warnings and a prefix scaffold, not a full drafted message. This rejection applies to automatic preview-time model calls. The separate explicit draft action is documented in the implementation correction above.
 
 ### Alternative 2: Single combined server route for all local mutations
 

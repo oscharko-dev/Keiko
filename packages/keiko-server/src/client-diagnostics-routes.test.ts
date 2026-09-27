@@ -1,3 +1,4 @@
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -5,7 +6,7 @@ import {
 } from "../../../tests/support/buffered-server-log.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   expectActivityLogProof,
@@ -20,7 +21,12 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
-import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
+import {
+  redactLogFields,
+  formatRegisteredServerLogLine,
+  serverLogProcessIdentity,
+} from "@oscharko-dev/keiko-activity-log";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
 const CORRELATION_ID = "diagnostics-route-test";
 const CLIENT_TS = "2026-08-21T10:00:00.000Z";
@@ -84,6 +90,15 @@ function gitOperationEvent(
   const event = sink.events.find((candidate) => candidate.op === op);
   expect(event, `expected exactly one ${op} event`).toBeDefined();
   return event ?? { category: "diagnostic", op };
+}
+
+function expectCompleteGitTimeline(events: readonly ServerLogEvent[]): void {
+  const identity = serverLogProcessIdentity();
+  const lines = events.map((event, index) =>
+    formatRegisteredServerLogLine(event, new Date(), { ...identity, seq: index + 1 }),
+  );
+  const report = analyzeLogText(lines.join(""));
+  expect(report.sufficiency).toMatchObject({ status: "complete", reasons: [] });
 }
 
 function clientDiagnosticRejectedEvents(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
@@ -592,6 +607,7 @@ describe("POST /api/diagnostics/client", () => {
     const body = JSON.stringify({
       message: "git-client: add-repository discarded: repository-clone succeeded",
       clientTs: CLIENT_TS,
+      correlationId: "ui_repo-discarded-0001",
       kind: "other",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
@@ -612,6 +628,205 @@ describe("POST /api/diagnostics/client", () => {
       loss: "none",
     });
   });
+
+  it.each([
+    ["repository-register", "succeeded"],
+    ["repository-clone", "succeeded"],
+    ["repository-clone", "discarded-succeeded"],
+    ["repository-register", "discarded-succeeded"],
+    ["repository-register", "failed"],
+    ["repository-clone", "failed"],
+    ["repository-register", "discarded-failed"],
+    ["repository-clone", "discarded-failed"],
+  ])("reconstructs the %s lifecycle when %s", async (operation, settlement) => {
+    const sink = captureServerLog();
+    for (const outcome of ["started", settlement]) {
+      const body = JSON.stringify({
+        message: "git-client: add-repository lifecycle",
+        clientTs: CLIENT_TS,
+        kind: "other",
+        correlationId: "ui_repository-0001",
+        gitClientOperation: { operation, outcome },
+        ...(outcome.endsWith("failed") ? { errorKind: "internal" } : {}),
+      });
+      expect(await handleClientDiagnosticIngest(context(body, `ingest-${outcome}`))).toEqual({
+        status: 204,
+        body: null,
+      });
+    }
+    const started = gitOperationEvent(sink, "client.git-operation.attempted");
+    const settled = gitOperationEvent(sink, "client.git-operation.settled");
+    expect(started).toMatchObject({
+      correlationId: "ui_repository-0001",
+      level: "info",
+      extra: { operation },
+    });
+    expect(settled).toMatchObject({
+      correlationId: "ui_repository-0001",
+      level: "info",
+      extra: { operation, outcome: settlement },
+    });
+    expectActivityLogProof(
+      "client.git-operation.attempted.line",
+      formatActivityLogProofLine(started),
+    );
+    expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(settled),
+    );
+    expectCompleteGitTimeline([started, settled]);
+    if (settlement.endsWith("succeeded")) expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    else
+      expect(clientDiagnosticLine(sink)).toMatchObject({
+        correlationId: "ui_repository-0001",
+        gitClientOperation: operation,
+        gitClientOperationOutcome: settlement,
+        errorKind: "internal",
+      });
+  });
+
+  describe.each(["repository-clone", "repository-register"])(
+    "%s join-key rejection",
+    (operation) => {
+      it.each(["started", "succeeded", "failed"])(
+        "rejects malformed %s IDs without unjoinable events",
+        async (outcome) => {
+          const sink = captureServerLog();
+          const body = JSON.stringify({
+            message: "git-client: add-repository lifecycle",
+            clientTs: CLIENT_TS,
+            correlationId: "x",
+            gitClientOperation: { operation, outcome },
+          });
+          expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+          expect(
+            sink.events.filter((event) => event.op.startsWith("client.git-operation.")),
+          ).toEqual([]);
+          expect(clientDiagnosticRejectedEvents(sink)).toEqual([
+            expect.objectContaining({
+              correlationId: CORRELATION_ID,
+              extra: expect.objectContaining({ rejection: "invalid-shape" }) as unknown,
+            }),
+          ]);
+        },
+      );
+    },
+  );
+
+  it.each(["discarded-succeeded", "discarded-failed"])(
+    "refuses an uncorrelated %s settlement after a correlated start",
+    async (outcome) => {
+      const sink = captureServerLog();
+      const body = { message: "git-client lifecycle", clientTs: CLIENT_TS };
+      expect(
+        (
+          await handleClientDiagnosticIngest(
+            context(
+              JSON.stringify({
+                ...body,
+                correlationId: "ui_repo-0001",
+                gitClientOperation: { operation: "repository-clone", outcome: "started" },
+              }),
+            ),
+          )
+        ).status,
+      ).toBe(204);
+      expect(
+        (
+          await handleClientDiagnosticIngest(
+            context(
+              JSON.stringify({
+                ...body,
+                gitClientOperation: { operation: "repository-clone", outcome },
+              }),
+            ),
+          )
+        ).status,
+      ).toBe(400);
+      expect(sink.events.filter((event) => event.op === "client.git-operation.settled")).toEqual(
+        [],
+      );
+      expect(clientDiagnosticRejectedEvents(sink)).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    "started",
+    "succeeded",
+    "failed",
+    "discarded-succeeded",
+    "discarded-failed",
+    "select",
+    "markdown",
+    "voice",
+    "failure",
+  ])("records client delivery loss exactly once for %s reports", async (outcome) => {
+    captureServerLog();
+    const before = activityLogLossCounters()["client-post-throttled"];
+    const metadata =
+      outcome === "select"
+        ? { selectDismissal: { reason: "escape", focus: "trigger" } }
+        : outcome === "markdown"
+          ? { kind: "markdown-layout" }
+          : outcome === "voice"
+            ? { kind: "voice-dialogue", voiceDialogueStage: "started" }
+            : outcome === "failure"
+              ? {}
+              : { gitClientOperation: { operation: "repository-clone", outcome } };
+    const body = JSON.stringify({
+      message: "client report",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_repo-0001",
+      loss: { postsThrottled: 5 },
+      ...metadata,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+  });
+
+  // Retain the loss-preservation pin across server throttling: a 429 leaves counts with the
+  // browser until a later report is admitted, rather than acknowledging unbounded input.
+  it.each(["routine", "failure"])(
+    "preserves refused loss for later %s admission",
+    async (budget) => {
+      const sink = captureServerLog();
+      const before = activityLogLossCounters()["client-post-throttled"];
+      const lossBefore = activityLogLossCounters();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const metadata =
+        budget === "routine" ? { selectDismissal: { reason: "escape", focus: "trigger" } } : {};
+      const report = { message: "report", clientTs: CLIENT_TS, ...metadata };
+      try {
+        for (let index = 0; index < 60; index += 1) {
+          expect((await handleClientDiagnosticIngest(context(JSON.stringify(report)))).status).toBe(
+            204,
+          );
+        }
+        const refused = JSON.stringify({ ...report, loss: { postsThrottled: 1_000_000 } });
+        for (let index = 0; index < 3; index += 1) {
+          expect((await handleClientDiagnosticIngest(context(refused))).status).toBe(429);
+        }
+        expect(activityLogLossCounters()["client-post-throttled"]).toBe(before);
+        expect(
+          sink.events.filter((event) => event.op === "client.diagnostic.rate-limited"),
+        ).toHaveLength(1);
+        now.mockReturnValue(1_700_000_060_001);
+        const retried = JSON.stringify({ ...report, loss: { postsThrottled: 5 } });
+        expect((await handleClientDiagnosticIngest(context(retried))).status).toBe(204);
+        expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+        const lossAfter = activityLogLossCounters();
+        expect(lossAfter["client-rate-suppressed"] - lossBefore["client-rate-suppressed"]).toBe(3);
+        expect(lossAfter["client-post-failed"]).toBe(lossBefore["client-post-failed"]);
+        // Three refused reports plus five previously lost reports, with no duplicate category.
+        expect(
+          Object.values(lossAfter).reduce((sum, count) => sum + count, 0) -
+            Object.values(lossBefore).reduce((sum, count) => sum + count, 0),
+        ).toBe(8);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
 
   it("records a superseded checkout selection as correlated routine evidence", async () => {
     const sink = captureServerLog();
@@ -785,6 +1000,7 @@ describe("POST /api/diagnostics/client", () => {
     const body = JSON.stringify({
       message: "git-client: add-repository discarded",
       clientTs: CLIENT_TS,
+      correlationId: "ui_repo-0001",
       gitClientOperation: { operation: "repository-clone", outcome: "retry-recovered" },
     });
 
@@ -801,6 +1017,7 @@ describe("POST /api/diagnostics/client", () => {
     const settled = JSON.stringify({
       message: "git-client: add-repository discarded: repository-clone succeeded",
       clientTs: CLIENT_TS,
+      correlationId: "ui_repo-discarded-0001",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
     for (let index = 1; index <= 61; index += 1) {
@@ -1827,4 +2044,64 @@ describe("POST /api/diagnostics/client", () => {
       expect(diagnosticEvents[0]?.errorKind).toBe("internal");
     });
   });
+});
+
+// A closing tab cannot retry in a later rate window. Final loss delivery needs reserved,
+// bounded admission independent of routine/failure storms.
+function expectFinalLossLine(sink: BufferedServerLogSink): void {
+  const index = sink.events.findIndex((event) => event.extra?.clientKind === "delivery-loss");
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(JSON.parse(sink.lines()[index] ?? "{}") as unknown).toMatchObject({
+    op: "client.diagnostic",
+    correlationId: CORRELATION_ID,
+    errorKind: "unknown",
+    clientKind: "delivery-loss",
+    clientPostsThrottled: 5,
+  });
+}
+
+it("admits a final loss flush after both ordinary budgets are exhausted", async () => {
+  resetClientDiagnosticsIngestStateForTests();
+  const sink = captureServerLog();
+  const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  const before = activityLogLossCounters()["client-post-throttled"];
+  try {
+    for (const metadata of [{}, { selectDismissal: { reason: "escape", focus: "trigger" } }]) {
+      for (let index = 0; index < 60; index += 1) {
+        expect(
+          (
+            await handleClientDiagnosticIngest(
+              context(
+                JSON.stringify({
+                  message: "report",
+                  clientTs: CLIENT_TS,
+                  ...metadata,
+                }),
+              ),
+            )
+          ).status,
+        ).toBe(204);
+      }
+    }
+    const finalReport = JSON.stringify({
+      message: "[keiko] client diagnostic delivery loss summary",
+      clientTs: CLIENT_TS,
+      kind: "delivery-loss",
+      loss: { postsThrottled: 5 },
+    });
+    expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(204);
+    expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+    expectFinalLossLine(sink);
+    for (let index = 1; index < 60; index += 1) {
+      expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(204);
+    }
+    const admitted = activityLogLossCounters()["client-post-throttled"];
+    for (let index = 0; index < 3; index += 1) {
+      expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(429);
+    }
+    expect(activityLogLossCounters()["client-post-throttled"]).toBe(admitted);
+  } finally {
+    now.mockRestore();
+    resetClientDiagnosticsIngestStateForTests();
+  }
 });

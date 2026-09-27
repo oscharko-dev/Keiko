@@ -94,22 +94,25 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     });
 
     expect(onAdded).not.toHaveBeenCalled();
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.meta).toMatchObject({
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]?.meta?.gitClientOperation).toEqual({
+      operation: "repository-clone",
+      outcome: "started",
+    });
+    expect(diagnostics[1]?.meta).toMatchObject({
       kind: "other",
       correlationId: "server-echoed-clone-1",
       gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
     });
-    expect(diagnostics[0]?.meta?.errorKind).toBeUndefined();
-    const serialized = JSON.stringify(diagnostics[0]);
+    expect(diagnostics[1]?.meta?.errorKind).toBeUndefined();
+    const serialized = JSON.stringify(diagnostics);
     expect(serialized).not.toContain("private-repo");
     expect(serialized).not.toContain("private-destination");
     expect(serialized).not.toContain("example.test");
   });
 
-  // A response resolved with no correlation header at all (a fixture, never a real BFF response)
-  // must not crash the settlement — it simply carries no correlation id, same as before this fix.
-  it("omits the correlation id when the resolved value carries none", async () => {
+  it("retains the attempt's correlation id when the resolved value carries no header", async () => {
+    const user = userEvent.setup();
     const diagnostics = captureDiagnostics();
     let resolveClone!: (value: { project: ProjectWithAvailability }) => void;
     const clonePromise = new Promise<{ project: ProjectWithAvailability }>((resolve) => {
@@ -124,14 +127,19 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
         initialMode="clone"
       />,
     );
-    await waitFor(() => expect(screen.getByLabelText("Repository URL")).toBeInTheDocument());
+    await user.type(screen.getByLabelText("Repository URL"), "https://example.test/repo.git");
+    await user.type(screen.getByLabelText("Clone to folder"), "/tmp/repo");
+    await user.click(screen.getAllByRole("button", { name: "Clone repository" }).at(-1)!);
+    expect(client.cloneRepository).toHaveBeenCalledOnce();
     view.unmount();
     await act(async () => {
       resolveClone({ project: PROJECT_FIXTURE });
       await clonePromise;
     });
 
-    expect(diagnostics[0]?.meta?.correlationId).toBeUndefined();
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]?.meta?.correlationId).toEqual(expect.any(String));
+    expect(diagnostics[1]?.meta?.correlationId).toBe(diagnostics[0]?.meta?.correlationId);
   });
 
   it("reports a discarded-failed register settlement with correlation id, error kind and error evidence, never silently", async () => {
@@ -167,8 +175,12 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
 
     expect(onAdded).not.toHaveBeenCalled();
     // Before this fix a discarded failure returned silently — this is the regression pin.
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.meta).toMatchObject({
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]?.meta?.gitClientOperation).toEqual({
+      operation: "repository-register",
+      outcome: "started",
+    });
+    expect(diagnostics[1]?.meta).toMatchObject({
       kind: "other",
       correlationId: "corr-register-discard-1",
       errorKind: "internal",
@@ -176,12 +188,12 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     });
     // Structured, body-free error evidence (PR #3625 review): the closed error class and its
     // (empty, in this fixture) dist-anchored frames and cause chain — never the error's message.
-    expect(diagnostics[0]?.meta?.errorEvidence).toEqual({
+    expect(diagnostics[1]?.meta?.errorEvidence).toEqual({
       errorClass: "ApiError",
       frames: [],
       causeChain: [],
     });
-    expect(JSON.stringify(diagnostics[0])).not.toContain("private-existing-repo");
-    expect(JSON.stringify(diagnostics[0])).not.toContain("boom");
+    expect(JSON.stringify(diagnostics)).not.toContain("private-existing-repo");
+    expect(JSON.stringify(diagnostics)).not.toContain("boom");
   });
 });

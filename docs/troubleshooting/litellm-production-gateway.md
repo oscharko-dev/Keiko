@@ -388,10 +388,10 @@ model allowance is scoped to the models Keiko should use.
 
 **Symptom**
 
-Clicking "Generate with Keiko" in the Git window fails. Before 1.1.7 every cause surfaced as the
-same generic "Keiko generated a commit draft that did not pass validation." regardless of whether
-the gateway never answered or answered with something unusable, so the message gave no signal on
-what to try next.
+Clicking "Generate with Keiko" in the Git window fails. Before 1.1.7 a thrown gateway error
+surfaced as "Keiko could not generate a commit draft from the staged diff." A returned unusable
+answer, including truncated output, surfaced as "Keiko generated a commit draft that did not pass
+validation." Neither message distinguished a slow provider from an exhausted output allowance.
 
 **Root Cause**
 
@@ -433,6 +433,43 @@ the model's raw output ever appears in the log or in the export.
   needs a lower reasoning-effort setting on the proxy side.
 - `GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT`: unchanged — the drafted message did not meet the
   repository's commit-message policy; edit and commit manually.
+
+---
+
+### Development correction: large selections and repeatable drafts (2026-09-27)
+
+A large staged lockfile could exhaust the ordinary 256 KiB Git command output allowance before
+model generation, or consume the draft's entire 90,000-character prefix and hide subsequent code
+and tests. The staged-diff reader now permits a bounded 4 MiB by default while preserving explicit
+narrower policies. Prompt assembly accounts for the selected model's context window and gives
+every file a share; omitted lines are marked. `GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE` means
+even that compact evidence cannot fit; no file is silently removed from the selection.
+
+Repeated Generate actions with the same staged content, policy, instructions and model
+configuration reuse the same validated draft in the current process (up to 32 retained results).
+The output layout is normalized to one subject, one bullet list and one footer. Changed inputs
+produce a new draft. Invalid output gets one corrective attempt; output exhaustion gets one larger
+allowance when the model permits it, bounded by the original request deadline. Persistent invalid
+answers still fail visibly. No error is cached and no placeholder commit text is reported as success.
+
+The existing `git.commit.draft.completed` line carries `promptTokens`, `maxPromptTokens`,
+`diffCompacted`, `generationAttempts` and `reused` when observed. The fields are counts and flags;
+no customer paths, diff or generated text is recorded. For a formatting report, compare
+`normalizationVersion`, `normalizationRule` and `normalizationChanged`, then `bodyBulletCount`,
+`trailerLikeLineCount`, `trailerCount`, `trailerContinuationCount`, `trailerParagraphBreakCount`,
+`referenceTrailerCount` and `breakingTrailerCount`. These separate footer retention from body-list
+normalization, and carry the same values on cache reuse. Missing normalization fields mean that line's selected result did not reach the
+formatter; zero means it ran and observed none. For a repair, read every
+`git.commit.draft.attempt.completed` line with the same correlation in `attempt` order. Its
+`failureCode` explains why repair ran or failed, while each attempt retains its own normalization
+and prompt bounds. An attempted repair refused before the model call still has an attempt line;
+`generationAttempts` counts actual model calls. Cache reuse has no new attempt lines. No footer label or reference value
+is logged.
+
+Chat startup now retries transient proxy failures and timeouts within the configured retry count
+and one shared stream budget. It never restarts a stream after delivering text. Authentication
+failures, cancellation and non-retryable refusals remain terminal. Each retry passes spend admission
+again and records the existing `gateway.retry.*` evidence.
 
 ---
 

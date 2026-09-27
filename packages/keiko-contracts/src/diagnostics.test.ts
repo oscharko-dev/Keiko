@@ -77,6 +77,7 @@ describe("isClientDiagnosticIngestRequest", () => {
             correlationId: "abcdefgh",
             kind,
             ...(kind === "voice-dialogue" ? { voiceDialogueStage: "started" } : {}),
+            ...(kind === "delivery-loss" ? { loss: { postsThrottled: 5 } } : {}),
           }),
         ).toBe(true);
       }
@@ -267,7 +268,11 @@ describe("isClientDiagnosticIngestRequest", () => {
   it("accepts only a git-client operation whose outcome matches its operation's family", () => {
     const discardedClone = { operation: "repository-clone", outcome: "discarded-succeeded" };
     expect(
-      isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: discardedClone }),
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "ui_repo-0001",
+        gitClientOperation: discardedClone,
+      }),
     ).toBe(true);
     const recoveredRetry = { operation: "status-read", outcome: "retry-recovered" };
     expect(
@@ -283,7 +288,11 @@ describe("isClientDiagnosticIngestRequest", () => {
       { outcome: "discarded-succeeded" },
     ]) {
       expect(
-        isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: invalid }),
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "ui_repo-0001",
+          gitClientOperation: invalid,
+        }),
       ).toBe(false);
     }
   });
@@ -846,12 +855,12 @@ describe("client report budgets", () => {
     ).toEqual(["replayed", "stream-repaired", "repair-acknowledged"]);
   });
 
-  it("classifies exactly the discarded-failed and retry-failed outcomes as git-client failures", () => {
+  it("classifies live, discarded and retry failures as git-client failures", () => {
     expect(
       CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
         CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome),
       ),
-    ).toEqual(["discarded-failed", "retry-failed"]);
+    ).toEqual(["discarded-failed", "retry-failed", "failed"]);
   });
 
   // PR #3625 review: a retry superseded by a newer automatic read is discarded evidence, never a
@@ -864,6 +873,24 @@ describe("client report budgets", () => {
 });
 
 describe("git-client operation settlement vocabulary", () => {
+  it.each(["started", "succeeded", "failed"])("restricts %s to repository additions", (outcome) => {
+    for (const operation of CLIENT_GIT_CLIENT_OPERATION_KINDS) {
+      const report = {
+        ...validRequest(),
+        correlationId: "repository-attempt-0001",
+        gitClientOperation: { operation, outcome },
+      };
+      expect(isClientDiagnosticIngestRequest(report)).toBe(
+        operation === "repository-clone" || operation === "repository-register",
+      );
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...report,
+          gitClientOperation: { operation, outcome, reason: "git-error" },
+        }),
+      ).toBe(false);
+    }
+  });
   it("accepts every operation paired with every outcome from its own family", () => {
     const discardOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
       (operation) => operation.startsWith("repository-") || operation === "checkout-selection",
@@ -882,6 +909,7 @@ describe("git-client operation settlement vocabulary", () => {
         expect(
           isClientDiagnosticIngestRequest({
             ...validRequest(),
+            correlationId: "ui_repo-0001",
             gitClientOperation: { operation, outcome },
           }),
         ).toBe(true);
@@ -1168,3 +1196,76 @@ describe("coding issue diagnostic outcome", () => {
     ).toBe(expected);
   });
 });
+
+it.each(["started", "succeeded", "failed"])(
+  "requires correlation for repository lifecycle %s",
+  (outcome) => {
+    const request = {
+      ...validRequest(),
+      gitClientOperation: { operation: "repository-clone", outcome },
+    };
+    expect(isClientDiagnosticIngestRequest(request)).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({ ...request, correlationId: "repository-attempt-0001" }),
+    ).toBe(true);
+  },
+);
+
+describe.each(["repository-clone", "repository-register"])(
+  "%s lifecycle join keys",
+  (operation) => {
+    it.each(["started", "succeeded", "failed"])("rejects unsafe IDs for %s", (outcome) => {
+      for (const correlationId of ["x", "1234567", "unsafe id", "unsafe/id", "x".repeat(129)]) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            correlationId,
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(false);
+      }
+      for (const correlationId of ["12345678", "ui.repository-0001_test", "x".repeat(128)]) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            correlationId,
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(true);
+      }
+    });
+  },
+);
+
+it.each(["discarded-succeeded", "discarded-failed"])(
+  "requires a joinable ID for a repository %s settlement",
+  (outcome) => {
+    for (const operation of ["repository-clone", "repository-register"]) {
+      for (const correlationId of [undefined, "x", "unsafe id"]) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            correlationId,
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(false);
+      }
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "ui_repo-0001",
+          gitClientOperation: { operation, outcome },
+        }),
+      ).toBe(true);
+    }
+  },
+);
+
+it.each([undefined, null, { unknown: 1 }, { postsFailed: -1 }, { postsFailed: 1_000_001 }])(
+  "rejects a final loss report with invalid counts: %j",
+  (loss) => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), kind: "delivery-loss", loss }),
+    ).toBe(false);
+  },
+);

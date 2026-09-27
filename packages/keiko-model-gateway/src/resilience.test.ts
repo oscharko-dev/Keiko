@@ -522,7 +522,7 @@ describe("CircuitBreaker", () => {
     const { clock } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     expect(cb.status("m").state).toBe("open");
     expect(cb.status("m").openedAt).toBe(0);
@@ -532,7 +532,7 @@ describe("CircuitBreaker", () => {
     const { clock } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
     for (let i = 0; i < cbConfig.failureThreshold - 1; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     expect(cb.status("m").state).toBe("closed");
     expect(cb.status("m").consecutiveFailures).toBe(cbConfig.failureThreshold - 1);
@@ -542,7 +542,7 @@ describe("CircuitBreaker", () => {
     const { clock } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     expect(() => {
       cb.assertAllowed();
@@ -552,9 +552,9 @@ describe("CircuitBreaker", () => {
   it("a single success resets the failure counter while closed", () => {
     const { clock } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
-    cb.recordFailure();
-    cb.recordFailure();
-    cb.recordSuccess();
+    cb.assertAllowed().settle("failure");
+    cb.assertAllowed().settle("failure");
+    cb.assertAllowed().settle("success");
     expect(cb.status("m").consecutiveFailures).toBe(0);
     expect(cb.status("m").state).toBe("closed");
   });
@@ -563,13 +563,13 @@ describe("CircuitBreaker", () => {
     const { clock, advance } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(30_000);
-    cb.assertAllowed();
+    const probe = cb.assertAllowed();
     expect(cb.status("m").state).toBe("half-open");
-    cb.recordSuccess();
-    cb.recordSuccess();
+    probe.settle("success");
+    cb.assertAllowed().settle("success");
     expect(cb.status("m").state).toBe("closed");
   });
 
@@ -577,12 +577,12 @@ describe("CircuitBreaker", () => {
     const { clock, advance } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(30_000);
-    cb.assertAllowed();
+    const probe = cb.assertAllowed();
     expect(cb.status("m").state).toBe("half-open");
-    cb.recordFailure();
+    probe.settle("failure");
     expect(cb.status("m").state).toBe("open");
     expect(cb.status("m").openedAt).toBe(30_000);
   });
@@ -591,7 +591,7 @@ describe("CircuitBreaker", () => {
     const { clock, advance } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(29_999);
     expect(() => {
@@ -609,7 +609,7 @@ describe("CircuitBreaker", () => {
       clock,
     );
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(30_000);
     // First call enters half-open and claims the single probe slot.
@@ -630,17 +630,17 @@ describe("CircuitBreaker", () => {
       clock,
     );
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(30_000);
-    cb.assertAllowed(); // claims slot 1
+    const probe = cb.assertAllowed(); // claims slot 1
     cb.assertAllowed(); // claims slot 2 (max)
     // Third call while 2 in-flight must be rejected.
     expect(() => {
       cb.assertAllowed();
     }).toThrow(CircuitOpenError);
     // After one success the slot is freed, so the next call is admitted.
-    cb.recordSuccess();
+    probe.settle("success");
     expect(() => {
       cb.assertAllowed();
     }).not.toThrow();
@@ -656,11 +656,10 @@ describe("CircuitBreaker", () => {
       clock,
     );
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(30_000);
-    cb.assertAllowed();
-    cb.recordFailure(); // probe fails → re-opens
+    cb.assertAllowed().settle("failure"); // probe fails → re-opens
     expect(cb.status("m").state).toBe("open");
     expect(() => {
       cb.assertAllowed();
@@ -680,11 +679,11 @@ describe("CircuitBreaker", () => {
       clock,
     );
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(30_000);
-    cb.assertAllowed(); // claims the single probe slot
-    cb.recordNonProviderFault(); // e.g. a client cancel or config error — never tested the provider
+    const probe = cb.assertAllowed(); // claims the single probe slot
+    probe.settle("non-provider-fault"); // e.g. a client cancel or config error — never tested the provider
     // Neither opened (still half-open, not re-opened) nor closed (still needs a real success).
     expect(cb.status("m").state).toBe("half-open");
     expect(cb.status("m").consecutiveFailures).toBe(5);
@@ -704,16 +703,14 @@ describe("CircuitBreaker", () => {
       clock,
     );
     for (let i = 0; i < 5; i += 1) {
-      cb.recordFailure();
+      cb.assertAllowed().settle("failure");
     }
     advance(30_000);
     for (let i = 0; i < 3; i += 1) {
-      cb.assertAllowed();
-      cb.recordNonProviderFault();
+      cb.assertAllowed().settle("non-provider-fault");
     }
     expect(cb.status("m").state).toBe("half-open");
-    cb.assertAllowed();
-    cb.recordSuccess();
+    cb.assertAllowed().settle("success");
     expect(cb.status("m").state).toBe("closed");
   });
 
@@ -722,8 +719,8 @@ describe("CircuitBreaker", () => {
   it("is a no-op for a non-provider fault while closed", () => {
     const { clock } = stubClock();
     const cb = new CircuitBreaker("m", cbConfig, clock);
-    cb.recordFailure();
-    cb.recordNonProviderFault();
+    cb.assertAllowed().settle("failure");
+    cb.assertAllowed().settle("non-provider-fault");
     expect(cb.status("m").consecutiveFailures).toBe(1);
     expect(cb.status("m").state).toBe("closed");
   });
@@ -869,4 +866,53 @@ describe("executeWithRetry remaining budget", () => {
     expect(remaining[1]).toBeLessThan(10_000);
     expect(remaining[1]).toBeGreaterThan(0);
   });
+});
+
+describe("circuit admission ownership", () => {
+  it.each(["success", "failure", "non-provider-fault"] as const)(
+    "ignores a %s settlement from an earlier half-open generation",
+    (outcome) => {
+      const { clock, advance } = stubClock();
+      const cb = new CircuitBreaker(
+        "m",
+        { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 2 },
+        clock,
+      );
+      cb.assertAllowed().settle("failure");
+      advance(1000);
+      const older = cb.assertAllowed();
+      cb.assertAllowed().settle("failure");
+      advance(1000);
+      const first = cb.assertAllowed();
+      const second = cb.assertAllowed();
+      older.settle(outcome);
+      expect(cb.status("m").state).toBe("half-open");
+      expect(() => cb.assertAllowed()).toThrow(CircuitOpenError);
+      first.settle("success");
+      second.settle("success");
+      expect(cb.status("m").state).toBe("closed");
+    },
+  );
+  it.each(["success", "non-provider-fault"] as const)(
+    "settles each %s admission at most once",
+    (outcome) => {
+      const { clock, advance } = stubClock();
+      const cb = new CircuitBreaker(
+        "m",
+        { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 2 },
+        clock,
+      );
+      cb.assertAllowed().settle("failure");
+      advance(1000);
+      const completed = cb.assertAllowed();
+      completed.settle(outcome);
+      cb.assertAllowed();
+      cb.assertAllowed();
+      completed.settle("success");
+      completed.settle("failure");
+      completed.settle("non-provider-fault");
+      expect(cb.status("m").state).toBe("half-open");
+      expect(() => cb.assertAllowed()).toThrow(CircuitOpenError);
+    },
+  );
 });

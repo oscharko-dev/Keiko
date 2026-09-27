@@ -8,6 +8,7 @@ import {
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
   cloneRepository,
+  createProject,
   resetConfigRequestCache,
   resetModelRequestCache,
   clearVoiceCapabilityCacheForTests,
@@ -2438,6 +2439,32 @@ describe("cloneRepository", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  it.each(["register", "clone"])(
+    "preserves the %s attempt correlation and CSRF headers",
+    async (operation) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ project: { path: "/repo/app" } }));
+      vi.stubGlobal("fetch", fetchMock);
+      if (operation === "register") {
+        await createProject({ path: "/repo/app" }, "ui_repository-0001");
+      } else {
+        await cloneRepository(
+          { repositoryUrl: "https://example.test/repo.git", destinationPath: "/repo/app" },
+          "ui_repository-0001",
+        );
+      }
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            "X-Keiko-Correlation-Id": "ui_repository-0001",
+            "X-Keiko-CSRF": "1",
+          }),
+        }),
+      );
+    },
+  );
 
   it("posts a repository clone request with the CSRF header", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

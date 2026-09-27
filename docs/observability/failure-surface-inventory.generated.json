@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "760e01428c40bee9627ff2f53d5fab8aba24955065d61e2feaf284b0608b4e88"
+    "catalogDigest": "10c900e9140a35aeefec1eb7dc202d228116fb37231a84d461ac7c08f99ee6d3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 469,
-    "proofCount": 477,
-    "resolvedProofCount": 477,
+    "operationCount": 470,
+    "proofCount": 478,
+    "resolvedProofCount": 478,
     "failureClassCount": 323,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -454,6 +454,7 @@
         "git-change.chat.refreshed",
         "git-change.chat.stale",
         "git.ci-observation",
+        "git.commit.draft.attempt.completed",
         "git.commit.draft.completed",
         "git.commit.preview.completed",
         "git.delivery.authority.admitted",
@@ -1604,6 +1605,9 @@
     "git.ci-repair.budget.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.test.ts",
       "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.test.ts"
+    ],
+    "git.commit.draft.attempt.completed.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"
     ],
     "git.commit.draft.completed.emitted-line": [
       "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"

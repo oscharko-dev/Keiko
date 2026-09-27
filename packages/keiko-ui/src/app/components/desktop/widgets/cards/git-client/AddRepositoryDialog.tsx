@@ -5,7 +5,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } fr
 import { createPortal } from "react-dom";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { bffRequestErrorKind, responseCorrelationIdOf } from "@/lib/http";
+import { bffRequestErrorKind, newClientCorrelationId, responseCorrelationIdOf } from "@/lib/http";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
@@ -134,6 +134,8 @@ export function AddRepositoryDialog({
   // this instance is gone, its own settle handlers below become no-ops instead.
   const closedRef = useRef(false);
   useEffect((): (() => void) => {
+    // React replays setup/cleanup in StrictMode. Only an actual unmount discards a response.
+    closedRef.current = false;
     return (): void => {
       closedRef.current = true;
     };
@@ -154,58 +156,56 @@ export function AddRepositoryDialog({
       ? repositoryUrl.trim() !== "" && destinationPath.trim() !== ""
       : localPath.trim() !== "";
 
+  const addRepository = (correlationId: string): ReturnType<GitClientSeam["registerRepository"]> =>
+    mode === "clone"
+      ? client.cloneRepository(
+          {
+            repositoryUrl: repositoryUrl.trim(),
+            destinationPath: destinationPath.trim(),
+          },
+          correlationId,
+        )
+      : client.registerRepository({ path: localPath.trim() }, correlationId);
+
   const submit = (): void => {
     if (busy || !canSubmit) return;
     setBusy(true);
     setError(null);
     const operation = gitClientAddOperation(mode);
-    const op =
-      mode === "clone"
-        ? client.cloneRepository({
-            repositoryUrl: repositoryUrl.trim(),
-            destinationPath: destinationPath.trim(),
-          })
-        : client.registerRepository({ path: localPath.trim() });
-    void op.then(
+    const correlationId = newClientCorrelationId();
+    reportGitClientOperationDiagnostic(
+      `git-client: add-repository ${operation} started`,
+      { operation, outcome: "started" },
+      { correlationId },
+    );
+    void addRepository(correlationId).then(
       (res) => {
-        if (closedRef.current) {
-          // #3646/PR #3625 review: the request settled after this dialog closed. The repository
-          // was created (or reconnected) but deliberately never activated — a structured,
-          // body-free settlement distinguishes this from a discarded FAILED request below and
-          // names which operation it was, never the repository path or URL. The server stamps a
-          // correlation id on every response, success included (server.ts); `responseCorrelationIdOf`
-          // recovers it from this exact parsed value so the line joins the request that created it.
-          reportGitClientOperationDiagnostic(
-            `git-client: add-repository discarded (dialog closed before response): ${operation} succeeded`,
-            { operation, outcome: "discarded-succeeded" },
-            { correlationId: responseCorrelationIdOf(res) },
-          );
-          return;
-        }
+        // #3646: evidence survives dismissal, but a dismissed result never activates a repository.
+        const outcome = closedRef.current ? "discarded-succeeded" : "succeeded";
+        reportGitClientOperationDiagnostic(
+          `git-client: add-repository ${operation} ${outcome}`,
+          { operation, outcome },
+          { correlationId: responseCorrelationIdOf(res) ?? correlationId },
+        );
+        if (closedRef.current) return;
         setBusy(false);
         onAdded(res.project);
         onClose();
       },
       (err: unknown) => {
-        if (closedRef.current) {
-          // A discarded failure used to return silently, losing the fact that the request ever
-          // happened at all — the activity log must show the attempt even though nothing failed
-          // "for the user" (there is no user surface left to show it to). Body-free error evidence
-          // (PR #3625 review) carries the thrown error's class and dist-anchored frames/cause chain
-          // alongside the closed kind, never its message.
-          reportGitClientOperationDiagnostic(
-            `git-client: add-repository discarded (dialog closed before response): ${operation} failed`,
-            { operation, outcome: "discarded-failed" },
-            {
-              correlationId: correlationIdOf(err),
-              errorKind: bffRequestErrorKind(err),
-              errorEvidence: clientErrorEvidence(err),
-            },
-          );
-          return;
-        }
+        const outcome = closedRef.current ? "discarded-failed" : "failed";
+        reportGitClientOperationDiagnostic(
+          `git-client: add-repository ${operation} ${outcome}`,
+          { operation, outcome },
+          {
+            correlationId: correlationIdOf(err) ?? correlationId,
+            errorKind: bffRequestErrorKind(err),
+            errorEvidence: clientErrorEvidence(err),
+          },
+        );
+        if (closedRef.current) return;
         setBusy(false);
-        setError(formatGitError(err));
+        setError(`${t("gitClientWindow.addRepository.failed")}: ${formatGitError(err)}`);
       },
     );
   };

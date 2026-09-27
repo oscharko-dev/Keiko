@@ -238,18 +238,43 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(lastPostedBody(fetchMock)["loss"]).toEqual({ postsThrottled: 2 });
   });
 
-  it("gives a failed POST's loss back and counts the failed POST itself", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network error")));
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    recordClientDiagnosticLoss("bufferEvicted", 2);
+  it.each(["network", "server-error", "server-rate-limit", "unclassified-rate-limit"])(
+    "restores loss after a %s refusal and delivers it later",
+    async (failure) => {
+      const fetchMock =
+        failure === "network"
+          ? vi.fn().mockRejectedValueOnce(new TypeError("network error"))
+          : vi
+              .fn()
+              .mockResolvedValueOnce(
+                failure === "server-rate-limit"
+                  ? new Response(
+                      JSON.stringify({ error: { code: "RATE_LIMITED", message: "rate limited" } }),
+                      { status: 429 },
+                    )
+                  : jsonResponse(failure === "unclassified-rate-limit" ? 429 : 503),
+              );
+      fetchMock.mockResolvedValue(jsonResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      recordClientDiagnosticLoss("bufferEvicted", 2);
 
-    fanOutClientDiagnostic("boot: gateway probe failed");
+      fanOutClientDiagnostic("boot: gateway probe failed");
 
-    await vi.waitFor(() => {
-      expect(clientDiagnosticPostFailureCount()).toBe(1);
-    });
-    expect(takeClientDiagnosticLoss()).toEqual({ bufferEvicted: 2, postsFailed: 1 });
-  });
+      await vi.waitFor(() => {
+        expect(clientDiagnosticPostFailureCount()).toBe(1);
+      });
+      fanOutClientDiagnostic("next admitted report");
+      // The server already counts a 429 as client-rate-suppressed. Preserve carried loss
+      // without reporting the same dropped event a second time as client-post-failed.
+      expect(lastPostedBody(fetchMock)["loss"]).toEqual(
+        failure === "server-rate-limit"
+          ? { bufferEvicted: 2 }
+          : { bufferEvicted: 2, postsFailed: 1 },
+      );
+      expect(takeClientDiagnosticLoss()).toBeUndefined();
+    },
+  );
 
   it("preserves a voice turn parent and rejects an unsafe parent identity", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -323,7 +348,7 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const body = lastPostedBody(fetchMock);
     expect(body["loss"]).toEqual({ errorsSuppressed: 7 });
-    expect(body["kind"]).toBe("other");
+    expect(body["kind"]).toBe("delivery-loss");
     expect(body["message"]).toBe("[keiko] client diagnostic delivery loss summary");
     expect(takeClientDiagnosticLoss()).toBeUndefined();
   });

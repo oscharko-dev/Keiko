@@ -65,6 +65,7 @@ import {
   setClientDiagnosticWriter,
   takeClientDiagnosticLoss,
 } from "./client-diagnostics";
+import { ApiError } from "./api-shared-primitives";
 import { bffFetchJson } from "./http";
 
 function writeToBrowserConsole(message: string): void {
@@ -397,10 +398,17 @@ export function resetClientDiagnosticPostStateForTests(): void {
 // received the diagnostic). This never calls back through `reportClientDiagnostic`, which would
 // re-enter `fanOutClientDiagnostic` and risk a loop under a persistently failing transport.
 // A failed delivery loses this report AND the loss counts it was carrying: the counts go back to
-// the page's ledger for the next report, and the report itself is counted as a failed POST.
-function recordFailedPost(loss: ClientDiagnosticLossCounts | undefined): void {
+// the page's ledger for the next report. The server owns known rate-limit drops; other failures
+// count the lost report as a failed POST.
+function recordFailedPost(loss: ClientDiagnosticLossCounts | undefined, error: unknown): void {
   postFailureCount += 1;
   restoreClientDiagnosticLoss(loss);
+  // The ingest route already owns this dropped report as client-rate-suppressed. Only its
+  // carried counts need restoring; counting postsFailed too would duplicate the lost event.
+  if (error instanceof ApiError && error.status === 429 && error.code === "RATE_LIMITED") {
+    writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
+    return;
+  }
   recordClientDiagnosticLoss("postsFailed");
   writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
 }
@@ -416,11 +424,11 @@ function sendClientDiagnostic(
       method: "POST",
       body: JSON.stringify(body),
       keepalive: true,
-    }).catch(() => {
-      recordFailedPost(loss);
+    }).catch((error: unknown) => {
+      recordFailedPost(loss, error);
     });
-  } catch {
-    recordFailedPost(loss);
+  } catch (error) {
+    recordFailedPost(loss, error);
   }
 }
 
@@ -445,12 +453,13 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
 // Loss counted after the page's last report would otherwise stay in the tab forever: a storm of
 // suppressed rejections followed by silence has no "next report" to ride on. When the page is
 // hidden for good, one final keepalive report carries whatever is still counted. It bypasses the
-// client throttle — it is at most one report per page lifetime — and the server still rate-limits.
+// client throttle. The server reserves an independent, bounded loss-report budget so ordinary
+// report storms cannot consume the closing tab's final admission.
 const LOSS_FLUSH_MESSAGE = "[keiko] client diagnostic delivery loss summary"; // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
 
 export function flushClientDiagnosticLoss(): void {
   const loss = takeClientDiagnosticLoss();
-  if (loss !== undefined) sendClientDiagnostic(LOSS_FLUSH_MESSAGE, { kind: "other" }, loss);
+  if (loss !== undefined) sendClientDiagnostic(LOSS_FLUSH_MESSAGE, { kind: "delivery-loss" }, loss);
 }
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
