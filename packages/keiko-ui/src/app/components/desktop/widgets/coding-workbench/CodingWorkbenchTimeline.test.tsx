@@ -400,6 +400,31 @@ describe("CodingWorkbenchTimeline", () => {
     expect(rows[1]).toHaveTextContent("Failed");
   });
 
+  it("shows a failed run separately from earlier successful workspace calls", () => {
+    const failure: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      kind: "status",
+      state: "failed",
+      occurredAt: "2026-07-19T12:00:01.000Z",
+      failureCode: "runtime-failed",
+    };
+    const { container } = render(
+      <Timeline
+        events={[failure]}
+        activity={activityLike(feedWithRepeatedTools())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const rows = container.querySelectorAll("[data-timeline-kind]");
+    expect(rows[0]).toHaveTextContent("Workspace discovery");
+    expect(rows[0]).toHaveTextContent("2 calls");
+    expect(rows[2]).toHaveTextContent("Coding run failed");
+    expect(rows[2]).toHaveAttribute("data-event-tone", "attention");
+    expect(rows[2]).not.toHaveTextContent("Seq.");
+    expect(rows[2]).not.toHaveTextContent("runtime-failed");
+  });
+
   it("groups completed work between answers and keeps failures outside the disclosure", () => {
     const repeated = feedWithRepeatedTools();
     const turn = repeated.turns[0];

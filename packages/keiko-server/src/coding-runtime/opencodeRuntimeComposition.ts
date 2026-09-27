@@ -876,6 +876,7 @@ function readinessV2Ports(
   request: OpenCodeLifecycleHandshakeRequest,
 ): Parameters<typeof createOpenCodeRuntimeAdapter>[0]["readiness"] {
   let fixedSessionId: string | undefined;
+  let sessionCreation: Promise<string> | undefined;
   let startupRead = false;
   const history = createOpenCodeV2HistoryProjection({
     runId: run.runId,
@@ -910,7 +911,10 @@ function readinessV2Ports(
       challengeV2Gateway(input, run, client, fixedSessionId, request, startupRead),
     toolFacadeChallenge: () => challengeToolFacade(input, bridge),
     subscribe: async function* (signal): AsyncIterable<OpenCodeSyncHint> {
-      fixedSessionId = await createAndEchoV2Session(client, run.workspaceRoot, request.signal);
+      // A reconnect opens another event stream for the same run, not another sidecar session.
+      // Keep the creation promise so concurrent subscriptions cannot create competing sessions.
+      sessionCreation ??= createAndEchoV2Session(client, run.workspaceRoot, request.signal);
+      fixedSessionId = await sessionCreation;
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
       for await (const event of client.events(combined)) {

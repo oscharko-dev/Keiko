@@ -964,6 +964,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Failure reported",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
+  "codingWorkbench.event.failure.runtime":
+    "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
+  "codingWorkbench.event.failure.generic":
+    "This step could not be completed. Check the Activity Log and try again.",
+  "codingWorkbench.event.runFailed": "Coding run failed",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",
   "codingWorkbench.event.turnFailure.stream-incomplete":

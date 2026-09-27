@@ -358,6 +358,7 @@ interface StartBridgeControl {
   readonly expectedStart?: Readonly<Record<string, unknown>>;
   readonly onSseCancel?: () => void;
   readonly onSseStart?: (controller: ReadableStreamDefaultController<Uint8Array>) => void;
+  readonly sessionCreateCalls?: string[];
   readonly sseFrame?: string;
   readonly historyCalls?: Readonly<Record<string, number>>[];
   readonly governedEvents?: OpenCodeReconciliationEvent[];
@@ -585,8 +586,10 @@ async function startBridgeFixture(
       });
       return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/api/session" && init?.method === "POST")
+    if (path === "/api/session" && init?.method === "POST") {
+      control?.sessionCreateCalls?.push("ses_tool");
       return Promise.resolve(v2Envelope({ id: "ses_tool" }));
+    }
     if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_tool" }]));
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
@@ -1212,6 +1215,28 @@ describe("private OpenCode run control", () => {
     });
     try {
       expect(historyCalls).toEqual([{}, {}]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("reuses the fixed V2 session when the event stream reconnects", async () => {
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const sessionCreateCalls: string[] = [];
+    const fixture = await startBridgeFixture(facade, undefined, {
+      onSseStart: (controller): void => {
+        streams.push(controller);
+      },
+      sessionCreateCalls,
+    });
+    try {
+      expect(sessionCreateCalls).toEqual(["ses_tool"]);
+      streams[0]?.close();
+      await vi.waitFor(() => {
+        expect(streams).toHaveLength(2);
+      });
+      expect(sessionCreateCalls).toEqual(["ses_tool"]);
+      expect(fixture.runtime.manager.health()).toMatchObject({ status: "ready" });
     } finally {
       await fixture.stop();
     }
