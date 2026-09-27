@@ -4124,16 +4124,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: [],
+      state: ["git.commit.draft.attempt.completed"],
       end: ["git.commit.draft.completed"],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["git.commit.draft.completed"],
+    requiredCausalOperations: ["git.commit.draft.attempt.completed", "git.commit.draft.completed"],
     requiredLossOperations: [],
-    requiredProofOperations: ["git.commit.draft.completed"],
+    requiredProofOperations: ["git.commit.draft.attempt.completed", "git.commit.draft.completed"],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["git.commit.draft.completed"],
+    requiredResourceOperations: [
+      "git.commit.draft.attempt.completed",
+      "git.commit.draft.completed",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

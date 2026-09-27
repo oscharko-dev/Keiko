@@ -162,6 +162,75 @@ const COMMIT_PREVIEW_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const COMMIT_DRAFT_MODEL_FIELDS = {
+  outcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["succeeded", "failed"],
+  },
+  failureCode: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "GIT_DELIVERY_COMMIT_BAD_REQUEST",
+      "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
+      "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
+      "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
+      "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
+      "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+      "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+      "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+      "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+      "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+      "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+      "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
+      "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
+    ],
+  },
+  // #3591 (1.1.7): the bounds the model call ran under, present once a model was resolved — the
+  // output allowance sent (the raised draft budget, clamped to the model's declared limit) and
+  // the route's own deadline behind the gateway's floors — so an exhausted or timed-out draft
+  // can be reconstructed from this line alone.
+  maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+  deadlineMs: { type: "integer", dataClass: "duration", required: false },
+  promptTokens: { type: "integer", dataClass: "count", required: false },
+  maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+  diffCompacted: { type: "boolean", dataClass: "closed-enum", required: false },
+  generationAttempts: { type: "integer", dataClass: "count", required: false },
+  reused: { type: "boolean", dataClass: "closed-enum", required: false },
+  draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  normalizationVersion: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["1"],
+  },
+  normalizationRule: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["body-only", "terminal-trailers", "explicit-trailers"],
+  },
+  normalizationChanged: { type: "boolean", dataClass: "closed-enum", required: false },
+  bodyBulletCount: { type: "integer", dataClass: "count", required: false },
+  trailerLikeLineCount: { type: "integer", dataClass: "count", required: false },
+  trailerCount: { type: "integer", dataClass: "count", required: false },
+  trailerContinuationCount: {
+    type: "integer",
+    dataClass: "count",
+    required: false,
+  },
+  trailerParagraphBreakCount: {
+    type: "integer",
+    dataClass: "count",
+    required: false,
+  },
+  referenceTrailerCount: { type: "integer", dataClass: "count", required: false },
+  breakingTrailerCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
 const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -177,78 +246,32 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
     stagedFileCount: { type: "integer", dataClass: "count", required: false },
     areaCount: { type: "integer", dataClass: "count", required: false },
     touchesTests: { type: "boolean", dataClass: "closed-enum", required: false },
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["succeeded", "failed"],
-    },
-    failureCode: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "GIT_DELIVERY_COMMIT_BAD_REQUEST",
-        "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
-        "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
-        "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
-        "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
-        "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
-        "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
-        "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
-        "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
-        "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
-        "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
-        "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
-        "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
-      ],
-    },
-    // #3591 (1.1.7): the bounds the model call ran under, present once a model was resolved — the
-    // output allowance sent (the raised draft budget, clamped to the model's declared limit) and
-    // the route's own deadline behind the gateway's floors — so an exhausted or timed-out draft
-    // can be reconstructed from this line alone.
-    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
-    deadlineMs: { type: "integer", dataClass: "duration", required: false },
-    promptTokens: { type: "integer", dataClass: "count", required: false },
-    maxPromptTokens: { type: "integer", dataClass: "count", required: false },
-    diffCompacted: { type: "boolean", dataClass: "closed-enum", required: false },
-    generationAttempts: { type: "integer", dataClass: "count", required: false },
-    reused: { type: "boolean", dataClass: "closed-enum", required: false },
-    draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
-    normalizationVersion: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["1"],
-    },
-    normalizationRule: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["body-only", "terminal-trailers", "explicit-trailers"],
-    },
-    normalizationChanged: { type: "boolean", dataClass: "closed-enum", required: false },
-    bodyBulletCount: { type: "integer", dataClass: "count", required: false },
-    trailerLikeLineCount: { type: "integer", dataClass: "count", required: false },
-    trailerCount: { type: "integer", dataClass: "count", required: false },
-    trailerContinuationCount: {
-      type: "integer",
-      dataClass: "count",
-      required: false,
-    },
-    trailerParagraphBreakCount: {
-      type: "integer",
-      dataClass: "count",
-      required: false,
-    },
-    referenceTrailerCount: { type: "integer", dataClass: "count", required: false },
-    breakingTrailerCount: { type: "integer", dataClass: "count", required: false },
+    ...COMMIT_DRAFT_MODEL_FIELDS,
   },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-commit-draft"],
   proofIds: ["git.commit.draft.completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const COMMIT_DRAFT_ATTEMPT_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.commit.draft.attempt.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/commitRoutes.logCommitDraftAttempt",
+  fields: {
+    ...COMMIT_DRAFT_MODEL_FIELDS,
+    attempt: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-commit-draft"],
+  proofIds: ["git.commit.draft.attempt.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -1067,6 +1090,7 @@ async function generateModelCommitMessage(
   deps: UiHandlerDeps,
   input: CommitDraftInput,
   signal: AbortSignal,
+  log: ServerLogSink,
 ): Promise<ModelCommitDraftResult> {
   const resolved = resolveCommitDraftModel(deps);
   if (resolved === undefined)
@@ -1082,9 +1106,11 @@ async function generateModelCommitMessage(
     if (cached !== undefined)
       return { ...cached, bounds: { ...cached.bounds, reused: true, generationAttempts: 0 } };
     let result = await attemptCommitDraft(deps, resolved, input, callSignal, 1);
+    logCommitDraftAttempt(log, input.correlationId, result, 1);
     const recovery = repairCommitDraftModel(resolved, result);
     if (recovery !== undefined && !clientLeft(callSignal)) {
       const repaired = await attemptCommitDraft(deps, recovery, input, callSignal, 2);
+      logCommitDraftAttempt(log, input.correlationId, repaired, 2);
       result = selectCommitDraftRecovery(result, repaired);
     }
     if (clientLeft(callSignal))
@@ -1102,15 +1128,45 @@ async function generateModelCommitMessage(
         draftKeyDigest: key,
       },
     };
-    if (result.ok) {
-      if (cache.size >= 32) {
-        const oldest = cache.keys().next().value;
-        if (oldest !== undefined) cache.delete(oldest);
-      }
-      cache.set(key, result);
-    }
+    if (result.ok) rememberCommitDraft(cache, key, result);
     return result;
   });
+}
+
+function rememberCommitDraft(
+  cache: Map<string, SuccessfulDraft>,
+  key: string,
+  result: SuccessfulDraft,
+): void {
+  if (cache.size >= 32) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, result);
+}
+
+function logCommitDraftAttempt(
+  log: ServerLogSink,
+  correlationId: string,
+  result: ModelCommitDraftResult,
+  attempt: number,
+): void {
+  log.write(
+    activityLogEvent(
+      COMMIT_DRAFT_ATTEMPT_COMPLETED_OPERATION,
+      {
+        correlationId,
+        status: result.ok ? 200 : commitDraftFailureStatus(result.code),
+        ...(result.ok ? {} : { errorKind: commitDraftErrorKind(result.code) }),
+      },
+      {
+        attempt,
+        outcome: result.ok ? "succeeded" : "failed",
+        ...(result.ok ? {} : { failureCode: result.code }),
+        ...result.bounds,
+      },
+    ),
+  );
 }
 
 // `summary` is undefined only when the draft ended before the staged changeset was read (a client
@@ -1260,6 +1316,7 @@ async function computeModelCommitDraft(
       correlationId,
     },
     signal,
+    log,
   );
   if (!suggested.ok) return modelDraftFailureResult(log, correlationId, summary, suggested);
   logCommitDraft(log, correlationId, summary, 200, undefined, suggested.bounds);

@@ -458,8 +458,12 @@ no customer paths, diff or generated text is recorded. For a formatting report, 
 `normalizationVersion`, `normalizationRule` and `normalizationChanged`, then `bodyBulletCount`,
 `trailerLikeLineCount`, `trailerCount`, `trailerContinuationCount`, `trailerParagraphBreakCount`,
 `referenceTrailerCount` and `breakingTrailerCount`. These separate footer retention from body-list
-normalization, and carry the same values on cache reuse. Missing normalization fields mean the
-formatter was not reached; zero means it ran and observed none. No footer label or reference value
+normalization, and carry the same values on cache reuse. Missing normalization fields mean that line's selected result did not reach the
+formatter; zero means it ran and observed none. For a repair, read every
+`git.commit.draft.attempt.completed` line with the same correlation in `attempt` order. Its
+`failureCode` explains why repair ran or failed, while each attempt retains its own normalization
+and prompt bounds. An attempted repair refused before the model call still has an attempt line;
+`generationAttempts` counts actual model calls. Cache reuse has no new attempt lines. No footer label or reference value
 is logged.
 
 Chat startup now retries transient proxy failures and timeouts within the configured retry count

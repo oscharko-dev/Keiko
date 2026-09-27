@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7267249586b28404af8af9e352566abf1a5dc8873f67a37a855e811f61a1df80",
+    "catalogDigest": "10c900e9140a35aeefec1eb7dc202d228116fb37231a84d461ac7c08f99ee6d3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -14777,6 +14777,158 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "git.commit.draft.attempt.completed",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "gitDelivery/commitRoutes.logCommitDraftAttempt",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["succeeded", "failed"]
+          },
+          "failureCode": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "GIT_DELIVERY_COMMIT_BAD_REQUEST",
+              "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
+              "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
+              "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
+              "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
+              "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+              "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+              "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+              "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+              "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+              "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+              "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
+              "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE"
+            ]
+          },
+          "maxOutputTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "deadlineMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "promptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "maxPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "diffCompacted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "generationAttempts": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "reused": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "draftKeyDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "normalizationVersion": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["1"]
+          },
+          "normalizationRule": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["body-only", "terminal-trailers", "explicit-trailers"]
+          },
+          "normalizationChanged": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "bodyBulletCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerLikeLineCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerContinuationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "trailerParagraphBreakCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "referenceTrailerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "breakingTrailerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "attempt": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["git-commit-draft"],
+        "proofIds": ["git.commit.draft.attempt.completed.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:259",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1155"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "git.commit.draft.completed",
         "category": "diagnostic",
         "owner": "keiko-server",
@@ -14933,8 +15085,8 @@
         "failureClasses": ["git-commit-draft"],
         "proofIds": ["git.commit.draft.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:165",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1127"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:234",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1183"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14988,7 +15140,7 @@
         "proofIds": ["git.commit.preview.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:138",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:412"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:435"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34114,16 +34266,25 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": [],
+          "state": ["git.commit.draft.attempt.completed"],
           "end": ["git.commit.draft.completed"],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["git.commit.draft.completed"],
+        "requiredCausalOperations": [
+          "git.commit.draft.attempt.completed",
+          "git.commit.draft.completed"
+        ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["git.commit.draft.completed"],
+        "requiredProofOperations": [
+          "git.commit.draft.attempt.completed",
+          "git.commit.draft.completed"
+        ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["git.commit.draft.completed"],
+        "requiredResourceOperations": [
+          "git.commit.draft.attempt.completed",
+          "git.commit.draft.completed"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -56940,24 +57101,179 @@
           "failureClass": "git-commit-draft",
           "requirementContract": "git-commit-draft",
           "productSurfaces": ["keiko-server"],
-          "lifecycleTransitions": ["end"],
+          "lifecycleTransitions": ["end", "state"],
           "lifecycleOperations": {
             "start": [],
-            "state": [],
+            "state": ["git.commit.draft.attempt.completed"],
             "end": ["git.commit.draft.completed"],
             "failure": [],
             "loss": []
           },
           "causalEdges": [
             {
+              "op": "git.commit.draft.attempt.completed",
+              "mode": "correlation"
+            },
+            {
               "op": "git.commit.draft.completed",
               "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["git.commit.draft.completed"],
+          "resourceSignals": ["git.commit.draft.attempt.completed", "git.commit.draft.completed"],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "git.commit.draft.attempt.completed",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "attempt",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "bodyBulletCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "breakingTrailerCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "deadlineMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "diffCompacted",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "draftKeyDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "failureCode",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "generationAttempts",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "maxOutputTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "maxPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "normalizationChanged",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "normalizationRule",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "normalizationVersion",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "promptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "referenceTrailerCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "reused",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "trailerContinuationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "trailerCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "trailerLikeLineCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "trailerParagraphBreakCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["git.commit.draft.attempt.completed.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "git.commit.draft.completed",
               "owner": "keiko-server",
@@ -76690,43 +77006,49 @@
       "package": "keiko-server"
     },
     {
+      "op": "git.commit.draft.attempt.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:262",
+      "package": "keiko-server"
+    },
+    {
       "op": "git.commit.draft.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:168",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:237",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.model",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:489",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:512",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:475",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:498",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.conflict-scan",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:503",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:526",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.mutation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:517",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:540",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.branch-protection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:447",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:470",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76739,7 +77061,7 @@
     {
       "op": "git.commit.preview.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:461",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:484",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76770,7 +77092,7 @@
     {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1664",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1721",
       "package": "keiko-server"
     },
     {
@@ -76782,7 +77104,7 @@
     {
       "op": "git.delivery.commit.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1518",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1575",
       "package": "keiko-server"
     },
     {
@@ -78433,6 +78755,7 @@
     "git-change.chat.stale",
     "git.ci-observation",
     "git.ci-repair.budget",
+    "git.commit.draft.attempt.completed",
     "git.commit.draft.completed",
     "git.commit.draft.model",
     "git.commit.draft.worktree",

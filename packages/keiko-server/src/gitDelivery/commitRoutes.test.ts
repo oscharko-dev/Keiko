@@ -2634,6 +2634,19 @@ it("preserves the model failure when only its repair prompt exceeds context", as
   expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
     extra: { failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT", generationAttempts: 1 },
   });
+  const attempts = events.filter((event) => event.op === "git.commit.draft.attempt.completed");
+  expect(attempts).toHaveLength(2);
+  const refused = expectActivityLogProof(
+    "git.commit.draft.attempt.completed.emitted-line",
+    formatActivityLogProofLine(attempts[1] ?? {}),
+  );
+  expect(refused).toMatchObject({
+    attempt: 2,
+    generationAttempts: 1,
+    failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
+    errorKind: "validation-failed",
+  });
+  expect(refused).not.toHaveProperty("normalizationVersion");
 });
 
 it("starts a queued draft's deadline only after its failed holder releases the mutex", async () => {
@@ -2817,6 +2830,9 @@ it.each([
     );
   }
   expect(respond).toHaveBeenCalledOnce();
+  expect(events.filter((event) => event.op === "git.commit.draft.attempt.completed")).toHaveLength(
+    1,
+  );
   const completed = events.filter((event) => event.op === "git.commit.draft.completed");
   expect(completed).toHaveLength(2);
   for (const [index, event] of completed.entries()) {
@@ -2882,3 +2898,86 @@ it("retains observed normalization evidence when commit policy rejects the answe
     generationAttempts: 2,
   });
 });
+
+it.each(["exhausted", "malformed", "transport", "repaired"] as const)(
+  "preserves each attempt's normalization and repair cause when recovery is %s",
+  async (recovery) => {
+    const events: ServerLogEvent[] = [];
+    const correlationId = "123e4567-e89b-12d3-a456-426614174002";
+    const firstBody = "* Fix parser.\n\nRefs #123\n\nFurther details.";
+    const respond = vi.fn(() => draftResponse({ subject: "invalid prefix", body: firstBody }));
+    respond.mockImplementationOnce(() =>
+      draftResponse({ subject: "invalid prefix", body: firstBody }),
+    );
+    respond.mockImplementationOnce(() => {
+      if (recovery === "transport") throw new Error("synthetic gateway failure");
+      const answer = draftResponse({ subject: "fix: repair parser", body: "- Update parser." });
+      if (recovery === "exhausted") return { ...answer, finishReason: "length" };
+      if (recovery === "malformed")
+        return { ...answer, structuredOutput: null, content: "not json" };
+      return answer;
+    });
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/a.ts b/a.ts\n+change"),
+      }),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const result = await handler(
+      { ...ctxFor(DRAFT, { schemaVersion: "1", projectId }), correlationId },
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => draftModelPort(respond),
+      }),
+    );
+    expect(result.status).toBe(
+      { repaired: 200, transport: 503, malformed: 502, exhausted: 502 }[recovery],
+    );
+    expect(respond).toHaveBeenCalledTimes(2);
+    const attempts = events.filter((event) => event.op === "git.commit.draft.attempt.completed");
+    expect(attempts).toHaveLength(2);
+    const lines = attempts.map((event) => formatActivityLogProofLine(event));
+    const first = expectActivityLogProof(
+      "git.commit.draft.attempt.completed.emitted-line",
+      lines[0] ?? "",
+    );
+    expect(first).toMatchObject({
+      attempt: 1,
+      outcome: "failed",
+      failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+      correlationId,
+      errorKind: "validation-failed",
+      ...commitDraftQuality.canonicalCommitBody(firstBody).evidence,
+    });
+    const second = expectActivityLogProof(
+      "git.commit.draft.attempt.completed.emitted-line",
+      lines[1] ?? "",
+    );
+    expect(second).toMatchObject({ attempt: 2, correlationId });
+    if (recovery === "repaired") {
+      expect(second).toMatchObject({
+        outcome: "succeeded",
+        ...commitDraftQuality.canonicalCommitBody("- Update parser.").evidence,
+      });
+    } else {
+      expect(second).toMatchObject({
+        outcome: "failed",
+        failureCode: {
+          exhausted: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+          malformed: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+          transport: "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
+        }[recovery],
+      });
+      expect(second).not.toHaveProperty("normalizationVersion");
+    }
+    expect(lines.join("\n")).not.toContain("Refs #123");
+    const completed = events.find((event) => event.op === "git.commit.draft.completed");
+    const timeline = [...lines, formatActivityLogProofLine(completed ?? {})].join("");
+    const report = analyzeLogText(timeline);
+    expect(report.sufficiency.status, JSON.stringify(report.sufficiency)).toBe("complete");
+  },
+);
