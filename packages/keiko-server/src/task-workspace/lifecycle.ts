@@ -552,7 +552,7 @@ async function setActiveImpl(
   // we must NOT re-acquire `ws:` here — the in-process mutex is not reentrant. Only on success do we
   // record the active pointer — the switch is atomic from the surfaces' view because the derived binding
   // flips in one persisted step.
-  loadInstance(ctx, request.workspaceId);
+  // activate validates the workspace under its lock; avoid an unlocked duplicate store read here.
   const result = await ctx.deps.provisioning.activate({
     workspaceId: request.workspaceId,
     // taskId "" intentionally skips activate's optional taskId cross-check — at switch time identity is
