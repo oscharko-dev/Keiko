@@ -96,12 +96,30 @@ export type ActivityLogRouteRedactor = (pathname: string, maxLength: number) => 
 const FAIL_CLOSED_ROUTE_REDACTOR: ActivityLogRouteRedactor = () => undefined;
 let activityLogRouteRedactor: ActivityLogRouteRedactor = FAIL_CLOSED_ROUTE_REDACTOR;
 
-/** Installs the server-owned route-template reducer without importing the server graph. */
+export class ActivityLogRouteRedactorConflictError extends Error {
+  public override readonly name = "ActivityLogRouteRedactorConflictError";
+
+  public constructor() {
+    super("The Activity Log route redactor is already configured with a different reducer.");
+  }
+}
+
+/**
+ * Installs the server-owned route-template reducer without importing the server graph. Until a
+ * composition root configures it, every path-shaped value is replaced by REDACTED_PATH, so a process
+ * that never loads the server (the CLI support commands) fails closed. The first configuration wins:
+ * repeating it with the same reducer is a no-op, and a different reducer throws instead of silently
+ * replacing the redaction every later line depends on.
+ */
 export function configureActivityLogRouteRedactor(redactor: ActivityLogRouteRedactor): void {
+  if (activityLogRouteRedactor === redactor) return;
+  if (activityLogRouteRedactor !== FAIL_CLOSED_ROUTE_REDACTOR) {
+    throw new ActivityLogRouteRedactorConflictError();
+  }
   activityLogRouteRedactor = redactor;
 }
 
-/** Restores the package's fail-closed default. Intended for isolated tests. */
+/** Restores the package's fail-closed default. A test seam: never exported by the package root. */
 export function resetActivityLogRouteRedactor(): void {
   activityLogRouteRedactor = FAIL_CLOSED_ROUTE_REDACTOR;
 }

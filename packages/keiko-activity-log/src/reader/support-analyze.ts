@@ -75,6 +75,7 @@ import {
   type ActivityLogSufficiency,
   type ActivityLogSufficiencyLine,
 } from "./support-analyze-sufficiency.js";
+import { SequenceNumberSet } from "./sequence-number-set.js";
 
 export interface SupportAnalyzeOptions {
   readonly toolLifecycleValidator?: ToolLifecycleValidator;
@@ -1332,8 +1333,12 @@ function evidenceWarnings(evidence: ActivityLogEvidenceSummary): readonly string
 }
 
 export interface SequenceState {
-  readonly seen: Set<number>;
+  readonly seen: SequenceNumberSet;
   previous: number;
+}
+
+export function createSequenceState(): SequenceState {
+  return { seen: new SequenceNumberSet(), previous: 0 };
 }
 
 function sequenceAnomaly(
@@ -1379,7 +1384,7 @@ function detectSequenceAnomalies(lines: readonly ParsedLine[]): readonly Process
   for (const line of lines) {
     const key = lifetimeKey(line);
     if (key === undefined) continue;
-    const state = states.get(key) ?? { seen: new Set<number>(), previous: 0 };
+    const state = states.get(key) ?? createSequenceState();
     anomalies.push(...lineSequenceAnomalies(line, state));
     states.set(key, state);
   }

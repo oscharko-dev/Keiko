@@ -778,15 +778,29 @@ function fieldFailure(
   return typeof value === "number" ? numberFieldFailure(contract, value) : "invalid-field-type";
 }
 
+function rejectUnknownActivityLogFields(
+  expected: ActivityLogOperationRegistration["fields"],
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  for (const name in fields) {
+    if (Object.hasOwn(fields, name) && expected[name] === undefined) {
+      throw new ActivityLogEventValidationError("unknown-field");
+    }
+  }
+}
+
+// Runs for every emitted event and for every persisted line a reader classifies, so both loops
+// walk the own keys in place: copying the constant registration with `Object.entries` on every
+// call was the largest allocation site of a cold `keiko support query` (#3558).
 function validateActivityLogFields(
   registration: ActivityLogOperationRegistration,
   fields: Readonly<Record<string, unknown>>,
 ): void {
   const expected = registration.fields;
-  for (const name of Object.keys(fields)) {
-    if (expected[name] === undefined) throw new ActivityLogEventValidationError("unknown-field");
-  }
-  for (const [name, contract] of Object.entries(expected)) {
+  rejectUnknownActivityLogFields(expected, fields);
+  for (const name in expected) {
+    const contract = Object.hasOwn(expected, name) ? expected[name] : undefined;
+    if (contract === undefined) continue;
     const value = fields[name];
     if (value === undefined) {
       if (contract.required) throw new ActivityLogEventValidationError("missing-field");

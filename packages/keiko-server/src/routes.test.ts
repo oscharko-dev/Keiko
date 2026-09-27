@@ -667,7 +667,9 @@ describe("health handler", () => {
     );
   });
 
-  it("keeps a cold unreadable Activity Log body-free and explicitly unavailable", async (ctx) => {
+  // Review 4050605306: a throwing storage check froze the last "ready" snapshot, and on a cold start
+  // it carried the state directory's path out through GET /api/health.
+  it("answers GET /api/health on a cold start whose log directory cannot be listed", async (ctx) => {
     if (process.platform === "win32" || process.getuid?.() === 0) ctx.skip();
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-health-unreadable-"));
     const logs = join(stateDir, "logs");
@@ -680,6 +682,7 @@ describe("health handler", () => {
       const route = API_ROUTES.find((entry) => entry.pattern === "/api/health");
       const result = await route?.handler(emptyCtx, stubDeps);
       if (result === undefined || result === STREAMING) throw new Error("expected a RouteResult");
+      expect(result.status).toBe(200);
       const diagnostics: unknown = Reflect.get(result.body as object, "diagnostics");
       expect(isActivityLogReadinessSnapshot(diagnostics)).toBe(true);
       expect(diagnostics).toMatchObject({
@@ -696,7 +699,7 @@ describe("health handler", () => {
     }
   });
 
-  it("returns the live Activity Log loss count in the closed diagnostics block", async () => {
+  it("exposes a closed diagnostics block on GET /api/health with a live lost-event count", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-health-loss-"));
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     resetServerLogger();
@@ -706,8 +709,11 @@ describe("health handler", () => {
       checkActivityLogReadiness({ stateDir });
       recordActivityLogLoss("client-rejected", 2);
       const route = API_ROUTES.find((entry) => entry.pattern === "/api/health");
+      expect(route).toBeDefined();
       const result = await route?.handler(emptyCtx, stubDeps);
       if (result === undefined || result === STREAMING) throw new Error("expected a RouteResult");
+      expect(result.status).toBe(200);
+      expect(Reflect.get(result.body as object, "status")).toBe("ok");
       const diagnostics: unknown = Reflect.get(result.body as object, "diagnostics");
       expect(isActivityLogReadinessSnapshot(diagnostics)).toBe(true);
       expect(diagnostics).toMatchObject({ readiness: "ready", lostEvents: 2 });

@@ -33,6 +33,7 @@ export {
 } from "./error-classification.js";
 export {
   configureActivityLogRouteRedactor,
+  ActivityLogRouteRedactorConflictError,
   type ActivityLogRouteRedactor,
 } from "./log-redaction.js";
 export {

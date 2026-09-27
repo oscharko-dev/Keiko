@@ -55,6 +55,7 @@ import {
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   ACTIVITY_LOG_EVIDENCE_INTEGRITY,
+  createSequenceState,
   emptyEvidenceCounts,
   evidenceSummary,
   incrementEvidence,
@@ -344,7 +345,7 @@ export class SegmentManifestBuilder {
     const identity = lineIdentity(parsed);
     if (identity === undefined) return;
     const key = `${String(identity.pid)}:${identity.instanceId}`;
-    const state = this.sequenceStates.get(key) ?? { seen: new Set<number>(), previous: 0 };
+    const state = this.sequenceStates.get(key) ?? createSequenceState();
     this.sequenceStates.set(key, state);
     for (const anomaly of lineSequenceAnomalies(parsed, state)) {
       this.anomalyCounts[anomaly.kind] += 1;

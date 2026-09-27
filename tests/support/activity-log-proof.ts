@@ -76,6 +76,16 @@ function registrationForProof(proofId: string): ActivityLogOperationRegistration
   return registration;
 }
 
+function registrationForOperation(op: string): ActivityLogOperationRegistration {
+  const registration = (
+    ACTIVITY_LOG_OPERATION_REGISTRY as readonly ActivityLogOperationRegistration[]
+  ).find((candidate) => candidate.op === op);
+  if (registration === undefined) {
+    throw new Error(`Activity Log operation ${op} is not registered.`);
+  }
+  return registration;
+}
+
 function parsePersistedLine(proofId: string, line: string): Record<string, unknown> {
   const text = line.endsWith("\n") ? line.slice(0, -1) : line;
   if (text.length === 0 || text.includes("\n")) {
@@ -150,12 +160,31 @@ export function expectActivityLogStderrProof(
   return expectRegisteredLine(proofId, line, "stderr-notice");
 }
 
+/**
+ * Applies every check of `expectActivityLogProof` to a production-persisted line of the registered
+ * operation `op`, without resolving a proof id. A test outside the operation's owning package uses
+ * it to keep full-strength evidence assertions for a path only that package can drive (for example
+ * the server's process logger wiring); the proof itself stays with the owning package, where the
+ * generator requires it.
+ */
+export function expectRegisteredActivityLogLine(op: string, line: string): Record<string, unknown> {
+  return expectLineOf(registrationForOperation(op), `operation ${op}`, line, "file-sink");
+}
+
 function expectRegisteredLine(
   proofId: string,
   line: string,
   channel: ProofChannel,
 ): Record<string, unknown> {
-  const registration = registrationForProof(proofId);
+  return expectLineOf(registrationForProof(proofId), proofId, line, channel);
+}
+
+function expectLineOf(
+  registration: ActivityLogOperationRegistration,
+  proofId: string,
+  line: string,
+  channel: ProofChannel,
+): Record<string, unknown> {
   const record = parsePersistedLine(proofId, line);
   const context = `Activity Log proof ${proofId} (${registration.op})`;
   expectPersistedIdentity(proofId, registration.op, record, channel);

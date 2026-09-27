@@ -77,16 +77,20 @@ import {
   type StateRootInspection,
 } from "./state-paths.js";
 import {
-  RERANKER_SECRET_REF,
-  credentialStorePath,
-  hasPlaintextGatewayCredentials,
-} from "@oscharko-dev/keiko-server/credential-vault";
-import {
   SecretVaultStoreError,
   readLocalVaultReferences,
 } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import { loadCredentialVault } from "./lazy-modules.js";
+
+// The credential vault helpers load only when a repair pass runs. A static import would put a
+// keiko-server module into the graph of every CLI command, including the Activity Log-only support
+// commands that must not load the server (ADR-0179).
+type CredentialVault = Pick<
+  Awaited<ReturnType<typeof loadCredentialVault>>,
+  "RERANKER_SECRET_REF" | "credentialStorePath" | "hasPlaintextGatewayCredentials"
+>;
 
 const USAGE = `Usage:
   keiko repair [--state-dir PATH] [--config PATH] [--dry-run]
@@ -583,11 +587,15 @@ function credentialConfigPaths(
   return [];
 }
 
-function credentialReferenceCheck(configPath: string, raw: unknown): CheckResult {
+function credentialReferenceCheck(
+  configPath: string,
+  raw: unknown,
+  vault: CredentialVault,
+): CheckResult {
   let orphaned: number;
   try {
     orphaned =
-      (raw === undefined ? 0 : orphanedSecretRefs(raw, configPath)) +
+      (raw === undefined ? 0 : orphanedSecretRefs(raw, configPath, vault)) +
       orphanedAtlassianSecretRefs(configPath);
   } catch (error) {
     if (error instanceof SecretVaultStoreError) {
@@ -615,9 +623,9 @@ function credentialReferenceCheck(configPath: string, raw: unknown): CheckResult
     : ok("Credential storage", "no plaintext credentials in config");
 }
 
-function checkCredentialConfig(configPath: string): CheckResult {
+function checkCredentialConfig(configPath: string, vault: CredentialVault): CheckResult {
   if (configPath.length === 0) return ok("Credential storage", "no config file to inspect");
-  if (!existsSync(configPath)) return credentialReferenceCheck(configPath, undefined);
+  if (!existsSync(configPath)) return credentialReferenceCheck(configPath, undefined, vault);
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(configPath, "utf8"));
@@ -625,25 +633,26 @@ function checkCredentialConfig(configPath: string): CheckResult {
     // Invalid JSON is already reported by the gateway-config check; avoid a duplicate action item.
     return ok("Credential storage", "config not parseable (reported above)");
   }
-  if (hasPlaintextGatewayCredentials(raw)) {
+  if (vault.hasPlaintextGatewayCredentials(raw)) {
     return action(
       "Credential storage",
       "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
     );
   }
-  return credentialReferenceCheck(configPath, raw);
+  return credentialReferenceCheck(configPath, raw, vault);
 }
 
 function checkCredentialStorage(
   args: readonly string[],
   env: EnvSource,
   defaultConfigCandidates: readonly string[],
+  vault: CredentialVault,
 ): readonly CheckResult[] {
   const paths = credentialConfigPaths(args, env, defaultConfigCandidates);
   if (paths.length === 0) return [ok("Credential storage", "no config file to inspect")];
   const includePath = paths.length > 1;
   return paths.map((configPath) => {
-    const result = checkCredentialConfig(configPath);
+    const result = checkCredentialConfig(configPath, vault);
     return includePath ? { ...result, name: `${result.name} (${configPath})` } : result;
   });
 }
@@ -783,7 +792,7 @@ function readPortableRecordForRepair(
 // encrypted credential vault — the signature of an interrupted migration or a deleted/corrupt vault
 // store.
 // Reads only the non-secret reference index (no vault key resolution, no decryption).
-function orphanedSecretRefs(raw: unknown, configPath: string): number {
+function orphanedSecretRefs(raw: unknown, configPath: string, vault: CredentialVault): number {
   if (typeof raw !== "object" || raw === null) return 0;
   const providers = (raw as { readonly providers?: unknown }).providers;
   const refs = Array.isArray(providers)
@@ -799,11 +808,11 @@ function orphanedSecretRefs(raw: unknown, configPath: string): number {
   if (typeof reranker === "object" && reranker !== null) {
     const ref = (reranker as { readonly apiKeySecretRef?: unknown }).apiKeySecretRef;
     if (typeof ref === "string" && ref.length > 0) {
-      refs.push(ref === RERANKER_SECRET_REF ? ref : "__invalid-reranker-secret-ref__");
+      refs.push(ref === vault.RERANKER_SECRET_REF ? ref : "__invalid-reranker-secret-ref__");
     }
   }
   if (refs.length === 0) return 0;
-  const vaulted = new Set(readLocalVaultReferences(credentialStorePath(configPath)));
+  const vaulted = new Set(readLocalVaultReferences(vault.credentialStorePath(configPath)));
   return refs.filter((ref) => !vaulted.has(ref)).length;
 }
 
@@ -968,6 +977,7 @@ function collectRepairResults(
   env: EnvSource,
   parsed: RepairOptions,
   resolved: ResolvedRepairDeps,
+  vault: CredentialVault,
 ): readonly CheckResult[] {
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
   const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
@@ -1007,16 +1017,16 @@ function collectRepairResults(
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
-    ...checkCredentialStorage(args, env, defaultConfigCandidates),
+    ...checkCredentialStorage(args, env, defaultConfigCandidates, vault),
   ];
 }
 
-export function runRepairCli(
+export async function runRepairCli(
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
   deps: RepairCliDeps = {},
-): number {
+): Promise<number> {
   const parsed = parseRepairArgs(args);
   if (parsed === "help") {
     io.out(USAGE);
@@ -1034,7 +1044,7 @@ export function runRepairCli(
   // scripts can detect "manual step required".
   let results: readonly CheckResult[];
   try {
-    results = collectRepairResults(args, io, env, parsed, resolved);
+    results = collectRepairResults(args, io, env, parsed, resolved, await loadCredentialVault());
   } catch (error) {
     const name = error instanceof Error ? error.name : "UnknownError";
     io.out("Keiko repair\n");

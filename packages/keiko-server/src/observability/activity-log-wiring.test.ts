@@ -18,6 +18,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
+  expectRegisteredActivityLogLine,
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
@@ -78,8 +79,7 @@ describe("process-wide Activity Log resolution", () => {
       readPersistedActivityLog(stateDir),
       "activity-log.loss",
     );
-    expect(JSON.parse(line ?? "{}") as Record<string, unknown>).toMatchObject({
-      op: "activity-log.loss",
+    expect(expectRegisteredActivityLogLine("activity-log.loss", line ?? "")).toMatchObject({
       trigger: "exit",
       totalLost: 0,
       completeness: "complete",
@@ -155,7 +155,10 @@ describe("mandatory evidence and the level threshold", () => {
     const raw = readPersistedActivityLog(stateDir);
     expect(persistedActivityLogLines(raw, "update.runtime.event")).toEqual([]);
     expect(build).not.toHaveBeenCalled();
-    expect(persistedActivityLogLines(raw, "activity-log.loss")).toHaveLength(1);
+    expectRegisteredActivityLogLine(
+      "activity-log.loss",
+      persistedActivityLogLines(raw, "activity-log.loss")[0] ?? "",
+    );
   });
 
   it("gates the production sink like the logger, mandatory evidence included", () => {

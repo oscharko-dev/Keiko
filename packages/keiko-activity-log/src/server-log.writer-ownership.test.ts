@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  activityLogLossCounters,
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
+  resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const CHILD_ORDER_ENV = "KEIKO_ACTIVITY_LOG_WRITER_GRAPH_ORDER";
@@ -21,6 +23,10 @@ const roots: string[] = [];
 type WriterModule = typeof import("./server-log.js");
 type PublicModule = typeof import("./index.js");
 type GraphOrder = "source-first" | "dist-first";
+type ChildMode = GraphOrder | "foreign-slot";
+
+const CHILD_MODE = process.env[CHILD_ORDER_ENV] as ChildMode | undefined;
+const WRITER_OWNER_KEY = Symbol.for("@oscharko-dev/keiko-activity-log/process-writer-owner");
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -57,6 +63,30 @@ function persistedLines(stateDir: string): readonly string[] {
         .split("\n")
         .filter((line) => line.length > 0),
     );
+}
+
+interface LiveSegment {
+  readonly name: string;
+  readonly ino: number;
+  readonly bytes: string;
+}
+
+// The winner's one active segment. A sealed sibling would be renamed away from `.active.jsonl`,
+// and a recovered one would be re-created under a new inode, so name and inode together prove the
+// segment stayed live and untouched apart from appends.
+function liveSegment(stateDir: string): LiveSegment {
+  const directory = join(stateDir, "logs");
+  const active = readdirSync(directory).filter((name) => name.endsWith(".active.jsonl"));
+  expect(active).toHaveLength(1);
+  const name = active[0] ?? "";
+  const path = join(directory, name);
+  return { name, ino: lstatSync(path).ino, bytes: readFileSync(path, "utf8") };
+}
+
+function segmentNames(stateDir: string): readonly string[] {
+  return readdirSync(join(stateDir, "logs"))
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort((left, right) => left.localeCompare(right, "en-US"));
 }
 
 function fileSnapshot(
@@ -127,6 +157,8 @@ async function exerciseOrder(order: GraphOrder): Promise<void> {
   const incidentDirectory = join(stateDir, "support-incidents");
   const incidentSnapshot = fileSnapshot(incidentDirectory);
   const pinSnapshot = fileSnapshot(join(stateDir, "logs"), (name) => name.startsWith("pin-"));
+  const liveBefore = liveSegment(stateDir);
+  const segmentsBefore = segmentNames(stateDir);
   expect(() => rejected.createFileServerLogSink(stateDir, { level: "debug" })).toThrow(
     rejected.ActivityLogWriterOwnershipError,
   );
@@ -170,7 +202,18 @@ async function exerciseOrder(order: GraphOrder): Promise<void> {
   expect(fileSnapshot(join(stateDir, "logs"), (name) => name.startsWith("pin-"))).toEqual(
     pinSnapshot,
   );
+  // Neither instance sealed the other's live segment: the winner's segment is the same live file,
+  // only appended to (by the winner's rejection evidence), and no segment appeared or disappeared.
+  const liveAfterRejections = liveSegment(stateDir);
+  expect(liveAfterRejections.name).toBe(liveBefore.name);
+  expect(liveAfterRejections.ino).toBe(liveBefore.ino);
+  expect(liveAfterRejections.bytes.startsWith(liveBefore.bytes)).toBe(true);
+  expect(segmentNames(stateDir)).toEqual(segmentsBefore);
   sink.write(event);
+  const liveAfterWinnerWrite = liveSegment(stateDir);
+  expect(liveAfterWinnerWrite.name).toBe(liveBefore.name);
+  expect(liveAfterWinnerWrite.ino).toBe(liveBefore.ino);
+  expect(liveAfterWinnerWrite.bytes.length).toBeGreaterThan(liveAfterRejections.bytes.length);
   sink.close?.();
 
   const lines = persistedLines(stateDir);
@@ -192,7 +235,23 @@ async function exerciseOrder(order: GraphOrder): Promise<void> {
   });
 }
 
-function runIsolated(order: GraphOrder): void {
+// A foreign or version-skewed value in the process slot is not a writer this graph can defer to.
+// The claim must fail closed before any filesystem mutation, and the rejection it cannot persist
+// is counted in the loss ledger.
+async function exerciseForeignSlot(): Promise<void> {
+  const stateDir = mkdtempSync(join(tmpdir(), "keiko-writer-owner-foreign-"));
+  roots.push(stateDir);
+  Reflect.set(globalThis, WRITER_OWNER_KEY, { graphToken: "foreign" });
+  const writer = await import("./server-log.js");
+  resetActivityLogLossCountersForTests();
+  expect(() => writer.createFileServerLogSink(stateDir, { level: "debug" })).toThrow(
+    writer.ActivityLogWriterOwnershipError,
+  );
+  expect(existsSync(join(stateDir, "logs"))).toBe(false);
+  expect(activityLogLossCounters()["persistence-failed"]).toBe(1);
+}
+
+function runIsolated(order: ChildMode): void {
   const run = spawnSync(
     process.execPath,
     [VITEST_ENTRY, "run", THIS_TEST, "--config", "vitest.config.ts"],
@@ -210,14 +269,27 @@ function runIsolated(order: GraphOrder): void {
 describe("process-wide Activity Log writer ownership", () => {
   it(
     "rejects the second source/dist graph before mutation and keeps the winner appendable",
-    async () => {
-      const childOrder = process.env[CHILD_ORDER_ENV] as GraphOrder | undefined;
-      if (childOrder !== undefined) {
-        await exerciseOrder(childOrder);
+    async (ctx) => {
+      if (CHILD_MODE === "foreign-slot") ctx.skip();
+      if (CHILD_MODE !== undefined) {
+        await exerciseOrder(CHILD_MODE as GraphOrder);
         return;
       }
       runIsolated("source-first");
       runIsolated("dist-first");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails closed with counted evidence when the ownership slot holds a foreign value",
+    async (ctx) => {
+      if (CHILD_MODE === "foreign-slot") {
+        await exerciseForeignSlot();
+        return;
+      }
+      if (CHILD_MODE !== undefined) ctx.skip();
+      runIsolated("foreign-slot");
     },
     TEST_TIMEOUT_MS,
   );

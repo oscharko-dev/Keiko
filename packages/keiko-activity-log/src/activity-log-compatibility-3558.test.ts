@@ -9,6 +9,7 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
   activityLogEvent,
   activityLogOperationSchema,
+  parseActivityLogFileName,
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -127,8 +128,25 @@ function expectCapturedV2Evidence(
   }
 }
 
+// The captured writer's pid is a real number from the capture host. Its liveness probe answers
+// ESRCH so an unrelated process that happens to hold that pid on the test host can never keep the
+// captured segment live; every other signal still reaches the real process.kill.
+function exitedCapturedWriter(segmentName: string): void {
+  const parsed = parseActivityLogFileName(segmentName);
+  if (parsed?.kind !== "active") throw new Error("fixture segment is not an active segment");
+  const capturedPid = parsed.pid;
+  const realKill = process.kill.bind(process);
+  vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+    if (pid === capturedPid && signal === 0) {
+      throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+    }
+    return realKill(pid, signal);
+  });
+}
+
 afterEach(() => {
   closeFileServerLogSinks();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -183,6 +201,7 @@ describe("pre-move Activity Log compatibility fixture (#3558)", () => {
     const stateDir = restoreFixture();
     const [activeBefore] = listActivityLogFiles(stateDir).filter((file) => file.kind === "active");
     if (activeBefore === undefined) throw new Error("fixture has no active segment");
+    exitedCapturedWriter(activeBefore.name);
     const bytesBefore = readFileSync(activeBefore.path);
 
     createFileServerLogSink(stateDir, { level: "debug" }).write(
