@@ -58,9 +58,11 @@ function renderSelector(
     <CodingWorkbenchRepositorySelector
       root="/repos/plain-folder"
       branch={null}
+      location="local"
       locked={false}
       onSelect={vi.fn()}
       onSelectBranch={vi.fn()}
+      onSelectLocation={vi.fn()}
       onOpenGit={vi.fn()}
       placement="setup"
       {...overrides}
