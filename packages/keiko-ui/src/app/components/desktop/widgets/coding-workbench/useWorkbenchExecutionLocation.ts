@@ -19,7 +19,7 @@ import { secureRandomId } from "@/lib/secure-random";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
-import { bffRequestErrorKind } from "@/lib/http";
+import { bffRequestErrorKind, newClientCorrelationId } from "@/lib/http";
 import { codingWorkbenchSetupTaskId } from "./CodingWorkbenchSetup";
 import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
 
@@ -55,9 +55,13 @@ function bindingReady(
   );
 }
 
-async function targetBranch(root: string, selected: string | undefined): Promise<string> {
+async function targetBranch(
+  root: string,
+  selected: string | undefined,
+  correlationId: string,
+): Promise<string> {
   if (selected !== undefined) return selected;
-  const status = await fetchGitStatus(root);
+  const status = await fetchGitStatus(root, { correlationId });
   if (!status.available || status.branch === undefined || status.detached) {
     throw new Error("CHECKOUT_BRANCH_UNAVAILABLE");
   }
@@ -187,9 +191,17 @@ interface BindingAttempt {
 async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
   const { input, key, latest, inFlight, setPending, setErrorKey, setSelectionEpoch } = attempt;
   if (input.root === null) return;
+  const correlationId = newClientCorrelationId();
   try {
-    const branch = await targetBranch(input.root, input.branch);
-    if (!selectionNeedsBinding(input, latest.current)) return;
+    const branch = await targetBranch(input.root, input.branch, correlationId);
+    if (!selectionNeedsBinding(input, latest.current)) {
+      reportClientDiagnostic("[keiko] coding workbench checkout selection superseded", {
+        correlationId,
+        kind: "other",
+        errorKind: "cancelled",
+      });
+      return;
+    }
     if (input.location === "local") {
       await selectLocalCheckout({ root: input.root, branch, requestedBy: OPERATOR });
     } else {

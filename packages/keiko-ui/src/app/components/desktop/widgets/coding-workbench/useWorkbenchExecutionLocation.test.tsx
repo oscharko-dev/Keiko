@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 import { useWorkbenchExecutionLocation } from "./useWorkbenchExecutionLocation";
 
@@ -14,6 +15,7 @@ vi.mock("@/lib/task-workspace-api", () => ({ selectLocalCheckout: mocks.selectLo
 vi.mock("@/lib/verified-task-workspace-binding", () => ({
   bindVerifiedTaskWorkspace: mocks.bindVerifiedTaskWorkspace,
 }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 
 const refresh = vi.fn(() => Promise.resolve(true));
 const managed = {
@@ -67,12 +69,24 @@ describe("workbench execution location restoration", () => {
       refresh,
     };
     const { rerender } = renderHook(useWorkbenchExecutionLocation, { initialProps: initial });
-    await waitFor(() => expect(mocks.fetchGitStatus).toHaveBeenCalledWith("/old"));
+    await waitFor(() =>
+      expect(mocks.fetchGitStatus).toHaveBeenCalledWith(
+        "/old",
+        expect.objectContaining({ correlationId: expect.any(String) }),
+      ),
+    );
     rerender({ ...initial, root: "/repo", location: "worktree", activeInstance: managed });
     await act(async () => {
       finishRead?.({ available: true, branch: "main", detached: false });
     });
     expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
     expect(mocks.bindVerifiedTaskWorkspace).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench checkout selection superseded",
+      expect.objectContaining({
+        correlationId: mocks.fetchGitStatus.mock.calls[0]?.[1]?.correlationId,
+        errorKind: "cancelled",
+      }),
+    );
   });
 });
