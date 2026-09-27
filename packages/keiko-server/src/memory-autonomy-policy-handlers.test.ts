@@ -33,6 +33,23 @@ function deps(): UiHandlerDeps {
 }
 
 describe("memory autonomy policy routes", () => {
+  it("projects the Memory ceiling independently of Coding mode availability", () => {
+    const handlerDeps = {
+      ...deps(),
+      codingRuntimeDeploymentCeiling: "autonomous-delivery" as const,
+      memoryDeploymentCeiling: "governed-assist" as const,
+    };
+    handlerDeps.store.updateMemoryAutonomyPolicy("autonomous-delivery", 0);
+    expect(handleGetMemoryAutonomyPolicy(context(), handlerDeps)).toMatchObject({
+      status: 200,
+      body: {
+        requestedMode: "autonomous-delivery",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "governed-assist",
+      },
+    });
+  });
+
   it("defaults safely and persists a requested mode clamped by the deployment ceiling", async () => {
     const handlerDeps = deps();
     expect(handleGetMemoryAutonomyPolicy(context(), handlerDeps)).toMatchObject({

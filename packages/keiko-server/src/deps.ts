@@ -778,6 +778,9 @@ export interface UiHandlerDeps {
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  // Memory retains its explicitly configured ceiling or the approval baseline. Coding's all-mode
+  // availability is not permission to auto-accept memories or widen standing maintenance.
+  readonly memoryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
   // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
@@ -4914,6 +4917,7 @@ type RuntimeUiHandlerDeps = ReturnType<typeof codingSidecarGatewayModelSourceFie
     | "codingWorkbenchEvidenceStore"
     | "codingRuntimeEvidenceAggregator"
     | "codingRuntimeDeploymentCeiling"
+    | "memoryDeploymentCeiling"
     | "codingSidecarGatewayEvidenceAggregator"
   >;
 
@@ -4934,6 +4938,7 @@ function buildRuntimeUiHandlerDeps(
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator: services.codingRuntimeEvidenceAggregator,
     codingRuntimeDeploymentCeiling: services.codingRuntimeCeiling,
+    memoryDeploymentCeiling: resolveConfiguredDeploymentCeiling(args.options) ?? "governed-assist",
     ...buildRuntimeMutationLeaseDependency(args.options, services.runtimeComposition),
     ...codingRuntimeControlPlaneDeps,
     codingSidecarGatewayEvidenceAggregator: {
@@ -5393,11 +5398,15 @@ export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEIL
 function resolveCodingRuntimeDeploymentCeiling(
   options: BuildHandlerDepsOptions,
 ): CodingWorkbenchMode {
-  if (options.codingRuntimeDeploymentCeiling !== undefined) {
-    return options.codingRuntimeDeploymentCeiling;
-  }
-  const configured = options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV];
-  if (configured === undefined) return "autonomous-delivery";
+  return resolveConfiguredDeploymentCeiling(options) ?? "autonomous-delivery";
+}
+
+function resolveConfiguredDeploymentCeiling(
+  options: BuildHandlerDepsOptions,
+): CodingWorkbenchMode | undefined {
+  const configured =
+    options.codingRuntimeDeploymentCeiling ?? options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV];
+  if (configured === undefined) return undefined;
   return isCodingWorkbenchMode(configured) ? configured : "governed-assist";
 }
 

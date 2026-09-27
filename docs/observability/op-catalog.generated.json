@@ -76859,7 +76859,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1982",
+      "site": "packages/keiko-server/src/deps.ts:1985",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -77229,7 +77229,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4193",
+      "site": "packages/keiko-server/src/deps.ts:4196",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -77358,7 +77358,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2824",
+      "site": "packages/keiko-server/src/deps.ts:2827",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

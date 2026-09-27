@@ -32,6 +32,10 @@ import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/c
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
 import { gitHubCodeContextPortFor } from "./coding-context/githubIssueReaderAuthorization.js";
+import {
+  resolveMemoryCaptureAutonomyMode,
+  resolvePersistedMemoryAutonomyMode,
+} from "./memory-capture-policy.js";
 import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
@@ -3142,6 +3146,22 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     expect(fromEnv.codingRuntimeDeploymentCeiling).toBe("supervised-coding");
     const fromDefault = depsWithEnv({});
     expect(fromDefault.codingRuntimeDeploymentCeiling).toBe("autonomous-delivery");
+  });
+
+  it("keeps memory approval semantics when all Coding modes are available by default", () => {
+    const deps = depsWithEnv({});
+    expect(deps.codingRuntimeDeploymentCeiling).toBe("autonomous-delivery");
+    expect(resolveMemoryCaptureAutonomyMode(deps)).toBe("governed-assist");
+    expect(resolveMemoryCaptureAutonomyMode(deps, "autonomous-delivery")).toBe("governed-assist");
+    deps.store.updateMemoryAutonomyPolicy("autonomous-delivery", 0);
+    expect(resolvePersistedMemoryAutonomyMode(deps)).toBe("governed-assist");
+  });
+
+  it("preserves explicitly configured Memory ceilings", () => {
+    const fromOption = depsWithEnv({}, "supervised-coding");
+    const fromEnv = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" });
+    expect(resolveMemoryCaptureAutonomyMode(fromOption)).toBe("supervised-coding");
+    expect(resolveMemoryCaptureAutonomyMode(fromEnv)).toBe("autonomous-delivery");
   });
 
   it("rejects an unrecognized explicit ceiling environment value fail-closed", () => {

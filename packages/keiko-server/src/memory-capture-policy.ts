@@ -142,16 +142,29 @@ export function enforcePersistableMemoryOutcome(outcome: CaptureOutcome): Captur
   return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
 }
 
+// Production supplies the Memory ceiling separately from Coding's all-mode availability. Existing
+// injected compositions retain their explicitly supplied shared ceiling; an absent ceiling remains
+// the approval baseline. All consumers use the same canonical mode clamp.
+export function memoryDeploymentCeiling(
+  deps: Pick<UiHandlerDeps, "memoryDeploymentCeiling" | "codingRuntimeDeploymentCeiling">,
+): CodingWorkbenchMode {
+  return (
+    deps.memoryDeploymentCeiling ??
+    deps.codingRuntimeDeploymentCeiling ??
+    DEFAULT_MEMORY_AUTONOMY_MODE
+  );
+}
+
 // The effective autonomy mode for memory capture on this turn. Memory capture is an
 // autonomy-capable surface under ADR-0129; a canonical requested mode is bounded by the validated,
-// server-owned coding-runtime deployment ceiling. An unset ceiling fails closed to the most
+// server-owned Memory deployment ceiling. An unset ceiling fails closed to the most
 // restrictive mode (ADR-0124 D2 / ADR-0138). Legacy calls without a requested mode retain #2546's
 // ceiling-derived behavior. No memory-local autonomy type or ordering is introduced.
 export function resolveMemoryCaptureAutonomyMode(
-  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling">,
+  deps: Pick<UiHandlerDeps, "memoryDeploymentCeiling" | "codingRuntimeDeploymentCeiling">,
   requestedMode?: CodingWorkbenchMode,
 ): CodingWorkbenchMode {
-  const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? DEFAULT_MEMORY_AUTONOMY_MODE;
+  const deploymentCeiling = memoryDeploymentCeiling(deps);
   return requestedMode === undefined
     ? resolveEffectiveCodingWorkbenchMode(deploymentCeiling, deploymentCeiling)
     : resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
@@ -166,14 +179,14 @@ export function resolveMemoryCaptureAutonomyMode(
 // is showing. This may throw if the UI store is unreadable; callers that must not fail a chat turn
 // wrap it and fall closed (see resolveMaintenanceAutonomyMode in memory-maintenance-handlers.ts).
 export function resolvePersistedMemoryAutonomyMode(
-  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling" | "store">,
+  deps: Pick<UiHandlerDeps, "memoryDeploymentCeiling" | "codingRuntimeDeploymentCeiling" | "store">,
 ): CodingWorkbenchMode {
   const requestedMode = deps.store.readMemoryAutonomyPolicy()?.requestedMode;
   return resolveMemoryCaptureAutonomyMode(deps, requestedMode ?? DEFAULT_MEMORY_AUTONOMY_MODE);
 }
 
 export function resolveMemoryMaintenanceAutonomyMode(
-  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling" | "store">,
+  deps: Pick<UiHandlerDeps, "memoryDeploymentCeiling" | "codingRuntimeDeploymentCeiling" | "store">,
 ): CodingWorkbenchMode {
   return resolvePersistedMemoryAutonomyMode(deps);
 }

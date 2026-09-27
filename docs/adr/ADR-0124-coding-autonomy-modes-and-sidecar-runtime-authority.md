@@ -89,9 +89,20 @@ Naming the mode here does not implement the runner.
 The effective mode is computed as the minimum of:
 
 - the requested mode for the current task, and
-- the deployment ceiling configured for the environment.
+- the server-owned deployment ceiling resolved for the surface.
 
-Unknown, missing, or malformed values fail closed to `governed-assist`.
+**Owner amendment, 2026-09-27:** a normal Coding Workbench installation resolves an absent
+configuration to `autonomous-delivery`, exposing all three modes without an extra setup step.
+The selected mode still defaults to `governed-assist`; an explicit human selection (including a
+persisted selection) bounds the run. An explicit narrower ceiling is honored, and malformed or
+unknown explicit values fail closed. Missing or invalid requested modes and missing envelope
+ceilings still fail closed to `governed-assist` at admission. Availability is resolved at production
+composition, not inferred from a successfully launched runtime.
+
+This amendment is scoped to Coding. Memory retains the previous explicitly configured ceiling or
+`governed-assist` when absent; Coding availability must not promote legacy captures or widen
+persisted Memory maintenance authority. Both surfaces continue to use the same canonical mode
+ordering and minimum calculation.
 
 No caller may widen authority by passing a higher requested mode than the environment allows. The
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime

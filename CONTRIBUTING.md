@@ -157,3 +157,12 @@ When adding a new entry, copy [`docs/troubleshooting/_template.md`](docs/trouble
 and follow the **Symptom**, **Root Cause**, **Diagnostic Steps**, and
 **Resolution** structure. Do not include API keys, customer data,
 internal endpoints, or unredacted log lines in examples.
+
+## Coding mode availability
+
+The owner decision of 2026-09-27 exposes all three Coding Workbench modes on a normal installation
+without extra configuration (ADR-0124 D2, ADR-0163 D7). The default selected mode remains Ask for
+approval. Explicit narrower deployment ceilings and every mode-independent denial remain enforced.
+Do not propagate Coding's availability default to Memory: its absent-configuration ceiling stays
+`governed-assist` for capture, policy projection and maintenance. Regression coverage must exercise
+both production composition and these consumers when changing this wiring.
