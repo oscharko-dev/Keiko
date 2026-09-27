@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7f97b2de46eb90722332b00dde5b6153f3c123711ffe6a00b694a10194a073b0" as const;
+  "ebd2204ab4ec18584416178498f492c5a997be4bf5b437387142f49a849b90f4" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -6745,7 +6745,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["pending", "running", "failed"],
+        values: ["pending", "running", "failed", "succeeded"],
       },
       rejection: {
         type: "string",

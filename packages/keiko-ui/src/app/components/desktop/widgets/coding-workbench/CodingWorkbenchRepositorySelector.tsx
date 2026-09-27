@@ -534,6 +534,62 @@ function BranchSelectorField({
   );
 }
 
+function SelectorRecoveryForState({
+  root,
+  state,
+  placement,
+  onOpenGit,
+  t,
+}: {
+  readonly root: string | null;
+  readonly state: RepositorySelectorState;
+  readonly placement: SelectorPlacement;
+  readonly onOpenGit: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <SelectorRecovery
+      placement={placement}
+      root={root}
+      unavailable={state.unavailable}
+      branchUnavailable={state.branchUnavailable}
+      catalogError={state.catalog.error}
+      onOpenGit={onOpenGit}
+      onRetryCatalog={state.catalog.reload}
+      t={t}
+    />
+  );
+}
+
+function RepositorySelectorField({
+  root,
+  locked,
+  catalog,
+  onSelect,
+  placement,
+  t,
+}: {
+  readonly root: string | null;
+  readonly locked: boolean;
+  readonly catalog: CatalogState;
+  readonly onSelect: (root: string) => void;
+  readonly placement: SelectorPlacement;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <SelectorField placement={placement} label={t("codingWorkbench.repository.label")}>
+      <RepositoryChip
+        root={root}
+        locked={locked}
+        catalog={catalog}
+        onSelect={onSelect}
+        t={t}
+        placement={placement}
+      />
+    </SelectorField>
+  );
+}
+
 export function CodingWorkbenchRepositorySelector({
   root,
   branch,
@@ -546,20 +602,17 @@ export function CodingWorkbenchRepositorySelector({
   placement = "composer",
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const { catalog, unavailable, branchLocked, branchState, branchUnavailable } =
-    useRepositorySelectorState(root, locked);
+  const state = useRepositorySelectorState(root, locked);
   return (
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
-      <SelectorField placement={placement} label={t("codingWorkbench.repository.label")}>
-        <RepositoryChip
-          root={root}
-          locked={locked}
-          catalog={catalog}
-          onSelect={onSelect}
-          t={t}
-          placement={placement}
-        />
-      </SelectorField>
+      <RepositorySelectorField
+        root={root}
+        locked={locked}
+        catalog={state.catalog}
+        onSelect={onSelect}
+        t={t}
+        placement={placement}
+      />
       <LocationSelectorField
         location={location}
         locked={locked || root === null}
@@ -570,20 +623,17 @@ export function CodingWorkbenchRepositorySelector({
       <BranchSelectorField
         root={root}
         branch={branch}
-        locked={branchLocked}
-        state={branchState}
+        locked={state.branchLocked}
+        state={state.branchState}
         onSelect={onSelectBranch}
         t={t}
         placement={placement}
       />
-      <SelectorRecovery
+      <SelectorRecoveryForState
         placement={placement}
         root={root}
-        unavailable={unavailable}
-        branchUnavailable={branchUnavailable}
-        catalogError={catalog.error}
+        state={state}
         onOpenGit={onOpenGit}
-        onRetryCatalog={catalog.reload}
         t={t}
       />
     </div>

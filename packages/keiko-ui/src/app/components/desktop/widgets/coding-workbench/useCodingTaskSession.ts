@@ -132,6 +132,9 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
     async (id: string, activate: boolean): Promise<void> => {
       const seq = ++sequence.current;
       const operation = historyLoad(id, scopeRevision.current.scope);
+      // A failed read for another task must never leave the previous task's conversation id
+      // attached to the composer. A refresh of the same task may retain its visible history.
+      setDetail((current) => (current?.task.id === id ? current : null));
       setPending(true);
       setError(false);
       try {

@@ -92,7 +92,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["pending", "running", "failed"],
+      values: ["pending", "running", "failed", "succeeded"],
     },
     // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
     rejection: {
@@ -931,14 +931,14 @@ function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
 }
 
 type SettledToolState = "succeeded" | "failed" | "denied" | "cancelled";
-type RestatedToolState = "pending" | "running" | "failed";
+type RestatedToolState = "pending" | "running" | "failed" | "succeeded";
 
 function isSettledToolState(state: CodingSafeActivityToolState): state is SettledToolState {
   return TERMINAL_TOOL_STATES.has(state);
 }
 
 function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
-  return state === "pending" || state === "running" || state === "failed";
+  return state === "pending" || state === "running" || state === "failed" || state === "succeeded";
 }
 
 function supersededRestatement(

@@ -356,6 +356,30 @@ describe("coding task selection", () => {
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads));
   });
 
+  it("drops the previous conversation when reading another selected task fails", async () => {
+    const workspace = activeWorkspace();
+    read.mockImplementation((id: string) =>
+      id === "chat-one" ? Promise.resolve(detail) : Promise.reject(new Error("Read failed")),
+    );
+    const { result, rerender } = renderHook(
+      ({ selection }: { readonly selection: string | undefined }) =>
+        useCodingTaskSession({
+          snapshot: snapshot("chat-one"),
+          active: false,
+          root: "/repo",
+          workspace,
+          selection,
+        }),
+      { initialProps: { selection: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-one"));
+    rerender({ selection: "chat-two" });
+    await waitFor(() => expect(result.current.error).toBe(true));
+    expect(result.current.pending).toBe(false);
+    expect(result.current.conversationId).toBeUndefined();
+    expect(result.current.detail).toBeNull();
+  });
+
   it("clears the old conversation for New task and surfaces workspace creation failure", async () => {
     const { result } = renderHook(() =>
       useCodingTaskSession({
