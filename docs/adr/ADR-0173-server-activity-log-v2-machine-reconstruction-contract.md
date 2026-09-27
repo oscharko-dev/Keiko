@@ -838,7 +838,7 @@ by the canonical Activity Log guard; malformed ids are rejected instead of assig
 ingest identities to the attempt and settlement. Browser delivery-loss counts enter the existing
 process loss ledger once after rate admission and before routine diversion. A rate-limited report
 carrying loss returns 429, without consuming its client-supplied counters; the browser restores them
-for later delivery. Reports without loss retain the bounded, body-free 204 drop behavior.
+for later delivery. The server records this refused report once as `client-rate-suppressed`; a recognized `RATE_LIMITED`/429 response restores carried counters without also adding `client-post-failed`. Network errors, other HTTP errors and unclassified 429 responses still count as failed POSTs. Reports without loss retain the bounded, body-free 204 drop behavior. The final pagehide flush uses the closed `delivery-loss` kind with required validated loss counters. It spends a separate fixed 60-per-minute process budget, using the existing limiter and per-budget drop notices. Exhausting routine or failure traffic cannot prevent that final accounting; exhausting the loss budget itself still refuses counts with 429. This reserves admission without allowing unlimited client-count injection. It does not promise delivery during transport failure or saturation of the reserved budget.
 Commit-draft refusal retains its measured prompt budget; generated and cached outcomes share a
 body-free draft-key digest. No repository path or remote URL enters the evidence.
 

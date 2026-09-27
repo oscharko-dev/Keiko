@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   createDefaultChatCapability,
   type GatewayCallRequest,
@@ -120,4 +121,45 @@ describe("commit trailer paragraph boundaries", () => {
       `- Refactor parser.\n\n${trailers}`,
     );
   });
+});
+
+// Footer values can continue across lines; formatting must retain the major-change marker.
+it.each([
+  "BREAKING CHANGE: v1 removed.\n  Migrate to v2.",
+  "BREAKING-CHANGE: v1 removed.\nMigrate to v2.\n\nMigration details.\nSigned-off-by: Dev <dev@example.invalid>",
+])("preserves multiline footer values: %s", (footer) => {
+  const body = `- Drop v1.\n\n${footer}`;
+  expect(canonicalCommitBody(body)).toBe(body);
+  expect(canonicalCommitBody(canonicalCommitBody(body))).toBe(body);
+});
+
+it("retains the measured smaller prompt when all file headers still exceed context", () => {
+  const patch = Array.from(
+    { length: 800 },
+    (_, index) =>
+      `diff --git a/file${String(index)} b/file${String(index)}\n+${"change".repeat(100)}`,
+  ).join("\n");
+  const observedBuild = vi.fn(build);
+  const prepared = prepareCommitDraft(patch, capability, observedBuild);
+  const lastBuild = observedBuild.mock.results.at(-1);
+  if (lastBuild?.type !== "return") throw new Error("Expected the minimum candidate build");
+  const minimum = lastBuild.value;
+  expect(prepared.request).toBeUndefined();
+  expect(prepared.diffCompacted).toBe(true);
+  expect(prepared.promptTokens).toBe(countGatewayPromptTokens(minimum, capability.tokenAccounting));
+  expect(prepared.promptTokens).toBeGreaterThan(prepared.maxPromptTokens);
+  expect(prepared.promptTokens).toBeLessThan(
+    countGatewayPromptTokens(build(patch, false), capability.tokenAccounting),
+  );
+});
+
+it("normalizes trailer tokens while retaining continuation indentation and reference separators", () => {
+  const expected =
+    "- Fix parser.\n\nBREAKING CHANGE: v1 removed.\n  Migrate to v2.\nRefs #123\nSigned-off-by: Dev <dev@example.invalid>";
+  expect(
+    canonicalCommitBody(
+      "- Fix parser.\n\n  BREAKING CHANGE: v1 removed.  \n  Migrate to v2.  \n  Refs #123  \n  Signed-off-by: Dev <dev@example.invalid>",
+    ),
+  ).toBe(expected);
+  expect(canonicalCommitBody(expected)).toBe(expected);
 });

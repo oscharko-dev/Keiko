@@ -1041,7 +1041,7 @@ export class Gateway {
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
     let firstTokenMs: number | undefined;
-    let terminalUsage: UsageMetadata | undefined;
+    let terminalResponse: NormalizedResponse | undefined;
     // EVERY started stream needs exactly one outcome line. Set the moment an outcome is written,
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
@@ -1051,8 +1051,8 @@ export class Gateway {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
-          terminalUsage = chunk.response.usage;
-          yield this.enrichDone(chunk.response, ids.requestId, start, route);
+          terminalResponse = chunk.response;
+          break;
         } else {
           yield chunk;
         }
@@ -1060,7 +1060,6 @@ export class Gateway {
       settled = true;
     } catch (error) {
       settled = true;
-      terminalUsage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       this.failStream(ids, route, chunkCount, elapsed(), error);
     } finally {
       admission.settle("non-provider-fault");
@@ -1080,8 +1079,13 @@ export class Gateway {
       chunkCount,
       elapsed(),
       firstTokenMs,
-      streamUsageIfSupplied(terminalUsage),
+      streamUsageIfSupplied(terminalResponse?.usage),
     );
+    // Production consumers stop at done without advancing or closing the iterator again.
+    // Close the provider, settle spend/circuit state and emit the outcome before handing it off.
+    if (terminalResponse !== undefined) {
+      yield this.enrichDone(terminalResponse, ids.requestId, start, route);
+    }
   }
 
   private failStream(
@@ -1364,6 +1368,7 @@ export class Gateway {
     let admitted = false;
     let usage: UsageMetadata | undefined;
     let received = false;
+    let terminal: GatewayStreamChunk | undefined;
     try {
       reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       admitted = true;
@@ -1377,6 +1382,8 @@ export class Gateway {
         if (chunk.type === "done") {
           usage = chunk.response.usage;
           received = true;
+          terminal = chunk;
+          break;
         } else if (chunk.token.length > 0) received = true;
         yield chunk;
       }
@@ -1391,6 +1398,7 @@ export class Gateway {
       admission.settle("non-provider-fault");
       reservation?.settle(usage);
     }
+    if (terminal !== undefined) yield terminal;
   }
 
   private async *readProviderStream(

@@ -18,8 +18,8 @@
 // Rate limiting reuses `createInlineCompletionRateLimiter` (the editor's existing token-bucket
 // primitive — AGENTS.md §5 forbids a second one) as a single, process-wide bucket: a flapping tab
 // or a hostile page must not be able to grow the activity log without bound. The response is 204
-// whether a report was accepted or dropped by the limiter — the limit itself is never disclosed to
-// the browser — and a dropped report is still counted, mirroring `server-log.ts`'s own
+// for accepted reports and drops without carried loss. Refused loss-bearing reports return 429
+// so the browser can retain their counts. Every dropped report is still counted, mirroring `server-log.ts`'s own
 // `reportServerLogFailure` throttle-and-count-suppressed shape: the first drop after a quiet window
 // is logged immediately, later drops in the same window are counted silently, and the count is
 // flushed on the next window's first drop — or, at the latest, by
@@ -111,12 +111,15 @@ const MAX_CLIENT_DIAGNOSTIC_BODY_BYTES = 4_096;
 // page. `minIntervalMs: 0` disables the limiter's own burst/cooldown gate, so only the sliding
 // window cap below applies.
 //
-// Two sliding windows (#3557): routine evidence (a stage, a binding that resolved, a session repair
+// Independent sliding windows: final loss flushes retain reserved admission when either
+// ordinary budget is full. Their own fixed budget still bounds hostile loss-count injection.
+// Routine evidence (a stage, a binding that resolved, a session repair
 // that recovered) spends its own budget, so a page load's dozen stage reports can never use up the
 // budget a failure report needs.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS = {
   failure: "client-diagnostics",
   routine: "client-diagnostics-routine",
+  loss: "client-diagnostics-loss",
 } as const;
 
 const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
@@ -134,7 +137,7 @@ const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["failure", "routine"],
+      values: ["failure", "routine", "loss"],
     },
     trigger: {
       type: "string",
@@ -337,6 +340,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "voice-dialogue",
         "voice-playback",
         "markdown-layout",
+        "delivery-loss",
         "other",
       ],
     },
@@ -995,20 +999,21 @@ function quietRejectionThrottles(): Map<ClientDiagnosticRejection, NoticeThrottl
   return new Map(CLIENT_DIAGNOSTIC_REJECTIONS.map((rejection) => [rejection, quietThrottle()]));
 }
 
-type ClientReportBudget = "failure" | "routine";
+type ClientReportBudget = "failure" | "routine" | "loss";
 
 // One notice throttle per budget: routine overflow never suppresses the notice of a dropped
 // failure report, which then keeps its own correlation id and budget class.
 let dropNotices: Record<ClientReportBudget, NoticeThrottle> = {
   failure: quietThrottle(),
   routine: quietThrottle(),
+  loss: quietThrottle(),
 };
 let rejectionNotices = quietRejectionThrottles();
 
 /** Test-only: puts the shared rate limiter and notice counters back to a clean start. */
 export function resetClientDiagnosticsIngestStateForTests(): void {
   rateLimiter = createInlineCompletionRateLimiter(CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG);
-  dropNotices = { failure: quietThrottle(), routine: quietThrottle() };
+  dropNotices = { failure: quietThrottle(), routine: quietThrottle(), loss: quietThrottle() };
   rejectionNotices = quietRejectionThrottles();
 }
 
@@ -1115,7 +1120,7 @@ function noticeRejectedReport(
  * process: the trailing counts reach the log instead of waiting for a next window that never comes.
  */
 export function flushClientDiagnosticsIngestCounts(): void {
-  for (const budget of ["failure", "routine"] as const) {
+  for (const budget of ["failure", "routine", "loss"] as const) {
     const drops = openThrottleWindow(dropNotices[budget], null);
     if (drops > 0) writeRateLimitedNotice(undefined, budget, drops, "shutdown-flush");
   }
@@ -1139,6 +1144,7 @@ const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
   "voice-dialogue": "internal",
   "voice-playback": "unavailable",
   "markdown-layout": "unknown",
+  "delivery-loss": "unknown",
   other: "unknown",
 } as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
 
@@ -1856,6 +1862,7 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
 // and a select menu's Escape dismissal, which has no failure variant at all (PR #3625 review,
 // KeikoSelect.tsx finding).
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
+  if (report.kind === "delivery-loss") return "loss";
   if (report.selectDismissal !== undefined) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";

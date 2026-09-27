@@ -729,3 +729,99 @@ it.each(["abandoned", "succeeded", "failed"])(
     expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
   },
 );
+
+// The Coding Workbench consumer returns at the done packet without advancing or closing
+// the generator. All terminal resources and evidence must already be settled at that point.
+it.each(["native", "buffered", "terminal-only"])(
+  "settles a %s stream before handing done to its consumer",
+  async (mode) => {
+    let now = 0;
+    const closed = vi.fn();
+    const settle = vi.fn();
+    const log = recorder();
+    const call = vi
+      .fn<() => Promise<NormalizedResponse>>()
+      .mockRejectedValueOnce(new TimeoutError("outage"))
+      .mockResolvedValue(ANSWER);
+    const adapter: ProviderAdapter = {
+      call,
+      ...(mode !== "buffered"
+        ? {
+            callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+              try {
+                const response: NormalizedResponse = await call();
+                if (mode !== "terminal-only") yield { type: "delta", token: response.content };
+                yield { type: "done", response };
+              } finally {
+                closed();
+              }
+            },
+          }
+        : {}),
+    };
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        providers: [{ ...PROVIDER, maxRetries: 0 }],
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter,
+        log,
+        clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+        spendBudget: { reserve: (): GatewaySpendReservation => ({ settle }) },
+      },
+    );
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
+    now = 1000;
+    settle.mockClear();
+    closed.mockClear();
+    const stream = gateway.chatStream(REQUEST);
+    if (mode !== "terminal-only") {
+      expect(await stream.next()).toMatchObject({ value: { type: "delta" } });
+    }
+    expect(await stream.next()).toMatchObject({ value: { type: "done" } });
+    expect(gateway.circuitStatus(REQUEST.modelId)).toMatchObject({
+      state: "closed",
+      consecutiveFailures: 0,
+    });
+    expect(settle).toHaveBeenCalledExactlyOnceWith(ANSWER.usage);
+    expect(closed).toHaveBeenCalledTimes(mode === "buffered" ? 0 : 1);
+    expect(log.events.filter((event) => event.op === "gateway.stream.completed")).toHaveLength(1);
+    expect(log.events.filter((event) => event.op === "gateway.stream.abandoned")).toHaveLength(0);
+    // A late cleanup must not settle the same reservation or emit an outcome twice.
+    await stream.return(undefined);
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(log.events.filter((event) => event.op === "gateway.stream.completed")).toHaveLength(1);
+    await expect(consumeStream(gateway)).resolves.toBeUndefined();
+  },
+);
+
+it("does not retry a failed half-open probe reached during startup backoff", async () => {
+  let now = 0;
+  const fake = streamingFake([new TimeoutError("outage"), new TimeoutError("probe failure")]);
+  const log = recorder();
+  const gateway = new Gateway(
+    {
+      ...config(true),
+      circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+    },
+    {
+      adapter: fake.adapter,
+      log,
+      clock: {
+        now: (): number => now,
+        sleep: (): Promise<void> => {
+          now += 1000;
+          return Promise.resolve();
+        },
+      },
+    },
+  );
+  await expect(consumeStream(gateway)).rejects.toThrow("probe failure");
+  expect(fake.bounds).toHaveLength(2);
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("open");
+  expect(log.events.filter((event) => event.op === "gateway.retry.exhausted")).toEqual([
+    expect.objectContaining({ extra: expect.objectContaining({ reason: "terminal" }) as unknown }),
+  ]);
+});

@@ -77,6 +77,7 @@ describe("isClientDiagnosticIngestRequest", () => {
             correlationId: "abcdefgh",
             kind,
             ...(kind === "voice-dialogue" ? { voiceDialogueStage: "started" } : {}),
+            ...(kind === "delivery-loss" ? { loss: { postsThrottled: 5 } } : {}),
           }),
         ).toBe(true);
       }
@@ -287,7 +288,11 @@ describe("isClientDiagnosticIngestRequest", () => {
       { outcome: "discarded-succeeded" },
     ]) {
       expect(
-        isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: invalid }),
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "ui_repo-0001",
+          gitClientOperation: invalid,
+        }),
       ).toBe(false);
     }
   });
@@ -1253,5 +1258,14 @@ it.each(["discarded-succeeded", "discarded-failed"])(
         }),
       ).toBe(true);
     }
+  },
+);
+
+it.each([undefined, null, { unknown: 1 }, { postsFailed: -1 }, { postsFailed: 1_000_001 }])(
+  "rejects a final loss report with invalid counts: %j",
+  (loss) => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), kind: "delivery-loss", loss }),
+    ).toBe(false);
   },
 );

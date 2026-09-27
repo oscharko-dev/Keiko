@@ -80,17 +80,19 @@ export function prepareCommitDraft(
   return { ...refused, request: undefined };
 }
 
+const COMMIT_TRAILER_TOKEN = /^(?:BREAKING CHANGE|[A-Za-z][A-Za-z0-9-]*)(?::\s+| #)\S/u;
+
 function takeCommitTrailers(lines: string[]): string[] {
-  let start = lines.length;
-  while (
-    start > 0 &&
-    /^(?:BREAKING CHANGE|[A-Za-z][A-Za-z0-9-]*):\s+\S/u.test(lines.at(start - 1)?.trim() ?? "")
-  ) {
-    start -= 1;
-  }
-  // A trailer block occupies its own paragraph; an unseparated "Note: ..." remains prose.
-  if (start > 0 && lines.at(start - 1)?.trim() !== "") return [];
-  return lines.splice(start).map((line) => line.trim());
+  // Footers start at a paragraph boundary and may contain free-form multiline values
+  // (Conventional Commits 1.0.0, section 10). Preserve continuation indentation and blanks.
+  const start = lines.findIndex(
+    (line, index) =>
+      (index === 0 || lines.at(index - 1)?.trim() === "") && COMMIT_TRAILER_TOKEN.test(line.trim()),
+  );
+  if (start < 0) return [];
+  return lines
+    .splice(start)
+    .map((line) => (COMMIT_TRAILER_TOKEN.test(line.trim()) ? line.trim() : line.trimEnd()));
 }
 
 // The model owns the wording; normalize prose into a list while retaining Git trailer syntax.

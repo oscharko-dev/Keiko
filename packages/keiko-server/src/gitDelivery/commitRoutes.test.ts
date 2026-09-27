@@ -2494,45 +2494,59 @@ it("generates a commit draft with the gateway's provider-only capability fallbac
   expect(call).toHaveBeenCalledOnce();
 });
 
-it("reports zero model attempts when even the minimum prompt exceeds the context", async () => {
-  const preparation = captureDraftPreparation();
-  const events: ServerLogEvent[] = [];
-  const call = vi.fn(() =>
-    draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
-  );
-  const handler = createHandleCommitDraft({
-    execution: seams({
-      stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
-      activityLog: {
-        write: (event): void => {
-          events.push(event);
+it.each(["single-file", "many-files"])(
+  "reports zero model attempts when the %s minimum exceeds context",
+  async (shape) => {
+    const patch =
+      shape === "single-file"
+        ? "diff --git a/src/a.ts b/src/a.ts\n+change"
+        : Array.from(
+            { length: 800 },
+            (_, index) =>
+              `diff --git a/file${String(index)} b/file${String(index)}\n+${"change".repeat(100)}`,
+          ).join("\n");
+    const preparation = captureDraftPreparation();
+    const events: ServerLogEvent[] = [];
+    const call = vi.fn(() =>
+      draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
+    );
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve(patch),
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
         },
+      }),
+    });
+    const result = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: {
+          ...DRAFT_GATEWAY_CONFIG,
+          capabilities: [
+            { ...DRAFT_MODEL_CAPABILITY, contextWindow: shape === "single-file" ? 16 : 8192 },
+          ],
+        },
+        modelPortFactory: () => draftModelPort(call),
+      }),
+    );
+    expect(result.status).toBe(422);
+    expect(call).not.toHaveBeenCalled();
+    expect(preparation().request).toBeUndefined();
+    expect(preparation().diffCompacted).toBe(shape === "many-files");
+    expect(preparation().promptTokens).toBeGreaterThan(preparation().maxPromptTokens);
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      extra: {
+        generationAttempts: 0,
+        promptTokens: preparation().promptTokens,
+        maxPromptTokens: preparation().maxPromptTokens,
+        diffCompacted: preparation().diffCompacted,
       },
-    }),
-  });
-  const result = await handler(
-    ctxFor(DRAFT, { schemaVersion: "1", projectId }),
-    deps({
-      config: {
-        ...DRAFT_GATEWAY_CONFIG,
-        capabilities: [{ ...DRAFT_MODEL_CAPABILITY, contextWindow: 16 }],
-      },
-      modelPortFactory: () => draftModelPort(call),
-    }),
-  );
-  expect(result.status).toBe(422);
-  expect(call).not.toHaveBeenCalled();
-  expect(preparation().request).toBeUndefined();
-  expect(preparation().promptTokens).toBeGreaterThan(preparation().maxPromptTokens);
-  expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
-    extra: {
-      generationAttempts: 0,
-      promptTokens: preparation().promptTokens,
-      maxPromptTokens: preparation().maxPromptTokens,
-      diffCompacted: preparation().diffCompacted,
-    },
-  });
-});
+    });
+  },
+);
 
 it("accepts a generated DCO signoff under the configured message policy", async () => {
   const call = vi.fn(() =>

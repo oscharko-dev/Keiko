@@ -791,6 +791,7 @@ describe("POST /api/diagnostics/client", () => {
     async (budget) => {
       const sink = captureServerLog();
       const before = activityLogLossCounters()["client-post-throttled"];
+      const lossBefore = activityLogLossCounters();
       const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
       const metadata =
         budget === "routine" ? { selectDismissal: { reason: "escape", focus: "trigger" } } : {};
@@ -813,6 +814,14 @@ describe("POST /api/diagnostics/client", () => {
         const retried = JSON.stringify({ ...report, loss: { postsThrottled: 5 } });
         expect((await handleClientDiagnosticIngest(context(retried))).status).toBe(204);
         expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+        const lossAfter = activityLogLossCounters();
+        expect(lossAfter["client-rate-suppressed"] - lossBefore["client-rate-suppressed"]).toBe(3);
+        expect(lossAfter["client-post-failed"]).toBe(lossBefore["client-post-failed"]);
+        // Three refused reports plus five previously lost reports, with no duplicate category.
+        expect(
+          Object.values(lossAfter).reduce((sum, count) => sum + count, 0) -
+            Object.values(lossBefore).reduce((sum, count) => sum + count, 0),
+        ).toBe(8);
       } finally {
         now.mockRestore();
       }
@@ -991,6 +1000,7 @@ describe("POST /api/diagnostics/client", () => {
     const body = JSON.stringify({
       message: "git-client: add-repository discarded",
       clientTs: CLIENT_TS,
+      correlationId: "ui_repo-0001",
       gitClientOperation: { operation: "repository-clone", outcome: "retry-recovered" },
     });
 
@@ -2034,4 +2044,51 @@ describe("POST /api/diagnostics/client", () => {
       expect(diagnosticEvents[0]?.errorKind).toBe("internal");
     });
   });
+});
+
+// A closing tab cannot retry in a later rate window. Final loss delivery needs reserved,
+// bounded admission independent of routine/failure storms.
+it("admits a final loss flush after both ordinary budgets are exhausted", async () => {
+  resetClientDiagnosticsIngestStateForTests();
+  captureServerLog();
+  const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  const before = activityLogLossCounters()["client-post-throttled"];
+  try {
+    for (const metadata of [{}, { selectDismissal: { reason: "escape", focus: "trigger" } }]) {
+      for (let index = 0; index < 60; index += 1) {
+        expect(
+          (
+            await handleClientDiagnosticIngest(
+              context(
+                JSON.stringify({
+                  message: "report",
+                  clientTs: CLIENT_TS,
+                  ...metadata,
+                }),
+              ),
+            )
+          ).status,
+        ).toBe(204);
+      }
+    }
+    const finalReport = JSON.stringify({
+      message: "[keiko] client diagnostic delivery loss summary",
+      clientTs: CLIENT_TS,
+      kind: "delivery-loss",
+      loss: { postsThrottled: 5 },
+    });
+    expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(204);
+    expect(activityLogLossCounters()["client-post-throttled"] - before).toBe(5);
+    for (let index = 1; index < 60; index += 1) {
+      expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(204);
+    }
+    const admitted = activityLogLossCounters()["client-post-throttled"];
+    for (let index = 0; index < 3; index += 1) {
+      expect((await handleClientDiagnosticIngest(context(finalReport))).status).toBe(429);
+    }
+    expect(activityLogLossCounters()["client-post-throttled"]).toBe(admitted);
+  } finally {
+    now.mockRestore();
+    resetClientDiagnosticsIngestStateForTests();
+  }
 });

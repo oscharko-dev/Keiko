@@ -133,7 +133,7 @@ of silently dropping files. The model is instructed to describe evidenced change
 successful verification from the presence of test files.
 
 The server normalizes the validated answer into a single-line subject, a blank line, a `-` bullet
-list, a blank line and the existing Keiko footer. Trailers, including `BREAKING CHANGE`, retain
+list, a blank line and the existing Keiko footer. Trailer values retain continuation lines and paragraph breaks (Conventional Commits 1.0.0 §10); their block begins at a paragraph boundary, and reference-style `Refs #123` separators are also preserved. Trailers, including `BREAKING CHANGE`, retain
 their paragraph only when separated from prose by a blank line or occupying the whole body. Sampling uses temperature zero, with a seed only
 when the model declares support. These sampling parameters alone do not guarantee identical
 answers: a bounded, process-local cache retains up to 32 successful drafts per server dependency

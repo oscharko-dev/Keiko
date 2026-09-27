@@ -75,6 +75,7 @@ export const CLIENT_DIAGNOSTIC_KINDS = [
   "voice-dialogue",
   "voice-playback",
   "markdown-layout",
+  "delivery-loss",
   "other",
 ] as const;
 export type ClientDiagnosticKind = (typeof CLIENT_DIAGNOSTIC_KINDS)[number];
@@ -573,7 +574,13 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!hasValidGitContext(value)) return false;
   if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
-  return hasValidCodingContext(value) && isOptional(loss, isClientDiagnosticLossCounts);
+  return hasValidCodingContext(value) && hasValidClientLoss(value.kind, loss);
+}
+
+function hasValidClientLoss(kind: unknown, loss: unknown): boolean {
+  return kind === "delivery-loss"
+    ? isClientDiagnosticLossCounts(loss)
+    : isOptional(loss, isClientDiagnosticLossCounts);
 }
 
 export function isClientDiagnosticIngestRequest(

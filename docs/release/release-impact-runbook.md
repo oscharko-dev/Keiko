@@ -42,7 +42,7 @@ The release-cut or release-metadata PR appends the prepared record to
 `release-impact.catalog.json` after the target package version is decided and the release owner has
 reviewed it. That PR owns catalog deduplication, version/tag binding, and the durable approval
 reference. This lifecycle split keeps feature review complete without mutating an append-only release
-artifact prematurely.
+artifact prematurely. A feature or fix PR may also serve as the release-cut PR when the owner has already chosen and approved the target version. In that case the same PR carries the canonical version update, append-only approved metadata and version-bound evidence through all normal checks and reviews; publication still starts only through the governed release workflow after merge. A second version-only PR is not required.
 
 ## Taxonomy
 

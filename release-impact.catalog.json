@@ -2860,6 +2860,77 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-09-27-keiko-1.1.11-git-gateway-and-workbench-reliability",
+      "packageVersion": "1.1.11",
+      "releaseTag": "v1.1.11",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Git commit drafts handle large staged selections with consistent formatting and session-local reuse. Chat and Coding Workbench recover from transient gateway startup failures without replaying partial answers. Successful streams settle their circuit and spend state before completion reaches the consumer. Workbench checkout selection and activity reporting are more reliable; unsupported coding-sidecar egress enforcement remains unavailable on Windows and Linux.",
+      "affectedStateStores": ["activity-log", "task-workspaces"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "The registered operations and closed fields change the catalog digest. Existing records remain unchanged under normal retention; analyze records written by an older version with that version until registry-version-matched analysis is available. Body-free Git lifecycle, draft-budget/reuse and gateway-attempt evidence is extended. Final browser delivery-loss reports have reserved bounded admission independent of routine/failure reports.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "task-workspaces",
+          "description": "Existing workspace records retain the managed-worktree default. Local checkout selection is explicit and is excluded from managed-worktree cleanup. No repository files are migrated or deleted by this update.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Git: commit drafts budget context across every staged file, accept staged diffs up to the bounded 4 MiB limit, and report an explicit refusal when the model context still cannot fit.",
+        "Git: commit drafts use consistent list and footer formatting, preserve multiline breaking-change notices, repair unusable model output once, and reuse validated drafts for unchanged inputs during the server session.",
+        "Chat and Coding Workbench: transient gateway failures before answer content can retry within the original deadline; partial answers and tool effects are never replayed. Successful streams release recovery probes and settle usage immediately, preventing the gateway from remaining unavailable after recovery.",
+        "Git: adding a repository completes correctly during development StrictMode replay; failed requests retain retry and correlated diagnostics, and dismissed dialogs do not activate a late result.",
+        "Coding Workbench: Local and managed-worktree execution locations are explicit and remain aligned with repository, branch, editor, runtime and Git views. All three Coding autonomy modes are available while preserving the selected mode and explicit deployment restrictions.",
+        "Coding Workbench: verification results and terminal activity remain visible through completion and reconnect, with fewer stale or misleading activity states.",
+        "Support: Activity Log-only commands start without loading the server; existing log records are retained unchanged. Use the version that wrote an older log to analyze it when its catalog digest differs.",
+        "Compatibility: long-lived coding sidecars require qualified OS-level egress enforcement. macOS uses the reviewed Seatbelt backend; Windows and Linux sidecar launches remain unavailable when no qualified loopback-preserving backend is present."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-27",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/3662#issuecomment-5858474434",
+        "rationale": "The release owner authorized autonomous delivery of the Git and LiteLLM/chat reliability fixes, corrected the target to 1.1.11, and explicitly requested combining release preparation with PR #3662. This append-only entry covers #3662 and the changes already merged since v1.1.10 in #3479, #3659 and #3660. Publication remains subject to exact-candidate checks, producing-reviewer settlement, governed workflow authorization, customer-shape qualification and artifact alignment. No published metadata is changed.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null
     }
   ]
 }
