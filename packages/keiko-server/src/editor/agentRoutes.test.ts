@@ -99,6 +99,7 @@ import {
 } from "../observability/index.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import type { ActiveWorkspaceView, WorkspaceLifecycleService } from "../task-workspace/types.js";
 import {
   grantedWorkspaceRootAccess,
   resolveLifecycleManagedWorkspaceRootAccess,
@@ -4630,6 +4631,60 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");
     expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
   });
+
+  it.each([
+    ["matching", true],
+    ["different", false],
+  ] as const)(
+    "applies a runtime edit only in the %s active local checkout",
+    async (_case, matching) => {
+      const arranged = arrangeTwoFiles();
+      await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+      registerTestAuthority(workspaceRoot);
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => true),
+        claim: vi.fn((): boolean => true),
+        complete: vi.fn((): boolean => true),
+        reject: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+      const activeRoot = matching ? workspaceRoot : join(workspaceRoot, "other");
+      const workspaceLifecycle = {
+        getActive: (): ActiveWorkspaceView =>
+          ({
+            instance: { executionLocation: "local", repositoryRoot: activeRoot },
+            binding: { activeRoot },
+          }) as unknown as ActiveWorkspaceView,
+      } as unknown as WorkspaceLifecycleService;
+      const deps = {
+        ...runtimeMutationDeps(runtimeMutationLease, (requestedRoot) =>
+          grantedWorkspaceRootAccess({
+            kind: "ordinary",
+            canonicalRoot: requestedRoot,
+            fs: nodeWorkspaceFs,
+          }),
+        ),
+        workspaceLifecycle,
+      };
+
+      expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
+      const result = await postActionResult(
+        arranged.action,
+        "succeeded",
+        "session-1",
+        undefined,
+        deps,
+      );
+
+      expect(actionResultStatus(result.body)).toBe(matching ? "succeeded" : "failed");
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe(matching ? "A1\n" : "A0\n");
+      expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Object),
+        matching,
+      );
+    },
+  );
 
   // Owner decision 2026-09-26 (ADR-0124 D6): the change review is the only approval an edit asks
   // for. Its Reject settles the run's lease as the human's decision, before anything was claimed or
