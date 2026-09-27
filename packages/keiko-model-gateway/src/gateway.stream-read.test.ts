@@ -4,6 +4,8 @@
 // `timeoutMs` and generated a second time.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CircuitOpenError,
+  ConfigInvalidError,
   ProviderEmptyAnswerError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -535,4 +537,91 @@ describe("stream startup resilience", () => {
     expect(received).toEqual(["partial answer"]);
     expect(calls).toBe(1);
   });
+});
+
+async function consumeStream(gateway: Gateway): Promise<void> {
+  for await (const chunk of gateway.chatStream(REQUEST)) expect(chunk).toBeDefined();
+}
+
+describe("stream retry circuit accounting", () => {
+  it("counts each failed startup attempt exactly once", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("{}", { status: 503 })));
+    const gateway = new Gateway(config(true), { fetchImpl, clock: createScriptedGatewayClock() });
+    await expect(consumeStream(gateway)).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(gateway.circuitStatus(REQUEST.modelId)).toMatchObject({
+      state: "open",
+      consecutiveFailures: 3,
+    });
+  });
+
+  it("does not extend the cooldown when a concurrent call opens the breaker during backoff", async () => {
+    let now = 0;
+    const fake = streamingFake([
+      new TimeoutError("first failure"),
+      new CircuitOpenError("adapter failure"),
+    ]);
+    const gateway = new Gateway(
+      {
+        ...config(true),
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        adapter: fake.adapter,
+        clock: {
+          now: (): number => now,
+          sleep: async (): Promise<void> => {
+            await expect(consumeStream(gateway)).rejects.toThrow();
+            now = 100;
+          },
+        },
+      },
+    );
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(gateway.circuitStatus(REQUEST.modelId)).toMatchObject({
+      state: "open",
+      openedAt: 0,
+      consecutiveFailures: 1,
+    });
+  });
+
+  it("still counts an adapter-thrown CircuitOpenError as a provider failure", async () => {
+    const fake = streamingFake([new CircuitOpenError("adapter failure")]);
+    const gateway = new Gateway(config(true), {
+      adapter: fake.adapter,
+      clock: createScriptedGatewayClock(),
+    });
+    await expect(consumeStream(gateway)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(gateway.circuitStatus(REQUEST.modelId).consecutiveFailures).toBe(1);
+  });
+});
+
+it("releases a half-open stream probe when spend admission refuses the attempt", async () => {
+  let now = 0;
+  let refused = false;
+  const fake = streamingFake([new TimeoutError("provider outage")]);
+  const gateway = new Gateway(
+    {
+      ...config(true),
+      providers: [{ ...PROVIDER, maxRetries: 0 }],
+      circuitBreaker: { failureThreshold: 1, cooldownMs: 1000, halfOpenProbes: 1 },
+    },
+    {
+      adapter: fake.adapter,
+      clock: { now: (): number => now, sleep: (): Promise<void> => Promise.resolve() },
+      spendBudget: {
+        reserve: (): GatewaySpendReservation => {
+          if (refused) throw new ConfigInvalidError("spend admission refused");
+          return { settle: (): void => undefined };
+        },
+      },
+    },
+  );
+  await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
+  now = 1000;
+  refused = true;
+  await expect(consumeStream(gateway)).rejects.toBeInstanceOf(ConfigInvalidError);
+  refused = false;
+  await expect(consumeStream(gateway)).resolves.toBeUndefined();
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
 });

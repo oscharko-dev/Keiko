@@ -22,6 +22,7 @@
 
 import type { IncomingMessage } from "node:http";
 import {
+  findConfiguredCapability,
   selectConfiguredModel,
   type GatewayCallRequest,
   type NormalizedResponse,
@@ -751,7 +752,7 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
   const modelId = structuredModelId ?? selectConfiguredModel(config, { kind: "chat" });
   if (modelId === undefined) return undefined;
   const model = deps.modelPortFactory(modelId);
-  const capability = config.capabilities?.find((entry) => entry.id === modelId);
+  const capability = findConfiguredCapability(config, modelId);
   if (model === undefined || capability === undefined) return undefined;
   return {
     model,
@@ -760,7 +761,7 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
     modelId,
     useResponseFormat: structuredModelId !== undefined,
     maxOutputTokens: Math.min(
-      commitDraftOutputTokens(config.capabilities ?? [], modelId),
+      commitDraftOutputTokens([capability], modelId),
       commitDraftWindowOutputLimit(capability),
     ),
     // The draft only buffers, so its backstop follows the buffered budget alone (PR #3602 review).
@@ -968,7 +969,7 @@ async function attemptCommitDraft(
   const bounds: CommitDraftBounds = {
     maxOutputTokens: resolved.maxOutputTokens,
     deadlineMs: resolved.deadlineMs,
-    generationAttempts: attempt,
+    generationAttempts: prepared === undefined ? attempt - 1 : attempt,
     ...(prepared === undefined
       ? {}
       : {

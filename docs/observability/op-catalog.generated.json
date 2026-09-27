@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6ff29736103ca0c43b5f1f5991607cf57b53c2e8fe4a216e53ef66640a9f7d0a",
+    "catalogDigest": "0640fd070cf701cb2bc7d7c243f17b46b36819f0dba01e0bd2a989d0ea4530f0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11909,7 +11909,7 @@
         "proofIds": ["gateway.chat.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:435",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1272"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1270"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -11959,7 +11959,7 @@
         "proofIds": ["gateway.chat.failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:297",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1163"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1161"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -12042,7 +12042,7 @@
         "failureClasses": ["gateway-chat-call"],
         "proofIds": ["gateway.chat.started.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:269",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1148"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1146"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13149,7 +13149,7 @@
         "proofIds": ["gateway.route.rejected.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:499",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1486"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1493"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13401,7 +13401,7 @@
         "proofIds": ["gateway.stream.abandoned.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:361",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1216"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1214"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13447,7 +13447,7 @@
         "proofIds": ["gateway.stream.buffered-fallback.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:474",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1381"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1388"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13513,7 +13513,7 @@
         "proofIds": ["gateway.stream.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:332",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1190"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1188"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13573,7 +13573,7 @@
         "proofIds": ["gateway.stream.failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:398",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1239"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1237"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13646,7 +13646,7 @@
         "failureClasses": ["gateway-stream-call"],
         "proofIds": ["gateway.stream.started.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:286",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1139"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1137"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14874,8 +14874,8 @@
         "failureClasses": ["git-commit-draft"],
         "proofIds": ["git.commit.draft.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:160",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1066"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:161",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1067"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14928,8 +14928,8 @@
         "failureClasses": ["git-commit-preview"],
         "proofIds": ["git.commit.preview.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:133",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:378"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:134",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:379"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -76565,54 +76565,54 @@
     {
       "op": "git.commit.draft.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:163",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:164",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.model",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:455",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:456",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:441",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:442",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.conflict-scan",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:469",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:470",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.mutation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:483",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:484",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.branch-protection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:413",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:414",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:136",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:137",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:427",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:428",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76643,7 +76643,7 @@
     {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1603",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1604",
       "package": "keiko-server"
     },
     {
@@ -76655,7 +76655,7 @@
     {
       "op": "git.delivery.commit.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1457",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1458",
       "package": "keiko-server"
     },
     {

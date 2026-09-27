@@ -2,7 +2,7 @@
 
 | Field             | Value                                                 |
 | ----------------- | ----------------------------------------------------- |
-| Severity          | High                                                  |
+| Severity          | Medium                                                |
 | Surface           | Local UI                                              |
 | Stable identifier | `client.git-operation.settled`, `discarded-succeeded` |
 

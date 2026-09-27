@@ -20,6 +20,7 @@ import type {
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -2445,4 +2446,81 @@ describe("commit preview — default draft, policy block, and worktree failure",
       }),
     ]);
   });
+});
+
+it("generates a commit draft with the gateway's provider-only capability fallback", async () => {
+  const handler = createHandleCommitDraft({
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    }),
+  });
+  const call = vi.fn(() =>
+    draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
+  );
+  const result = await handler(
+    ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+    deps({
+      config: { ...DRAFT_GATEWAY_CONFIG, capabilities: undefined },
+      modelPortFactory: () => draftModelPort(call),
+    }),
+  );
+  expect(result.status).toBe(200);
+  expect(call).toHaveBeenCalledOnce();
+});
+
+it("reports zero model attempts when even the minimum prompt exceeds the context", async () => {
+  const events: ServerLogEvent[] = [];
+  const call = vi.fn(() =>
+    draftResponse({ subject: "fix: handle missing values", body: "Handle missing values." }),
+  );
+  const handler = createHandleCommitDraft({
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    }),
+  });
+  const result = await handler(
+    ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+    deps({
+      config: {
+        ...DRAFT_GATEWAY_CONFIG,
+        capabilities: [{ ...DRAFT_MODEL_CAPABILITY, contextWindow: 16 }],
+      },
+      modelPortFactory: () => draftModelPort(call),
+    }),
+  );
+  expect(result.status).toBe(422);
+  expect(call).not.toHaveBeenCalled();
+  expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+    extra: { generationAttempts: 0 },
+  });
+});
+
+it("accepts a generated DCO signoff under the configured message policy", async () => {
+  const call = vi.fn(() =>
+    draftResponse({
+      subject: "fix: handle missing values",
+      body: "Handle missing values.\n\nSigned-off-by: Dev <dev@example.invalid>",
+    }),
+  );
+  const handler = createHandleCommitDraft({
+    messagePolicy: { ...KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY, requireSignoff: true },
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    }),
+  });
+  const result = await handler(
+    ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+    deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => draftModelPort(call) }),
+  );
+  expect(result.status).toBe(200);
+  expect(call).toHaveBeenCalledOnce();
+  expect(result.body).toHaveProperty(
+    "suggestedMessage",
+    expect.stringContaining("\nSigned-off-by: Dev <dev@example.invalid>"),
+  );
 });

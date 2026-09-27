@@ -1065,7 +1065,7 @@ export class Gateway {
     } catch (error) {
       settled = true;
       terminalUsage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
-      this.failStream(ids, route, breaker, chunkCount, elapsed(), error);
+      this.failStream(ids, route, chunkCount, elapsed(), error);
     } finally {
       // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
       // generator through `return()`: the loop is left without running either outcome branch, so
@@ -1090,12 +1090,10 @@ export class Gateway {
   private failStream(
     ids: CallIds,
     route: RoutedCall,
-    breaker: CircuitBreaker,
     chunkCount: number,
     durationMs: number,
     error: unknown,
   ): never {
-    recordProviderFailure(breaker, error, ids.correlationId);
     attachGatewayRequestId(error, ids.requestId);
     this.logStreamFailed(ids, route, chunkCount, durationMs, error);
     throw error;
@@ -1342,9 +1340,13 @@ export class Gateway {
     ids: CallIds,
     bounds: StreamReadBounds,
   ): AsyncGenerator<GatewayStreamChunk> {
-    const reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
+    let reservation: GatewaySpendReservation | undefined;
+    let admitted = false;
     let usage: UsageMetadata | undefined;
+    let received = false;
     try {
+      reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
+      admitted = true;
       for await (const chunk of this.readProviderStream(
         adapter,
         request,
@@ -1352,11 +1354,16 @@ export class Gateway {
         ids,
         bounds,
       )) {
+        received ||= chunk.type === "done" || chunk.token.length > 0;
         if (chunk.type === "done") usage = chunk.response.usage;
         yield chunk;
       }
+      if (!received) throw new TransportError("provider stream ended without an answer");
     } catch (error) {
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
+      const breaker = this.breakerFor(route.provider);
+      if (admitted) recordProviderFailure(breaker, error, ids.correlationId);
+      else breaker.recordNonProviderFault();
       throw error;
     } finally {
       reservation?.settle(usage);

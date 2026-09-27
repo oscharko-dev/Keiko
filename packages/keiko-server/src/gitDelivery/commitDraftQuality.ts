@@ -17,15 +17,22 @@ function requestTokens(request: GatewayCallRequest, capability: ModelCapability)
 }
 
 function excerpt(section: string, limit: number): string {
-  if (section.length <= limit) return section;
+  const separator = section.indexOf("\n");
+  const header = separator < 0 ? section : section.slice(0, separator);
+  const content = separator < 0 ? "" : section.slice(separator + 1);
+  if (content.length <= limit) return section;
+  if (limit === 0) return header;
   const head = Math.ceil(limit * 0.75);
-  return section.slice(0, head) + OMITTED + section.slice(-(limit - head));
+  const tail = limit - head;
+  return (
+    header + "\n" + content.slice(0, head) + "\n...\n" + (tail === 0 ? "" : content.slice(-tail))
+  );
 }
 
 // Allocate each file a share before spending more on a large file. In particular, a lockfile at
 // the beginning must never evict the code and tests at the end of a Stage all selection.
 function compactDiff(sections: readonly string[], limit: number): string {
-  return sections.map((section) => excerpt(section, limit)).join("\n");
+  return sections.map((section) => excerpt(section, limit)).join("\n") + OMITTED;
 }
 
 export interface PreparedCommitDraft {
@@ -54,7 +61,7 @@ export function prepareCommitDraft(
   if (original.promptTokens <= maxPromptTokens) return original;
   const parsed = splitUnifiedDiffSections(diff).map((lines) => lines.join("\n"));
   const sections = parsed.length === 0 ? [diff] : parsed;
-  let low = 128;
+  let low = 0;
   let high = sections.reduce((largest, section) => Math.max(largest, section.length), 0);
   let selected: PreparedCommitDraft | undefined;
   while (low <= high) {
@@ -68,21 +75,31 @@ export function prepareCommitDraft(
   return selected;
 }
 
-// The model owns the wording; the server normalizes bullet markers, blank lines and hard-wrapped
-// paragraphs into one list. Content is never logged here.
+function takeCommitTrailers(lines: string[]): string[] {
+  const trailers: string[] = [];
+  while (/^[A-Za-z][A-Za-z0-9-]*:\s+\S/u.test(lines.at(-1)?.trim() ?? "")) {
+    trailers.unshift(lines.pop()?.trim() ?? "");
+  }
+  return trailers;
+}
+
+// The model owns the wording; normalize prose into a list while retaining Git trailer syntax.
+// Content is never logged here.
 export function canonicalCommitBody(body: string): string {
+  const lines = body.trim().replace(/\r\n?/gu, "\n").split("\n");
+  const trailers = takeCommitTrailers(lines);
   const items: string[] = [];
   let paragraph: string[] = [];
   const flush = (): void => {
     if (paragraph.length > 0) items.push(`- ${paragraph.join(" ")}`);
     paragraph = [];
   };
-  for (const line of body.replace(/\r\n?/gu, "\n").split("\n")) {
+  for (const line of lines) {
     const text = line.trim();
     const bullet = /^(?:[-*•]|\d+[.)])\s+/u.exec(text);
     if (text === "" || bullet !== null) flush();
     if (text !== "") paragraph.push(text.slice(bullet?.[0].length ?? 0));
   }
   flush();
-  return items.join("\n");
+  return [items.join("\n"), trailers.join("\n")].filter((block) => block !== "").join("\n\n");
 }

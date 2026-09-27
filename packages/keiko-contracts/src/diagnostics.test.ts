@@ -866,7 +866,11 @@ describe("client report budgets", () => {
 describe("git-client operation settlement vocabulary", () => {
   it.each(["started", "succeeded", "failed"])("restricts %s to repository additions", (outcome) => {
     for (const operation of CLIENT_GIT_CLIENT_OPERATION_KINDS) {
-      const report = { ...validRequest(), gitClientOperation: { operation, outcome } };
+      const report = {
+        ...validRequest(),
+        correlationId: "repository-attempt-0001",
+        gitClientOperation: { operation, outcome },
+      };
       expect(isClientDiagnosticIngestRequest(report)).toBe(
         operation === "repository-clone" || operation === "repository-register",
       );
@@ -1182,3 +1186,17 @@ describe("coding issue diagnostic outcome", () => {
     ).toBe(expected);
   });
 });
+
+it.each(["started", "succeeded", "failed"])(
+  "requires correlation for repository lifecycle %s",
+  (outcome) => {
+    const request = {
+      ...validRequest(),
+      gitClientOperation: { operation: "repository-clone", outcome },
+    };
+    expect(isClientDiagnosticIngestRequest(request)).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({ ...request, correlationId: "repository-attempt-0001" }),
+    ).toBe(true);
+  },
+);

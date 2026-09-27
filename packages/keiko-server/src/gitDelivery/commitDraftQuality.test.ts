@@ -69,3 +69,28 @@ describe("canonical commit body", () => {
     expect(canonicalCommitBody(result)).toBe(expected);
   });
 });
+
+describe("review regressions for large selections and commit trailers", () => {
+  it("fits hundreds of files using their complete headers when excerpts cannot fit", () => {
+    const headers = Array.from(
+      { length: 250 },
+      (_, index) => `diff --git a/f${String(index)} b/f${String(index)}`,
+    );
+    const patch = headers.map((header) => `${header}\n+${"change".repeat(100)}`).join("\n");
+    const prepared = prepareCommitDraft(patch, capability, build);
+    expect(prepared).toBeDefined();
+    expect(prepared?.promptTokens).toBeLessThanOrEqual(prepared?.maxPromptTokens ?? 0);
+    for (const header of headers) expect(prepared?.request.messages[0]?.content).toContain(header);
+  });
+
+  it("preserves a trailing signoff block without turning it into list items", () => {
+    const trailer = "Signed-off-by: Dev <dev@example.invalid>";
+    const result = canonicalCommitBody(
+      `* Fix the workflow.\n\n${trailer}\nCo-authored-by: Reviewer <reviewer@example.invalid>`,
+    );
+    expect(result).toBe(
+      `- Fix the workflow.\n\n${trailer}\nCo-authored-by: Reviewer <reviewer@example.invalid>`,
+    );
+    expect(canonicalCommitBody(result)).toBe(result);
+  });
+});

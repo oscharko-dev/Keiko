@@ -554,7 +554,12 @@ function hasValidGitContext(value: Record<string, unknown>): boolean {
   const { gitChangeDescription, workspaceTrustBinding, gitClientOperation } = value;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
-  return isOptional(gitClientOperation, isClientDiagnosticGitClientOperation);
+  if (gitClientOperation === undefined) return true;
+  if (!isClientDiagnosticGitClientOperation(gitClientOperation)) return false;
+  return (
+    !GIT_CLIENT_ADDITION_OUTCOMES.has(gitClientOperation.outcome) ||
+    isCorrelationIdShape(value.correlationId)
+  );
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {

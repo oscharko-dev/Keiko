@@ -1,10 +1,9 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-25 for PR #3602 after the gateway latency
-repair added the chat gateway-error strings to the shared English and German message catalogs. No
-updater string changed. All eight
-Chromium checks passed, including the real-BFF outage journey, and refreshed the tracked updater
-artifacts. The tests prove the startup notice yields only while a visible, foreground **ready**
+The current repair evidence was regenerated on 2026-09-27 for PR #3662 after repository-operation
+correlation changed the shared UI API module. No updater behavior changed. All eight Chromium
+checks passed on the supported Node 26 runtime, including the real-BFF outage journey, and refreshed
+the tracked updater artifacts. The tests prove the startup notice yields only while a visible, foreground **ready**
 Update window owns the same critical context and actions; the notice returns when that window is
 backgrounded or minimized, and remains available while the foreground updater is loading or
 contains only a load error.
