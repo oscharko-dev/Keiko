@@ -75,7 +75,7 @@ type Action =
 const INITIAL: State = {
   instances: [],
   active: null,
-  loading: false,
+  loading: true,
   switching: false,
   error: null,
   inventoryUnavailable: false,

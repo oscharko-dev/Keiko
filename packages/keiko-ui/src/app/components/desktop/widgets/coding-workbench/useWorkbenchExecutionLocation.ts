@@ -21,7 +21,8 @@ export function activeExecutionLocation(
   selected: WorkbenchExecutionLocation | undefined,
 ): WorkbenchExecutionLocation {
   if (selected !== undefined) return selected;
-  if (instance?.repositoryRoot === root) return instance.executionLocation === "local" ? "local" : "worktree";
+  if (instance?.repositoryRoot === root)
+    return instance.executionLocation === "local" ? "local" : "worktree";
   return "local";
 }
 
@@ -33,11 +34,15 @@ function bindingReady(
 ): boolean {
   if (instance === null || root === null || instance.repositoryRoot !== root) return false;
   if (location === "local") {
-    return instance.executionLocation === "local" &&
-      (branch === undefined || instance.taskBranch === branch);
+    return (
+      instance.executionLocation === "local" &&
+      (branch === undefined || instance.taskBranch === branch)
+    );
   }
-  return instance.executionLocation !== "local" &&
-    (branch === undefined || instance.baseBranch === branch);
+  return (
+    instance.executionLocation !== "local" &&
+    (branch === undefined || instance.baseBranch === branch)
+  );
 }
 
 async function targetBranch(root: string, selected: string | undefined): Promise<string> {
@@ -74,16 +79,32 @@ export function useWorkbenchExecutionLocation(input: {
   readonly branch: string | undefined;
   readonly location: WorkbenchExecutionLocation;
   readonly activeInstance: WorkspaceInstance | null;
+  readonly workspaceLoading: boolean;
+  readonly workspaceError: boolean;
   readonly runIsActive: boolean;
   readonly refresh: () => Promise<boolean>;
 }): WorkbenchExecutionLocationState {
   const [pending, setPending] = useState(false);
+  const [selectionEpoch, setSelectionEpoch] = useState(0);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const inFlight = useRef<string | null>(null);
   const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}`;
-  const ready = bindingReady(input.activeInstance, input.root, input.branch, input.location);
+  const latest = useRef(input);
+  latest.current = input;
+  const ready =
+    !input.workspaceLoading &&
+    !input.workspaceError &&
+    bindingReady(input.activeInstance, input.root, input.branch, input.location);
   useEffect(() => {
-    if (ready || input.runIsActive || input.root === null || inFlight.current !== null || errorKey === key) {
+    if (
+      ready ||
+      input.workspaceLoading ||
+      input.workspaceError ||
+      input.runIsActive ||
+      input.root === null ||
+      inFlight.current !== null ||
+      errorKey === key
+    ) {
       return;
     }
     const root = input.root;
@@ -92,6 +113,17 @@ export function useWorkbenchExecutionLocation(input: {
     void (async (): Promise<void> => {
       try {
         const branch = await targetBranch(root, input.branch);
+        const current = latest.current;
+        if (
+          current.root !== root ||
+          current.branch !== input.branch ||
+          current.location !== input.location ||
+          current.workspaceLoading ||
+          current.workspaceError ||
+          current.runIsActive ||
+          bindingReady(current.activeInstance, current.root, current.branch, current.location)
+        )
+          return;
         if (input.location === "local") {
           await selectLocalCheckout({ root, branch, requestedBy: OPERATOR });
         } else {
@@ -111,9 +143,36 @@ export function useWorkbenchExecutionLocation(input: {
       } finally {
         inFlight.current = null;
         setPending(false);
+        const current = latest.current;
+        if (
+          current.root !== input.root ||
+          current.branch !== input.branch ||
+          current.location !== input.location
+        )
+          setSelectionEpoch((epoch) => epoch + 1);
       }
     })();
-  }, [errorKey, input.branch, input.location, input.refresh, input.root, input.runIsActive, key, pending, ready]);
-  const retry = useCallback((): void => setErrorKey(null), []);
-  return { ready, pending, error: errorKey === key, retry };
+  }, [
+    errorKey,
+    input.branch,
+    input.location,
+    input.refresh,
+    input.root,
+    input.runIsActive,
+    input.workspaceError,
+    input.workspaceLoading,
+    key,
+    ready,
+    selectionEpoch,
+  ]);
+  const retry = useCallback((): void => {
+    setErrorKey(null);
+    if (input.workspaceError) void input.refresh();
+  }, [input.refresh, input.workspaceError]);
+  return {
+    ready,
+    pending: pending || input.workspaceLoading,
+    error: errorKey === key || input.workspaceError,
+    retry,
+  };
 }

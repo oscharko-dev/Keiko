@@ -866,6 +866,8 @@ export function CodingWorkbenchWindow({
     branch: selectedBranch,
     location,
     activeInstance: activeWorkspace.activeInstance,
+    workspaceLoading: activeWorkspace.loading || activeWorkspace.switching,
+    workspaceError: activeWorkspace.error !== null,
     runIsActive,
     refresh: activeWorkspace.refresh,
   });
