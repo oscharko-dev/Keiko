@@ -31,8 +31,11 @@ export class SequenceNumberSet {
     }
   }
 
+  // The run holds exactly the integers between its bounds; a fraction between them was never added.
   private inRun(value: number): boolean {
-    return this.low !== undefined && value >= this.low && value <= this.high;
+    return (
+      this.low !== undefined && Number.isInteger(value) && value >= this.low && value <= this.high
+    );
   }
 
   // Values that arrived ahead of the run join it once the run reaches them, so the Set only ever

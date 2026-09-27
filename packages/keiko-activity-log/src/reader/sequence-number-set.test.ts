@@ -35,7 +35,8 @@ describe("SequenceNumberSet", () => {
       const next = random(seed);
       const subject = new SequenceNumberSet();
       const reference = new Set<number>();
-      const probes = Array.from({ length: 44 }, (_, index) => index - 2);
+      // Integer probes plus half-steps: a value between two members of the run was never added.
+      const probes = Array.from({ length: 88 }, (_, index) => index / 2 - 2);
       for (let step = 0; step < 60; step += 1) {
         const roll = next();
         const previous = [...reference].at(-1) ?? 0;
@@ -62,6 +63,16 @@ describe("SequenceNumberSet", () => {
     expect(subject.has(100_000)).toBe(true);
     expect(subject.has(100_001)).toBe(false);
     expect(subject.has(0)).toBe(false);
+  });
+
+  it("never reports a non-integer inside the run as a member", () => {
+    const subject = new SequenceNumberSet();
+    for (const seq of [1, 2, 3, 4]) subject.add(seq);
+    expect(subject.has(2.5)).toBe(false);
+    expect(subject.has(1.000_000_1)).toBe(false);
+    subject.add(2.5);
+    expect(subject.has(2.5)).toBe(true);
+    expect(subject.outsideRunCount).toBe(1);
   });
 
   it("folds values that arrived ahead of the run into it once the gap closes", () => {
