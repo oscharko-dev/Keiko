@@ -165,7 +165,7 @@ describe("bounded coding safe-activity projection", () => {
                 callId: "call_1",
                 tool: "keiko_workspace_discover",
                 state: "failed",
-                occurredAt: "2026-07-18T17:00:00.004Z",
+                occurredAt: "2026-07-18T17:00:00.003Z",
               },
             ],
           },

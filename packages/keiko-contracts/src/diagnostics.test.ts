@@ -844,11 +844,11 @@ describe("client report budgets", () => {
 
 describe("git-client operation settlement vocabulary", () => {
   it("accepts every operation paired with every outcome from its own family", () => {
-    const discardOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter((operation) =>
-      operation.startsWith("repository-"),
+    const discardOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
+      (operation) => operation.startsWith("repository-") || operation === "checkout-selection",
     );
     const retryOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
-      (operation) => !operation.startsWith("repository-"),
+      (operation) => !discardOperations.includes(operation),
     );
     const discardOutcomes = CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
       outcome.startsWith("discarded-"),

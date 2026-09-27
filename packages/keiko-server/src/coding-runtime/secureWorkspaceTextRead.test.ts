@@ -226,8 +226,10 @@ describe("SecureWorkspaceTextReadPort", () => {
   });
 
   it("keeps a stalled helper bounded after allowing for process scheduling", async () => {
-    vi.useFakeTimers();
+    const timeout = new AbortController();
+    const timeoutSignal = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
     try {
+      const started = deferred<undefined>();
       const timed = createPort(
         ({ signal }) =>
           new Promise<Uint8Array>((_resolve, reject) => {
@@ -239,14 +241,16 @@ describe("SecureWorkspaceTextReadPort", () => {
               { once: true },
             );
             if (signal.aborted) reject(new Error("terminated"));
+            started.resolve(undefined);
           }),
       );
       const reading = timed.port.readText({ relativePath: "src/a.ts" });
 
-      await vi.advanceTimersByTimeAsync(15_000);
+      await started.promise;
+      timeout.abort();
       await expect(reading).resolves.toEqual({ ok: false, reason: "timeout" });
     } finally {
-      vi.useRealTimers();
+      timeoutSignal.mockRestore();
     }
   });
 

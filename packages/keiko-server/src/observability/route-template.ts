@@ -178,6 +178,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "journey",
   "json",
   "language",
+  "local",
   "local-branch",
   "local-history",
   "local-knowledge",

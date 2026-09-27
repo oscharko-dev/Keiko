@@ -21,6 +21,7 @@ import type {
   CodingToolAuthorityPort,
   CodingToolDelegatePort,
   CodingToolFacade,
+  CodingToolMutationGuard,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
@@ -1557,12 +1558,9 @@ describe("CodingToolFacade", () => {
 
   // #3390 rubric: the coding model must observe the RED state (which check failed and why) before
   // it may claim a fix. `keiko_verification` is bound through the governed catalog in production
-  // (catalogToolFacadeBridge.ts), which settles ANY `status: "failed"` handler result -- a genuine
-  // dispatch fault AND a verifier that ran and reported failing tests alike -- as a
-  // `CatalogDispatchFault` for its own governance bookkeeping (tool-catalog.invocation-settled,
-  // global `internal` error kind, empty data). `catalogToolFacadeBridge.ts`'s
-  // `preservedExecutedResult` rescues the original executed result for the first case; these tests
-  // pin that the rescued payload actually survives THIS file's own catalog composition
+  // (catalogToolFacadeBridge.ts). A verifier that ran and reported failing tests is a completed
+  // execution effect with a failed verification result, not a catalog dispatch failure. These tests
+  // pin that the structured payload survives this file's catalog composition
   // (`executeCatalogRequest`'s `delegateState.threw` guard) all the way to the value returned to
   // the caller -- the same value `opencodeRuntimeComposition.ts` JSON-serializes as the HTTP 200
   // body the coding model's tool call receives -- and that a handler which never ran at all still
@@ -1616,12 +1614,19 @@ describe("CodingToolFacade", () => {
         ],
         truncated: false,
       };
-      ports.delegate.execute = vi.fn(() =>
-        Promise.resolve({
-          outcome: "failed",
-          reasonCode: "VERIFICATION_FAILED",
-          verificationFailure,
-        }),
+      ports.delegate.execute = vi.fn(
+        (
+          _request: CodingToolActionRequest,
+          _signal: AbortSignal | undefined,
+          mutationGuard: CodingToolMutationGuard,
+        ) => {
+          expect(mutationGuard.check()).toBe(true);
+          return Promise.resolve({
+            outcome: "failed",
+            reasonCode: "VERIFICATION_FAILED",
+            verificationFailure,
+          });
+        },
       );
 
       const result = await subject.execute({
@@ -1629,19 +1634,18 @@ describe("CodingToolFacade", () => {
         capability,
       });
 
+      expect(ports.delegate.execute).toHaveBeenCalledOnce();
       expect(result).toEqual({
         status: "failed",
         reasonCode: "VERIFICATION_FAILED",
         evidence: [{ kind: "governed-delegate", code: "VERIFICATION_FAILED" }],
         verificationFailure,
       });
-      // The catalog's own settlement log records this as a dispatch fault for its governance
-      // accounting (budget commit, effectStarted) -- an internal audit artifact of that layer, not
-      // evidence the payload asserted above was lost to the caller.
+      // The catalog records a completed execution effect and commits its budget. The failed test
+      // result remains available to the model in the facade result above.
       expect(log.events.at(-1)).toMatchObject({
         op: "tool-catalog.invocation-settled",
-        errorKind: "internal",
-        extra: { status: "failed", reason: "handler-failed" },
+        extra: { status: "completed", reason: "none" },
       });
     });
 

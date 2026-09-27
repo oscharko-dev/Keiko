@@ -339,7 +339,10 @@ describe("canonical catalog facade bridge", () => {
     };
 
     await expect(
-      bridge.execute(request, facadeInput(), () => Promise.resolve(failedTests)),
+      bridge.execute(request, facadeInput(), (_signal, mutationGuard) => {
+        expect(mutationGuard.check()).toBe(true);
+        return Promise.resolve(failedTests);
+      }),
     ).resolves.toEqual(failedTests);
     expect(log.events.at(-1)).toMatchObject({
       op: "tool-catalog.invocation-settled",
