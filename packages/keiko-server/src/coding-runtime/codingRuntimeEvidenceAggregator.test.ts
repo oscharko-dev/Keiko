@@ -71,6 +71,83 @@ describe("CodingRuntimeEvidenceAggregator", () => {
       ],
     });
   });
+  it("preserves sorted content-free sandbox attestations with optional proxy digests", () => {
+    const backing = createInMemoryEvidenceStore();
+    const aggregator = createCodingRuntimeEvidenceAggregator(backing);
+    const sandboxAttestation = {
+      schemaVersion: 1 as const,
+      backend: "seatbelt" as const,
+      platform: "darwin",
+      networkEnforced: true as const,
+      policyKind: "enterprise-proxy" as const,
+      runtimeSource: "codex-cli-adapter" as const,
+      modelSource: "chatgpt-codex-subscription-profile" as const,
+      authorityEnvelopeDigest: digest,
+      reviewedEgressReceipt: `sha256:${digest}`,
+      policyDigest: digest,
+      directEgress: "disabled" as const,
+      proxyIdentityDigest: "c".repeat(64),
+      caIdentityDigest: "d".repeat(64),
+      noProxyIdentityDigest: "e".repeat(64),
+    };
+    aggregator.observe("run-evidence", {
+      kind: "sandbox-attestation",
+      state: "starting",
+      sandboxAttestation: { ...sandboxAttestation, policyDigest: "f".repeat(64) },
+    });
+    aggregator.observe("run-evidence", {
+      kind: "sandbox-attestation",
+      state: "starting",
+      sandboxAttestation,
+    });
+    aggregator.settle(settlement);
+
+    expect(JSON.parse(backing.get("run-evidence") ?? "")).toMatchObject({
+      sandboxAttestations: [
+        { policyDigest: digest, proxyIdentityDigest: "c".repeat(64) },
+        { policyDigest: "f".repeat(64), noProxyIdentityDigest: "e".repeat(64) },
+      ],
+    });
+  });
+  it("rejects sandbox attestation shape mismatches and raw receipts", () => {
+    const aggregator = createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore());
+    expect(() => {
+      aggregator.observe("run-evidence", {
+        kind: "tool-call",
+        state: "running",
+        sandboxAttestation: {
+          schemaVersion: 1,
+          backend: "seatbelt",
+          platform: "darwin",
+          networkEnforced: true,
+          policyKind: "loopback-only",
+          runtimeSource: "keiko-sidecar",
+          modelSource: "keiko-model-gateway",
+          authorityEnvelopeDigest: digest,
+          reviewedEgressReceipt: `sha256:${digest}`,
+          policyDigest: digest,
+        },
+      });
+    }).toThrow("sandbox attestation must use the sandbox-attestation observation kind");
+    expect(() => {
+      aggregator.observe("run-evidence", {
+        kind: "sandbox-attestation",
+        state: "starting",
+        sandboxAttestation: {
+          schemaVersion: 1,
+          backend: "seatbelt",
+          platform: "darwin",
+          networkEnforced: true,
+          policyKind: "loopback-only",
+          runtimeSource: "keiko-sidecar",
+          modelSource: "keiko-model-gateway",
+          authorityEnvelopeDigest: digest,
+          reviewedEgressReceipt: "https://proxy.example.invalid",
+          policyDigest: digest,
+        },
+      });
+    }).toThrow("invalid sandbox reviewedEgressReceipt");
+  });
   it("deletes exactly store-pruned ids without listing the evidence directory", () => {
     const backing = createInMemoryEvidenceStore();
     const list = vi.spyOn(backing, "list");

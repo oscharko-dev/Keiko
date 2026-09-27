@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { SEATBELT_DENY_EGRESS_PROFILE } from "./backends.js";
 import {
+  longLivedRuntimeEgressPolicyDigest,
   planLongLivedRuntimeSandbox,
   verifyLongLivedRuntimeSandboxAttestation,
   type LongLivedRuntimeSandboxRequest,
@@ -26,6 +27,23 @@ function loopbackRequest(): LongLivedRuntimeSandboxRequest {
     modelSource: "keiko-model-gateway",
     authorityEnvelopeDigest: "a".repeat(64),
     policy: { kind: "loopback-only", reviewedEgressReceipt: RECEIPT },
+  };
+}
+
+function enterpriseProxyRequest(
+  policy: Partial<Extract<LongLivedRuntimeSandboxRequest["policy"], { kind: "enterprise-proxy" }>>,
+): LongLivedRuntimeSandboxRequest {
+  return {
+    ...loopbackRequest(),
+    runtimeSource: "codex-cli-adapter",
+    modelSource: "chatgpt-codex-subscription-profile",
+    policy: {
+      kind: "enterprise-proxy",
+      reviewedEgressReceipt: RECEIPT,
+      directEgress: "disabled",
+      proxyIdentityDigest: "c".repeat(64),
+      ...policy,
+    },
   };
 }
 
@@ -92,24 +110,62 @@ describe("long-lived runtime egress planning", () => {
   });
 
   it("fails closed for reviewed Codex policy until an address-aware backend is qualified", () => {
-    const request: LongLivedRuntimeSandboxRequest = {
-      ...loopbackRequest(),
-      runtimeSource: "codex-cli-adapter",
-      modelSource: "chatgpt-codex-subscription-profile",
-      policy: {
-        kind: "enterprise-proxy",
-        reviewedEgressReceipt: RECEIPT,
-        directEgress: "disabled",
-        proxyIdentityDigest: "c".repeat(64),
-        caIdentityDigest: "d".repeat(64),
-      },
-    };
+    const request = enterpriseProxyRequest({ caIdentityDigest: "d".repeat(64) });
     const decision = planLongLivedRuntimeSandbox(
       request,
       { ...NONE, seatbelt: true, docker: true },
       "darwin",
     );
     expect(decision).toEqual({ kind: "fail-closed", reason: "policy-unenforceable" });
+  });
+
+  it("verifies enterprise proxy attestations with optional custody digests", () => {
+    const request = enterpriseProxyRequest({
+      caIdentityDigest: "d".repeat(64),
+      noProxyIdentityDigest: "e".repeat(64),
+    });
+    if (request.policy.kind !== "enterprise-proxy") throw new Error("expected proxy policy");
+    const attestation = {
+      schemaVersion: 1 as const,
+      backend: "seatbelt" as const,
+      platform: "darwin",
+      networkEnforced: true as const,
+      policyKind: "enterprise-proxy" as const,
+      runtimeSource: request.runtimeSource,
+      modelSource: request.modelSource,
+      authorityEnvelopeDigest: request.authorityEnvelopeDigest,
+      reviewedEgressReceipt: request.policy.reviewedEgressReceipt,
+      policyDigest: longLivedRuntimeEgressPolicyDigest(request.policy),
+      directEgress: request.policy.directEgress,
+      proxyIdentityDigest: request.policy.proxyIdentityDigest,
+      caIdentityDigest: request.policy.caIdentityDigest,
+      noProxyIdentityDigest: request.policy.noProxyIdentityDigest,
+    };
+
+    expect(verifyLongLivedRuntimeSandboxAttestation(attestation, request)).toBe(true);
+    expect(
+      verifyLongLivedRuntimeSandboxAttestation({ ...attestation, caIdentityDigest: 7 }, request),
+    ).toBe(false);
+    expect(
+      verifyLongLivedRuntimeSandboxAttestation({ ...attestation, directEgress: "open" }, request),
+    ).toBe(false);
+    expect(
+      verifyLongLivedRuntimeSandboxAttestation(
+        { ...attestation, policyKind: "approved-direct" },
+        request,
+      ),
+    ).toBe(false);
+    expect(verifyLongLivedRuntimeSandboxAttestation(null, request)).toBe(false);
+    expect(verifyLongLivedRuntimeSandboxAttestation([], request)).toBe(false);
+  });
+
+  it("rejects malformed enterprise proxy optional digests", () => {
+    const decision = planLongLivedRuntimeSandbox(
+      enterpriseProxyRequest({ noProxyIdentityDigest: "not-a-digest" }),
+      { ...NONE, seatbelt: true },
+      "darwin",
+    );
+    expect(decision).toEqual({ kind: "fail-closed", reason: "policy-invalid" });
   });
 
   it("retains an approved-direct Codex profile instead of coercing it to loopback", () => {
