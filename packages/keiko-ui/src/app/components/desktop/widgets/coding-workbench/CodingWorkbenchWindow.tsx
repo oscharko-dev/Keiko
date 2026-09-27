@@ -779,6 +779,15 @@ function welcomeEligible(
   );
 }
 
+function initialHistoryLocation(
+  workspace: UseCodingWorkbenchRuntimeInput["workspace"],
+  selectedRoot: string | undefined,
+  selectedLocation: WorkbenchExecutionLocation | undefined,
+): WorkbenchExecutionLocation {
+  const root = selectedRoot ?? workspace.activeInstance?.repositoryRoot ?? null;
+  return activeExecutionLocation(workspace.activeInstance, root, selectedLocation);
+}
+
 export function CodingWorkbenchWindow({
   selectedRoot,
   selectedBranch,
@@ -814,11 +823,7 @@ export function CodingWorkbenchWindow({
     active: activeRunState(runtimeState.run.value?.state),
     workspace: workspaceContext,
     root: selectedRoot,
-    location: activeExecutionLocation(
-      activeWorkspace.activeInstance,
-      selectedRoot ?? activeWorkspace.activeInstance?.repositoryRoot ?? null,
-      selectedLocation,
-    ),
+    location: initialHistoryLocation(activeWorkspace, selectedRoot, selectedLocation),
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
   });
@@ -866,7 +871,7 @@ export function CodingWorkbenchWindow({
     branch: selectedBranch,
     location,
     activeInstance: activeWorkspace.activeInstance,
-    workspaceLoading: activeWorkspace.loading || activeWorkspace.switching,
+    workspaceLoading: workspaceBindingPendingOf(activeWorkspace),
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
     refresh: activeWorkspace.refresh,
@@ -1143,6 +1148,64 @@ function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => vo
   }, [runId, retry]);
 }
 
+function workbenchStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  showSetup: boolean,
+  authorityError: string | null,
+  locationState: WorkbenchExecutionLocationState,
+): string | null {
+  if (locationState.ready) return startBlockedReason(state, t, showSetup, authorityError);
+  return t(
+    locationState.error
+      ? "codingWorkbench.repository.locationError"
+      : "codingWorkbench.repository.locationBinding",
+  );
+}
+
+function locationMutationPending(
+  state: CodingWorkbenchRuntimeState,
+  locationState: WorkbenchExecutionLocationState,
+  bindPending = false,
+): boolean {
+  return state.mutation.status === "pending" || locationState.pending || bindPending;
+}
+
+function canStartAtLocation(
+  state: CodingWorkbenchRuntimeState,
+  locationState: WorkbenchExecutionLocationState,
+): boolean {
+  return state.canStart && locationState.ready;
+}
+
+function LocationBindingNotices({
+  locationState,
+}: {
+  readonly locationState: WorkbenchExecutionLocationState;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <>
+      {locationState.pending ? (
+        <p className={styles.cmpRepositorySelectorNotice} role="status">
+          {t("codingWorkbench.repository.locationBinding")}
+        </p>
+      ) : null}
+      {locationState.error ? (
+        <RetryMessage
+          text={t("codingWorkbench.repository.locationError")}
+          className={styles.cmpRepositorySelectorNotice}
+          role="alert"
+          retry={{
+            label: t("codingWorkbench.repository.retryLoad"),
+            onRetry: locationState.retry,
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function WorkbenchColumns({
   history,
   state,
@@ -1177,13 +1240,13 @@ function WorkbenchColumns({
   const issuePending = issueIntake.state.kind === "loading";
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
   const showSetup = repositoryRoot === null && !runIsActive;
-  const startBlocker = locationState.ready
-    ? startBlockedReason(state, t, showSetup, authority.errorMessage)
-    : t(
-        locationState.error
-          ? "codingWorkbench.repository.locationError"
-          : "codingWorkbench.repository.locationBinding",
-      );
+  const startBlocker = workbenchStartBlocker(
+    state,
+    t,
+    showSetup,
+    authority.errorMessage,
+    locationState,
+  );
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
   // its length plateaus on a long run and every change-driven resync — questions and the activity
@@ -1286,7 +1349,7 @@ function WorkbenchColumns({
         },
         onSend: () => void actions.submitFollowUp(taskIntent.trim()),
       }}
-      canStart={state.canStart && locationState.ready}
+      canStart={canStartAtLocation(state, locationState)}
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={issuePending || state.mutation.status === "pending"}
@@ -1322,7 +1385,7 @@ function WorkbenchColumns({
       runIsActive={runIsActive}
       runWorkspace={runWorkspace}
       activeWorkspace={activeWorkspace}
-      mutationPending={state.mutation.status === "pending" || locationState.pending}
+      mutationPending={locationMutationPending(state, locationState)}
       onSelectRepository={onSelectRepository}
       onSelectBranch={onSelectBranch}
       location={location}
@@ -1341,9 +1404,7 @@ function WorkbenchColumns({
               runIsActive={runIsActive}
               runWorkspace={runWorkspace}
               activeWorkspace={activeWorkspace}
-              mutationPending={
-                state.mutation.status === "pending" || bindPending || locationState.pending
-              }
+              mutationPending={locationMutationPending(state, locationState, bindPending)}
               onSelectRepository={onSelectRepository}
               onSelectBranch={onSelectBranch}
               location={location}
@@ -1459,22 +1520,7 @@ function WorkbenchColumns({
       )}
       <div className={styles.composerDock}>
         {repositorySelector}
-        {locationState.pending ? (
-          <p className={styles.cmpRepositorySelectorNotice} role="status">
-            {t("codingWorkbench.repository.locationBinding")}
-          </p>
-        ) : null}
-        {locationState.error ? (
-          <RetryMessage
-            text={t("codingWorkbench.repository.locationError")}
-            className={styles.cmpRepositorySelectorNotice}
-            role="alert"
-            retry={{
-              label: t("codingWorkbench.repository.retryLoad"),
-              onRetry: locationState.retry,
-            }}
-          />
-        ) : null}
+        <LocationBindingNotices locationState={locationState} />
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}

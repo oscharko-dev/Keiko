@@ -320,15 +320,16 @@ function useNewTask(
 
 async function provisionNewTask(current: SessionInput): Promise<boolean | undefined> {
   if (current.location === "local") return true;
-  const root = current.root ?? current.workspace?.activeInstance?.repositoryRoot;
-  const baseBranch = current.workspace?.activeInstance?.baseBranch;
-  return root !== undefined && baseBranch !== undefined
-    ? await current.workspace?.provision({
-        root,
-        baseBranch,
-        taskId: `coding-${secureRandomId("task")}`,
-      })
-    : await current.workspace?.clearActive();
+  const workspace = current.workspace;
+  if (workspace === null) return undefined;
+  const root = current.root ?? workspace.activeInstance?.repositoryRoot;
+  const baseBranch = workspace.activeInstance?.baseBranch;
+  if (root === undefined || baseBranch === undefined) return await workspace.clearActive();
+  return await workspace.provision({
+    root,
+    baseBranch,
+    taskId: `coding-${secureRandomId("task")}`,
+  });
 }
 
 function useSessionSelection(

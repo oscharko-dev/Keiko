@@ -1,6 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { fetchGitStatus } from "@/lib/api";
 import { selectLocalCheckout } from "@/lib/task-workspace-api";
@@ -74,7 +84,7 @@ export interface WorkbenchExecutionLocationState {
   readonly retry: () => void;
 }
 
-export function useWorkbenchExecutionLocation(input: {
+interface LocationInput {
   readonly root: string | null;
   readonly branch: string | undefined;
   readonly location: WorkbenchExecutionLocation;
@@ -83,94 +93,169 @@ export function useWorkbenchExecutionLocation(input: {
   readonly workspaceError: boolean;
   readonly runIsActive: boolean;
   readonly refresh: () => Promise<boolean>;
-}): WorkbenchExecutionLocationState {
+}
+
+function useStableLocationInput(input: LocationInput): LocationInput {
+  const {
+    root,
+    branch,
+    location,
+    activeInstance,
+    workspaceLoading,
+    workspaceError,
+    runIsActive,
+    refresh,
+  } = input;
+  return useMemo(
+    () => ({
+      root,
+      branch,
+      location,
+      activeInstance,
+      workspaceLoading,
+      workspaceError,
+      runIsActive,
+      refresh,
+    }),
+    [
+      root,
+      branch,
+      location,
+      activeInstance,
+      workspaceLoading,
+      workspaceError,
+      runIsActive,
+      refresh,
+    ],
+  );
+}
+
+function selectionChanged(previous: LocationInput, current: LocationInput): boolean {
+  return (
+    current.root !== previous.root ||
+    current.branch !== previous.branch ||
+    current.location !== previous.location
+  );
+}
+
+function shouldBind(
+  input: LocationInput,
+  ready: boolean,
+  errorKey: string | null,
+  key: string,
+): boolean {
+  return (
+    !ready &&
+    !input.workspaceLoading &&
+    !input.workspaceError &&
+    !input.runIsActive &&
+    input.root !== null &&
+    errorKey !== key
+  );
+}
+
+function selectionNeedsBinding(previous: LocationInput, current: LocationInput): boolean {
+  return (
+    !selectionChanged(previous, current) &&
+    !current.workspaceLoading &&
+    !current.workspaceError &&
+    !current.runIsActive &&
+    !bindingReady(current.activeInstance, current.root, current.branch, current.location)
+  );
+}
+
+function reportBindingFailure(error: unknown): void {
+  const correlationId = correlationIdOf(error);
+  reportClientDiagnostic("[keiko] coding workbench checkout selection failed", {
+    kind: "other",
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
+}
+
+interface BindingAttempt {
+  readonly input: LocationInput;
+  readonly key: string;
+  readonly latest: RefObject<LocationInput>;
+  readonly inFlight: RefObject<string | null>;
+  readonly setPending: Dispatch<SetStateAction<boolean>>;
+  readonly setErrorKey: Dispatch<SetStateAction<string | null>>;
+  readonly setSelectionEpoch: Dispatch<SetStateAction<number>>;
+}
+
+async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
+  const { input, key, latest, inFlight, setPending, setErrorKey, setSelectionEpoch } = attempt;
+  if (input.root === null) return;
+  try {
+    const branch = await targetBranch(input.root, input.branch);
+    if (!selectionNeedsBinding(input, latest.current)) return;
+    if (input.location === "local") {
+      await selectLocalCheckout({ root: input.root, branch, requestedBy: OPERATOR });
+    } else {
+      await bindWorktree(input.root, branch);
+    }
+    if (!(await input.refresh())) throw new Error("WORKSPACE_REFRESH_UNAVAILABLE");
+    setErrorKey(null);
+  } catch (error) {
+    reportBindingFailure(error);
+    setErrorKey(key);
+  } finally {
+    inFlight.current = null;
+    setPending(false);
+    if (selectionChanged(input, latest.current)) setSelectionEpoch((epoch) => epoch + 1);
+  }
+}
+
+function useBindingAttempt(
+  input: LocationInput,
+  ready: boolean,
+  key: string,
+): {
+  readonly pending: boolean;
+  readonly errorKey: string | null;
+  readonly retry: () => void;
+} {
+  const stableInput = useStableLocationInput(input);
   const [pending, setPending] = useState(false);
   const [selectionEpoch, setSelectionEpoch] = useState(0);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const inFlight = useRef<string | null>(null);
-  const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}`;
-  const latest = useRef(input);
+  const latest = useRef(stableInput);
   useLayoutEffect(() => {
-    latest.current = input;
-  }, [input]);
+    latest.current = stableInput;
+  }, [stableInput]);
+  const { refresh, workspaceError } = input;
+  useEffect(() => {
+    if (!shouldBind(stableInput, ready, errorKey, key) || inFlight.current !== null) return;
+    inFlight.current = key;
+    setPending(true);
+    void runBindingAttempt({
+      input: stableInput,
+      key,
+      latest,
+      inFlight,
+      setPending,
+      setErrorKey,
+      setSelectionEpoch,
+    });
+  }, [errorKey, stableInput, key, ready, selectionEpoch]);
+  const retry = useCallback((): void => {
+    setErrorKey(null);
+    if (workspaceError) void refresh();
+  }, [refresh, workspaceError]);
+  return { pending, errorKey, retry };
+}
+
+export function useWorkbenchExecutionLocation(
+  input: LocationInput,
+): WorkbenchExecutionLocationState {
+  const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}`;
   const ready =
     !input.workspaceLoading &&
     !input.workspaceError &&
     bindingReady(input.activeInstance, input.root, input.branch, input.location);
-  useEffect(() => {
-    if (
-      ready ||
-      input.workspaceLoading ||
-      input.workspaceError ||
-      input.runIsActive ||
-      input.root === null ||
-      inFlight.current !== null ||
-      errorKey === key
-    ) {
-      return;
-    }
-    const root = input.root;
-    inFlight.current = key;
-    setPending(true);
-    void (async (): Promise<void> => {
-      try {
-        const branch = await targetBranch(root, input.branch);
-        const current = latest.current;
-        if (
-          current.root !== root ||
-          current.branch !== input.branch ||
-          current.location !== input.location ||
-          current.workspaceLoading ||
-          current.workspaceError ||
-          current.runIsActive ||
-          bindingReady(current.activeInstance, current.root, current.branch, current.location)
-        )
-          return;
-        if (input.location === "local") {
-          await selectLocalCheckout({ root, branch, requestedBy: OPERATOR });
-        } else {
-          await bindWorktree(root, branch);
-        }
-        if (!(await input.refresh())) throw new Error("WORKSPACE_REFRESH_UNAVAILABLE");
-        setErrorKey(null);
-      } catch (error) {
-        const correlationId = correlationIdOf(error);
-        reportClientDiagnostic("[keiko] coding workbench checkout selection failed", {
-          kind: "other",
-          errorKind: bffRequestErrorKind(error),
-          errorEvidence: clientErrorEvidence(error),
-          ...(correlationId === undefined ? {} : { correlationId }),
-        });
-        setErrorKey(key);
-      } finally {
-        inFlight.current = null;
-        setPending(false);
-        const current = latest.current;
-        if (
-          current.root !== input.root ||
-          current.branch !== input.branch ||
-          current.location !== input.location
-        )
-          setSelectionEpoch((epoch) => epoch + 1);
-      }
-    })();
-  }, [
-    errorKey,
-    input.branch,
-    input.location,
-    input.refresh,
-    input.root,
-    input.runIsActive,
-    input.workspaceError,
-    input.workspaceLoading,
-    key,
-    ready,
-    selectionEpoch,
-  ]);
-  const retry = useCallback((): void => {
-    setErrorKey(null);
-    if (input.workspaceError) void input.refresh();
-  }, [input.refresh, input.workspaceError]);
+  const { pending, errorKey, retry } = useBindingAttempt(input, ready, key);
   return {
     ready,
     pending: pending || input.workspaceLoading,

@@ -289,7 +289,14 @@ function LocationChip({
   return (
     <KeikoSelect
       value={location}
-      sections={[{ options: [{ value: "local", label: local }, { value: "worktree", label: worktree }] }]}
+      sections={[
+        {
+          options: [
+            { value: "local", label: local },
+            { value: "worktree", label: worktree },
+          ],
+        },
+      ]}
       onValueChange={(value): void => onSelect(value === "worktree" ? "worktree" : "local")}
       disabled={locked}
       ariaLabel={t("codingWorkbench.repository.locationLabel")}
@@ -469,6 +476,32 @@ interface CodingWorkbenchRepositorySelectorProps {
   readonly placement?: SelectorPlacement;
 }
 
+function LocationSelectorField({
+  location,
+  locked,
+  onSelect,
+  placement,
+  t,
+}: {
+  readonly location: WorkbenchExecutionLocation;
+  readonly locked: boolean;
+  readonly onSelect: (location: WorkbenchExecutionLocation) => void;
+  readonly placement: SelectorPlacement;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <SelectorField placement={placement} label={t("codingWorkbench.repository.locationLabel")}>
+      <LocationChip
+        location={location}
+        locked={locked}
+        onSelect={onSelect}
+        t={t}
+        placement={placement}
+      />
+    </SelectorField>
+  );
+}
+
 export function CodingWorkbenchRepositorySelector({
   root,
   branch,
@@ -495,15 +528,13 @@ export function CodingWorkbenchRepositorySelector({
           placement={placement}
         />
       </SelectorField>
-      <SelectorField placement={placement} label={t("codingWorkbench.repository.locationLabel")}>
-        <LocationChip
-          location={location}
-          locked={locked || root === null}
-          onSelect={onSelectLocation}
-          t={t}
-          placement={placement}
-        />
-      </SelectorField>
+      <LocationSelectorField
+        location={location}
+        locked={locked || root === null}
+        onSelect={onSelectLocation}
+        t={t}
+        placement={placement}
+      />
       <SelectorField placement={placement} label={t("codingWorkbench.repository.branchLabel")}>
         <BranchChip
           root={root}

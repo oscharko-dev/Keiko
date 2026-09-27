@@ -174,6 +174,13 @@ export interface RestoreVerifiedActiveTaskWorkspaceOptions {
   readonly verifiedWorkspaceId?: string | null;
 }
 
+function restoredWorkspaceStatus(
+  entries: Awaited<ReturnType<typeof reconcileTaskWorkspaces>>["entries"],
+  workspaceId: string,
+): string {
+  return entries.find((item) => item.workspaceId === workspaceId)?.status ?? "missing-report-entry";
+}
+
 /**
  * Restore-time counterpart of {@link bindVerifiedTaskWorkspace} (release-audit F-09b).
  *
@@ -210,13 +217,11 @@ export async function restoreVerifiedActiveTaskWorkspace(
   // the post-verification truth (fresh health, verified-head stamp, or a self-healed pointer).
   const reverified = await getActiveTaskWorkspace();
   if (reverified === null) return null;
-  const entry = report.entries.find((item) => item.workspaceId === reverified.instance.workspaceId);
-  if (entry?.status === "healthy" || reverified.instance.health !== "healthy") return reverified;
+  const status = restoredWorkspaceStatus(report.entries, reverified.instance.workspaceId);
+  if (status === "healthy" || reverified.instance.health !== "healthy") return reverified;
   // The verdict is a closed, content-free status (never an Error), so it is logged as itself: the
   // one fact an operator needs from this line is WHICH status refused the restored binding.
-  reportClientDiagnostic(
-    `[keiko] task workspace bind restore-verify failed: status=${entry?.status ?? "missing-report-entry"}`,
-  );
+  reportClientDiagnostic(`[keiko] task workspace bind restore-verify failed: status=${status}`);
   throw new TaskWorkspaceRestoreVerificationError();
 }
 
