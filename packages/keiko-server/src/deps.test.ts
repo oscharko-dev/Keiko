@@ -110,6 +110,7 @@ import {
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { RuntimeShutdownCleanup } from "./deps-activity.js";
+import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
@@ -3486,4 +3487,52 @@ describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", (
       await depsB.dispose?.();
     }
   }, 15000);
+});
+
+describe("Local checkout activity projection composition", () => {
+  it("purges prior workspace activity before a Local selection and keeps the real binding", async () => {
+    const root = snapshotWorkspace().root;
+    const projection = createCodingSafeActivityProjection({ now: () => 1_800_000_000_000 });
+    projection.open({
+      runId: "old-run",
+      workspaceId: "old-workspace",
+      authorityExpiresAt: new Date(1_800_000_060_000).toISOString(),
+      workspaceIsCurrent: () => true,
+    });
+    const purge = vi.spyOn(projection, "purgeAll");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("local-activity-evidence-"),
+      env: {},
+      initialProjectPath: root,
+      uiDbPath: join(tmp("local-activity-ui-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          safeActivityProjection: projection,
+          createRun: (): never => {
+            throw new Error("No model run is expected");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("No editor action is expected")),
+        },
+      },
+    });
+    try {
+      expect(deps.codingSafeActivityProjection).toBe(projection);
+      const selectLocal = deps.workspaceLifecycle?.selectLocal;
+      if (selectLocal === undefined) throw new Error("Local selection was not composed");
+      const active = selectLocal({ root, branch: "main", requestedBy: "operator" });
+      expect(purge).toHaveBeenCalledWith("workspace-switch");
+      expect(active.binding.activeRoot).toBe(root);
+      expect(deps.workspaceLifecycle?.getActive()?.binding).toEqual(active.binding);
+      expect(projection.currentContent()).toBeNull();
+    } finally {
+      await deps.dispose?.();
+    }
+  });
 });

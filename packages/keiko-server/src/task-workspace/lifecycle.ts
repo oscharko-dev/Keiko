@@ -34,7 +34,11 @@ import {
 import { buildBinding } from "./binding.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import { deriveManagedWorktreePath, deriveRepositoryId } from "./naming.js";
-import { isManagedTargetContained, managedTargetExists } from "./managed-root.js";
+import {
+  assertManagedWorkspaceInstance,
+  isManagedTargetContained,
+  managedTargetExists,
+} from "./managed-root.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
@@ -149,6 +153,7 @@ function loadInstance(ctx: LifecycleCtx, workspaceId: string): WorkspaceInstance
   if (instance === undefined) {
     throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
   }
+  assertManagedWorkspaceInstance(instance);
   return instance;
 }
 
@@ -547,6 +552,7 @@ async function setActiveImpl(
   // we must NOT re-acquire `ws:` here — the in-process mutex is not reentrant. Only on success do we
   // record the active pointer — the switch is atomic from the surfaces' view because the derived binding
   // flips in one persisted step.
+  loadInstance(ctx, request.workspaceId);
   const result = await ctx.deps.provisioning.activate({
     workspaceId: request.workspaceId,
     // taskId "" intentionally skips activate's optional taskId cross-check — at switch time identity is
@@ -597,6 +603,7 @@ function getActiveImpl(
     ctx.deps.activePointerStore.clear();
     return undefined;
   }
+  if (instance.executionLocation === "local") return undefined;
   if (!exposableOrThrow(ctx, instance, correlationId)) {
     ctx.deps.activePointerStore.clear();
     return undefined;
@@ -616,7 +623,9 @@ function listImpl(ctx: LifecycleCtx, repositoryRoot: string): readonly Workspace
   if (!isBoundedNonEmpty(repositoryRoot)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "repository root is required");
   }
-  return ctx.deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
+  return ctx.deps.store
+    .listByRepository(deriveRepositoryId(repositoryRoot))
+    .filter((instance) => instance.executionLocation !== "local");
 }
 
 async function resumeImpl(
@@ -705,7 +714,8 @@ export function createWorkspaceLifecycleService(
   const ctx: LifecycleCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     list: (repositoryRoot: string): readonly WorkspaceInstance[] => listImpl(ctx, repositoryRoot),
-    listAll: (): readonly WorkspaceInstance[] => deps.store.listAll(),
+    listAll: (): readonly WorkspaceInstance[] =>
+      deps.store.listAll().filter((instance) => instance.executionLocation !== "local"),
     getActive: (correlationId?: string): ActiveWorkspaceView | undefined =>
       getActiveImpl(ctx, correlationId),
     setActive: (request: SetActiveWorkspaceRequest): Promise<ActiveWorkspaceView> =>

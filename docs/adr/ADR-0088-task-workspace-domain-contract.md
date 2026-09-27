@@ -96,6 +96,12 @@ from `0.8.0` to `0.9.0`, and deliver contract-level tests in
 
 ### D1 — Eight canonical entities
 
+The shared instance and binding also represent an explicitly selected Local checkout through
+`executionLocation: "local"`. Its active root is the registered checkout, and its branch is the
+actual selected local branch. This discriminator excludes the row from managed worktree lifecycle,
+health, reconciliation, repair, and cleanup. Local selection and activation use the shared stores
+and content-free evidence adapter; they do not create or maintain a managed worktree.
+
 The module defines eight entities. All schema-versioned objects carry `schemaVersion:
 TASK_WORKSPACE_SCHEMA_VERSION = "1"`.
 

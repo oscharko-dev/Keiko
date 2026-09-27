@@ -17,6 +17,7 @@
 // uncommitted work, repair a containment escape — return an `operator-required` result with NO
 // mutation.
 
+import { assertManagedWorkspaceInstance } from "./managed-root.js";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import type {
   TaskWorkspaceDriftMarker,
@@ -572,6 +573,7 @@ async function repairLocked(
   if (existing === undefined) {
     throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
   }
+  assertManagedWorkspaceInstance(existing, "REPAIR_NOT_APPLICABLE");
   const nowMs = ctx.deps.now();
   if (
     lockIsLive(existing.lock, nowMs, ctx.lockTtlMs) &&

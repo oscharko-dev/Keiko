@@ -91,6 +91,13 @@ What the existing slices do **not** provide:
 
 ## Decision
 
+**Local checkout scope.** Managed health and reconciliation inventories exclude instances whose
+`executionLocation` is `local`. Direct managed lifecycle, reconciliation, repair, and cleanup
+requests for those instances reject before classification, locks, or mutation. A startup pass
+leaves an active Local pointer intact; Local activation validates the registered checkout through
+its own existing binding path. This prevents an ordinary checkout from being marked as an escaped
+managed path or offered managed worktree repair and deletion.
+
 **D1 — No new table. Reconciliation outcome is persisted on the existing V7 instance row.**
 
 Reconciliation does not require a new store. The V7 `task_workspace_instances`

@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
 import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 
@@ -8,7 +10,7 @@ import {
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { UNKNOWN_CORRELATION_ID, correlationIdOrUnknown } from "../correlation.js";
 import type { UiStore } from "../store/types.js";
 import {
   readProductionWorkspaceGitState,
@@ -16,7 +18,13 @@ import {
 } from "../coding-runtime/productionWorkspaceHeadReader.js";
 import type { ActiveWorkspacePointerStore } from "./active-store.js";
 import { buildBinding } from "./binding.js";
-import { logWorkspaceLifecycle, type WorkspaceActivityLogSeam } from "./activity-log.js";
+import {
+  logWorkspaceLifecycle,
+  recordWorkspaceLifecycle,
+  type WorkspaceActivityLogSeam,
+} from "./activity-log.js";
+import { buildWorkspaceEvent, WORKSPACE_LIFECYCLE_EVIDENCE_KIND } from "./evidence.js";
+
 import { TaskWorkspaceError } from "./errors.js";
 import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
@@ -25,6 +33,12 @@ import type {
   SetActiveWorkspaceRequest,
   WorkspaceLifecycleService,
 } from "./types.js";
+
+export interface LocalCheckoutEvidenceDeps extends WorkspaceActivityLogSeam {
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly now: () => number;
+}
 
 const LOCAL_PREFIX = "local:";
 const GIT_TIMEOUT_MS = 5_000;
@@ -224,7 +238,7 @@ interface LocalSelectionRequest {
   readonly correlationId?: string;
 }
 
-function validatedLocalIdentity(store: UiStore, root: string, branch: string): string {
+function validatedLocalIdentity(store: UiStore, root: string): string {
   if (!store.listProjects().some((project) => project.path === root))
     throw new TaskWorkspaceError("MISSING_REPOSITORY", "Select a registered repository.");
   let identity: string | undefined;
@@ -238,7 +252,13 @@ function validatedLocalIdentity(store: UiStore, root: string, branch: string): s
       { cause },
     );
   }
-  if (identity === undefined || branch.length === 0 || branch.startsWith("-"))
+  if (identity === undefined)
+    throw new TaskWorkspaceError("REPOSITORY_UNREACHABLE", "The local checkout is unavailable.");
+  return identity;
+}
+
+function requireLocalBranch(root: string, branch: string): void {
+  if (branch.length === 0 || branch.startsWith("-"))
     throw new TaskWorkspaceError("INVALID_BASE_BRANCH", "The local branch is unavailable.");
   try {
     git(root, "check-ref-format", "--branch", branch);
@@ -248,58 +268,25 @@ function validatedLocalIdentity(store: UiStore, root: string, branch: string): s
       cause: error,
     });
   }
-  return identity;
 }
 
-function requireAvailableBranchObjects(
-  request: LocalSelectionRequest,
-  identity: string,
-  activityLog: WorkspaceActivityLogSeam,
-): void {
-  const { root, branch } = request;
-  const startedAt = Date.now();
+function requireAvailableBranchObjects(root: string, branch: string): void {
   let available: boolean;
   try {
     available = targetTreeObjectsAvailable(root, branch);
   } catch (cause) {
-    const error = new TaskWorkspaceError(
+    throw new TaskWorkspaceError(
       "REPOSITORY_UNREACHABLE",
       "The selected branch could not be inspected; retry when Git is available.",
       [],
       { cause },
     );
-    logBranchInventoryFailure(request, identity, activityLog, startedAt, error);
-    throw error;
   }
-  if (available) return;
-  const error = new TaskWorkspaceError(
-    "BRANCH_CONFLICT",
-    "The selected branch has unavailable Git objects; hydrate it outside the Workbench.",
-  );
-  logBranchInventoryFailure(request, identity, activityLog, startedAt, error);
-  throw error;
-}
-
-function logBranchInventoryFailure(
-  request: LocalSelectionRequest,
-  identity: string,
-  activityLog: WorkspaceActivityLogSeam,
-  startedAt: number,
-  error: TaskWorkspaceError,
-): void {
-  logWorkspaceLifecycle(activityLog, {
-    operation: "activate",
-    outcome: error.outcome,
-    workspaceId: `${LOCAL_PREFIX}${identity}`,
-    taskId: `coding-workbench-local-${identity.slice(0, 16)}`,
-    correlationId: request.correlationId,
-    attempt: 1,
-    durationMs: Math.max(0, Date.now() - startedAt),
-    worktreeCount: 0,
-    baseBranch: request.branch,
-    errorCode: error.code,
-    error,
-  });
+  if (!available)
+    throw new TaskWorkspaceError(
+      "BRANCH_CONFLICT",
+      "The selected branch has unavailable Git objects; hydrate it outside the Workbench.",
+    );
 }
 
 function switchLocalBranch(root: string, branch: string): void {
@@ -363,16 +350,57 @@ function localInstance(
   };
 }
 
-function selectLocalCheckout(
+interface LocalSelectionEvidence {
+  readonly request: LocalSelectionRequest;
+  readonly identity: string;
+  readonly startedAt: number;
+  readonly fromState?: TaskWorkspaceLifecycleState | undefined;
+  readonly error?: TaskWorkspaceError | undefined;
+}
+
+function recordLocalSelection(
+  deps: LocalCheckoutEvidenceDeps,
+  input: LocalSelectionEvidence,
+): void {
+  const { request, identity, startedAt, fromState, error } = input;
+  const recordedAt = deps.now();
+  recordWorkspaceLifecycle(deps, {
+    evidenceStore: deps.evidenceStore,
+    redactString: deps.redactString,
+    record: {
+      kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
+      schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
+      recordedAt,
+      operation: "activate",
+      outcome: error?.outcome ?? "activated",
+      attempt: 1,
+      durationMs: Math.max(0, recordedAt - startedAt),
+      worktreeCount: 0,
+      event: buildWorkspaceEvent({
+        eventId: randomUUID(),
+        workspaceId: `${LOCAL_PREFIX}${identity}`,
+        taskId: `coding-workbench-local-${identity.slice(0, 16)}`,
+        type: error === undefined ? "activated" : "transition-rejected",
+        at: new Date(recordedAt).toISOString(),
+        correlationId: correlationIdOrUnknown(request.correlationId),
+        fromState,
+        toState: error === undefined ? "active" : undefined,
+      }),
+    },
+    baseBranch: request.branch,
+    errorCode: error?.code,
+    error,
+  });
+}
+
+function activateLocalCheckout(
   request: LocalSelectionRequest,
-  store: UiStore,
+  identity: string,
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
   getActive: () => ActiveWorkspaceView | undefined,
-  activityLog: WorkspaceActivityLogSeam,
 ): ActiveWorkspaceView {
-  const identity = validatedLocalIdentity(store, request.root, request.branch);
-  requireAvailableBranchObjects(request, identity, activityLog);
+  requireAvailableBranchObjects(request.root, request.branch);
   switchLocalBranch(request.root, request.branch);
   const head = verifiedLocalHead(request.root, identity);
   const atIso = new Date().toISOString();
@@ -382,18 +410,40 @@ function selectLocalCheckout(
   const active = getActive();
   if (active === undefined)
     throw new TaskWorkspaceError("POINTER_DRIFT", "The local checkout could not be verified.");
-  logWorkspaceLifecycle(activityLog, {
-    operation: "activate",
-    outcome: "activated",
-    workspaceId,
-    taskId: active.instance.taskId,
-    correlationId: request.correlationId,
-    attempt: 1,
-    durationMs: 0,
-    worktreeCount: 0,
-    baseBranch: request.branch,
-  });
   return active;
+}
+
+function selectLocalCheckout(
+  request: LocalSelectionRequest,
+  store: UiStore,
+  instances: WorkspaceInstanceStore,
+  pointerStore: ActiveWorkspacePointerStore,
+  getActive: () => ActiveWorkspaceView | undefined,
+  deps: LocalCheckoutEvidenceDeps,
+): ActiveWorkspaceView {
+  const startedAt = deps.now();
+  let identity = digest(request.root);
+  let fromState: TaskWorkspaceLifecycleState | undefined;
+  try {
+    identity = validatedLocalIdentity(store, request.root);
+    fromState = instances.getById(`${LOCAL_PREFIX}${identity}`)?.lifecycleState;
+    requireLocalBranch(request.root, request.branch);
+    const active = activateLocalCheckout(request, identity, instances, pointerStore, getActive);
+    recordLocalSelection(deps, { request, identity, startedAt, fromState });
+    return active;
+  } catch (cause) {
+    const error =
+      cause instanceof TaskWorkspaceError
+        ? cause
+        : new TaskWorkspaceError(
+            "PROVISIONING_FAILED",
+            "The local checkout could not be selected.",
+            [],
+            { cause },
+          );
+    recordLocalSelection(deps, { request, identity, startedAt, fromState, error });
+    throw error;
+  }
 }
 
 function logInvalidatedLocalPointer(
@@ -430,7 +480,7 @@ function setActiveWithLocal(
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
   getActive: () => ActiveWorkspaceView | undefined,
-  activityLog: WorkspaceActivityLogSeam,
+  activityLog: LocalCheckoutEvidenceDeps,
 ): Promise<ActiveWorkspaceView> {
   const instance = instances.getById(request.workspaceId);
   if (instance?.executionLocation !== "local") return managed.setActive(request);
@@ -457,7 +507,7 @@ function setActiveWithLocal(
 }
 
 interface LocalInvalidationLogger {
-  readonly log: (
+  readonly record: (
     pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
     correlationId: string | undefined,
     startedAt: number,
@@ -471,7 +521,7 @@ function createLocalInvalidationLogger(
 ): LocalInvalidationLogger {
   let lastInvalidatedPointer: string | null = null;
   let lastInvalidationCorrelated = false;
-  const log = (
+  const record = (
     pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
     correlationId: string | undefined,
     startedAt: number,
@@ -485,7 +535,7 @@ function createLocalInvalidationLogger(
     logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, cause);
   };
   return {
-    log,
+    record,
     clear: (): void => {
       lastInvalidatedPointer = null;
     },
@@ -497,9 +547,9 @@ export function withLocalCheckout(
   pointerStore: ActiveWorkspacePointerStore,
   store: UiStore,
   instances: WorkspaceInstanceStore,
-  activityLog: WorkspaceActivityLogSeam = {},
+  activityLog: LocalCheckoutEvidenceDeps,
 ): LocalCheckoutLifecycle {
-  const invalidation = createLocalInvalidationLogger(activityLog);
+  const invalidationLogger = createLocalInvalidationLogger(activityLog);
   const getActive = (correlationId?: string): ActiveWorkspaceView | undefined => {
     const pointer = pointerStore.get();
     if (pointer?.workspaceId.startsWith(LOCAL_PREFIX)) {
@@ -508,14 +558,14 @@ export function withLocalCheckout(
       try {
         active = localView(store, instances, pointer);
       } catch (cause) {
-        logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, cause);
+        invalidationLogger.record(pointer, correlationId, startedAt, cause);
         return undefined;
       }
-      if (active === undefined) invalidation.log(pointer, correlationId, startedAt);
-      else invalidation.clear();
+      if (active === undefined) invalidationLogger.record(pointer, correlationId, startedAt);
+      else invalidationLogger.clear();
       return active;
     }
-    invalidation.clear();
+    invalidationLogger.clear();
     return managed.getActive(correlationId);
   };
   return {

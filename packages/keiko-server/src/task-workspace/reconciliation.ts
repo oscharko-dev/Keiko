@@ -17,6 +17,7 @@
 // SAME store. Restoration of the last active workspace is conservative — it never auto-selects among
 // ambiguous active workspaces (SC).
 
+import { assertManagedWorkspaceInstance } from "./managed-root.js";
 import { existsSync, realpathSync } from "node:fs";
 import {
   detectWorkspaceAt,
@@ -442,6 +443,7 @@ export async function reconcileSingleInstance(
   actor?: string,
   correlationId?: string,
 ): Promise<ReconcileInstanceResult> {
+  assertManagedWorkspaceInstance(instance);
   const ctx: ReconcileCtx = {
     deps,
     lockTtlMs: resolveLockTtl(deps.lockTtlMs),

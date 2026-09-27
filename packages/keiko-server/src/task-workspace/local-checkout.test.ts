@@ -1,3 +1,5 @@
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { WorkspaceLifecycleEvidenceRecord } from "./evidence.js";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +31,19 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 let root: string;
 let db: DatabaseSync;
+let lifecycleEvidence: string[];
+
+function capturingEvidenceStore(): EvidenceStore {
+  return {
+    put: (id, json): string => {
+      lifecycleEvidence.push(json);
+      return id;
+    },
+    list: (): readonly string[] => [],
+    get: (): undefined => undefined,
+    delete: (): void => undefined,
+  };
+}
 
 function git(...args: readonly string[]): string {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
@@ -37,6 +52,8 @@ function git(...args: readonly string[]): string {
 function fixture(
   activityLog?: ServerLogSink,
   registeredRoot = root,
+  now: () => number = Date.now,
+  evidenceStore: EvidenceStore = capturingEvidenceStore(),
 ): ReturnType<typeof withLocalCheckout> {
   const uiStore = createInMemoryUiStore();
   uiStore.createProject(registeredRoot, "local-checkout-fixture");
@@ -50,10 +67,16 @@ function fixture(
       pointer.clear();
     },
   } as unknown as WorkspaceLifecycleService;
-  return withLocalCheckout(managed, pointer, uiStore, instances, { activityLog });
+  return withLocalCheckout(managed, pointer, uiStore, instances, {
+    activityLog,
+    evidenceStore,
+    redactString: (value): string => value,
+    now,
+  });
 }
 
 beforeEach(() => {
+  lifecycleEvidence = [];
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-local-checkout-")));
   db = new DatabaseSync(":memory:");
   runMigrations(db);
@@ -175,6 +198,26 @@ describe("local checkout selection", () => {
       correlationId: "corr-local-drift",
       extra: { operation: "activate", failureKind: "POINTER_DRIFT" },
     });
+  });
+
+  it("deduplicates a missing checkout while retaining the first correlated failure", () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = fixture(activityLog);
+    service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    rmSync(root, { recursive: true, force: true });
+    for (let index = 0; index < 3; index += 1) expect(service.getActive()).toBeUndefined();
+    for (let index = 0; index < 3; index += 1)
+      expect(service.getActive("missing-checkout")).toBeUndefined();
+    const failures = activityLog.events.filter(
+      (event) => event.extra?.failureKind === "REPOSITORY_UNREACHABLE",
+    );
+    expect(failures).toHaveLength(2);
+    expect(failures[1]).toMatchObject({ correlationId: "missing-checkout" });
+    expect(failures[1]?.extra?.causeChain).toBeDefined();
+    expectActivityLogProof(
+      "task-workspace.lifecycle.line",
+      formatActivityLogProofLine(failures[1] ?? {}),
+    );
   });
 
   it("logs a successful local selection under the request correlation", () => {
@@ -369,4 +412,103 @@ describe("local checkout selection", () => {
     expect(git("branch", "--show-current")).toBe("main");
     expect(selected.instance.taskBranch).toBe("main");
   });
+});
+
+describe("Local selection lifecycle evidence", () => {
+  it("records reactivation from the persisted state without leaking branch names", () => {
+    const service = fixture();
+    service.selectLocal({ root, branch: "main", requestedBy: "operator" });
+    service.selectLocal({ root, branch: "feature", requestedBy: "operator" });
+    expect(lifecycleEvidence).toHaveLength(2);
+    expect(JSON.parse(lifecycleEvidence[1] ?? "null")).toMatchObject({
+      outcome: "activated",
+      event: { fromState: "active", toState: "active" },
+    });
+    expect(lifecycleEvidence.join("")).not.toContain("feature");
+  });
+
+  it("reports evidence persistence failure while preserving the successful checkout", () => {
+    const sink = createBufferedServerLogSink();
+    const service = fixture(sink, root, Date.now, {
+      ...capturingEvidenceStore(),
+      put: (): never => {
+        throw new Error("evidence unavailable");
+      },
+    });
+    const selected = service.selectLocal({
+      root,
+      branch: "feature",
+      requestedBy: "operator",
+      correlationId: "evidence-failed",
+    });
+    expect(service.getActive()?.instance.workspaceId).toBe(selected.instance.workspaceId);
+    expect(git("branch", "--show-current")).toBe("feature");
+    expect(
+      sink.events.find((event) => event.extra?.evidencePersistence === "failed"),
+    ).toMatchObject({ correlationId: "evidence-failed" });
+    expect(sink.events.find((event) => event.extra?.outcome === "activated")).toMatchObject({
+      correlationId: "evidence-failed",
+    });
+  });
+
+  it("attributes a rejected branch selection to the existing checkout and previous state", () => {
+    const service = fixture();
+    const active = service.selectLocal({ root, branch: "main", requestedBy: "operator" });
+    expect(() =>
+      service.selectLocal({ root, branch: "missing", requestedBy: "operator" }),
+    ).toThrow();
+    expect(JSON.parse(lifecycleEvidence[1] ?? "null")).toMatchObject({
+      outcome: "blocked",
+      event: { workspaceId: active.instance.workspaceId, fromState: "active" },
+    });
+    expect(service.getActive()?.binding).toEqual(active.binding);
+  });
+
+  it.each(["activated", "blocked"] as const)(
+    "pairs %s logs and durable evidence with measured duration",
+    (outcome) => {
+      const sink = createBufferedServerLogSink();
+      const now = vi.fn().mockReturnValueOnce(1_800_000_000_000).mockReturnValue(1_800_000_000_125);
+      const service = fixture(sink, root, now);
+      const request = {
+        root,
+        branch: outcome === "activated" ? "feature" : "missing",
+        requestedBy: "operator",
+        correlationId: "local-evidence-regression",
+      };
+      if (outcome === "activated") service.selectLocal(request);
+      else expect(() => service.selectLocal(request)).toThrow();
+      expect(lifecycleEvidence).toHaveLength(1);
+      const record = JSON.parse(lifecycleEvidence[0] ?? "null") as WorkspaceLifecycleEvidenceRecord;
+      expect(record).toMatchObject({
+        kind: "task-workspace-lifecycle",
+        operation: "activate",
+        outcome,
+        durationMs: 125,
+        worktreeCount: 0,
+        event: {
+          correlationId: request.correlationId,
+          type: outcome === "activated" ? "activated" : "transition-rejected",
+        },
+      });
+      const line = sink.events.find((event) => event.extra?.outcome === outcome);
+      expect(line).toMatchObject({
+        op: "task-workspace.lifecycle",
+        correlationId: request.correlationId,
+        durationMs: 125,
+        extra: {
+          operation: "activate",
+          outcome,
+          workspaceId: record.event.workspaceId,
+        },
+      });
+      expect(line?.extra?.baseBranchDigest).toEqual(expect.any(String));
+      expectActivityLogProof(
+        "task-workspace.lifecycle.line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(lifecycleEvidence.join("")).not.toContain(root);
+      expect(lifecycleEvidence.join("")).not.toContain(request.branch);
+    },
+  );
 });

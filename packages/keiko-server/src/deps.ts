@@ -285,7 +285,10 @@ import {
 } from "./task-workspace/active-store.js";
 import { createWorkspaceProvisioningService } from "./task-workspace/provisioning.js";
 import { createWorkspaceLifecycleService } from "./task-workspace/lifecycle.js";
-import { withLocalCheckout } from "./task-workspace/local-checkout.js";
+import {
+  withLocalCheckout,
+  type LocalCheckoutEvidenceDeps,
+} from "./task-workspace/local-checkout.js";
 import {
   createWorkspaceMutexRegistry,
   type WorkspaceMutexRegistry,
@@ -3855,7 +3858,18 @@ function composePersistenceTaskWorkspaceServices(
     evidenceStore,
     redactString,
   });
-  return { workspaceScriptTrust, services };
+  return {
+    workspaceScriptTrust,
+    services: {
+      ...services,
+      workspaceLifecycle: withOptionalLocalCheckout(persistence, services, {
+        evidenceStore,
+        redactString,
+        now: Date.now,
+        activityLog: options.activityLog,
+      }),
+    },
+  };
 }
 
 function buildPersistenceBundle(
@@ -3888,7 +3902,6 @@ function buildPersistenceBundle(
       codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
       codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
-      workspaceLifecycle: withOptionalLocalCheckout(persistence, services),
       managedTaskWorkspaceRoot: composedManagedWorktreeRoot(
         services.workspaceProvisioning,
         resolvedUiDbPath,
@@ -3912,6 +3925,7 @@ function buildPersistenceBundle(
 function withOptionalLocalCheckout(
   persistence: ComposedPersistence,
   services: TaskWorkspaceServices,
+  evidence: LocalCheckoutEvidenceDeps,
 ): TaskWorkspaceServices["workspaceLifecycle"] {
   if (
     services.workspaceLifecycle === undefined ||
@@ -3924,6 +3938,7 @@ function withOptionalLocalCheckout(
     persistence.activeWorkspacePointerStore,
     persistence.store,
     persistence.workspaceInstanceStore,
+    evidence,
   );
 }
 

@@ -7,7 +7,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -31,7 +31,11 @@ import {
 } from "../observability/index.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
-import type { WorkspaceProvisioningService } from "./types.js";
+import { createWorkspaceLifecycleService } from "./lifecycle.js";
+import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js";
+import { withLocalCheckout } from "./local-checkout.js";
+import { TaskWorkspaceError } from "./errors.js";
+import type { WorkspaceProvisioningService, WorkspaceLifecycleService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import {
   createFakeSessionPairingPort,
@@ -467,4 +471,182 @@ describe("GET /api/task-workspaces/:workspaceId", () => {
     const missing = await fetch(`${baseUrl()}/api/task-workspaces/ws_missing`);
     expect(missing.status).toBe(404);
   });
+});
+
+interface LocalRouteFixture {
+  readonly selectLocal: ReturnType<
+    typeof vi.fn<NonNullable<WorkspaceLifecycleService["selectLocal"]>>
+  >;
+  readonly sink: ReturnType<typeof createBufferedServerLogSink>;
+  readonly pointer: ReturnType<typeof buildActiveWorkspacePointerStoreOverDatabase>;
+}
+
+async function localRouteFixture(hasLiveRun = vi.fn(() => false)): Promise<LocalRouteFixture> {
+  const store = createInMemoryUiStore();
+  store.createProject(repoRoot, "local route fixture");
+  const instances = buildWorkspaceInstanceStoreOverDatabase(db);
+  const pointer = buildActiveWorkspacePointerStoreOverDatabase(db);
+  const managed = createWorkspaceLifecycleService({
+    store: instances,
+    activePointerStore: pointer,
+    managedRoot,
+    provisioning: service,
+    evidenceStore: noopEvidence(),
+    redactString: (value): string => value,
+    now: Date.now,
+    newId: (): string => "route-lifecycle",
+    mutex: __twMutex,
+  });
+  const lifecycle = withLocalCheckout(managed, pointer, store, instances, {
+    evidenceStore: noopEvidence(),
+    redactString: (value): string => value,
+    now: Date.now,
+  });
+  const selectLocal = vi.fn(lifecycle.selectLocal);
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  await rebuild({
+    store,
+    workspaceLifecycle: { ...lifecycle, selectLocal },
+    codingRuntimeOrchestrator: {
+      hasLiveRun,
+    } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+  });
+  return { selectLocal, sink, pointer };
+}
+
+function postLocal(
+  body: unknown = { root: repoRoot, branch: "main", requestedBy: "u" },
+): Promise<Response> {
+  return fetch(`${baseUrl()}/api/task-workspaces/local`, {
+    method: "POST",
+    headers: { ...csrfHeaders(), "X-Keiko-Correlation-Id": "local-route-regression" },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("POST /api/task-workspaces/local", () => {
+  it("selects the registered checkout and returns its actual root and branch", async () => {
+    const fixture = await localRouteFixture();
+    const response = await postLocal();
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    expect(body).toMatchObject({
+      active: {
+        instance: { executionLocation: "local", repositoryRoot: repoRoot, taskBranch: "main" },
+        binding: { activeRoot: repoRoot, gitDeliveryRoot: repoRoot, editorProjectRoot: repoRoot },
+      },
+    });
+    expect(fixture.selectLocal).toHaveBeenCalledWith({
+      root: repoRoot,
+      branch: "main",
+      requestedBy: "u",
+      correlationId: "local-route-regression",
+    });
+  });
+
+  it("returns 503 when the lifecycle is unavailable", async () => {
+    expect((await postLocal()).status).toBe(503);
+  });
+
+  it("returns 503 when a lifecycle has no Local capability", async () => {
+    await localRouteFixture();
+    const lifecycle = deps.workspaceLifecycle;
+    if (lifecycle === undefined) throw new Error("Local lifecycle was not composed");
+    await rebuild({ workspaceLifecycle: { ...lifecycle, selectLocal: undefined } });
+    expect((await postLocal()).status).toBe(503);
+  });
+
+  it.each(["root", "branch", "requestedBy"])(
+    "rejects an absent or unsafe %s before checkout",
+    async (field) => {
+      const fixture = await localRouteFixture();
+      for (const value of [undefined, "", "hidden\u0000field", 5]) {
+        const response = await postLocal({
+          root: repoRoot,
+          branch: "main",
+          requestedBy: "u",
+          [field]: value,
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(fixture.selectLocal).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a repository that is not registered", async () => {
+    const fixture = await localRouteFixture();
+    deps.store.deleteProject(repoRoot);
+    const response = await postLocal();
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "MISSING_REPOSITORY" } });
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+
+  it.each(["before-body", "before-mutation"])("refuses a live run %s", async (phase) => {
+    const hasLiveRun = vi.fn(() => true);
+    if (phase === "before-mutation") hasLiveRun.mockReturnValueOnce(false);
+    const fixture = await localRouteFixture(hasLiveRun);
+    const response = await postLocal();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "LOCK_CONTENTION" } });
+    expect(hasLiveRun).toHaveBeenCalledTimes(phase === "before-body" ? 1 : 2);
+    expect(fixture.selectLocal).not.toHaveBeenCalled();
+  });
+
+  it("refuses checkout when a run starts while the HTTP body is still arriving", async () => {
+    let running = false;
+    const hasLiveRun = vi.fn(() => running);
+    const fixture = await localRouteFixture(hasLiveRun);
+    const request = httpRequest(`${baseUrl()}/api/task-workspaces/local`, {
+      method: "POST",
+      headers: csrfHeaders(),
+    });
+    const response = new Promise<number>((resolve, reject) => {
+      request.on("error", reject);
+      request.on("response", (incoming) => {
+        incoming.resume();
+        incoming.on("end", () => {
+          resolve(incoming.statusCode ?? 0);
+        });
+        incoming.on("error", reject);
+      });
+    });
+    try {
+      request.write('{"branch":"main",');
+      await vi.waitFor(() => {
+        expect(hasLiveRun).toHaveBeenCalledOnce();
+      });
+      running = true;
+      request.end(JSON.stringify({ root: repoRoot, requestedBy: "u" }).slice(1));
+      expect(await response).toBe(409);
+      expect(fixture.selectLocal).not.toHaveBeenCalled();
+      expect(fixture.pointer.get()).toBeUndefined();
+    } finally {
+      request.destroy();
+    }
+  });
+
+  it.each(["classified", "unexpected"])(
+    "maps a %s activation failure with correlated evidence",
+    async (kind) => {
+      const fixture = await localRouteFixture();
+      fixture.selectLocal.mockImplementation(() => {
+        if (kind === "classified")
+          throw new TaskWorkspaceError("BRANCH_CONFLICT", "Branch unavailable.");
+        throw new Error("private-checkout-detail");
+      });
+      const response = await postLocal();
+      expect(response.status).toBe(kind === "classified" ? 409 : 500);
+      const body = await response.text();
+      expect(body).toContain(kind === "classified" ? "BRANCH_CONFLICT" : "PROVISIONING_FAILED");
+      expect(body).not.toContain("private-checkout-detail");
+      expect(fixture.sink.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ correlationId: "local-route-regression" }),
+        ]),
+      );
+      expect(fixture.pointer.get()).toBeUndefined();
+    },
+  );
 });

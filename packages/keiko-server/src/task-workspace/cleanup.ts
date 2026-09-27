@@ -34,6 +34,7 @@ import {
 import { deriveRepositoryId } from "./naming.js";
 import {
   assertManagedTargetContained,
+  assertManagedWorkspaceInstance,
   isManagedRootOwned,
   isManagedTargetContained,
   listManagedRepositoryIds,
@@ -179,6 +180,7 @@ function loadInstance(ctx: CleanupCtx, workspaceId: string): WorkspaceInstance {
   if (instance === undefined) {
     throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
   }
+  assertManagedWorkspaceInstance(instance, "CLEANUP_NOT_ELIGIBLE");
   return instance;
 }
 
