@@ -140,8 +140,8 @@ function comparableWindowsPath(path: string): string {
 // Uses stable filesystem object identity rather than path text. BigInt stats avoid precision loss
 // in Windows' 64-bit file index. lstat on the candidate deliberately rejects a final symlink or
 // junction (Node reports NTFS junctions as symbolic links); stat then follows ordinary path
-// resolution for the identity comparison. A host/filesystem that cannot supply non-zero identity
-// fields fails closed instead of treating two unknown identities as equal.
+// resolution for the identity comparison. Some Windows filesystems report `dev=0` for path stats
+// while still supplying a stable inode; treat that device id as unknown, but keep the inode required.
 export function sameWindowsSystemDirectoryIdentity(
   candidate: string,
   authoritativeRoot: string,
@@ -158,9 +158,8 @@ export function sameWindowsSystemDirectoryIdentity(
     const authoritativeStats = statSync(authoritativeRoot, { bigint: true });
     return (
       authoritativeStats.isDirectory() &&
-      candidateStats.dev !== 0n &&
       candidateStats.ino !== 0n &&
-      candidateStats.dev === authoritativeStats.dev &&
+      sameKnownDeviceId(candidateStats.dev, authoritativeStats.dev) &&
       candidateStats.ino === authoritativeStats.ino
     );
   } catch {
@@ -171,6 +170,10 @@ export function sameWindowsSystemDirectoryIdentity(
 function defaultSystemDirectoryIdentity(candidate: string, authoritativeRoot: string): boolean {
   if (process.platform !== "win32") return true;
   return sameWindowsSystemDirectoryIdentity(candidate, authoritativeRoot);
+}
+
+function sameKnownDeviceId(left: bigint, right: bigint): boolean {
+  return left === right || left <= 0n || right <= 0n;
 }
 
 function assertSystemDirectoryIdentity(

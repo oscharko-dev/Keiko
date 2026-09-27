@@ -4,6 +4,10 @@ const KNOWLEDGE_PATH = "packages/keiko-local-knowledge/src/retrieval/vector-inde
 const MEMORY_PATH = "packages/keiko-server/src/memory-retrieval-signals.ts";
 const REPO_PATH = "packages/keiko-server/src/grounded-repo-semantic-search.ts";
 
+export function normalizeRepositoryPath(path) {
+  return path.replaceAll("\\", "/");
+}
+
 function count(source, pattern) {
   return [...source.matchAll(pattern)].length;
 }

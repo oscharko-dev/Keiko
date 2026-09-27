@@ -337,6 +337,10 @@ function sameKnownSnapshotValue(left: unknown, right: unknown): boolean {
   return left === undefined || right === undefined || left === right;
 }
 
+function sameKnownDeviceId(left: bigint, right: bigint): boolean {
+  return left === right || left <= 0n || right <= 0n;
+}
+
 function expectedDescriptorSnapshotMatches(expected: WorkspaceStat, actual: BigIntStats): boolean {
   const observed = workspaceStat(actual, actual.isSymbolicLink());
   return [
@@ -367,7 +371,7 @@ function assertExpectedDescriptorSnapshot(expected: WorkspaceStat, actual: BigIn
 
 function sameDescriptorSnapshot(left: BigIntStats, right: BigIntStats): boolean {
   return (
-    left.dev === right.dev &&
+    sameKnownDeviceId(left.dev, right.dev) &&
     left.ino === right.ino &&
     left.mode === right.mode &&
     left.nlink === right.nlink &&

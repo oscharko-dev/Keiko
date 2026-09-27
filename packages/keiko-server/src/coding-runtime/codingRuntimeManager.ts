@@ -2,7 +2,7 @@ import { draftPendingApprovalReview } from "./productionDraftDeliveryRuntime.js"
 import { createHash } from "node:crypto";
 import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 
@@ -33,6 +33,10 @@ import type {
   CodingWorkbenchSupervisedPolicyReason,
 } from "@oscharko-dev/keiko-contracts";
 import { buildSandboxEnv, collectSensitiveEnvValues } from "@oscharko-dev/keiko-tools";
+import type {
+  LongLivedRuntimeEgressPolicy,
+  LongLivedRuntimeSandboxAttestation,
+} from "@oscharko-dev/keiko-sandbox";
 
 import { createDeadlineCancellation, isCancellation } from "../editor/languageCancellation.js";
 import {
@@ -121,6 +125,7 @@ export type CodingRuntimeFailureCode =
   | "runtime-version-mismatch"
   | "runtime-already-running"
   | "runtime-crashed"
+  | "runtime-egress-unenforceable"
   | "runtime-run-mismatch"
   | "runtime-profile-open"
   | "runtime-reap-unproven"
@@ -143,6 +148,8 @@ export interface CodingRuntimeLaunchRequest {
   /** Opaque backend-owned 128-bit process-tree recovery identity (32 lowercase hex chars). */
   readonly recoveryHandle?: string | undefined;
   readonly treeBindingId: string;
+  /** Exact digest of the server-minted Authority Envelope retained for this run. */
+  readonly authorityEnvelopeDigest: string;
   readonly taskRef: string;
   readonly adapterKind: CodingRuntimeAdapterKind;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
@@ -274,6 +281,8 @@ export interface CodingRuntimeManagerDeps {
   readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
+  readonly onSandboxAttestation?:
+    ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly openCodeLifecycleAdapter?: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter?: CodexLifecycleAdapter | undefined;
@@ -425,6 +434,8 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly onSandboxAttestation:
+    ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
@@ -696,6 +707,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
     codingToolApprovals: deps.codingToolApprovals,
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
+    onSandboxAttestation: deps.onSandboxAttestation,
     diagnostics: deps.diagnostics,
     openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
     codexLifecycleAdapter: deps.codexLifecycleAdapter,
@@ -1094,6 +1106,9 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     const active = createActiveRuntime(request, launched.tree, this.deps, lifecycleAdapter);
     this.active = active;
     this.attachRuntime(active);
+    if (!observeSandboxAttestation(this.deps, request.runId, launched.sandboxAttestation)) {
+      return this.failCodexStart(request, active, "runtime-egress-unenforceable");
+    }
     if (request.adapterKind === "opencode-compatible" && lifecycleAdapter !== undefined) {
       return this.completeOpenCodeStart(request, active, lifecycleAdapter);
     }
@@ -1172,6 +1187,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         portable,
         adapter,
         deadline,
+        egress.value,
       );
     } finally {
       deadline.dispose();
@@ -1185,10 +1201,15 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     portable: ResolvedPortableRuntime | undefined,
     adapter: CodexLifecycleAdapter,
     deadline: CodexStartupDeadline,
+    egress: ReviewedCodexEgressPolicy,
   ): Promise<CodingRuntimeStartResult> {
     const portableAvailability = portableAvailabilityFailure(portable);
     if (portableAvailability !== undefined)
       return this.recordLaunchFailure(request, portableAvailability);
+    const egressPolicy = codexRuntimeEgressPolicy(egress, this.deps, request.runId);
+    if (egressPolicy === undefined) {
+      return this.recordLaunchFailure(request, failure("egress-unqualified", false));
+    }
     const proof = proveSpawnWorkspaceRoot(
       this.deps.resolveWorkspaceRootAccess,
       request.workspaceRoot,
@@ -1196,7 +1217,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (!proof.ok)
       return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS, proof.cwd),
+      supervisorLaunchRequest(
+        request,
+        executablePath,
+        env,
+        FIXED_CODEX_ARGS,
+        proof.cwd,
+        egressPolicy,
+      ),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -1207,6 +1235,9 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     const active = createActiveRuntime(request, launched.tree, this.deps, undefined, adapter);
     this.active = active;
     this.attachRuntime(active);
+    if (!observeSandboxAttestation(this.deps, request.runId, launched.sandboxAttestation)) {
+      return await this.failCodexStart(request, active, "runtime-egress-unenforceable");
+    }
     return await this.attachCodexRuntime(request, active, adapter, deadline);
   }
 
@@ -2489,7 +2520,8 @@ function validCodexEgressPolicy(policy: ReviewedCodexEgressPolicy): boolean {
     validDirectEgress((policy as { readonly directEgress: unknown }).directEgress) &&
     validCodexProxyPolicy(policy) &&
     validCodexNoProxyPolicy(policy) &&
-    validCodexCaPolicy(policy)
+    validCodexCaPolicy(policy) &&
+    (policy.httpsProxy !== undefined || policy.directEgress === "approved")
   );
 }
 
@@ -2503,7 +2535,11 @@ function validCodexProxyPolicy(policy: ReviewedCodexEgressPolicy): boolean {
 
 function validCodexNoProxyPolicy(policy: ReviewedCodexEgressPolicy): boolean {
   if (policy.noProxy === undefined) return true;
-  return policy.directEgress === "approved" && validNoProxy(policy.noProxy);
+  return (
+    policy.httpsProxy !== undefined &&
+    policy.directEgress === "approved" &&
+    validNoProxy(policy.noProxy)
+  );
 }
 
 function validCodexCaPolicy(policy: ReviewedCodexEgressPolicy): boolean {
@@ -2582,6 +2618,20 @@ function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureRes
   return { ok: false, failureCode: code, retryable };
 }
 
+function observeSandboxAttestation(
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "diagnostics" | "now" | "onSandboxAttestation">,
+  runId: string,
+  attestation: LongLivedRuntimeSandboxAttestation,
+): boolean {
+  try {
+    deps.onSandboxAttestation?.(runId, attestation);
+    return true;
+  } catch (error) {
+    emitSandboxAttestationFailureDiagnostic(deps.diagnostics, runId, error, deps.now);
+    return false;
+  }
+}
+
 type SpawnWorkspaceRootProof = { readonly ok: true; readonly cwd: string } | { readonly ok: false };
 
 /**
@@ -2622,6 +2672,7 @@ function supervisorLaunchRequest(
   // proveSpawnWorkspaceRoot): the long-lived tree starts in the path that just re-proved, not in
   // the request string admitted before the preparation awaits.
   cwd: string,
+  egressPolicy?: LongLivedRuntimeEgressPolicy,
 ): Parameters<RuntimeProcessSupervisor["spawnOwnedTree"]>[0] {
   return {
     runId: request.runId,
@@ -2638,7 +2689,86 @@ function supervisorLaunchRequest(
       releaseReceipt: "unqualified",
     },
     launchProfile: CLOSED_RUNTIME_LAUNCH_PROFILE,
+    runtimeSource: request.runtimeSource,
+    modelSource: request.modelSource,
+    authorityEnvelopeDigest: request.authorityEnvelopeDigest,
+    egressPolicy: egressPolicy ?? {
+      kind: "loopback-only",
+      reviewedEgressReceipt: request.confinement?.releaseReceipt ?? "unqualified",
+    },
   };
+}
+
+function codexRuntimeEgressPolicy(
+  policy: ReviewedCodexEgressPolicy,
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "diagnostics" | "now">,
+  runId: string,
+): LongLivedRuntimeEgressPolicy | undefined {
+  const reviewedEgressReceipt = `sha256:${digestValue(policy.receipt)}`;
+  if (policy.httpsProxy === undefined) {
+    return { kind: "approved-direct", reviewedEgressReceipt };
+  }
+  const proxy = validHttpsProxy(policy.httpsProxy);
+  if (proxy === undefined) throw new Error("egress-unqualified");
+  try {
+    return {
+      kind: "enterprise-proxy",
+      reviewedEgressReceipt,
+      directEgress: policy.directEgress,
+      proxyIdentityDigest: digestValue(new URL(proxy).origin),
+      ...(policy.caBundlePath === undefined
+        ? {}
+        : {
+            caIdentityDigest: createHash("sha256")
+              .update(readFileSync(policy.caBundlePath))
+              .digest("hex"),
+          }),
+      ...(policy.noProxy === undefined
+        ? {}
+        : { noProxyIdentityDigest: digestValue(policy.noProxy) }),
+    };
+  } catch (error) {
+    emitCodexEgressPolicyFailureDiagnostic(deps.diagnostics, runId, error, deps.now);
+    return undefined;
+  }
+}
+
+function emitSandboxAttestationFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.readiness.failed",
+    source: "coding-runtime-manager.sandbox-attestation",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: "sandbox-attestation-observer",
+  });
+}
+
+function emitCodexEgressPolicyFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.readiness.failed",
+    source: "coding-runtime-manager.egress-policy",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: "egress-policy-attestation",
+  });
+}
+
+function digestValue(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function runtimeExitEvent(

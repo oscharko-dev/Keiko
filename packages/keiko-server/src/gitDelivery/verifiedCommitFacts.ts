@@ -49,6 +49,7 @@ export async function readVerifiedCommitFacts(
     throw new Error("verified-commit-authority-unavailable");
   const deps = {
     workspace: context.workspace,
+    processEnv: seams.processEnv,
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
   };

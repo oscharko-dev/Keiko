@@ -757,9 +757,13 @@ function typedRegistryProgram(repoRoot) {
         "@oscharko-dev/keiko-contracts/runtime/observability": [
           "packages/keiko-contracts/src/observability.ts",
         ],
+        "@oscharko-dev/keiko-contracts/runtime/diagnostics": [
+          "packages/keiko-contracts/src/diagnostics.ts",
+        ],
         "@oscharko-dev/keiko-contracts/runtime/pr-description": [
           "packages/keiko-contracts/src/pr-description.ts",
         ],
+        "@oscharko-dev/keiko-model-gateway": ["packages/keiko-model-gateway/src/index.ts"],
       },
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.NodeNext,
@@ -768,6 +772,11 @@ function typedRegistryProgram(repoRoot) {
       strict: true,
     },
   });
+}
+
+export function isTypedRegistrySourceFile(repoRoot, sourceFile) {
+  const packagesRoot = `${join(repoRoot, "packages").replaceAll("\\", "/")}/`;
+  return sourceFile.fileName.replaceAll("\\", "/").startsWith(packagesRoot);
 }
 
 function relevantRegistrySource(sourceFile) {
@@ -1563,7 +1572,7 @@ export function generateTypedActivityLogRegistry(
   const violations = typedRegistryDiagnostics(program, repoRoot);
   const sourceFiles = program
     .getSourceFiles()
-    .filter((sourceFile) => sourceFile.fileName.startsWith(join(repoRoot, "packages")));
+    .filter((sourceFile) => isTypedRegistrySourceFile(repoRoot, sourceFile));
   const context = { repoRoot, checker, operations, bySymbol, violations };
   collectTypedSites(context, sourceFiles, collectTypedRegistration);
   collectTypedSites(context, sourceFiles, collectTypedEmission);

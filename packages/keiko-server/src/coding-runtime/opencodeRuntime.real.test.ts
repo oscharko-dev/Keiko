@@ -20,6 +20,7 @@ import type { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 import {
   toolCallingConfigurationFingerprint,
   type GatewayConfig,
@@ -1103,6 +1104,7 @@ async function startNativeCompactionHarness(harness: NativeCompactionHarness): P
   const started = await harness.runtime.manager.start({
     runId: RUN_ID,
     treeBindingId: TREE_BINDING_ID,
+    authorityEnvelopeDigest: "a".repeat(64),
     taskRef: "issue-3384-message-limit",
     workspaceRoot: join(harness.root, "workspace"),
     adapterKind: "opencode-compatible",
@@ -1274,6 +1276,12 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const supervisor = createRuntimeProcessSupervisor({
         backend,
         qualifications: [functionalPlatform().qualification],
+        planSandbox: (request) =>
+          planLongLivedRuntimeSandbox(
+            request,
+            { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+            "darwin",
+          ),
       });
       const diagnostic = vi.spyOn(console, "error").mockImplementation((): void => undefined);
       const runtime = createOpenCodeRuntimeComposition({
@@ -1314,6 +1322,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           runtime.manager.start({
             runId: RUN_ID,
             treeBindingId: TREE_BINDING_ID,
+            authorityEnvelopeDigest: "a".repeat(64),
             taskRef: "issue-2254",
             workspaceRoot,
             adapterKind: "opencode-compatible",

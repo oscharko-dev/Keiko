@@ -224,6 +224,13 @@ caller: it refuses to spawn the sidecar at all when no
 confinement policy is attached, or when the policy's `runId`/`treeBindingId` drift from the launch
 request, before any process exists.
 
+The runtime supervisor also records a launch-bound, content-free prepared-wrapper attestation for
+the exact runtime/model-source pair. That attestation binds the enforcing backend and platform, the
+closed runtime and model sources, the Authority Envelope digest, the reviewed-egress receipt, and
+the canonical policy digest. Proxy and CA identities, when present, are represented only as digests;
+endpoints, paths, headers, tokens, and credentials are excluded. Any binding drift invalidates the
+attestation and fails the launch before a runtime tree is owned.
+
 ### D12 — macOS and Linux are product-wired; Windows remains fail-closed
 
 `buildRuntimeGatewaySeatbeltCommand` remains the enforcing macOS product path (ADR-0140). Issue

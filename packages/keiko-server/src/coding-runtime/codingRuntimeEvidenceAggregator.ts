@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import type { LongLivedRuntimeSandboxAttestation } from "@oscharko-dev/keiko-sandbox";
 
 const MAX_COUNT = 1_000_000;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -18,11 +19,18 @@ const SETTLEMENT_STATES = new Set<CodingWorkbenchRuntimeStateName>([
 ]);
 
 export interface CodingRuntimeEvidenceObservation {
-  readonly kind: "state-transition" | "tool-call" | "patch" | "model-request" | "authority-denied";
+  readonly kind:
+    | "state-transition"
+    | "tool-call"
+    | "patch"
+    | "model-request"
+    | "authority-denied"
+    | "sandbox-attestation";
   readonly state: CodingWorkbenchRuntimeStateName;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
   readonly authorityDigest?: string | undefined;
   readonly bindingDigest?: string | undefined;
+  readonly sandboxAttestation?: LongLivedRuntimeSandboxAttestation | undefined;
 }
 
 export interface CodingRuntimeEvidenceSettlement {
@@ -54,6 +62,7 @@ interface Aggregate {
   readonly failures: Set<CodingWorkbenchRuntimeFailureCode>;
   readonly authorityDigests: Set<string>;
   readonly bindingDigests: Set<string>;
+  readonly sandboxAttestations: Map<string, LongLivedRuntimeSandboxAttestation>;
 }
 
 export function createCodingRuntimeEvidenceAggregator(
@@ -80,6 +89,12 @@ function observe(
 ): void {
   assertId(runId, "runId");
   if (settled.has(runId)) return;
+  if (
+    (observation.kind === "sandbox-attestation") !==
+    (observation.sandboxAttestation !== undefined)
+  ) {
+    throw new Error("sandbox attestation must use the sandbox-attestation observation kind");
+  }
   const aggregate = aggregates.get(runId) ?? newAggregate();
   aggregates.set(runId, aggregate);
   aggregate.counts[observation.kind] = increment(aggregate.counts[observation.kind]);
@@ -87,6 +102,10 @@ function observe(
   if (observation.failureCode) aggregate.failures.add(observation.failureCode);
   addDigest(observation.authorityDigest, "authorityDigest", aggregate.authorityDigests);
   addDigest(observation.bindingDigest, "bindingDigest", aggregate.bindingDigests);
+  if (observation.sandboxAttestation !== undefined) {
+    const attestation = contentFreeSandboxAttestation(observation.sandboxAttestation);
+    aggregate.sandboxAttestations.set(JSON.stringify(attestation), attestation);
+  }
 }
 
 function addDigest(value: string | undefined, name: string, target: Set<string>): void {
@@ -135,6 +154,9 @@ function manifest(settlement: CodingRuntimeEvidenceSettlement, aggregate: Aggreg
     counts: aggregate.counts,
     states: [...aggregate.states].sort(compareCodeUnits),
     failureCodes: [...aggregate.failures].sort(compareCodeUnits),
+    sandboxAttestations: [...aggregate.sandboxAttestations.values()].sort((left, right) =>
+      compareCodeUnits(JSON.stringify(left), JSON.stringify(right)),
+    ),
   };
 }
 
@@ -167,12 +189,56 @@ function newAggregate(): Aggregate {
       patch: 0,
       "model-request": 0,
       "authority-denied": 0,
+      "sandbox-attestation": 0,
     },
     states: new Set(),
     failures: new Set(),
     authorityDigests: new Set(),
     bindingDigests: new Set(),
+    sandboxAttestations: new Map(),
   };
+}
+
+function contentFreeSandboxAttestation(
+  value: LongLivedRuntimeSandboxAttestation,
+): LongLivedRuntimeSandboxAttestation {
+  assertId(value.backend, "sandbox backend");
+  assertId(value.platform, "sandbox platform");
+  assertId(value.policyKind, "sandbox policy kind");
+  assertId(value.runtimeSource, "sandbox runtime source");
+  assertId(value.modelSource, "sandbox model source");
+  assertDigest(value.authorityEnvelopeDigest, "sandbox authorityEnvelopeDigest");
+  if (!/^sha256:[a-f0-9]{64}$/u.test(value.reviewedEgressReceipt)) {
+    throw new Error("invalid sandbox reviewedEgressReceipt");
+  }
+  assertDigest(value.policyDigest, "sandbox policyDigest");
+  addOptionalSandboxDigest(value.proxyIdentityDigest, "proxyIdentityDigest");
+  addOptionalSandboxDigest(value.caIdentityDigest, "caIdentityDigest");
+  addOptionalSandboxDigest(value.noProxyIdentityDigest, "noProxyIdentityDigest");
+  return Object.freeze({
+    schemaVersion: 1,
+    backend: value.backend,
+    platform: value.platform,
+    networkEnforced: true,
+    policyKind: value.policyKind,
+    runtimeSource: value.runtimeSource,
+    modelSource: value.modelSource,
+    authorityEnvelopeDigest: value.authorityEnvelopeDigest,
+    reviewedEgressReceipt: value.reviewedEgressReceipt,
+    policyDigest: value.policyDigest,
+    ...(value.directEgress === undefined ? {} : { directEgress: value.directEgress }),
+    ...(value.proxyIdentityDigest === undefined
+      ? {}
+      : { proxyIdentityDigest: value.proxyIdentityDigest }),
+    ...(value.caIdentityDigest === undefined ? {} : { caIdentityDigest: value.caIdentityDigest }),
+    ...(value.noProxyIdentityDigest === undefined
+      ? {}
+      : { noProxyIdentityDigest: value.noProxyIdentityDigest }),
+  });
+}
+
+function addOptionalSandboxDigest(value: string | undefined, name: string): void {
+  if (value !== undefined) assertDigest(value, `sandbox ${name}`);
 }
 function increment(value: number): number {
   return value >= MAX_COUNT ? MAX_COUNT : value + 1;

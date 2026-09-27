@@ -3,7 +3,7 @@
 // - The totals-vs-collection-length invariant fails closed.
 // - Schema validation rejects a stored manifest with an unknown top-level key (defensive read).
 
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -462,6 +462,13 @@ describe("load-time integrity verification (issue #637)", () => {
       // forged "unchanged" fingerprint. The recomputed hash no longer matches the stored one.
       sourceFingerprints: [{ ...sourceFingerprints[0], integrityHashSha256Hex: "b".repeat(64) }],
     });
+    // Force a deterministic cache miss instead of depending on the filesystem clock advancing
+    // between the original atomic write and this same-size tamper.
+    await utimes(
+      join(evidenceDir, QI_SUBDIR, "run-tamper-srcfp.qi.json"),
+      new Date(2_000),
+      new Date(2_000),
+    );
     expect(() => loadQualityIntelligenceRun("run-tamper-srcfp", { evidenceDir })).toThrow(
       EvidenceReadError,
     );

@@ -108,6 +108,13 @@ function launchRequest(
     env: { OPENCODE_DISABLE_PROJECT_CONFIG: "true" },
     qualification: { ...identity, releaseReceipt: RELEASE_RECEIPT },
     launchProfile: CLOSED_RUNTIME_LAUNCH_PROFILE,
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "a".repeat(64),
+    egressPolicy: {
+      kind: "loopback-only",
+      reviewedEgressReceipt: RELEASE_RECEIPT,
+    },
   };
 }
 

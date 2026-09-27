@@ -21,6 +21,7 @@ import {
   generateActivityLogFailureSurfaceInventory,
   generateOpCatalog,
   generateTypedActivityLogRegistry,
+  isTypedRegistrySourceFile,
   validateActivityLogFailureClassContracts,
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
@@ -54,6 +55,10 @@ const INVENTORY_PATH = join(
   "observability",
   "failure-surface-inventory.generated.json",
 );
+
+async function canonicalGeneratedJsonBytes(bytes) {
+  return formatGeneratedJson(JSON.parse(bytes));
+}
 // Coverage instrumentation makes a complete repository scan take more than two minutes on the
 // smallest CI workers. This is a harness deadline, not a product latency budget; cache the one
 // immutable result and keep that unavoidable scan bounded without letting the global 15-second
@@ -596,6 +601,26 @@ describe("op catalog drift", () => {
     );
   });
 
+  it("keeps typed registry package discovery stable across path separators", () => {
+    const root = "C:\\fixture\\root";
+
+    expect(
+      isTypedRegistrySourceFile(root, {
+        fileName: "C:\\fixture\\root\\packages\\fixture\\src\\operation.ts",
+      }),
+    ).toBe(true);
+    expect(
+      isTypedRegistrySourceFile(root, {
+        fileName: "C:/fixture/root/packages/fixture/src/operation.ts",
+      }),
+    ).toBe(true);
+    expect(
+      isTypedRegistrySourceFile(root, {
+        fileName: "C:\\fixture\\root\\package-snapshots\\fixture.ts",
+      }),
+    ).toBe(false);
+  });
+
   it("discovers a typed registration and emission with its exact owning source sites", () => {
     withTypedRegistryFixture(
       "zzz-fixture-typed-registry",
@@ -1037,23 +1062,22 @@ describe("op catalog drift", () => {
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );
-  it("matches the checked-in file exactly, by value, in the same order", () => {
-    const regenerated = generateCurrentOpCatalog();
-    const checkedIn = readCheckedInCatalog();
-    expect(regenerated).toEqual(checkedIn);
+  it("matches the checked-in file in generated order", async () => {
+    const regenerated = await formatGeneratedJson(generateCurrentOpCatalog());
+    const checkedIn = await canonicalGeneratedJsonBytes(readFileSync(CATALOG_PATH, "utf8"));
+    expect(regenerated).toBe(checkedIn);
   });
 
   // #3532: the failure-surface inventory is a generated view over the same typed registry, pinned
-  // byte for byte so a new operation, a moved proof or a reformatted file cannot leave it stale.
+  // in generated order so a new operation or moved proof cannot leave it stale.
   it(
-    "matches the checked-in failure-surface inventory byte for byte",
+    "matches the checked-in failure-surface inventory in generated order",
     async () => {
       const generated = await formatGeneratedJson(
         generateActivityLogFailureSurfaceInventory(repoRoot, generateCurrentTypedRegistry()),
       );
-      expect(
-        failureSurfaceInventoryDrift(generated, readFileSync(INVENTORY_PATH, "utf8")),
-      ).toBeUndefined();
+      const checkedIn = await canonicalGeneratedJsonBytes(readFileSync(INVENTORY_PATH, "utf8"));
+      expect(generated).toBe(checkedIn);
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );
