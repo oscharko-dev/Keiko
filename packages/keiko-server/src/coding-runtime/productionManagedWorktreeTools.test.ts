@@ -3853,6 +3853,7 @@ function authorizedEnvelope(network = false): never {
 // mapping so the next refusal in a customer log names what actually fired.
 describe("verificationLivenessRefusal", () => {
   const liveInput = {
+    workspaceRoot: "/managed/worktree",
     liveFacts: (): CodingWorkbenchRuntimeAuthorityFacts => FACTS,
     resolveWorkspaceRootAccess,
     authorityExpiresAt: "2099-01-01T00:00:00.000Z",
