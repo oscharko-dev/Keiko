@@ -157,6 +157,7 @@ type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
   | "autonomousDeliveryDeploymentCeiling"
   | "runtimeMutationLease"
+  | "workspaceLifecycle"
   | "workspaceRootAccessResolver"
   | "workspaceScriptTrust"
 > & { readonly store?: UiHandlerDeps["store"] | undefined };

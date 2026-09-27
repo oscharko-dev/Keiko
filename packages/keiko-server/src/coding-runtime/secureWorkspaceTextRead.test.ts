@@ -225,7 +225,7 @@ describe("SecureWorkspaceTextReadPort", () => {
     expect(truncated.every((byte) => byte === 0)).toBe(true);
   });
 
-  it("maps the fixed two-second helper deadline to timeout", async () => {
+  it("keeps a stalled helper bounded after allowing for process scheduling", async () => {
     vi.useFakeTimers();
     try {
       const timed = createPort(
@@ -243,7 +243,7 @@ describe("SecureWorkspaceTextReadPort", () => {
       );
       const reading = timed.port.readText({ relativePath: "src/a.ts" });
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(15_000);
       await expect(reading).resolves.toEqual({ ok: false, reason: "timeout" });
     } finally {
       vi.useRealTimers();

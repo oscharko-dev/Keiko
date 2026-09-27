@@ -475,7 +475,12 @@ export async function handleSelectLocalCheckout(
       const resolved = await resolveRoot(deps.store, root, deps.redactor);
       let active: ActiveWorkspaceView;
       try {
-        active = selectLocal({ root: resolved.realRoot, branch, requestedBy, correlationId: ctx.correlationId });
+        active = selectLocal({
+          root: resolved.realRoot,
+          branch,
+          requestedBy,
+          ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+        });
       } catch (error) {
         if (error instanceof TaskWorkspaceError) throw error;
         throw new TaskWorkspaceError(
