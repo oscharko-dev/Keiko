@@ -1,3 +1,4 @@
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Behavioural tests for the desktop chat SSE streaming handler (#152). The regression these guard:
@@ -61,6 +62,14 @@ import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
+import { currentContextProfileForModel } from "./deps.js";
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
+import { CancelledError, TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const CHAT_MODEL = "example-chat-model";
 // A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
@@ -519,6 +528,77 @@ function lastRecordedRole(recorded: { request: GatewayRequest | undefined }): st
   return recorded.request?.messages.at(-1)?.role;
 }
 
+function contextSelectionFixture(
+  dependencies: UiHandlerDeps,
+  regenerate: boolean,
+): {
+  request: Record<string, unknown>;
+  expected: NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>;
+} {
+  const chatId = seedChat();
+  for (let index = 0; index < 30; index += 1) {
+    seedMessage(chatId, index % 2 === 0 ? "user" : "assistant", "private-history ".repeat(300));
+  }
+  const profile = currentContextProfileForModel(dependencies, CHAT_MODEL);
+  if (profile === undefined) throw new Error("Missing fixture profile");
+  const historyPrefix = store.listMessages(chatId);
+  const expected = selectGatewayPromptAssembly({
+    historyPrefix,
+    historyTurnCount: historyPrefix.length,
+    request: { content: "private-current-prompt", discussionMode: undefined },
+    profile,
+    memoryEntries: [],
+    documentContext: [],
+    redactionSecrets: [],
+  });
+  if (expected?.compaction === undefined) throw new Error("Expected compacted fixture");
+  if (regenerate) {
+    seedMessage(chatId, "user", "private-current-prompt");
+    seedMessage(chatId, "assistant", "original-answer");
+  }
+  return {
+    expected,
+    request: {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "private-current-prompt",
+      assistantMessageId: store.listMessages(chatId).at(-1)?.id,
+    },
+  };
+}
+
+function assertContextSelectionEvidence(
+  event: ServerLogEvent | undefined,
+  expected: NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>,
+): void {
+  const line = formatActivityLogProofLine(event ?? {});
+  const persisted = expectActivityLogProof("chat.context.selected.budget", line);
+  expect(persisted).toMatchObject({
+    correlationId: "context-selection-failed-turn",
+    state: "compacted",
+    compactedHistoryMessages: expected.compaction?.itemsBefore,
+    tokensBefore: expected.compaction?.tokensBefore,
+    tokensAfter: expected.compaction?.tokensAfter,
+    promptTokens: expected.diagnostics.totalEstimatedTokens,
+    inputBudget: expected.diagnostics.profile.effectiveInputBudget,
+    imageCount: 0,
+    imageReserveTokens: 0,
+    completeness: "complete",
+    loss: "none",
+  });
+  const report = analyzeLogText(line);
+  expect(report.timelines).toContainEqual(
+    expect.objectContaining({
+      correlationId: "context-selection-failed-turn",
+      lines: [expect.objectContaining({ op: "chat.context.selected" })],
+    }),
+  );
+  expect(report.sufficiency).toMatchObject({ status: "complete", reasons: [] });
+  expect(line).not.toContain("private-history");
+  expect(line).not.toContain("private-current-prompt");
+}
+
 function lastRecordedContent(recorded: { request: GatewayRequest | undefined }): string {
   return recorded.request?.messages.at(-1)?.content ?? "";
 }
@@ -538,6 +618,52 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it.each([
+    ["buffered", "timeout"],
+    ["streamed", "timeout"],
+    ["regenerated", "timeout"],
+    ["buffered", "cancelled"],
+    ["streamed", "cancelled"],
+    ["regenerated", "cancelled"],
+  ] as const)("records context selection before %s generation is %s", async (mode, failure) => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const captured = captureResWithEvents();
+    const atProvider: ServerLogEvent[] = [];
+    const fail = (): never => {
+      atProvider.push(...sink.events.filter((event) => event.op === "chat.context.selected"));
+      if (failure === "cancelled") captured.emitClose();
+      throw failure === "timeout" ? new TimeoutError("fixture") : new CancelledError("fixture");
+    };
+    const model: ModelPort = {
+      call: () => Promise.resolve().then(fail),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        yield await Promise.resolve().then(fail);
+      },
+    };
+    const dependencies = deps(model, {
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 32_000,
+        reservedOutputTokens: 4_096,
+        safetyMarginTokens: 1_024,
+      }),
+    });
+    const fixture = contextSelectionFixture(dependencies, mode === "regenerated");
+    const ctx = {
+      ...routeContext(makeReq(fixture.request), captured.res),
+      correlationId: "context-selection-failed-turn",
+    };
+    const handlers = {
+      buffered: handleSendDesktopChat,
+      streamed: handleSendDesktopChatStream,
+      regenerated: handleRegenerateDesktopChat,
+    };
+    await handlers[mode](ctx, dependencies);
+    expect(atProvider).toHaveLength(1);
+    expect(sink.events.filter((event) => event.op === "chat.context.selected")).toEqual(atProvider);
+    assertContextSelectionEvidence(atProvider[0], fixture.expected);
+  });
+
   it("rejects a tokenless plain stream on a grounded chat before admission or SSE", async () => {
     const chatId = seedChat();
     store.updateChat(chatId, {

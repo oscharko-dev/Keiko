@@ -44,6 +44,10 @@ describe("commit draft evidence bounds", () => {
       },
     }));
     expect(structured.promptTokens).toBeGreaterThan(plain.promptTokens);
+    if (structured.request === undefined) throw new Error("Missing prepared request");
+    expect(structured.promptTokens).toBe(
+      countGatewayPromptTokens(structured.request, capability.tokenAccounting),
+    );
   });
 
   it("retains beginning and end evidence for a large single file, including Unicode", () => {

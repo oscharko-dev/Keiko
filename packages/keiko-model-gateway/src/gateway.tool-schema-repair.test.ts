@@ -1,6 +1,10 @@
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  deriveContextProfile,
+  deriveContextProfileFromCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import {
@@ -21,6 +25,30 @@ import {
 const MODEL_ID = "fixture-model";
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
 const INVALID_ARGUMENT_SECRET = "private-invalid-argument-body";
+
+it("keeps repaired catalog diagnostics correlated without unwired projection loss", async () => {
+  const events: ModelGatewayLogEvent[] = [];
+  const fetchImpl = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(invalidArguments("call-repair-correlation"))
+    .mockResolvedValueOnce(successfulResponse());
+  const gateway = new Gateway(config(), {
+    clock: clock(),
+    random: (): number => 1,
+    fetchImpl,
+    log: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  const unwiredBefore = activityLogLossCounters()["port-unwired"];
+  await gateway.chat(request());
+  expect(activityLogLossCounters()["port-unwired"]).toBe(unwiredBefore);
+  const projected = events.filter((event) => event.op === "gateway.tool-catalog.projected");
+  expect(projected).toHaveLength(2);
+  for (const event of projected) expect(event.correlationId).toBe("correlation-1");
+});
 
 function clock(): Clock {
   let current = NOW;
@@ -373,8 +401,9 @@ describe("Gateway bounded tool-schema repair", () => {
     ]);
   });
 
-  it("fails before a second provider call when prompt fits but its output reservation would overflow", async () => {
-    const base = request();
+  it("rejects an overflowing explicit output reservation before even the first provider call", async () => {
+    // Relocated to admission: the old repair-only guard allowed the first over-budget request.
+    const base = { ...request(), maxOutputTokens: 4_096 };
     const tools = createGatewayToolCatalogBridge(base, (): number => NOW).tools;
     const basePromptTokens = countGatewayPromptTokens({ messages: base.messages, tools });
     const contextWindow = basePromptTokens + 2_048;
@@ -385,27 +414,11 @@ describe("Gateway bounded tool-schema repair", () => {
       clock: clock(),
       log: { write: (event): void => void events.push(event) },
     });
-
     await expect(gateway.chat(base)).rejects.toBeInstanceOf(ContextOverflowError);
-
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    const repair = events.find((event) => event.op === "gateway.tool-catalog.repair");
-    expect(repair).toMatchObject({
-      extra: {
-        state: "denied",
-        reason: "context-window-exceeded",
-        toolCallId: "call-context",
-        offeredAlias: "keiko_changeset_edit",
-        maxOutputTokens: 4_096,
-        effectStarted: false,
-      },
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "gateway.prompt.admission")).toMatchObject({
+      extra: { state: "overflow", promptTokens: basePromptTokens, outputBudget: 4_096 },
     });
-    expect(repair?.extra?.promptTokens).toBeLessThan(contextWindow);
-    const capability = config(contextWindow).capabilities?.[0];
-    if (capability === undefined) throw new TypeError("Expected fixture capability");
-    expect(repair?.extra?.maxPromptTokens).toBe(
-      deriveContextProfileFromCapability(capability).effectiveInputBudget,
-    );
     expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
   });
 
@@ -422,12 +435,17 @@ describe("Gateway bounded tool-schema repair", () => {
     ).toThrow(expect.objectContaining({ repair: undefined }));
   });
 
-  it("refuses a repair inside the reserved safety margin before another provider call", async () => {
+  it("refuses the reserved safety margin before a provider or repair call", async () => {
     const promptTokens = await observedRepairPromptTokens();
     const boundedConfig = config(promptTokens + 4_096);
     const capability = boundedConfig.capabilities?.[0];
     if (capability === undefined) throw new TypeError("Expected fixture capability");
-    const context = deriveContextProfileFromCapability(capability);
+    const defaults = deriveContextProfileFromCapability(capability);
+    const context = deriveContextProfile({
+      maxInputTokens: defaults.maxInputTokens,
+      reservedOutputTokens: 4_096,
+      safetyMarginTokens: defaults.safetyMarginTokens,
+    });
     expect(context.safetyMarginTokens).toBeGreaterThan(0);
     expect(promptTokens).toBe(context.maxInputTokens - context.reservedOutputTokens);
     expect(promptTokens).toBeGreaterThan(context.effectiveInputBudget);
@@ -440,15 +458,16 @@ describe("Gateway bounded tool-schema repair", () => {
       log: { write: (event): void => void events.push(event) },
     });
 
-    await expect(gateway.chat(request())).rejects.toBeInstanceOf(ContextOverflowError);
+    await expect(gateway.chat({ ...request(), maxOutputTokens: 4_096 })).rejects.toBeInstanceOf(
+      ContextOverflowError,
+    );
 
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(events.find((event) => event.op === "gateway.tool-catalog.repair")).toMatchObject({
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "gateway.prompt.admission")).toMatchObject({
       extra: {
-        state: "denied",
-        promptTokens,
-        safetyMarginTokens: context.safetyMarginTokens,
-        effectStarted: false,
+        state: "overflow",
+        inputBudget: context.effectiveInputBudget,
+        outputBudget: 4_096,
       },
     });
   });
@@ -537,3 +556,87 @@ it("does not replay a tool-call-only stream rejected by the catalog", async () =
     }),
   );
 });
+
+it("refuses a complete schema-bearing repair that overflows only after the first call", async () => {
+  const cfg = config(128_000);
+  const capability = cfg.capabilities?.[0];
+  if (capability === undefined) throw new Error("Missing capability");
+  const profile = deriveContextProfileFromCapability(capability);
+  const base = { ...request(), maxOutputTokens: profile.reservedOutputTokens };
+  const tools = createGatewayToolCatalogBridge(base, (): number => NOW).tools;
+  const build = (length: number): GatewayCallRequest => ({
+    ...base,
+    responseFormat: {
+      type: "json_schema",
+      name: "fixture",
+      schema: { description: "x".repeat(length) },
+    },
+  });
+  let low = 0;
+  let high = 500_000;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (countGatewayPromptTokens({ ...build(middle), tools }) <= profile.effectiveInputBudget - 5)
+      low = middle;
+    else high = middle - 1;
+  }
+  const input = build(low);
+  const initialTokens = countGatewayPromptTokens({ ...input, tools });
+  expect(initialTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+  expect(initialTokens).toBeGreaterThan(profile.effectiveInputBudget - 10);
+  const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(invalidArguments("call-margin")));
+  const events: ModelGatewayLogEvent[] = [];
+  const gateway = new Gateway(cfg, {
+    fetchImpl,
+    clock: clock(),
+    random: (): number => 1,
+    log: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  await expect(gateway.chat(input)).rejects.toBeInstanceOf(ContextOverflowError);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(
+    events
+      .filter((event) => event.op === "gateway.prompt.admission")
+      .map((event) => event.extra?.state),
+  ).toEqual(["admitted", "overflow"]);
+});
+
+it.each([false, true])(
+  "joins catalog admission to one call lifecycle, expired=%s",
+  async (expired) => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(successfulResponse()));
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const input = {
+      ...request(),
+      toolCatalog: openCodeGatewayCatalogAdvertisement(expired ? NOW - 600_000 : NOW),
+    };
+    if (expired) {
+      await expect(gateway.chat(input)).rejects.toBeInstanceOf(GatewayToolCatalogError);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(events.filter((event) => event.op === "gateway.tool-catalog.rejected")).toMatchObject([
+        { correlationId: "correlation-1", errorKind: "validation-failed" },
+      ]);
+      expect(events.find((event) => event.op === "gateway.chat.failed")?.correlationId).toBe(
+        "correlation-1",
+      );
+    } else {
+      await gateway.chat(input);
+      expect(events.filter((event) => event.op === "gateway.tool-catalog.projected")).toMatchObject(
+        [{ correlationId: "correlation-1" }],
+      );
+    }
+  },
+);

@@ -340,7 +340,7 @@ async function streamAndPersist(
     deps,
     request,
     modelId,
-    buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn),
+    buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn, ctx.correlationId),
   );
   const stream = callStream(
     { modelId, messages: assembly.messages, logContext: { correlationId: ctx.correlationId } },

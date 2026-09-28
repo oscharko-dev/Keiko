@@ -22,6 +22,7 @@ import {
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import {
   activityLogErrorKind,
@@ -30,6 +31,7 @@ import {
   logModelId,
   logTimer,
   resolveLogSink,
+  withCorrelationId,
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -598,13 +600,29 @@ interface RoutedCall {
   readonly capability: ModelCapability;
 }
 
+interface PreparedStream {
+  readonly route: RoutedCall;
+  readonly prepared: GatewayCallRequest;
+  readonly ids: CallIds;
+  readonly start: number;
+  readonly elapsed: () => number;
+  readonly adapter: ProviderAdapter;
+  readonly admission: CircuitBreakerAdmission;
+  readonly promptAdmission: GatewayPromptAdmission;
+}
+
 interface BufferedChatAttempt {
   readonly route: RoutedCall;
   readonly breaker: CircuitBreaker;
   readonly adapter: ProviderAdapter;
   readonly originalRequest: GatewayCallRequest;
+  readonly promptAdmission: GatewayPromptAdmission;
   readonly correlationId: string;
-  readonly state: { request: GatewayCallRequest; attemptNumber: number };
+  readonly state: {
+    request: GatewayCallRequest;
+    attemptNumber: number;
+    repair?: GatewayToolCatalogError["repair"];
+  };
 }
 
 // Whether a buffered call reads each attempt's answer over the provider's stream (ADR-0003): the
@@ -802,6 +820,7 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
 
 export class Gateway {
   private readonly spendBudget: GatewaySpendBudget | undefined;
+  private readonly promptCounter: ProviderPromptCounter;
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly adapter: ProviderAdapter | undefined;
@@ -817,6 +836,7 @@ export class Gateway {
   ) {
     this.spendBudget = deps.spendBudget;
     this.clock = deps.clock ?? systemClock;
+    this.promptCounter = new ProviderPromptCounter(() => this.clock.now());
     this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
     this.fetchImpl = deps.fetchImpl;
@@ -831,8 +851,22 @@ export class Gateway {
     capability: ModelCapability,
   ): GatewayCallRequest {
     assertValidGatewaySamplingParameters(request);
-    if (this.spendBudget === undefined || request.maxOutputTokens !== undefined) return request;
-    return { ...request, maxOutputTokens: capability.maxOutputTokens };
+    if (request.maxOutputTokens !== undefined || this.spendBudget === undefined) return request;
+    return {
+      ...request,
+      maxOutputTokens: deriveContextProfileFromCapability(capability).reservedOutputTokens,
+    };
+  }
+
+  private promptAdmission(route: RoutedCall, ids: CallIds): GatewayPromptAdmission {
+    return new GatewayPromptAdmission({
+      ...route,
+      correlationId: ids.correlationId,
+      log: this.log,
+      now: () => this.clock.now(),
+      counter: this.promptCounter,
+      fetchImpl: this.fetchImpl,
+    });
   }
 
   // ONE-TIME configuration snapshot, written once per Gateway construction (the process-wide
@@ -871,7 +905,6 @@ export class Gateway {
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
     const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
-    const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const ids = callIds(requestId, request);
     const start = this.clock.now();
@@ -879,9 +912,10 @@ export class Gateway {
     const adapter = this.adapterFor(requestId, route, ids.correlationId);
     const attempt: BufferedChatAttempt = {
       route,
-      breaker,
+      breaker: this.breakerFor(route.provider),
       adapter,
       originalRequest: request,
+      promptAdmission: this.promptAdmission(route, ids),
       correlationId: ids.correlationId,
       state: { request, attemptNumber: 0 },
     };
@@ -932,22 +966,14 @@ export class Gateway {
       ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
     };
     try {
-      return await this.invoke(
-        attempt.breaker,
-        attempt.adapter,
-        attempt.state.request,
-        attempt.route.capability,
-        attempt.correlationId,
-        provider,
-        streamedReadBounds(attempt, remainingBudgetMs),
-      );
+      return await this.invoke(attempt, provider, streamedReadBounds(attempt, remainingBudgetMs));
     } catch (error) {
       if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
+        attempt.state.repair = error instanceof GatewayToolCatalogError ? error.repair : undefined;
         attempt.state.request = this.requestAfterToolSchemaRejection(
           attempt.originalRequest,
           attempt.state.request,
           attempt.route.capability,
-          attempt.correlationId,
           error,
         );
       }
@@ -959,34 +985,35 @@ export class Gateway {
     original: GatewayCallRequest,
     current: GatewayCallRequest,
     capability: ModelCapability,
-    correlationId: string,
     error: unknown,
   ): GatewayCallRequest {
     const candidate = repairedRequest(original, error);
     if (candidate === undefined) return current;
-    const prepared = this.prepareRequest(candidate, capability);
-    const context = deriveContextProfileFromCapability(capability);
-    const maxOutputTokens = prepared.maxOutputTokens ?? context.reservedOutputTokens;
-    const promptTokens = countGatewayPromptTokens(
-      {
-        messages: prepared.messages,
-        tools: createGatewayToolCatalogBridge(prepared, (): number => this.clock.now()).tools,
-      },
-      capability.tokenAccounting,
-    );
-    const { safetyMarginTokens } = context;
-    const maxPromptTokens = Math.max(
-      0,
-      context.maxInputTokens - maxOutputTokens - safetyMarginTokens,
-    );
-    const budget = { promptTokens, maxPromptTokens, maxOutputTokens, safetyMarginTokens };
-    const repair = error instanceof GatewayToolCatalogError ? error.repair : undefined;
-    if (promptTokens > maxPromptTokens) {
-      this.logToolSchemaRepair(correlationId, repair, "denied", budget);
-      throw new ContextOverflowError("tool-call schema repair exceeds the model context window");
-    }
-    this.logToolSchemaRepair(correlationId, repair, "scheduled", budget);
-    return prepared;
+    return this.prepareRequest(candidate, capability);
+  }
+
+  private logAttemptRepair(attempt: BufferedChatAttempt, state: "scheduled" | "denied"): void {
+    if (attempt.state.repair === undefined) return;
+    const request = attempt.state.request;
+    const profile = deriveContextProfileFromCapability(attempt.route.capability);
+    const maxOutputTokens = request.maxOutputTokens ?? profile.reservedOutputTokens;
+    const tools = createGatewayToolCatalogBridge(
+      request,
+      (): number => this.clock.now(),
+      withCorrelationId(this.log, attempt.correlationId),
+      false,
+    ).tools;
+    this.logToolSchemaRepair(attempt.correlationId, attempt.state.repair, state, {
+      promptTokens: countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting, {
+        contextWindow: profile.maxInputTokens,
+      }),
+      maxOutputTokens,
+      safetyMarginTokens: profile.safetyMarginTokens,
+      maxPromptTokens: Math.max(
+        0,
+        profile.maxInputTokens - maxOutputTokens - profile.safetyMarginTokens,
+      ),
+    });
   }
 
   private logToolSchemaRepair(
@@ -1026,16 +1053,9 @@ export class Gateway {
   // retry would replay already-emitted tokens and is never permitted. An adapter without a
   // streaming variant falls back to a single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
-    const route = this.routeForCall(request);
-    request = this.prepareRequest(request, route.capability);
-    const breaker = this.breakerFor(route.provider);
-    const ids = callIds(randomUUID(), request);
-    const start = this.clock.now();
-    const elapsed = logTimer();
-    const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
-    const admission = breaker.assertAllowed(ids.correlationId);
-    // streamFrom degrades to its buffered fallback without a native stream (#3591, PR #3602
-    // review); the started line must report the bound that branch actually applies.
+    const { route, ids, start, elapsed, adapter, admission, promptAdmission, prepared } =
+      this.prepareStream(request);
+    request = prepared;
     const usesNativeStream = adapter.callStream !== undefined;
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
@@ -1047,7 +1067,14 @@ export class Gateway {
     let settled = false;
     try {
       this.logCallStarted(ids, route, true, request.reasoningEffort, usesNativeStream);
-      for await (const chunk of this.streamFrom(adapter, request, route, ids, admission)) {
+      for await (const chunk of this.streamFrom(
+        adapter,
+        request,
+        route,
+        ids,
+        admission,
+        promptAdmission,
+      )) {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
@@ -1086,6 +1113,26 @@ export class Gateway {
     if (terminalResponse !== undefined) {
       yield this.enrichDone(terminalResponse, ids.requestId, start, route);
     }
+  }
+
+  private prepareStream(request: GatewayCallRequest): PreparedStream {
+    const route = this.routeForCall(request);
+    const prepared = this.prepareRequest(request, route.capability);
+    const ids = callIds(randomUUID(), prepared);
+    const start = this.clock.now();
+    const elapsed = logTimer();
+    const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
+    const admission = this.breakerFor(route.provider).assertAllowed(ids.correlationId);
+    return {
+      route,
+      prepared,
+      ids,
+      start,
+      elapsed,
+      adapter,
+      admission,
+      promptAdmission: this.promptAdmission(route, ids),
+    };
   }
 
   private failStream(
@@ -1291,6 +1338,7 @@ export class Gateway {
     route: RoutedCall,
     ids: CallIds,
     initialAdmission: CircuitBreakerAdmission,
+    promptAdmission: GatewayPromptAdmission,
   ): AsyncGenerator<GatewayStreamChunk> {
     const breaker = this.breakerFor(route.provider);
     const maxRetries = initialAdmission.halfOpen ? 0 : route.provider.maxRetries;
@@ -1299,7 +1347,15 @@ export class Gateway {
     const opened = await executeWithRetry(
       async (_attemptMs, remainingMs) => {
         if (attempt++ > 0) admission = breaker.assertAllowed(ids.correlationId);
-        return this.openStreamAttempt(adapter, request, route, ids, remainingMs, admission);
+        return this.openStreamAttempt(
+          adapter,
+          request,
+          route,
+          ids,
+          remainingMs,
+          admission,
+          promptAdmission,
+        );
       },
       {
         ...providerRetryConfig(route.provider),
@@ -1329,6 +1385,7 @@ export class Gateway {
     ids: CallIds,
     remainingMs: number | undefined,
     admission: CircuitBreakerAdmission,
+    promptAdmission: GatewayPromptAdmission,
   ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
     const bounds = chatStreamBounds(route.provider);
     const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
@@ -1342,6 +1399,7 @@ export class Gateway {
         silenceMs: Math.min(bounds.silenceMs, budgetMs),
       },
       admission,
+      promptAdmission,
     );
     try {
       let first = await iterator.next();
@@ -1363,6 +1421,7 @@ export class Gateway {
     ids: CallIds,
     bounds: StreamReadBounds,
     admission: CircuitBreakerAdmission,
+    promptAdmission: GatewayPromptAdmission,
   ): AsyncGenerator<GatewayStreamChunk> {
     let reservation: GatewaySpendReservation | undefined;
     let admitted = false;
@@ -1370,6 +1429,12 @@ export class Gateway {
     let received = false;
     let terminal: GatewayStreamChunk | undefined;
     try {
+      const attemptBudget =
+        adapter.callStream === undefined
+          ? Math.min(bounds.budgetMs, effectiveBufferedAttemptMs(route.provider))
+          : bounds.budgetMs;
+      const remaining = await promptAdmission.admit(request, attemptBudget);
+      bounds = { budgetMs: remaining, silenceMs: Math.min(bounds.silenceMs, remaining) };
       reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       admitted = true;
       for await (const chunk of this.readProviderStream(
@@ -1479,19 +1544,26 @@ export class Gateway {
   }
 
   private async invoke(
-    breaker: CircuitBreaker,
-    adapter: ProviderAdapter,
-    request: GatewayCallRequest,
-    capability: ModelCapability,
-    correlationId: string,
+    attempt: BufferedChatAttempt,
     provider: ModelProviderConfig,
     bounds?: StreamReadBounds,
   ): Promise<NormalizedResponse> {
+    const { breaker, adapter, correlationId } = attempt;
+    const { capability } = attempt.route;
+    const request = attempt.state.request;
     const admission = breaker.assertAllowed(correlationId);
     let reservation: GatewaySpendReservation | undefined;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     try {
+      const remaining = await attempt.promptAdmission.admit(
+        request,
+        bounds?.budgetMs ?? provider.timeoutMs,
+      );
+      provider = { ...provider, timeoutMs: Math.min(provider.timeoutMs, remaining) };
+      if (bounds !== undefined)
+        bounds = { budgetMs: remaining, silenceMs: Math.min(bounds.silenceMs, remaining) };
+      this.logAttemptRepair(attempt, "scheduled");
       reservation = this.spendBudget?.reserve(capability, request, correlationId);
       admitted = true;
       const response = await readAnswer(adapter, request, provider, bounds);
@@ -1499,6 +1571,7 @@ export class Gateway {
       admission.settle("success");
       return response;
     } catch (error) {
+      if (error instanceof ContextOverflowError) this.logAttemptRepair(attempt, "denied");
       usage = measuredCatalogFailureUsage(error, capability, correlationId);
       // A client-initiated cancel is not a provider fault — skip the breaker.
       recordProviderFailure(admission, error, admitted);

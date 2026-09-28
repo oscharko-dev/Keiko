@@ -211,6 +211,7 @@ describe("Activity Log scenario: model-gateway", () => {
     const startedAtMs = Date.now();
     let dropped = false;
     const droppingSink: ProcessServerLogSink = {
+      errorEvidence: processServerLogSink().errorEvidence,
       write(event: ServerLogEvent): void {
         if (!dropped && event.op === "gateway.config.resolved") {
           dropped = true;

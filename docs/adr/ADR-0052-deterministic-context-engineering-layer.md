@@ -72,7 +72,9 @@ every lane. Properties:
 - **Conservative (over-estimates slightly)**: it computes UTF-8 byte length with a conservative baseline
   bytes-per-token divisor, applies a stricter dense-text floor for CJK, emoji, short-line, and structural
   code-shaped content, then **rounds up** and adds a small fixed per-segment structural overhead. Over-estimation
-  is the safe direction: it makes the allocator fit *fewer* tokens than the provider would, never *more*.
+  is the intended safe direction. This remains an estimate: no byte heuristic guarantees the token
+  count for every provider tokenizer, chat template, or modality. Model calibration, a safety margin,
+  and final gateway admission remain necessary.
 - **Total / never throws**: empty string → a defined small constant (the structural overhead, never `NaN` or a
   divide-by-zero), huge input → a finite integer, non-ASCII / emoji / surrogate pairs → counted by UTF-8 bytes
   using `TextEncoder` with a manual UTF-8 fallback when `TextEncoder` is absent. It must **never fail a
@@ -95,6 +97,47 @@ profile-derived override (through `OrchestratorInput.budget` for path 1 and the 
 **never** by editing call sites. We do **not** raise the existing `DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax`
 default of `32_000` (`connected-context.ts:122`) — that is a breaking change to path 1; profile-derived
 overrides thread through `OrchestratorInput.budget` as today.
+
+The capability's output maximum is a provider ceiling, not the default response reservation. The
+shared derivation limits the default reservation to a bounded fraction of the window and to any
+known output ceiling. A model declaring equal input/output maxima must retain usable input space.
+An explicit caller allocation is validated against both the output ceiling and the remaining input
+budget, including the safety margin. A request with no caller allocation and no spend guard
+keeps its provider output field absent; the local reservation does not silently cap a provider's
+answer. A spend-guarded call dispatches exactly the allocation used for admission.
+
+Before both buffered and streaming calls, `keiko-model-gateway` accounts for the complete provider
+projection: message roles, tool-call arguments and identifiers, offered tool schemas, and structured
+response schemas. LiteLLM discovery additionally enables the same-origin `/utils/token_counter`
+request with the configured credential header and egress policy. Admission uses the larger of the
+local text/tool/schema floor and a valid reported message/tool count plus the locally counted
+response schema, which the counter endpoint does not receive. Image URLs and base64 are not text
+tokens. Without a positive provider count, each image receives a fallback allowance of one quarter
+of the declared context window, capped at 8,192 tokens (8,192 if the window is unknown), separate
+from text calibration. This keeps a supported small vision window usable without pretending that
+encoded bytes measure provider patches. A positive provider count replaces only that image
+allowance; the local text/tool/schema floor remains enforced. Zero is not image measurement evidence.
+The fallback is an estimate, not a provider-independent bound or exact image tokenizer.
+Counting takes place after circuit admission, inside the attempt budget. Corrective retries repeat
+the complete check and retain the previous measured contribution plus added local context if a
+counter becomes unavailable. A rejected or malformed counter is retried after a 60-second cooldown
+scoped to the configured gateway instance/provider; cancellation does not disable later counting.
+`gateway.prompt.counter-cooldown` records activation, suppression and expiry with the current call's
+correlation, a model digest, and remaining milliseconds. `gateway.prompt.admission-failed` records
+counter/validation phase, budget and elapsed milliseconds, error kind, and structured stack/cause
+evidence when admission exhausts its deadline or is cancelled before generation.
+A denied, malformed, cancelled, or timed-out counter never silently becomes an exact zero; the local estimate remains available and the
+body-free `gateway.prompt.admission` event records the source, counter status, tokenizer category,
+and input/output budgets. Azure routes do not acquire this LiteLLM-specific endpoint.
+
+Desktop chat assembly, deterministic history compaction, final prompt diagnostics, and gateway
+admission share `countGatewayPromptTokens`. The current request, context wrappers, and image
+allowances are reserved before selecting the retained history. Image accounting uses metadata-only
+placeholders; attachment authority checks and byte resolution stay at the final provider boundary.
+Compaction records report removed complete-message costs and the incremental serialized summary
+cost, so their token savings agree with the difference between the pre/post-compaction prompts.
+The optional LiteLLM counter may still report a higher count and refuse admission; local assembly
+and gateway admission use the same local fallback, not a claim of provider-exact counting.
 
 ### D3 — Eight-lane taxonomy with a fixed allocation order
 

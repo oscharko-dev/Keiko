@@ -4,7 +4,7 @@ import type {
   ConversationDocumentContextWire,
   DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
-import { countContextTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,
@@ -14,7 +14,10 @@ import {
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "./store/index.js";
-import { usableGatewayMessages } from "./conversation-gateway.js";
+import {
+  usableGatewayMessages,
+  gatewayConversationImageAccounting,
+} from "./conversation-gateway.js";
 import {
   CONVERSATION_CONTEXT_BLOCK_HEADER,
   CONVERSATION_MEMORY_BLOCK_HEADER,
@@ -46,6 +49,7 @@ interface PromptAssemblyInput {
   readonly request: {
     readonly content: string;
     readonly discussionMode: DiscussionMode | undefined;
+    readonly imageCount?: number;
   };
   readonly profile: ContextProfile;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
@@ -367,17 +371,19 @@ function buildLatestUserTurn(input: PromptAssemblyInput): string {
 function promptScaffoldTokens(
   latestTurn: string,
   compactionContextText: string | undefined,
-  tokenAccounting: ContextProfile["tokenAccounting"],
+  profile: ContextProfile,
+  imageCount: number | undefined,
 ): number {
-  return countContextTokensForSegments(
+  const messages = gatewayConversationImageAccounting(
     [
-      ...systemScopedCompactionContextMessage(compactionContextText).map(
-        (message) => message.content,
-      ),
-      latestTurn,
+      ...systemScopedCompactionContextMessage(compactionContextText),
+      { role: "user", content: latestTurn },
     ],
-    tokenAccounting,
+    imageCount,
   );
+  return countGatewayPromptTokens({ messages }, profile.tokenAccounting, {
+    contextWindow: profile.maxInputTokens,
+  });
 }
 
 function buildPromptMessages(
@@ -398,7 +404,8 @@ function assembleGatewayPromptCandidate(
   const scaffoldTokens = promptScaffoldTokens(
     latestTurn,
     input.compactionContextText,
-    input.profile.tokenAccounting,
+    input.profile,
+    input.request.imageCount,
   );
   if (scaffoldTokens > input.profile.effectiveInputBudget) {
     return undefined;
@@ -407,11 +414,11 @@ function assembleGatewayPromptCandidate(
   const historyOutcome = compactHistoryForBudget(input, historyBudget);
   if (historyOutcome === undefined) return undefined;
   const messages = buildPromptMessages(historyOutcome, latestTurn, input.compactionContextText);
+  const accountedMessages = gatewayConversationImageAccounting(messages, input.request.imageCount);
   if (
-    countContextTokensForSegments(
-      messages.map((message) => message.content),
-      input.profile.tokenAccounting,
-    ) > input.profile.effectiveInputBudget
+    countGatewayPromptTokens({ messages: accountedMessages }, input.profile.tokenAccounting, {
+      contextWindow: input.profile.maxInputTokens,
+    }) > input.profile.effectiveInputBudget
   ) {
     return undefined;
   }
@@ -428,7 +435,7 @@ function assembleGatewayPromptCandidate(
       documentContext: input.documentContext,
       totalDocumentEntries: input.totalDocumentEntries,
       request: input.request,
-      finalMessages: messages,
+      finalMessages: accountedMessages,
       compactionContextText: input.compactionContextText,
       allocatorDiagnostics: input.allocatorDiagnostics,
     }),
@@ -441,6 +448,7 @@ export function selectGatewayPromptAssembly(input: {
   readonly request: {
     readonly content: string;
     readonly discussionMode: DiscussionMode | undefined;
+    readonly imageCount?: number;
   };
   readonly profile: ContextProfile;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
