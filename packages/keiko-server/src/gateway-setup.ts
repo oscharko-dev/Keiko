@@ -845,13 +845,14 @@ function numberFieldFromRecords(
   records: readonly Record<string, unknown>[],
   fields: readonly string[],
 ): number | undefined {
+  const values: number[] = [];
   for (const record of records) {
     for (const field of fields) {
       const value = record[field];
-      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) values.push(value);
     }
   }
-  return undefined;
+  return values.length === 0 ? undefined : Math.min(...values);
 }
 
 function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscoveredModelMetadata {
@@ -1317,6 +1318,7 @@ type DiscoveryModelKind = "chat" | "embedding" | "voice" | "unsupported";
 type DiscoveryVoiceRole = "speech-input" | "speech-output" | "realtime";
 
 interface ClassifiedDiscoveryModel {
+  readonly deploymentConflict?: boolean;
   readonly id: string;
   readonly kind: DiscoveryModelKind;
   readonly voiceRole?: DiscoveryVoiceRole;
@@ -1437,20 +1439,14 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
-  // First occurrence wins, with ONE exception: a usable entry replaces an unsupported one for the
-  // same id. A LiteLLM `model_name` is a routing alias that can front several deployments, and an
-  // unusable one listed first must not shadow the usable duplicate behind it.
+  // An alias may route to any deployment. Its usable geometry is their intersection; list order
+  // must never grant the largest deployment's capabilities to its smaller peers.
   const byId = new Map<string, ClassifiedDiscoveryModel>();
   for (const item of payload.data) {
     const classified = classifyDiscoveryItem(item);
     if (classified === undefined) continue;
     const existing = byId.get(classified.id);
-    if (
-      existing === undefined ||
-      (existing.kind === "unsupported" && classified.kind !== "unsupported")
-    ) {
-      byId.set(classified.id, classified);
-    }
+    byId.set(classified.id, mergeDiscoveryDeployment(existing, classified));
   }
   const entries: ClassifiedDiscoveryModel[] = [...byId.values()];
   // LiteLLM declares audio roles in /model/info. Preserve the existing chat/embedding discovery
@@ -1474,6 +1470,49 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
   const boundedVoice = voiceEntries.slice(0, MAX_DISCOVERED_MODELS);
   assertDiscoveryYieldedUsableModels([...usable, ...boundedVoice], unsupported);
   return discoveredModelLists(usable, boundedVoice, unsupported, wasTruncated);
+}
+
+function mergeDiscoveryDeployment(
+  existing: ClassifiedDiscoveryModel | undefined,
+  incoming: ClassifiedDiscoveryModel,
+): ClassifiedDiscoveryModel {
+  if (existing?.deploymentConflict === true) return existing;
+  if (existing === undefined || existing.kind === "unsupported") return incoming;
+  if (incoming.kind === "unsupported") return existing;
+  if (existing.kind !== incoming.kind || existing.voiceRole !== incoming.voiceRole) {
+    return {
+      ...existing,
+      kind: "unsupported",
+      deploymentConflict: true,
+      reason: "not-chat-capable",
+    };
+  }
+  return {
+    ...existing,
+    supportsImageInput: existing.supportsImageInput && incoming.supportsImageInput,
+    metadata: intersectDeploymentMetadata(existing.metadata, incoming.metadata),
+  };
+}
+
+function intersectDeploymentMetadata(
+  left: GatewayDiscoveredModelMetadata,
+  right: GatewayDiscoveredModelMetadata,
+): GatewayDiscoveredModelMetadata {
+  const outputLimits = [left.maxOutputTokens, right.maxOutputTokens].filter(
+    (value): value is number => value !== undefined,
+  );
+  const reasoningEfforts = (left.reasoningEfforts ?? [])
+    .filter((effort) => right.reasoningEfforts?.includes(effort))
+    .sort();
+  return {
+    contextWindow: Math.min(left.contextWindow ?? 4_096, right.contextWindow ?? 4_096),
+    ...(outputLimits.length === 0 ? {} : { maxOutputTokens: Math.min(...outputLimits) }),
+    toolCalling: left.toolCalling === true && right.toolCalling === true,
+    ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
+    ...(left.chatModeDeclared === true && right.chatModeDeclared === true
+      ? { chatModeDeclared: true }
+      : {}),
+  };
 }
 
 function discoveredModelLists(

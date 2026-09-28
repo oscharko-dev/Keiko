@@ -5499,6 +5499,81 @@ describe("handleGatewaySetup", () => {
     });
   });
 
+  it("intersects routing alias limits independently of deployment order", () => {
+    const deployments = [
+      {
+        model_name: "shared-chat",
+        model_info: {
+          mode: "chat",
+          max_input_tokens: 131_072,
+          max_output_tokens: 16_384,
+          supports_function_calling: true,
+        },
+      },
+      {
+        model_name: "shared-chat",
+        model_info: {
+          mode: "chat",
+          max_input_tokens: 32_768,
+          max_output_tokens: 4_096,
+          supports_function_calling: false,
+        },
+      },
+    ];
+    const forward = parseModelDiscovery({ data: deployments });
+    const reverse = parseModelDiscovery({ data: [...deployments].reverse() });
+    expect(forward.modelMetadata?.["shared-chat"]).toMatchObject({
+      contextWindow: 32_768,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+    });
+    expect(reverse).toEqual(forward);
+  });
+
+  it("uses conservative context geometry if one alias deployment omits its limit", () => {
+    const result = parseModelDiscovery({
+      data: [
+        { model_name: "shared-chat", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+        { model_name: "shared-chat", model_info: { mode: "chat" } },
+      ],
+    });
+    expect(result.modelMetadata?.["shared-chat"]?.contextWindow).toBe(4_096);
+  });
+
+  it("keeps conflicting deployment roles unusable after a third alias entry", () => {
+    const chat = { model_name: "mixed-alias", model_info: { mode: "chat" } };
+    const embedding = { model_name: "mixed-alias", model_info: { mode: "embedding" } };
+    for (const entries of [
+      [chat, embedding, chat],
+      [embedding, chat, chat],
+      [chat, chat, embedding],
+    ]) {
+      const result = parseModelDiscovery({
+        data: [...entries, { model_name: "healthy-chat", model_info: { mode: "chat" } }],
+      });
+      expect(result.chatModelIds).toEqual(["healthy-chat"]);
+      expect(result.embeddingModelIds).toEqual([]);
+      expect(result.modelIds).not.toContain("mixed-alias");
+    }
+  });
+
+  it("uses the smallest declared bound within a deployment record", () => {
+    const result = parseModelDiscovery({
+      data: [
+        {
+          model_name: "bounded-chat",
+          max_input_tokens: 131_072,
+          model_info: { mode: "chat", max_input_tokens: 32_768, max_output_tokens: 8_192 },
+          litellm_params: { max_tokens: 2_048 },
+        },
+      ],
+    });
+    expect(result.modelMetadata?.["bounded-chat"]).toMatchObject({
+      contextWindow: 32_768,
+      maxOutputTokens: 2_048,
+    });
+  });
+
   it("lets a usable duplicate win over an unsupported entry with the same id", () => {
     // A LiteLLM model_name is a routing alias that can front several deployments. An unusable one
     // listed first must not shadow the usable duplicate behind it.
