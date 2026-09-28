@@ -1,5 +1,6 @@
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   deriveContextProfile,
   deriveContextProfileFromCapability,
@@ -24,6 +25,30 @@ import {
 const MODEL_ID = "fixture-model";
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
 const INVALID_ARGUMENT_SECRET = "private-invalid-argument-body";
+
+it("keeps repaired catalog diagnostics correlated without unwired projection loss", async () => {
+  const events: ModelGatewayLogEvent[] = [];
+  const fetchImpl = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(invalidArguments("call-repair-correlation"))
+    .mockResolvedValueOnce(successfulResponse());
+  const gateway = new Gateway(config(), {
+    clock: clock(),
+    random: (): number => 1,
+    fetchImpl,
+    log: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  const unwiredBefore = activityLogLossCounters()["port-unwired"];
+  await gateway.chat(request());
+  expect(activityLogLossCounters()["port-unwired"]).toBe(unwiredBefore);
+  const projected = events.filter((event) => event.op === "gateway.tool-catalog.projected");
+  expect(projected).toHaveLength(2);
+  for (const event of projected) expect(event.correlationId).toBe("correlation-1");
+});
 
 function clock(): Clock {
   let current = NOW;
@@ -531,3 +556,87 @@ it("does not replay a tool-call-only stream rejected by the catalog", async () =
     }),
   );
 });
+
+it("refuses a complete schema-bearing repair that overflows only after the first call", async () => {
+  const cfg = config(128_000);
+  const capability = cfg.capabilities?.[0];
+  if (capability === undefined) throw new Error("Missing capability");
+  const profile = deriveContextProfileFromCapability(capability);
+  const base = { ...request(), maxOutputTokens: profile.reservedOutputTokens };
+  const tools = createGatewayToolCatalogBridge(base, (): number => NOW).tools;
+  const build = (length: number): GatewayCallRequest => ({
+    ...base,
+    responseFormat: {
+      type: "json_schema",
+      name: "fixture",
+      schema: { description: "x".repeat(length) },
+    },
+  });
+  let low = 0;
+  let high = 500_000;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (countGatewayPromptTokens({ ...build(middle), tools }) <= profile.effectiveInputBudget - 5)
+      low = middle;
+    else high = middle - 1;
+  }
+  const input = build(low);
+  const initialTokens = countGatewayPromptTokens({ ...input, tools });
+  expect(initialTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+  expect(initialTokens).toBeGreaterThan(profile.effectiveInputBudget - 10);
+  const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(invalidArguments("call-margin")));
+  const events: ModelGatewayLogEvent[] = [];
+  const gateway = new Gateway(cfg, {
+    fetchImpl,
+    clock: clock(),
+    random: (): number => 1,
+    log: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  await expect(gateway.chat(input)).rejects.toBeInstanceOf(ContextOverflowError);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(
+    events
+      .filter((event) => event.op === "gateway.prompt.admission")
+      .map((event) => event.extra?.state),
+  ).toEqual(["admitted", "overflow"]);
+});
+
+it.each([false, true])(
+  "joins catalog admission to one call lifecycle, expired=%s",
+  async (expired) => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(successfulResponse()));
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const input = {
+      ...request(),
+      toolCatalog: openCodeGatewayCatalogAdvertisement(expired ? NOW - 600_000 : NOW),
+    };
+    if (expired) {
+      await expect(gateway.chat(input)).rejects.toBeInstanceOf(GatewayToolCatalogError);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(events.filter((event) => event.op === "gateway.tool-catalog.rejected")).toMatchObject([
+        { correlationId: "correlation-1", errorKind: "validation-failed" },
+      ]);
+      expect(events.find((event) => event.op === "gateway.chat.failed")?.correlationId).toBe(
+        "correlation-1",
+      );
+    } else {
+      await gateway.chat(input);
+      expect(events.filter((event) => event.op === "gateway.tool-catalog.projected")).toMatchObject(
+        [{ correlationId: "correlation-1" }],
+      );
+    }
+  },
+);

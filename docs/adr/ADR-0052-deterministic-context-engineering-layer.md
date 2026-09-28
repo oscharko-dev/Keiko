@@ -102,14 +102,23 @@ The capability's output maximum is a provider ceiling, not the default response 
 shared derivation limits the default reservation to a bounded fraction of the window and to any
 known output ceiling. A model declaring equal input/output maxima must retain usable input space.
 An explicit caller allocation is validated against both the output ceiling and the remaining input
-budget, including the safety margin.
+budget, including the safety margin. A request with no caller allocation and no spend guard
+keeps its provider output field absent; the local reservation does not silently cap a provider's
+answer. A spend-guarded call dispatches exactly the allocation used for admission.
 
 Before both buffered and streaming calls, `keiko-model-gateway` accounts for the complete provider
 projection: message roles, tool-call arguments and identifiers, offered tool schemas, and structured
 response schemas. LiteLLM discovery additionally enables the same-origin `/utils/token_counter`
 request with the configured credential header and egress policy. Admission uses the larger of the
-local complete estimate and a valid reported count. A denied, malformed, cancelled, or timed-out
-counter never silently becomes an exact zero; the local estimate remains available and the
+local complete estimate and a valid reported message/tool count plus the locally counted response
+schema, which the counter endpoint does not receive. Image URLs and base64 are not text tokens:
+unmeasured images carry an 8,192-token fallback allowance per image, separate from text calibration.
+This is a fallback estimate, not a provider-independent bound or exact image tokenizer.
+Counting takes place after circuit admission, inside the attempt budget. Corrective retries repeat
+the complete check and retain the previous measured contribution plus added local context if a
+counter becomes unavailable. A rejected or malformed counter is retried after a 60-second cooldown
+scoped to the configured gateway instance/provider; cancellation does not disable later counting.
+A denied, malformed, cancelled, or timed-out counter never silently becomes an exact zero; the local estimate remains available and the
 body-free `gateway.prompt.admission` event records the source, counter status, tokenizer category,
 and input/output budgets. Azure routes do not acquire this LiteLLM-specific endpoint.
 

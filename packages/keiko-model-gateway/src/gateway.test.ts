@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Gateway } from "./gateway.js";
+import { Gateway, type GatewaySpendReservation } from "./gateway.js";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createDefaultChatCapability } from "./capabilities.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
@@ -82,7 +82,7 @@ const REQUEST: GatewayRequest = {
 };
 
 describe("Gateway.chat", () => {
-  it("sends the bounded answer allocation instead of the model output ceiling", async () => {
+  it("sends the bounded answer allocation used by spend admission", async () => {
     const capability = {
       ...createDefaultChatCapability("example-chat-model"),
       contextWindow: 131_072,
@@ -93,6 +93,9 @@ describe("Gateway.chat", () => {
     const gateway = new Gateway(
       { ...config([provider()]), capabilities: [capability] },
       {
+        spendBudget: {
+          reserve: (): GatewaySpendReservation => ({ settle: (): void => undefined }),
+        },
         adapter: fakeAdapter((request) => {
           requests.push(request);
           return Promise.resolve(okResponse(request.modelId));
@@ -548,6 +551,7 @@ describe("Gateway.chatStream", () => {
     };
     const gateway = new Gateway(config([provider({ timeoutMs: 30_000, maxRetries: 0 })]), {
       adapter,
+      clock: createScriptedGatewayClock(),
     });
     await collectStream(gateway.chatStream(REQUEST));
     expect(timeouts).toStrictEqual([GATEWAY_BUFFERED_BUDGET_FLOOR_MS]);

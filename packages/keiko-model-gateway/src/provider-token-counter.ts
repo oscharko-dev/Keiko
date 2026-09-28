@@ -1,13 +1,20 @@
-import { randomUUID } from "node:crypto";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   activityLogErrorKind,
+  GATEWAY_FAILURE_EVIDENCE_FIELDS,
+  gatewayFailureEvidence,
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
+import {
+  AuthenticationError,
+  ConfigInvalidError,
+  ProviderError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { gatewayFetch, readJsonCapped } from "./http.js";
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
 import {
@@ -55,40 +62,59 @@ export async function countProviderPromptTokens(
 ): Promise<ProviderTokenCount> {
   if (provider.tokenCounter !== "litellm") return { status: "disabled" };
   if (request.cancellationSignal?.aborted === true) return { status: "unavailable" };
+  try {
+    const response = await fetchTokenCount(request, provider, log, fetchImpl);
+    if (!response.ok) {
+      await response.body?.cancel();
+      const error =
+        response.status === 401 || response.status === 403
+          ? new AuthenticationError("token counter access denied")
+          : new ProviderError("token counter unavailable", response.status);
+      logCounterFailure(log, request.logContext, error);
+      return { status: "unavailable" };
+    }
+    const result = parseTokenCount(await readJsonCapped(response, 16_384));
+    if (result.status === "invalid")
+      logCounterFailure(
+        log,
+        request.logContext,
+        new ConfigInvalidError("invalid token counter response"),
+      );
+    return result;
+  } catch (error) {
+    logCounterFailure(log, request.logContext, error);
+    return { status: "unavailable" };
+  }
+}
+
+async function fetchTokenCount(
+  request: GatewayCallRequest & GatewayPromptTokenInput,
+  provider: ModelProviderConfig,
+  log: ModelGatewayLogSink,
+  fetchImpl?: typeof fetch,
+): Promise<Response> {
   const signal = AbortSignal.any([
     AbortSignal.timeout(5_000),
     ...(request.cancellationSignal === undefined ? [] : [request.cancellationSignal]),
   ]);
   const header = (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME).toLowerCase();
-  try {
-    const response = await gatewayFetch(tokenCounterUrl(provider.baseUrl), {
-      method: "POST",
-      headers: {
-        [header]: apiKeyHeaderValue(header, provider.apiKey),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: request.modelId,
-        messages: request.messages.map(openAiCompatiblePromptMessage),
-        ...(request.tools === undefined
-          ? {}
-          : { tools: openAiCompatiblePromptTools(request.tools) }),
-      }),
-      signal,
-      egress: provider.egress,
-      log,
-      logContext: request.logContext,
-      fetchImpl,
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      return { status: "unavailable" };
-    }
-    return parseTokenCount(await readJsonCapped(response, 16_384));
-  } catch (error) {
-    logCounterFailure(log, request.logContext, error);
-    return { status: "unavailable" };
-  }
+  return gatewayFetch(tokenCounterUrl(provider.baseUrl), {
+    method: "POST",
+    headers: {
+      [header]: apiKeyHeaderValue(header, provider.apiKey),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: request.modelId,
+      messages: request.messages.map(openAiCompatiblePromptMessage),
+      ...(request.tools === undefined ? {} : { tools: openAiCompatiblePromptTools(request.tools) }),
+    }),
+    signal,
+    egress: provider.egress,
+    log,
+    logContext: request.logContext,
+    fetchImpl,
+  });
 }
 
 function tokenizerSource(value: unknown): NonNullable<ProviderTokenCount["tokenizer"]> {
@@ -105,6 +131,7 @@ const COUNTER_FAILED = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "provider-token-counter.logCounterFailure",
   fields: {
+    ...GATEWAY_FAILURE_EVIDENCE_FIELDS,
     fallback: {
       type: "string",
       dataClass: "closed-enum",
@@ -131,10 +158,16 @@ function logCounterFailure(
     activityLogEvent(
       COUNTER_FAILED,
       {
-        correlationId: context?.correlationId ?? log.correlationId ?? randomUUID(),
+        correlationId:
+          context?.correlationId ?? log.correlationId ?? ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
         errorKind: activityLogErrorKind(error),
       },
-      { fallback: "local-estimate", completeness: "complete", loss: "none" },
+      {
+        fallback: "local-estimate",
+        completeness: "complete",
+        loss: "none",
+        ...gatewayFailureEvidence(log, error),
+      },
     ),
   );
 }

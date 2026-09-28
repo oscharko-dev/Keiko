@@ -2,7 +2,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import { getServerLogger } from "./observability/index.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 
@@ -14,7 +14,8 @@ const ALIAS_INTERSECTION = defineActivityLogOperation({
   category: "gateway",
   emitter: "gateway-discovery-log.logAliasIntersection",
   fields: {
-    aliasHash: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+    deploymentCount: { type: "integer", dataClass: "count", required: true },
     state: {
       type: "string",
       dataClass: "closed-enum",
@@ -40,6 +41,7 @@ const ALIAS_INTERSECTION = defineActivityLogOperation({
 export function logAliasIntersection(
   input: {
     readonly alias: string;
+    readonly deploymentCount: number;
     readonly contextWindow: number;
     readonly undeclaredLimit: boolean;
     readonly state: "normalized" | "intersected" | "conflicting";
@@ -54,7 +56,8 @@ export function logAliasIntersection(
       ALIAS_INTERSECTION,
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
-        aliasHash: sha256Hex(input.alias),
+        ...modelIdEvidence(input.alias),
+        deploymentCount: input.deploymentCount,
         state: input.state,
         maxOutputTokens: input.maxOutputTokens,
         undeclaredOutputLimit: input.undeclaredOutputLimit,

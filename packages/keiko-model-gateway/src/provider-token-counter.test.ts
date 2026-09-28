@@ -1,8 +1,10 @@
+import { keikoStackFrames, causeChain } from "@oscharko-dev/keiko-activity-log";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
 import { describe, expect, it, vi } from "vitest";
 import { countProviderPromptTokens } from "./provider-token-counter.js";
 import type { ModelProviderConfig } from "./types.js";
@@ -164,4 +166,51 @@ it("records a body-free counter failure before falling back", async () => {
     errorKind: "internal",
   });
   expect(line).not.toContain("private response body");
+});
+
+it.each([403, 200])("logs counter fallback evidence for HTTP %s", async (status) => {
+  const events: ModelGatewayLogEvent[] = [];
+  const sink = {
+    write: (event: ModelGatewayLogEvent): void => {
+      events.push(event);
+    },
+    errorEvidence: (error: unknown): GatewayFailureEvidence => ({
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    }),
+  };
+  await countProviderPromptTokens(request, provider, sink, () =>
+    Promise.resolve(Response.json({ invalid: true }, { status })),
+  );
+  expect(events.find((event) => event.op === "gateway.prompt.counter-failed")).toMatchObject({
+    correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    errorKind: status === 403 ? "permission-denied" : "validation-failed",
+    extra: { fallback: "local-estimate" },
+  });
+});
+
+it("retains safe frames and causes from a counter reader failure", async () => {
+  const events: ModelGatewayLogEvent[] = [];
+  const error = new TypeError("private-body", { cause: new RangeError("private-cause") });
+  error.stack =
+    "TypeError: private-body\n at reader (/private/install/packages/keiko-model-gateway/dist/http.js:80:4)";
+  const sink = {
+    write: (event: ModelGatewayLogEvent): void => {
+      events.push(event);
+    },
+    errorEvidence: (value: unknown): GatewayFailureEvidence => ({
+      frames: keikoStackFrames(value),
+      causeChain: causeChain(value),
+    }),
+  };
+  await countProviderPromptTokens(request, provider, sink, () => Promise.reject(error));
+  const event = events.find((entry) => entry.op === "gateway.prompt.counter-failed");
+  expect(event).toMatchObject({
+    correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    extra: {
+      frames: ["packages/keiko-model-gateway/dist/http.js:80:4"],
+      causeChain: ["RangeError"],
+    },
+  });
+  expect(JSON.stringify(event)).not.toMatch(/private-/u);
 });

@@ -16,16 +16,25 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Keiko intersects
 the limits of every backend sharing an alias; missing bounds use conservative defaults, and
-conflicting task kinds are rejected. A catalog model name alone does not prove that the deployment
+conflicting task kinds are rejected. If every replica omits context/reasoning metadata, same-endpoint
+rediscovery retains previously verified capability evidence. A mixture of declared and undeclared
+context bounds remains conservative. One final event per selected alias records `deploymentCount`,
+`modelIdDigest`, effective bounds, and persistent unknown-bound provenance. A catalog model name alone does not prove that the deployment
 is callable or that a larger context window is available.
 
 Keiko reserves a bounded answer budget rather than the model's full output ceiling. Before a chat
 request, the gateway checks the complete prompt, tool context, and response schema against the
-remaining input budget. Discovery through `/model/info` enables `"tokenCounter": "litellm"` for
+remaining input budget on every attempt, including schema-correction retries. Without an explicit
+caller allocation or spend guard, the output field stays absent and the provider's default remains
+in effect. Images use a separate fallback token allowance, never their base64 text length.
+Discovery through `/model/info` enables `"tokenCounter": "litellm"` for
 those providers. The count request goes to `/utils/token_counter` on the configured proxy (including
 any reverse-proxy prefix), uses the same authorization and egress policy, and has a five-second
-limit. A proxy key may be permitted to generate but forbidden to count; Keiko then uses its local
-estimate. This counter is an additional estimate, not a guarantee of the backend tokenizer.
+limit inside the attempt's time budget; an open circuit makes no counting request. A proxy key may be permitted to generate but forbidden to count; Keiko then uses its local
+estimate and waits 60 seconds before probing that unavailable counter again. Response-schema cost
+is added to the reported message/tool count before admission. Counter failures, malformed responses,
+and admission refusals carry correlated closed error kinds and body-free stack/cause evidence.
+This counter is an additional estimate, not a guarantee of the backend tokenizer.
 
 Inspect `gateway.prompt.admission` in the activity log for `counterStatus`, `counterSource`,
 `tokenizer`, `promptTokens`, `inputBudget`, and `outputBudget`. No prompt or counter response body is

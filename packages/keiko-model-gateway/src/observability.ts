@@ -49,7 +49,43 @@ export interface ModelGatewayLogEvent {
   readonly extra?: Readonly<Record<string, unknown>> | undefined;
 }
 
+export interface GatewayFailureEvidence {
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
+export const GATEWAY_FAILURE_EVIDENCE_FIELDS = {
+  frames: {
+    type: "string-array",
+    dataClass: "opaque-id",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
+export function gatewayFailureEvidence(
+  log: ModelGatewayLogSink,
+  error: unknown,
+): GatewayFailureEvidence {
+  try {
+    return log.errorEvidence?.(error) ?? { frames: [], causeChain: [] };
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+    return { frames: [], causeChain: [] };
+  }
+}
+
 export interface ModelGatewayLogSink {
+  /** The composition root supplies the existing body-free stack/cause reducers. */
+  readonly errorEvidence?: ((error: unknown) => GatewayFailureEvidence) | undefined;
   readonly write: (event: ModelGatewayLogEvent) => void;
   readonly correlationId?: string | undefined;
   // Cheap level predicate — the ONLY way a below-threshold event can cost nothing here.
@@ -152,6 +188,7 @@ function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
         return true;
       }
     },
+    errorEvidence: (error): GatewayFailureEvidence => gatewayFailureEvidence(sink, error),
     ...(sink.correlationId === undefined ? {} : { correlationId: sink.correlationId }),
   };
 }
@@ -239,6 +276,7 @@ export function withCorrelationId(
       return logLevelEnabled(sink, level);
     },
     correlationId,
+    errorEvidence: (error): GatewayFailureEvidence => gatewayFailureEvidence(sink, error),
   };
 }
 

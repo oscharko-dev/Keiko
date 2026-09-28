@@ -1,4 +1,5 @@
 import {
+  countContextTokens,
   countContextTokensForSegments,
   type ContextTokenAccounting,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -85,19 +86,62 @@ export function openAiCompatiblePromptTools(
   }));
 }
 
-/** Counts the complete text-bearing provider request projection with the selected model's token
- * calibration. Tool-call arguments and ids are context just like visible message content. */
+// A deliberately conservative, model-independent fallback, not an exact vision tokenizer.
+// Encoded bytes/URL length do not describe the patches/tiles a provider puts in its context.
+// Keep this allowance separate from text calibration; a text probe cannot calibrate image cost.
+const FALLBACK_IMAGE_TOKENS = 8_192;
+
+function countMessageTokens(message: ChatMessage, accounting?: ContextTokenAccounting): number {
+  const projected = openAiCompatiblePromptMessage(message);
+  const parts =
+    typeof projected.content === "string" || projected.content === null
+      ? undefined
+      : projected.content;
+  const imageCount = parts?.filter((part) => part.type === "image_url").length ?? 0;
+  const content =
+    parts?.map((part) => (part.type === "text" ? part : { type: "image_url" })) ??
+    projected.content;
+  const text =
+    parts
+      ?.filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n") ?? (typeof content === "string" ? content : "");
+  // Preserve the dense-text floor when the JSON projection escapes literal newlines.
+  return (
+    Math.max(
+      countContextTokens(text, accounting),
+      countContextTokens(JSON.stringify({ ...projected, content }), accounting),
+    ) +
+    imageCount * FALLBACK_IMAGE_TOKENS
+  );
+}
+
+/** The LiteLLM counter receives messages/tools, but not the generation response schema. */
+export function countGatewayResponseFormatTokens(
+  input: GatewayPromptTokenInput,
+  accounting?: ContextTokenAccounting,
+): number {
+  return input.responseFormat?.type === "json_schema"
+    ? countContextTokens(JSON.stringify(input.responseFormat), accounting)
+    : 0;
+}
+
+/** Counts the complete provider projection; image bytes are never treated as text tokens. */
 export function countGatewayPromptTokens(
   input: GatewayPromptTokenInput,
   accounting?: ContextTokenAccounting,
 ): number {
-  const segments = input.messages.map((message) =>
-    JSON.stringify(openAiCompatiblePromptMessage(message)),
+  const messageTokens = input.messages.reduce(
+    (sum, message) => sum + countMessageTokens(message, accounting),
+    0,
   );
-  if (input.tools !== undefined && input.tools.length > 0) {
-    segments.push(JSON.stringify(openAiCompatiblePromptTools(input.tools)));
-  }
-  if (input.responseFormat?.type === "json_schema")
-    segments.push(JSON.stringify(input.responseFormat));
-  return countContextTokensForSegments(segments, accounting);
+  const segments =
+    input.tools !== undefined && input.tools.length > 0
+      ? [JSON.stringify(openAiCompatiblePromptTools(input.tools))]
+      : [];
+  return (
+    messageTokens +
+    countContextTokensForSegments(segments, accounting) +
+    countGatewayResponseFormatTokens(input, accounting)
+  );
 }

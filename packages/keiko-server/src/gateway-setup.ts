@@ -1321,6 +1321,8 @@ type DiscoveryModelKind = "chat" | "embedding" | "voice" | "unsupported";
 type DiscoveryVoiceRole = "speech-input" | "speech-output" | "realtime";
 
 interface ClassifiedDiscoveryModel {
+  readonly deploymentCount?: number;
+  readonly undeclaredContext?: boolean;
   readonly deploymentConflict?: boolean;
   readonly declaredNonChat?: boolean;
   readonly id: string;
@@ -1458,10 +1460,7 @@ export function parseModelDiscovery(
   for (const item of payload.data) {
     const classified = classifyDiscoveryItem(item);
     if (classified === undefined) continue;
-    const existing = byId.get(classified.id);
-    const merged = mergeDiscoveryDeployment(existing, classified);
-    logDiscoveryMerge(existing, classified, merged, correlationId);
-    byId.set(classified.id, merged);
+    collectDiscoveryDeployment(byId, classified);
   }
   const entries: ClassifiedDiscoveryModel[] = [...byId.values()];
   // LiteLLM declares audio roles in /model/info. Preserve the existing chat/embedding discovery
@@ -1483,8 +1482,23 @@ export function parseModelDiscovery(
     usableEntries.length > MAX_DISCOVERED_MODELS || voiceEntries.length > MAX_DISCOVERED_MODELS;
   const usable = usableEntries.slice(0, MAX_DISCOVERED_MODELS);
   const boundedVoice = voiceEntries.slice(0, MAX_DISCOVERED_MODELS);
+  for (const entry of [...usable, ...boundedVoice, ...unsupported.slice(0, MAX_DISCOVERED_MODELS)])
+    logDiscoveryMerge(entry, correlationId);
   assertDiscoveryYieldedUsableModels([...usable, ...boundedVoice], unsupported);
   return discoveredModelLists(usable, boundedVoice, unsupported, wasTruncated);
+}
+
+function collectDiscoveryDeployment(
+  byId: Map<string, ClassifiedDiscoveryModel>,
+  incoming: ClassifiedDiscoveryModel,
+): void {
+  const existing = byId.get(incoming.id);
+  byId.set(incoming.id, {
+    ...mergeDiscoveryDeployment(existing, incoming),
+    deploymentCount: (existing?.deploymentCount ?? 0) + 1,
+    undeclaredContext:
+      existing?.undeclaredContext === true || incoming.metadata.contextWindow === undefined,
+  });
 }
 
 function mergeDiscoveryDeployment(
@@ -1529,18 +1543,35 @@ function intersectDeploymentMetadata(
   left: GatewayDiscoveredModelMetadata,
   right: GatewayDiscoveredModelMetadata,
 ): GatewayDiscoveredModelMetadata {
-  const reasoningEfforts = (left.reasoningEfforts ?? [])
-    .filter((effort) => right.reasoningEfforts?.includes(effort))
-    .sort((left, right) => left.localeCompare(right, "en"));
   return {
-    contextWindow: Math.min(left.contextWindow ?? 4_096, right.contextWindow ?? 4_096),
+    ...intersectContextWindow(left, right),
     ...commonTokenCounter(left, right),
     maxOutputTokens: Math.min(left.maxOutputTokens ?? 0, right.maxOutputTokens ?? 0),
     toolCalling: left.toolCalling === true && right.toolCalling === true,
-    reasoningEfforts,
+    ...intersectReasoningEfforts(left, right),
     ...(left.chatModeDeclared === true && right.chatModeDeclared === true
       ? { chatModeDeclared: true }
       : {}),
+  };
+}
+
+function intersectContextWindow(
+  left: GatewayDiscoveredModelMetadata,
+  right: GatewayDiscoveredModelMetadata,
+): Pick<GatewayDiscoveredModelMetadata, "contextWindow"> {
+  if (left.contextWindow === undefined && right.contextWindow === undefined) return {};
+  return { contextWindow: Math.min(left.contextWindow ?? 4_096, right.contextWindow ?? 4_096) };
+}
+
+function intersectReasoningEfforts(
+  left: GatewayDiscoveredModelMetadata,
+  right: GatewayDiscoveredModelMetadata,
+): Pick<GatewayDiscoveredModelMetadata, "reasoningEfforts"> {
+  if (left.reasoningEfforts === undefined && right.reasoningEfforts === undefined) return {};
+  return {
+    reasoningEfforts: (left.reasoningEfforts ?? [])
+      .filter((effort) => right.reasoningEfforts?.includes(effort))
+      .sort((left, right) => left.localeCompare(right, "en")),
   };
 }
 
@@ -7270,8 +7301,6 @@ function modelTokenCounterMetadata(
 }
 
 function logDiscoveryMerge(
-  existing: ClassifiedDiscoveryModel | undefined,
-  incoming: ClassifiedDiscoveryModel,
   merged: ClassifiedDiscoveryModel,
   correlationId: string | undefined,
 ): void {
@@ -7279,10 +7308,9 @@ function logDiscoveryMerge(
     {
       alias: merged.id,
       contextWindow: merged.metadata.contextWindow ?? 0,
-      undeclaredLimit:
-        (existing !== undefined && existing.metadata.contextWindow === undefined) ||
-        incoming.metadata.contextWindow === undefined,
-      state: discoveryMergeState(existing, merged),
+      undeclaredLimit: merged.undeclaredContext === true,
+      deploymentCount: merged.deploymentCount ?? 1,
+      state: discoveryMergeState(merged),
       maxOutputTokens: merged.metadata.maxOutputTokens ?? 0,
       undeclaredOutputLimit: (merged.metadata.maxOutputTokens ?? 0) === 0,
       reasoningOptionCount: merged.metadata.reasoningEfforts?.length ?? 0,
@@ -7292,9 +7320,8 @@ function logDiscoveryMerge(
 }
 
 function discoveryMergeState(
-  existing: ClassifiedDiscoveryModel | undefined,
   merged: ClassifiedDiscoveryModel,
 ): "normalized" | "intersected" | "conflicting" {
   if (merged.deploymentConflict === true) return "conflicting";
-  return existing === undefined ? "normalized" : "intersected";
+  return (merged.deploymentCount ?? 1) === 1 ? "normalized" : "intersected";
 }

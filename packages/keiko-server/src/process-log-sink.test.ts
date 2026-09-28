@@ -194,3 +194,17 @@ describe("logCommandTermination", () => {
     expect(second.escalation).toBe("failed");
   });
 });
+
+it("supplies the canonical body-free failure reducers through process sinks", () => {
+  const error = new TypeError("private-body", { cause: new RangeError("private-cause") });
+  error.stack =
+    "TypeError: private-body\n at admit (/private/install/packages/keiko-model-gateway/dist/prompt-admission.js:80:4)";
+  for (const sink of [processServerLogSink(), processServerLogSinkFor("request")]) {
+    const evidence = sink.errorEvidence(error);
+    expect(evidence).toEqual({
+      frames: ["packages/keiko-model-gateway/dist/prompt-admission.js:80:4"],
+      causeChain: ["RangeError"],
+    });
+    expect(JSON.stringify(evidence)).not.toMatch(/private-/u);
+  }
+});

@@ -270,7 +270,7 @@ describe("Gateway.chat — activity log", () => {
       log,
     );
     const response = await gateway.chat({ ...REQUEST, reasoningEffort: "high" });
-    expect(opsAtCall).toEqual(["gateway.prompt.admission", "gateway.chat.started"]);
+    expect(opsAtCall).toEqual(["gateway.chat.started", "gateway.prompt.admission"]);
     const started = eventFor(log.events, "gateway.chat.started");
     expect(started.level).toBe("info");
     expect(started.correlationId).toBe(response.usage.requestId);
@@ -318,7 +318,7 @@ describe("Gateway.chat — activity log", () => {
     );
     const pending = gateway.chat(REQUEST);
     await inFlight;
-    expect(ops(log.events)).toEqual(["gateway.prompt.admission", "gateway.chat.started"]);
+    expect(ops(log.events)).toEqual(["gateway.chat.started", "gateway.prompt.admission"]);
     answer(okResponse("example-chat-model"));
     await expect(pending).resolves.toMatchObject({ content: "answer" });
   });

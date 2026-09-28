@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 
 describe("countGatewayPromptTokens", () => {
+  it("does not lose the dense-text floor when JSON escapes multiline content", () => {
+    const content = "A long German conversation with decisions and corrections.\n".repeat(30);
+    expect(
+      countGatewayPromptTokens({ messages: [{ role: "system", content }] }),
+    ).toBeGreaterThanOrEqual(countContextTokens(content));
+  });
   it("counts assistant tool arguments and tool-result ids as forwarded prompt context", () => {
     const visibleOnly = countGatewayPromptTokens({
       messages: [

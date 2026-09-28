@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0e531a190503fbef92395b2b190e66cfe810c4b889d9e620626da95c1aa05905" as const;
+  "2e24526273d5b496a2377d43b0972406b7a72b83b63c4abd65c193983f9906bb" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -11673,11 +11673,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      aliasHash: {
+      modelIdDigest: {
         type: "string",
         dataClass: "digest",
+        required: false,
+        maxLength: 16,
+      },
+      deploymentCount: {
+        type: "integer",
+        dataClass: "count",
         required: true,
-        maxLength: 64,
       },
       state: {
         type: "string",
@@ -11920,6 +11925,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
       state: {
         type: "string",
         dataClass: "closed-enum",
@@ -11989,6 +12008,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "loss-state",
         required: true,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
       },
       fallback: {
         type: "string",
@@ -42955,13 +42988,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "aliasHash",
-              type: "string",
-              dataClass: "digest",
+              name: "contextWindow",
+              type: "integer",
+              dataClass: "count",
               required: true,
             },
             {
-              name: "contextWindow",
+              name: "deploymentCount",
               type: "integer",
               dataClass: "count",
               required: true,
@@ -42971,6 +43004,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
             {
               name: "reasoningOptionCount",
@@ -43904,6 +43943,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "contextWindow",
               type: "integer",
               dataClass: "count",
@@ -43920,6 +43965,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
             },
             {
               name: "inputBudget",
@@ -43952,10 +44003,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["gateway.prompt.admission.bounds"],
           replayReferences: [],
@@ -43970,16 +44028,34 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "fallback",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["gateway.prompt.counter-failed.fallback"],
           replayReferences: [],

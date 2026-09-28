@@ -5587,6 +5587,10 @@ describe("handleGatewaySetup", () => {
               model_info: { mode: "chat", max_input_tokens: 131_072 },
             },
             { model_name: "private-customer-alias", model_info: { mode: "chat" } },
+            {
+              model_name: "private-customer-alias",
+              model_info: { mode: "chat", max_input_tokens: 131_072 },
+            },
           ],
         },
         "corr-alias-intersection",
@@ -5598,6 +5602,7 @@ describe("handleGatewaySetup", () => {
         correlationId: "corr-alias-intersection",
         extra: {
           state: "intersected",
+          deploymentCount: 3,
           contextWindow: 4_096,
           maxOutputTokens: 0,
           undeclaredOutputLimit: true,
@@ -5607,6 +5612,7 @@ describe("handleGatewaySetup", () => {
           loss: "none",
         },
       });
+      expect(event?.extra?.modelIdDigest).toMatch(/^[a-f0-9]{16}$/u);
       expect(JSON.stringify(event)).not.toContain("private-customer-alias");
       expectActivityLogProof(
         "gateway.discovery.alias-intersection.line",
@@ -5737,6 +5743,72 @@ describe("handleGatewaySetup", () => {
       deps.store.close();
     }
   });
+
+  it.each([1, 2, 3])(
+    "preserves proven bounds for %s wholly undeclared replicas",
+    async (replicas) => {
+      const uiDir = await tempDir("keiko-alias-reasoning-");
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-alias-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+        gatewayModelDiscovery: () =>
+          Promise.resolve(
+            parseModelDiscovery({
+              data: Array.from({ length: replicas }, () => ({
+                model_name: "shared-chat",
+                model_info: { mode: "chat" },
+              })),
+            }),
+          ),
+      });
+      const gatewayConfig = deps.gatewayConfig;
+      if (gatewayConfig === undefined) throw new TypeError("Missing fixture config store");
+      const raw = {
+        providers: [
+          {
+            modelId: "shared-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "fixture-token",
+            capability: {
+              ...createDefaultChatCapability("shared-chat"),
+              contextWindow: 32_000,
+              reasoningEfforts: ["medium"],
+              maxOutputTokens: 16_384,
+            },
+          },
+        ],
+      };
+      gatewayConfig.set(parseGatewayConfig(raw), true);
+      writeFileSync(gatewayConfig.storagePath, JSON.stringify(raw), "utf8");
+      try {
+        const result = await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "fixture-token",
+            preserveExisting: false,
+            deploymentNames: [],
+          }),
+          deps,
+        );
+        expect(result.status).toBe(200);
+        expect(
+          currentGatewayConfig(deps)?.capabilities?.find(
+            (capability) => capability.id === "shared-chat",
+          )?.reasoningEfforts ?? [],
+        ).toEqual(["medium"]);
+        expect(
+          currentGatewayConfig(deps)?.capabilities?.find(
+            (capability) => capability.id === "shared-chat",
+          )?.contextWindow,
+        ).toBe(32_000);
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
 
   it("keeps conflicting deployment roles unusable after a third alias entry", () => {
     const chat = { model_name: "mixed-alias", model_info: { mode: "chat" } };
@@ -11069,3 +11141,25 @@ function expectLiteLlmCounter(config: GatewayConfig | undefined): void {
     expect.objectContaining({ modelId: "litellm-chat-large", tokenCounter: "litellm" }),
   );
 }
+
+it("bounds discovery evidence by selected aliases instead of raw replica count", () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  try {
+    const replicas = Array.from({ length: 2_000 }, () => ({
+      model_name: "replicated-chat",
+      model_info: { mode: "chat" },
+    }));
+    parseModelDiscovery({ data: replicas }, "bounded-discovery");
+    const events = sink.events.filter(
+      (event) => event.op === "gateway.discovery.alias-intersection",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({
+      deploymentCount: replicas.length,
+      undeclaredLimit: true,
+    });
+  } finally {
+    resetServerLogger();
+  }
+});

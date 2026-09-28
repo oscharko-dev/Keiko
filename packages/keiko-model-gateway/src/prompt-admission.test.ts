@@ -3,7 +3,7 @@ import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contract
 import { admitGatewayPrompt } from "./prompt-admission.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
 
 const capability = {
   ...createDefaultChatCapability("fixture"),
@@ -82,5 +82,46 @@ describe("complete prompt admission", () => {
     expect(() =>
       admitGatewayPrompt({ ...request, responseFormat }, capability, recorder(), "fixture"),
     ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
+  });
+});
+
+it("retains schema cost when the remote message count wins", () => {
+  const log = recorder();
+  const responseFormat = {
+    type: "json_schema" as const,
+    name: "result",
+    schema: { description: "item ".repeat(500) },
+  };
+  const complete = { ...request, maxOutputTokens: 800, responseFormat };
+  const profile = deriveContextProfileFromCapability(capability);
+  const schemaCost = countGatewayPromptTokens({ messages: [], responseFormat });
+  const remote = profile.maxInputTokens - 800 - profile.safetyMarginTokens;
+  expect(() =>
+    admitGatewayPrompt(complete, capability, log, "schema-remote", {
+      status: "available",
+      tokens: remote,
+    }),
+  ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
+  expect(log.events[0]?.extra?.promptTokens).toBe(remote + schemaCost);
+});
+
+it("classifies overflow refusals with structured evidence before throwing", () => {
+  const log = {
+    ...recorder(),
+    errorEvidence: (): GatewayFailureEvidence => ({
+      frames: ["packages/keiko-model-gateway/dist/prompt-admission.js:80:4"],
+      causeChain: [],
+    }),
+  };
+  expect(() =>
+    admitGatewayPrompt({ ...request, maxOutputTokens: 1025 }, capability, log, "refused-call"),
+  ).toThrow();
+  expect(log.events[0]).toMatchObject({
+    correlationId: "refused-call",
+    errorKind: "invalid-request",
+    extra: {
+      state: "overflow",
+      frames: ["packages/keiko-model-gateway/dist/prompt-admission.js:80:4"],
+    },
   });
 });

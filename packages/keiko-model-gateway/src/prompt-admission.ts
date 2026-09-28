@@ -1,4 +1,7 @@
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfileFromCapability,
+  type ContextTokenAccounting,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -6,9 +9,14 @@ import {
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayCallRequest } from "./gateway.js";
 import type { ModelCapability } from "./types.js";
-import type { ModelGatewayLogSink } from "./observability.js";
+import {
+  GATEWAY_FAILURE_EVIDENCE_FIELDS,
+  gatewayFailureEvidence,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import {
   countGatewayPromptTokens,
+  countGatewayResponseFormatTokens,
   type GatewayPromptTokenInput,
 } from "./prompt-token-accounting.js";
 import type { ProviderTokenCount } from "./provider-token-counter.js";
@@ -21,6 +29,7 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "prompt-admission.admitGatewayPrompt",
   fields: {
+    ...GATEWAY_FAILURE_EVIDENCE_FIELDS,
     state: {
       type: "string",
       dataClass: "closed-enum",
@@ -76,16 +85,18 @@ export function admitGatewayPrompt(
     profile.maxInputTokens - outputBudget - profile.safetyMarginTokens,
   );
   const estimatedTokens = countGatewayPromptTokens(request, profile.tokenAccounting);
-  const promptTokens = Math.max(estimatedTokens, measured.tokens ?? 0);
-  const overflow = promptTokens > inputBudget || outputExceedsCapability(outputBudget, capability);
+  const measuredTokens = completeMeasuredTokens(request, measured, profile.tokenAccounting);
+  const promptTokens = Math.max(estimatedTokens, measuredTokens ?? 0);
+  const refusal = promptRefusal(promptTokens, inputBudget, outputBudget, capability);
   log.write(
     activityLogEvent(
       PROMPT_ADMISSION,
-      { correlationId },
+      { correlationId, ...(refusal === undefined ? {} : { errorKind: "invalid-request" }) },
       {
-        state: overflow ? "overflow" : "admitted",
+        ...(refusal === undefined ? {} : gatewayFailureEvidence(log, refusal)),
+        state: refusal === undefined ? "admitted" : "overflow",
         counterSource: selectedCounterSource(
-          measured.tokens,
+          measuredTokens,
           estimatedTokens,
           profile.tokenAccounting?.source,
         ),
@@ -100,11 +111,31 @@ export function admitGatewayPrompt(
       },
     ),
   );
-  if (overflow)
-    throw new ContextOverflowError(
-      "complete provider prompt and output allocation exceed the model context budget",
-    );
-  return { ...request, maxOutputTokens: outputBudget };
+  if (refusal !== undefined) throw refusal;
+  return request;
+}
+
+function promptRefusal(
+  promptTokens: number,
+  inputBudget: number,
+  outputBudget: number,
+  capability: ModelCapability,
+): ContextOverflowError | undefined {
+  if (promptTokens <= inputBudget && !outputExceedsCapability(outputBudget, capability))
+    return undefined;
+  return new ContextOverflowError(
+    "complete provider prompt and output allocation exceed the model context budget",
+  );
+}
+
+function completeMeasuredTokens(
+  request: GatewayPromptTokenInput,
+  measured: ProviderTokenCount,
+  accounting: ContextTokenAccounting | undefined,
+): number | undefined {
+  return measured.tokens === undefined
+    ? undefined
+    : measured.tokens + countGatewayResponseFormatTokens(request, accounting);
 }
 
 function outputExceedsCapability(output: number, capability: ModelCapability): boolean {
