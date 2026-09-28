@@ -1,7 +1,7 @@
 name: Windows gateway confinement development proof
 
 # Explicit development lane for #3666/#3423. Only a disposable hosted runner changes WFP state.
-# This proves filter lifecycle, not production runtime or socket qualification.
+# Development proof only; this does not qualify the production runtime.
 on:
   push:
     branches: [fix/3666-windows-coding-runtime]
@@ -36,3 +36,5 @@ jobs:
           if ((Get-Service BFE).Status -ne 'Running') { throw "BFE is not running." }
       - name: Compile, analyze, validate and prove dynamic filter cleanup
         run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle
+      - name: Prove real AppContainer gateway access and hostile loopback denial
+        run: node scripts/testing/test-windows-gateway-filters.mjs --socket-proof

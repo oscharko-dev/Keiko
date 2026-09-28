@@ -4,6 +4,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <rpc.h>
+#include <stdlib.h>
+
+int gateway_socket_proof(void);
+int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile);
 
 static int validation_tests(void) {
   struct keiko_gateway_filters filters = {0};
@@ -85,6 +89,10 @@ static int lifecycle_test(UINT16 family) {
 
 int main(int argc, char **argv) {
   if (argc == 1) return validation_tests();
+  if (argc == 2 && strcmp(argv[1], "--socket-proof") == 0) return gateway_socket_proof();
+  if (argc == 5 && strcmp(argv[1], "--socket-child") == 0) {
+    return gateway_socket_child(atoi(argv[2]), (UINT16)atoi(argv[3]), (UINT16)atoi(argv[4]));
+  }
   if (argc == 2 && strcmp(argv[1], "--filter-lifecycle") == 0) {
     if (lifecycle_test(AF_INET) != 0) return 1;
     return lifecycle_test(AF_INET6);

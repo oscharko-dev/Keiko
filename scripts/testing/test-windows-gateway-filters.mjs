@@ -12,10 +12,10 @@ const options = process.argv.slice(2);
 if (
   process.platform !== "win32" ||
   options.length > 1 ||
-  (options.length === 1 && options[0] !== "--filter-lifecycle")
+  (options.length === 1 && !new Set(["--filter-lifecycle", "--socket-proof"]).has(options[0]))
 ) {
   process.stderr.write(
-    "Requires Windows; usage: test-windows-gateway-filters.mjs [--filter-lifecycle]\n",
+    "Requires Windows; usage: test-windows-gateway-filters.mjs [--filter-lifecycle|--socket-proof]\n",
   );
   process.exitCode = 2;
 } else {
@@ -37,12 +37,14 @@ if (
     `/Fo:${scratch}\\`,
     join(root, "native/runtime-supervisor/windows/gateway_wfp.c"),
     join(root, "native/runtime-supervisor/windows/gateway_wfp.test.c"),
+    join(root, "native/runtime-supervisor/windows/gateway_socket.test.c"),
     "/link",
     "/DEPENDENTLOADFLAG:0x800",
     "fwpuclnt.lib",
     "rpcrt4.lib",
     "advapi32.lib",
     "ws2_32.lib",
+    "userenv.lib",
   ];
   const built = spawnSync(windowsToolFromPath(env.PATH, "cl.exe"), args, {
     env,
@@ -55,7 +57,7 @@ if (
     const checked = spawnSync(executable, [], { stdio: "inherit", windowsHide: true });
     process.exitCode = checked.status ?? 1;
   }
-  if (process.exitCode === 0 && options[0] === "--filter-lifecycle") {
+  if (process.exitCode === 0 && options.length === 1) {
     const tested = spawnSync(executable, options, { stdio: "inherit", windowsHide: true });
     process.exitCode = tested.status ?? 1;
   }

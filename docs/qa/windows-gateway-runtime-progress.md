@@ -52,6 +52,18 @@ test there, including IPv4/IPv6 installation and independent readback of filter 
 No filter-installation test runs on the developer PC. Do not remove the runtime's fail-closed refusal
 or label the end-to-end issue fixed without actual socket and workbench evidence.
 
+### Disposable runner result, 2026-09-28
+
+[GitHub Actions run 36449500023](https://github.com/oscharko-dev/Keiko/actions/runs/36449500023)
+passed on Windows Server 2025 at commit `f2a95a09590f9a12a3fa443b459db848f7c5cc03`.
+MSVC compilation and static analysis completed successfully. Input validation passed, and both
+IPv4 and IPv6 lifecycle tests returned `code=0`, including independent verification that the
+filters and their private sublayer were removed. All steps of this dedicated workflow succeeded.
+
+This result proves native filter installation and cleanup only. It does not prove socket isolation,
+runtime integration, npm installation, the DesignPatterns workbench task, or the complete repository
+CI matrix. Those acceptance criteria remain outstanding.
+
 ## Platform references
 
 - [WFP engine sessions and dynamic object lifetime](https://learn.microsoft.com/en-us/windows/win32/api/fwpmu/nf-fwpmu-fwpmengineopen0)
