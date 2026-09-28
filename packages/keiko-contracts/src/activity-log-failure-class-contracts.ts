@@ -6,6 +6,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "gateway-alias-intersection",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["gateway.discovery.alias-intersection"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["gateway.discovery.alias-intersection"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["gateway.discovery.alias-intersection"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["gateway.discovery.alias-intersection"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-history-persistence",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

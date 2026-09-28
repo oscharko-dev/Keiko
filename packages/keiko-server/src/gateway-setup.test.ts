@@ -18,6 +18,7 @@ import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
@@ -27,6 +28,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   ERROR_CODES,
+  createDefaultChatCapability,
   parseGatewayConfig,
   resolveCodingSafeSidecarGatewayProfile,
   resolveVoiceCapability,
@@ -5540,6 +5542,144 @@ describe("handleGatewaySetup", () => {
     expect(result.modelMetadata?.["shared-chat"]?.contextWindow).toBe(4_096);
   });
 
+  it("keeps prompt capacity when an unknown context has a declared output ceiling", () => {
+    const parsed = parseModelDiscovery({
+      data: [
+        {
+          model_name: "shared-chat",
+          model_info: { mode: "chat", max_input_tokens: 131_072, max_output_tokens: 16_384 },
+        },
+        { model_name: "shared-chat", model_info: { mode: "chat", max_output_tokens: 8_192 } },
+      ],
+    });
+    const metadata = parsed.modelMetadata?.["shared-chat"];
+    const capability = {
+      ...createDefaultChatCapability("shared-chat"),
+      contextWindow: metadata?.contextWindow ?? 0,
+      maxOutputTokens: metadata?.maxOutputTokens ?? 0,
+    };
+    expect(capability.contextWindow).toBe(4_096);
+    expect(deriveContextProfileFromCapability(capability).effectiveInputBudget).toBeGreaterThan(0);
+  });
+
+  it("preserves an authoritative unknown output ceiling in either alias order", () => {
+    const entries = [
+      { model_name: "shared-chat", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+      {
+        model_name: "shared-chat",
+        model_info: { mode: "chat", max_input_tokens: 131_072, max_output_tokens: 16_384 },
+      },
+    ];
+    for (const data of [entries, [...entries].reverse()]) {
+      expect(parseModelDiscovery({ data }).modelMetadata?.["shared-chat"]?.maxOutputTokens).toBe(0);
+    }
+  });
+
+  it("records alias fallback bounds with body-free correlated analyzer evidence", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      parseModelDiscovery(
+        {
+          data: [
+            {
+              model_name: "private-customer-alias",
+              model_info: { mode: "chat", max_input_tokens: 131_072 },
+            },
+            { model_name: "private-customer-alias", model_info: { mode: "chat" } },
+          ],
+        },
+        "corr-alias-intersection",
+      );
+      const event = sink.events.find(
+        (entry) => entry.op === "gateway.discovery.alias-intersection",
+      );
+      expect(event).toMatchObject({
+        correlationId: "corr-alias-intersection",
+        extra: {
+          state: "intersected",
+          contextWindow: 4_096,
+          undeclaredLimit: true,
+          reasoningOptionCount: 0,
+          completeness: "complete",
+          loss: "none",
+        },
+      });
+      expect(JSON.stringify(event)).not.toContain("private-customer-alias");
+      expectActivityLogProof(
+        "gateway.discovery.alias-intersection.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("clears stored reasoning choices on same-endpoint alias rediscovery", async () => {
+    const uiDir = await tempDir("keiko-alias-reasoning-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-alias-evidence-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              {
+                model_name: "shared-chat",
+                model_info: { mode: "chat", reasoning_efforts: ["low", "high"] },
+              },
+              { model_name: "shared-chat", model_info: { mode: "chat" } },
+            ],
+          }),
+        ),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new TypeError("Missing fixture config store");
+    const raw = {
+      providers: [
+        {
+          modelId: "shared-chat",
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "fixture-token",
+          capability: {
+            ...createDefaultChatCapability("shared-chat"),
+            reasoningEfforts: ["medium"],
+            maxOutputTokens: 16_384,
+          },
+        },
+      ],
+    };
+    gatewayConfig.set(parseGatewayConfig(raw), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(raw), "utf8");
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "fixture-token",
+          preserveExisting: false,
+          deploymentNames: [],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(
+        currentGatewayConfig(deps)?.capabilities?.find(
+          (capability) => capability.id === "shared-chat",
+        )?.reasoningEfforts ?? [],
+      ).toEqual([]);
+      expect(
+        currentGatewayConfig(deps)?.capabilities?.find(
+          (capability) => capability.id === "shared-chat",
+        )?.maxOutputTokens,
+      ).toBe(0);
+    } finally {
+      deps.store.close();
+    }
+  });
+
   it("keeps conflicting deployment roles unusable after a third alias entry", () => {
     const chat = { model_name: "mixed-alias", model_info: { mode: "chat" } };
     const embedding = { model_name: "mixed-alias", model_info: { mode: "embedding" } };
@@ -5574,17 +5714,15 @@ describe("handleGatewaySetup", () => {
     });
   });
 
-  it("lets a usable duplicate win over an unsupported entry with the same id", () => {
-    // A LiteLLM model_name is a routing alias that can front several deployments. An unusable one
-    // listed first must not shadow the usable duplicate behind it.
-    expect(
-      normalizeDiscoveryPayloadForSetup({
-        data: [
-          { model_name: "shared-alias", model_info: { mode: "rerank" } },
-          { model_name: "shared-alias", model_info: { mode: "chat" } },
-        ],
-      }),
-    ).toMatchObject({ chatModelIds: ["shared-alias"] });
+  it("rejects a routing alias containing a declared reranker in either order", () => {
+    // A declared non-chat backend can receive this alias too; ignoring it would widen authority.
+    const entries = [
+      { model_name: "shared-alias", model_info: { mode: "rerank" } },
+      { model_name: "shared-alias", model_info: { mode: "chat" } },
+    ];
+    for (const data of [entries, [...entries].reverse()]) {
+      expect(() => normalizeDiscoveryPayloadForSetup({ data })).toThrow();
+    }
   });
 
   it("never lets unsupported models consume discovery-cap slots", () => {

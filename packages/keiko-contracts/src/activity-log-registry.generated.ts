@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "10c900e9140a35aeefec1eb7dc202d228116fb37231a84d461ac7c08f99ee6d3" as const;
+  "586a1ac5f98eec526f61ab70f9ad4ba21ecaa14c62b52cad26520581148904b8" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -11653,6 +11653,59 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "capability",
     failureClasses: ["gateway-configuration"],
     proofIds: ["gateway.config.resolved.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.discovery.alias-intersection",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-discovery-log.logAliasIntersection",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      aliasHash: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["intersected", "conflicting"],
+      },
+      contextWindow: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      undeclaredLimit: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      reasoningOptionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-alias-intersection"],
+    proofIds: ["gateway.discovery.alias-intersection.line"],
     releaseImpact: "patch",
   },
   {
@@ -28658,8 +28711,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 323,
-  completeClassCount: 323,
+  supportedClassCount: 324,
+  completeClassCount: 324,
   completeness: "complete",
   classes: [
     {
@@ -42752,6 +42805,80 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["evidence.retention.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "gateway-alias-intersection",
+      requirementContract: "gateway-alias-intersection",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.discovery.alias-intersection"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "gateway.discovery.alias-intersection",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["gateway.discovery.alias-intersection"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "gateway.discovery.alias-intersection",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "aliasHash",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "contextWindow",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "reasoningOptionCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "undeclaredLimit",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.discovery.alias-intersection.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -63437,6 +63564,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.circuit.opened": "model-gateway",
     "gateway.circuit.rejected": "model-gateway",
     "gateway.config.resolved": "model-gateway",
+    "gateway.discovery.alias-intersection": "model-gateway",
     "gateway.instance.bound": "model-gateway",
     "gateway.instance.reset": "model-gateway",
     "gateway.instance.reused": "model-gateway",

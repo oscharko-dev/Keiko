@@ -739,7 +739,7 @@ export function deriveContextProfileFromCapability(
       : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
   const reservedOutputTokens =
     capability.maxOutputTokens > 0
-      ? Math.min(maxInputTokens, capability.maxOutputTokens)
+      ? Math.min(undeclaredOutputReserveTokens(maxInputTokens), capability.maxOutputTokens)
       : undeclaredOutputReserveTokens(maxInputTokens);
   const safetyMarginTokens = safetyMarginTokensFor(maxInputTokens, reservedOutputTokens);
   return {

@@ -939,6 +939,7 @@ export interface UiHandlerDeps {
         apiKey: string,
         apiKeyHeaderName?: string,
         egress?: GatewayEgressConfig,
+        correlationId?: string,
       ) => Promise<GatewayModelDiscoveryOutput>)
     | undefined;
   // Test seam for the non-mutating gateway readiness probes. Production uses globalThis.fetch via
@@ -1279,6 +1280,7 @@ export interface BuildHandlerDepsOptions {
         apiKey: string,
         apiKeyHeaderName?: string,
         egress?: GatewayEgressConfig,
+        correlationId?: string,
       ) => Promise<GatewayModelDiscoveryOutput>)
     | undefined;
   // Optional Figma credential-test seam (tests); production calls Figma /v1/me.

@@ -1,3 +1,4 @@
+import { logAliasIntersection } from "./gateway-discovery-log.js";
 import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 // First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
 // and optionally a Figma PAT; the loopback BFF builds the local provider config, performs a real
@@ -1319,6 +1320,7 @@ type DiscoveryVoiceRole = "speech-input" | "speech-output" | "realtime";
 
 interface ClassifiedDiscoveryModel {
   readonly deploymentConflict?: boolean;
+  readonly declaredNonChat?: boolean;
   readonly id: string;
   readonly kind: DiscoveryModelKind;
   readonly voiceRole?: DiscoveryVoiceRole;
@@ -1382,7 +1384,14 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
       // unbounded shape; echoing it verbatim would put foreign strings into the diagnostic channel
       // and the setup response, which the redaction rules forbid.
       const reason = boundedUnsupportedReason(declaredMode);
-      return { id, kind: "unsupported", supportsImageInput: false, metadata, reason };
+      return {
+        id,
+        kind: "unsupported",
+        declaredNonChat: true,
+        supportsImageInput: false,
+        metadata,
+        reason,
+      };
     }
     if (role === "embedding") {
       return { id, kind: "embedding", supportsImageInput: false, metadata };
@@ -1435,7 +1444,10 @@ export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
 // Issue #144: exported as part of the discovery-normalization seam. Throws on schema-level
 // malformation (no data array) and on the "every entry filtered" terminal case so the caller
 // (production path) returns an honest error rather than a silently-empty model list.
-export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
+export function parseModelDiscovery(
+  payload: unknown,
+  correlationId?: string,
+): GatewayDiscoveredModels {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
@@ -1446,7 +1458,9 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
     const classified = classifyDiscoveryItem(item);
     if (classified === undefined) continue;
     const existing = byId.get(classified.id);
-    byId.set(classified.id, mergeDiscoveryDeployment(existing, classified));
+    const merged = mergeDiscoveryDeployment(existing, classified);
+    logDiscoveryMerge(existing, classified, merged, correlationId);
+    byId.set(classified.id, merged);
   }
   const entries: ClassifiedDiscoveryModel[] = [...byId.values()];
   // LiteLLM declares audio roles in /model/info. Preserve the existing chat/embedding discovery
@@ -1476,8 +1490,17 @@ function mergeDiscoveryDeployment(
   existing: ClassifiedDiscoveryModel | undefined,
   incoming: ClassifiedDiscoveryModel,
 ): ClassifiedDiscoveryModel {
-  if (existing?.deploymentConflict === true) return existing;
-  if (existing === undefined || existing.kind === "unsupported") return incoming;
+  if (existing === undefined) return incoming;
+  if (existing.deploymentConflict === true) return existing;
+  if (hasDeclaredNonChatDeployment(existing, incoming)) {
+    return {
+      ...existing,
+      kind: "unsupported",
+      deploymentConflict: true,
+      reason: "not-chat-capable",
+    };
+  }
+  if (existing.kind === "unsupported") return incoming;
   if (incoming.kind === "unsupported") return existing;
   if (existing.kind !== incoming.kind || existing.voiceRole !== incoming.voiceRole) {
     return {
@@ -1494,21 +1517,25 @@ function mergeDiscoveryDeployment(
   };
 }
 
+function hasDeclaredNonChatDeployment(
+  left: ClassifiedDiscoveryModel,
+  right: ClassifiedDiscoveryModel,
+): boolean {
+  return left.declaredNonChat === true || right.declaredNonChat === true;
+}
+
 function intersectDeploymentMetadata(
   left: GatewayDiscoveredModelMetadata,
   right: GatewayDiscoveredModelMetadata,
 ): GatewayDiscoveredModelMetadata {
-  const outputLimits = [left.maxOutputTokens, right.maxOutputTokens].filter(
-    (value): value is number => value !== undefined,
-  );
   const reasoningEfforts = (left.reasoningEfforts ?? [])
     .filter((effort) => right.reasoningEfforts?.includes(effort))
-    .sort();
+    .sort((left, right) => left.localeCompare(right, "en"));
   return {
     contextWindow: Math.min(left.contextWindow ?? 4_096, right.contextWindow ?? 4_096),
-    ...(outputLimits.length === 0 ? {} : { maxOutputTokens: Math.min(...outputLimits) }),
+    maxOutputTokens: Math.min(left.maxOutputTokens ?? 0, right.maxOutputTokens ?? 0),
     toolCalling: left.toolCalling === true && right.toolCalling === true,
-    ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
+    reasoningEfforts,
     ...(left.chatModeDeclared === true && right.chatModeDeclared === true
       ? { chatModeDeclared: true }
       : {}),
@@ -1640,11 +1667,13 @@ async function discoverLiteLlmModelInfo(
   apiKey: string,
   apiKeyHeaderName: string,
   egress?: GatewayEgressConfig,
+  correlationId?: string,
 ): Promise<GatewayDiscoveredModels | undefined> {
   for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
     try {
       return parseModelDiscovery(
         await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress),
+        correlationId,
       );
     } catch (cause) {
       if (modelInfoAnswerIsUnusable(cause) && cause instanceof Error) throw cause;
@@ -1658,13 +1687,21 @@ async function defaultGatewayModelDiscovery(
   apiKey: string,
   apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
   egress?: GatewayEgressConfig,
+  correlationId?: string,
 ): Promise<GatewayDiscoveredModels> {
-  const litellmModels = await discoverLiteLlmModelInfo(baseUrl, apiKey, apiKeyHeaderName, egress);
+  const litellmModels = await discoverLiteLlmModelInfo(
+    baseUrl,
+    apiKey,
+    apiKeyHeaderName,
+    egress,
+    correlationId,
+  );
   if (litellmModels !== undefined) {
     return litellmModels;
   }
   return parseModelDiscovery(
     await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress),
+    correlationId,
   );
 }
 
@@ -5003,6 +5040,7 @@ async function candidateModelIdsForSetup(
       input.apiKey,
       input.apiKeyHeaderName,
       validationConfig.egress,
+      input.correlationId,
     ),
   );
 }
@@ -7196,5 +7234,26 @@ export async function handleApplyGatewayVerifiedCapabilities(
     updated,
     true,
     ctx.correlationId,
+  );
+}
+
+function logDiscoveryMerge(
+  existing: ClassifiedDiscoveryModel | undefined,
+  incoming: ClassifiedDiscoveryModel,
+  merged: ClassifiedDiscoveryModel,
+  correlationId: string | undefined,
+): void {
+  if (existing === undefined) return;
+  logAliasIntersection(
+    {
+      alias: merged.id,
+      contextWindow: merged.metadata.contextWindow ?? 0,
+      undeclaredLimit:
+        existing.metadata.contextWindow === undefined ||
+        incoming.metadata.contextWindow === undefined,
+      conflicting: merged.deploymentConflict === true,
+      reasoningOptionCount: merged.metadata.reasoningEfforts?.length ?? 0,
+    },
+    correlationId,
   );
 }
