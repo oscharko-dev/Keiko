@@ -144,7 +144,10 @@ static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters, PSID
     if (filter == NULL) valid = readback_mismatch("missing-filter");
     else if (!same_guid(&filter->subLayerKey, &filters->sublayer)) valid = readback_mismatch("sublayer");
     else if (!same_guid(&filter->layerKey, layer)) valid = readback_mismatch("layer");
-    else if (filter->flags != 0) valid = readback_mismatch("flags");
+    /* BFE may mark a returned filter as indexed. That is a lookup optimization, not a policy
+     * change. Reject every other flag, including disabled filters and hard-permit semantics. */
+    else if ((filter->flags & ~(UINT32)FWPM_FILTER_FLAG_INDEXED) != 0)
+      valid = readback_mismatch("flags");
     else if (filter->action.type != (UINT32)(index == 2 ? FWP_ACTION_PERMIT : FWP_ACTION_BLOCK))
       valid = readback_mismatch("action");
     else if (filter->weight.type != FWP_UINT64 || filter->weight.uint64 == NULL ||
