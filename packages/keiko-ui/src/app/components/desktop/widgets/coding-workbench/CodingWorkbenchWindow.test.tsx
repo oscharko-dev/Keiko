@@ -1513,7 +1513,15 @@ describe("CodingWorkbenchWindow", () => {
     expect(dialog).toHaveTextContent("Not reported by runtime");
   });
 
-  it("separates current context capacity from cumulative run input", (): void => {
+  it("separates current context capacity from cumulative run input", ({ onTestFinished }): void => {
+    // The expected English display must not depend on the Windows host's regional settings.
+    const NumberFormat = Intl.NumberFormat;
+    const formatting = vi
+      .spyOn(Intl, "NumberFormat")
+      .mockImplementation(function (locales, options) {
+        return new NumberFormat(locales ?? "en-US", options);
+      });
+    onTestFinished(() => formatting.mockRestore());
     renderWorkbench(
       liveState({
         run: {

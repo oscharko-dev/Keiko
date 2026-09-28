@@ -449,7 +449,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist. Auf einem Mac erhält eine npm-Installation ihre Coding-Runtime automatisch als optionales Paket. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
+    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Du kannst weiterhin einen Workspace binden. Unter Windows enthalten npm-Installationen keine unterstützte Coding-Runtime: Die erforderliche Windows-Netzwerkisolation ist noch nicht implementiert. Erneutes Binden des Workspace oder die Installation eines macOS-Runtime-Pakets ermöglicht keine Coding-Läufe unter Windows. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.setup.runtimeEvaluation":
     "Diese Installation nutzt eine ungeprüfte Evaluations-Runtime. Sie trägt keine Apple- oder Microsoft-Codesignatur und läuft unter macOS ohne die Endpoint-Security-Eingrenzung eines Release-Builds. Die Integrität ihrer Nutzdaten wird bei jedem Start weiterhin Byte für Byte geprüft.",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
@@ -1066,7 +1066,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Modellquelle konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Das Starten eines Coding-Laufs bleibt nicht verfügbar, bis die Coding-Runtime dieser Installation als aktiv bestätigt ist. Auf einem Mac erhält eine npm-Installation ihre Coding-Runtime automatisch als optionales Paket. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
+    "Auf dieser Installation kann kein Coding-Lauf gestartet werden. Unter Windows enthalten npm-Installationen keine unterstützte Coding-Runtime: Die erforderliche Windows-Netzwerkisolation ist noch nicht implementiert. Erneutes Binden des Workspace oder die Installation eines macOS-Runtime-Pakets ermöglicht keine Coding-Läufe unter Windows. Auf einem Mac installiert npm die optionale Runtime normalerweise automatisch. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceBindFailed":
