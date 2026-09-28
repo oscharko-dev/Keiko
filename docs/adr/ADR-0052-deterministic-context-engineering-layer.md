@@ -122,6 +122,15 @@ A denied, malformed, cancelled, or timed-out counter never silently becomes an e
 body-free `gateway.prompt.admission` event records the source, counter status, tokenizer category,
 and input/output budgets. Azure routes do not acquire this LiteLLM-specific endpoint.
 
+Desktop chat assembly, deterministic history compaction, final prompt diagnostics, and gateway
+admission share `countGatewayPromptTokens`. The current request, context wrappers, and image
+allowances are reserved before selecting the retained history. Image accounting uses metadata-only
+placeholders; attachment authority checks and byte resolution stay at the final provider boundary.
+Compaction records report removed complete-message costs and the incremental serialized summary
+cost, so their token savings agree with the difference between the pre/post-compaction prompts.
+The optional LiteLLM counter may still report a higher count and refuse admission; local assembly
+and gateway admission use the same local fallback, not a claim of provider-exact counting.
+
 ### D3 — Eight-lane taxonomy with a fixed allocation order
 
 We will encode exactly eight lanes via `ContextLaneId`:

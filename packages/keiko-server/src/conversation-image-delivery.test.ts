@@ -2,14 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { MAX_ATTACHMENT_MIME_BYTES } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { buildRedactor } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   assemblyWithConversationImages,
+  buildGatewayAssembly,
+  type GatewayTurnSnapshot,
   conversationImageDeliveries,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
@@ -117,7 +123,63 @@ function assembly(): GatewayPromptAssembly {
   return built;
 }
 
+function imageConversationHistory(target: ReturnType<typeof fixture>): GatewayTurnSnapshot {
+  const { deps, request } = target;
+  for (let index = 0; index < 31; index += 1) {
+    deps.store.createMessage({
+      chatId: request.chatId,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: index === 30 ? request.content : "Prior requirement. ".repeat(60),
+      timestamp: index,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+  }
+  const history = deps.store.listMessages(request.chatId);
+  const current = history.at(-1);
+  if (current === undefined) throw new Error("Missing fixture turn");
+  return { history, currentUserMessageId: current.id };
+}
+
 describe("conversation image finalization", () => {
+  it("reserves image capacity before compacting history without resolving bytes early", () => {
+    const target = fixture();
+    const profile = deriveContextProfile({
+      maxInputTokens: 12_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const deps = { ...target.deps, contextProfile: profile };
+    const snapshot = imageConversationHistory(target);
+    const built = buildGatewayAssembly(
+      deps,
+      target.request,
+      {
+        context: { enabled: false, text: "", memories: [], budget: { tokens: 0, used: 0 } },
+        actions: [],
+      },
+      "vision-chat",
+      snapshot,
+    );
+    expect(built.compaction).toBeDefined();
+    expect(target.resolve).not.toHaveBeenCalled();
+    expect(built.messages.every((message) => message.contentParts === undefined)).toBe(true);
+    const delivered = assemblyWithConversationImages(deps, target.request, "vision-chat", built);
+    const tokens = countGatewayPromptTokens(
+      { messages: delivered.messages },
+      profile.tokenAccounting,
+    );
+    expect(tokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect(built.diagnostics.totalEstimatedTokens).toBe(tokens);
+    expect(built.diagnostics.lanes.reduce((sum, lane) => sum + lane.estimatedTokens, 0)).toBe(
+      tokens,
+    );
+    expect(target.resolve).toHaveBeenCalledOnce();
+  });
+
   it("revalidates authority and resolves bound bytes only at the gateway boundary", () => {
     const { deps, request, resolve } = fixture();
     const result = assemblyWithConversationImages(deps, request, "vision-chat", assembly());

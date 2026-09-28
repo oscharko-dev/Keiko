@@ -36,6 +36,13 @@ is added to the reported message/tool count before admission. Counter failures, 
 and admission refusals carry correlated closed error kinds and body-free stack/cause evidence.
 This counter is an additional estimate, not a guarantee of the backend tokenizer.
 
+Desktop chat reserves complete message framing and image capacity before choosing or compacting
+history. Prompt assembly, compaction savings, and gateway local admission use the same accountant;
+long conversations therefore do not fill a text-only budget that fails at the next gateway check.
+Image bytes remain subject to the existing final authority check. A higher proxy-reported count can
+still reject a locally fitting prompt; compare the local and reported counts when diagnosing that
+case, rather than increasing the deployed window without evidence.
+
 Inspect `gateway.prompt.admission` in the activity log for `counterStatus`, `counterSource`,
 `tokenizer`, `promptTokens`, `inputBudget`, and `outputBudget`. No prompt or counter response body is
 logged. A local overflow ends before generation. If counting is unavailable, check the key's route

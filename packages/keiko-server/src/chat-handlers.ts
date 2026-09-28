@@ -215,7 +215,11 @@ import {
   selectGatewayPromptAssembly,
   type GatewayPromptAssembly,
 } from "./chat-prompt-budget.js";
-import { MAX_CONTEXT_MESSAGES, usableGatewayMessages } from "./conversation-gateway.js";
+import {
+  MAX_CONTEXT_MESSAGES,
+  usableGatewayMessages,
+  withGatewayConversationImages,
+} from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
@@ -1751,6 +1755,7 @@ export function buildGatewayAssembly(
     request: {
       content: request.content,
       discussionMode: request.discussionMode,
+      imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
@@ -1926,6 +1931,7 @@ function buildRegenerateGatewayAssembly(
     request: {
       content: request.content,
       discussionMode: request.discussionMode,
+      imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
@@ -3537,15 +3543,7 @@ export function assemblyWithConversationImages(
 ): GatewayPromptAssembly {
   const imageParts = conversationImageParts(deps, request, modelId);
   if (imageParts.length === 0) return assembly;
-  const lastIndex = assembly.messages.length - 1;
-  const messages = assembly.messages.map((message, index): GatewayConversationMessage =>
-    index === lastIndex
-      ? {
-          ...message,
-          contentParts: [{ type: "text", text: message.content }, ...imageParts],
-        }
-      : message,
-  );
+  const messages = withGatewayConversationImages(assembly.messages, imageParts);
   return { ...assembly, messages };
 }
 

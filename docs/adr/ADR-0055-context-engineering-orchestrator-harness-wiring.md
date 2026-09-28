@@ -166,62 +166,36 @@ builder reads only the merged evidence content. Byte-identical.
 
 ### D3 — HISTORY-COMPACTION SPLICE: the one genuine behavioral change (PR4-W2)
 
-We will introduce a new pure sibling module
-`keiko-server/src/conversation-compaction.ts` (≤ 400 LOC). It wraps `conversationForGateway`
-(`chat-handlers.ts:L294`) with a thin, predicate-guarded shim that activates ONLY when both
-conditions are true:
+`keiko-server/src/conversation-compaction.ts` is the pure, synchronous, deterministic
+in-prompt compaction layer. Its current activation rule is token-budget based:
 
-```
-(a) deps.contextProfile !== undefined         // profile must be explicitly provisioned
-(b) rawHistory.length > MAX_CONTEXT_MESSAGES  // splice is only needed above the existing window
+```text
+activeProfile = contextProfile ?? DEFAULT_CONTEXT_PROFILE
+compact when the complete filtered provider messages exceed the remaining input budget
 ```
 
-When either condition is false, the shim returns the output of the EXISTING `conversationForGateway`
-call verbatim, without modification. This is the exact mechanism that guarantees byte-identity
-for short sessions and for all existing tests.
+The chat assembler reserves the latest user request, context wrappers, and image allowances first.
+The compactor uses the same `countGatewayPromptTokens` accountant as final gateway admission,
+including message framing and calibrated text costs. If the complete usable history fits, all of
+it remains verbatim, including histories longer than the former 24-message window. A short but
+oversized history also goes through compaction; an absent override uses the default profile.
 
-When both conditions are true (a long session with a profile), the shim:
+On overflow, it finds the smallest removable oldest prefix for which a deterministic, redacted
+structured summary plus the retained recent tail fits. The summary is appended to the canonical
+system message as an attributed continuity block; it is not a fabricated user instruction.
+Summary fitting counts the complete serialized system message, including its wrapper. The latest
+request stays unchanged. If mandatory context cannot fit, the call fails closed before generation.
 
-1. Runs `conversationForGateway` on the last `MAX_CONTEXT_MESSAGES` messages (the existing slice)
-   to obtain the unchanged recent-turn window.
-2. Calls `buildCompactionRecords` (`keiko-workflows/src/context-budget/compaction.ts`) on the
-   messages that were sliced off (the `rawHistory.slice(0, -MAX_CONTEXT_MESSAGES)` prefix).
-3. Produces a compact provenance-backed summary segment: a single `user`-role synthetic message
-   (a labeled, redacted, byte-bounded digest of the dropped turns). **Decision refined during PR4-W2:**
-   the segment is a `user` turn, NOT a second `system` turn — heterogeneous/open-weight customer models
-   may merge or mishandle multiple system messages, so a labeled `user`-role context turn is the
-   model-agnostic-safe choice. It is placed immediately AFTER the existing
-   `CONVERSATION_SYSTEM_PROMPT` system turn so platform instructions remain first, while the compacted
-   continuity context still sits near the front of the prompt. The summary is a deterministic,
-   offline digest (no model call); durable facts/decisions extraction from chat remains a future
-   enhancement.
-4. Returns the concatenated array:
-   `[system-message, compaction-summary-segment, ...recent-user-assistant-window]`.
+The validated `ContextCompactionRecord` contains structured continuity fields and source spans.
+`tokensBefore` counts the removed provider messages; `tokensAfter` counts the incremental cost of
+the embedded summary over the original system message. Their difference equals the complete
+prompt's token savings. Final assembly diagnostics use the same currency and contain only aggregate
+counts and closed reasons. No attachment bytes are loaded to estimate image capacity.
 
-The synthetic segment contains ONLY content from `ContextCompactionRecord.preservedFacts`,
-`.decisions`, and `.openQuestions` — no raw message text, no file paths, no secrets (the
-compaction builder applies `scanForSecrets` gate per ADR-0053 D4).
-
-**Activation predicate** (the precise condition that triggers a behavioral change):
-
-```
-profile !== undefined AND rawHistory.length > MAX_CONTEXT_MESSAGES
-```
-
-Where `rawHistory = deps.store.listMessages(request.chatId)` — the full unsliced chat history.
-
-**Byte-identity below threshold** is guaranteed by the `else` branch returning the EXACT return
-value of the original `conversationForGateway(messages)` call, not a reconstructed equivalent.
-No new computation occurs on the fast path. `buildGatewayMessages` (`chat-handlers.ts:L912`) is
-updated to call the shim instead of `conversationForGateway` directly, but when the shim exits
-the fast path, `buildGatewayMessages`'s callers receive an identical `GatewayConversationMessage[]`.
-
-The compaction builder is called only in the slow path (long sessions with a profile). It is
-pure and synchronous (no IO, no clock per ADR-0053 D7). The `orderedAt` counter is the current
-message index from the history list (deterministic, no `Date.now()`).
-
-The compaction records produced in W2 are in-memory only (per ADR-0053 D6). They are not
-persisted in PR4. PR5 writes them to `EvidenceManifest.compaction?`.
+The deterministic layer has no model calls, I/O, clock, or randomness. Post-turn model enrichment
+and subsequent resurfacing remain owned by `chat-compaction-model-summary.ts` and
+`chat-compaction-resurfacing.ts`. The original PR4 plan below records rollout history; it does not
+restore the retired message-count activation rule or the former synthetic user-role summary.
 
 ### D4 — SHAPED-OBSERVATION WIRING in the harness: additive attach, no prompt change (PR4-W3)
 
@@ -281,12 +255,9 @@ We will add `contextProfile?: ContextProfile | undefined` as an optional field o
 production. This makes the diagnostics observer active by default for grounded calls, delivering
 lane diagnostics with zero behavioral risk.
 
-The history-compaction splice (D3) is separately gated: even with `contextProfile` present, the
-splice only fires when `rawHistory.length > MAX_CONTEXT_MESSAGES = 24`. All existing tests have
-short or fabricated histories well below 24 messages, so they remain byte-identical.
-
-A test seam allows `contextProfile: undefined` to be injected in any test that needs to pin the
-legacy no-profile code path.
+History compaction follows D3's complete-prompt budget predicate. An explicit `contextProfile`
+remains a test/deployment override; absent overrides use the default profile for chat compaction.
+Budget-safe histories remain verbatim regardless of message count.
 
 **Why DEFAULT ON for diagnostics, not opt-in?** The diagnostics observer is non-mutating and its
 cost is ~1-2ms (a pure `estimateTokens` pass over already-assembled text). Delivering measurable
@@ -294,37 +265,17 @@ lane diagnostics from day one (even before the splice) makes the quality gate `d
 loadbearing and surfaced immediately in evidence. Requiring explicit opt-in would leave the gate
 scaffolded until a caller manually threads the profile, defeating the purpose of the W1 wave.
 
-**Why NOT DEFAULT ON for the compaction splice?** The splice produces a genuine behavior change
-(a different `GatewayConversationMessage[]`). It requires a session with > 24 messages to activate,
-which no existing test vector exercises. However, because `UiHandlerDeps.contextProfile` defaults
-to `DEFAULT_CONTEXT_PROFILE`, a real long session WILL see the splice in production after PR4
-merges. This is intentional: it is the first PR where the milestone delivers user-observable value.
-The gate `longSessionCompaction` covers this path with a synthetic corpus fixture of 30 messages.
+### D6 — VERBATIM-PRESERVATION GUARANTEE: complete history fits the remaining budget
 
-### D6 — THE UNCHANGED-GUARANTEE MECHANISM: `contextProfile` absent or short history
+The chat fast path preserves every usable message when its complete provider projection fits the
+remaining input budget. Neither an absent profile override nor a history of 24 or fewer messages
+bypasses accounting. The current request and image allowances have already been reserved by the
+assembler. Regression tests cover buffered/streaming gateway admission over 60 turns with repeated
+compaction, with and without images, and calibrated lane totals and compaction savings.
 
-The single predicate that makes the entire new path inert for existing callers:
-
-```
-contextProfile === undefined  ||  rawHistory.length <= MAX_CONTEXT_MESSAGES
-```
-
-When this predicate is true, EVERY new code path in PR4 is a no-op:
-
-- Diagnostics observer: guarded by `if (deps.contextProfile !== undefined)` at the top of
-  the observer call site in `assembleGroundedPack`. When absent, the pack is returned as
-  `assemblePackFromReads` produced it, with no additional computation.
-- Compaction splice: guarded by both `deps.contextProfile !== undefined` AND
-  `rawHistory.length > MAX_CONTEXT_MESSAGES` in the `conversation-compaction.ts` shim.
-  When either guard is false, `conversationForGateway` is called and its return value is
-  returned verbatim — no object reconstruction, no spread, no copy.
-- Shaped-observation attachment: guarded by `harnessShaperPort !== undefined`. When the port
-  is absent (all existing harness tests), `runOneTool`'s result is used as-is, byte-identical.
-- Lane diagnostics in the harness: computed only when `ctx.shapedObservations` is non-empty,
-  which requires the shaper port to have been injected and to have produced at least one observation.
-
-No existing test provisions a `ContextProfile` or a shaper port, so all existing tests exercise
-only the legacy code paths and remain byte-identical.
+The independent observer/shaper seams retain their own guards: grounded diagnostics require an
+injected profile, and shaped tool observations require an injected shaper port. These guards do not
+disable the chat budget invariant in D3.
 
 ### D7 — What PR4 does NOT do
 
