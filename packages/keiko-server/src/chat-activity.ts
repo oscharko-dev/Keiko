@@ -8,6 +8,8 @@ import {
 import type { RouteResult } from "./routes.js";
 import { correlationIdOrUnknown, isValidCorrelationId } from "./correlation.js";
 import { getServerLogger, type ServerLogSink } from "./observability/index.js";
+import type { GatewayPromptAssembly } from "./chat-prompt-budget.js";
+import { estimateFinalPromptTokens } from "./chat-prompt-budget-token-summary.js";
 
 type ObservedModelKind = ModelKind | "unknown";
 export type ChatRejectionReason = "readiness" | "generation" | "grounding-scope";
@@ -160,6 +162,40 @@ const CHAT_RESPONSE_MESSAGE_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["chat-turn"],
   proofIds: ["chat.response.message.causality"],
+  releaseImpact: "patch",
+});
+
+const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.context.selected",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "chat-activity.logChatContextSelection",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verbatim", "compacted"],
+    },
+    compactedHistoryMessages: { type: "integer", dataClass: "count", required: true },
+    retainedHistoryMessages: { type: "integer", dataClass: "count", required: true },
+    tokensBefore: { type: "integer", dataClass: "count", required: true },
+    tokensAfter: { type: "integer", dataClass: "count", required: true },
+    tokensSaved: { type: "integer", dataClass: "count", required: true },
+    promptTokens: { type: "integer", dataClass: "count", required: true },
+    inputBudget: { type: "integer", dataClass: "count", required: true },
+    imageCount: { type: "integer", dataClass: "count", required: true },
+    imageReserveTokens: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-turn"],
+  proofIds: ["chat.context.selected.budget"],
   releaseImpact: "patch",
 });
 
@@ -348,6 +384,44 @@ export function logChatTurnStartedEvent(
       CHAT_TURN_STARTED_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId) },
       { ...fields, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+/** Record the selection before dispatch so failed or cancelled turns retain their budget evidence. */
+export function logChatContextSelection(
+  correlationId: string | undefined,
+  assembly: GatewayPromptAssembly,
+  imageCount: number,
+): void {
+  const { compaction, diagnostics } = assembly;
+  const compacted = compaction !== undefined;
+  const history = diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
+  const tokensBefore = compaction?.tokensBefore ?? 0;
+  const tokensAfter = compaction?.tokensAfter ?? 0;
+  const textTokens = estimateFinalPromptTokens(
+    assembly.messages,
+    diagnostics.profile.tokenAccounting,
+    diagnostics.profile.maxInputTokens,
+  );
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_CONTEXT_SELECTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        state: compacted ? "compacted" : "verbatim",
+        compactedHistoryMessages: compaction?.itemsBefore ?? 0,
+        retainedHistoryMessages: Math.max(0, (history?.includedItems ?? 0) - Number(compacted)),
+        tokensBefore,
+        tokensAfter,
+        tokensSaved: Math.max(0, tokensBefore - tokensAfter),
+        promptTokens: diagnostics.totalEstimatedTokens,
+        inputBudget: diagnostics.profile.effectiveInputBudget,
+        imageCount,
+        imageReserveTokens: Math.max(0, diagnostics.totalEstimatedTokens - textTokens),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }

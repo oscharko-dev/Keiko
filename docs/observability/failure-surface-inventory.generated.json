@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7deee9bddec7f5a5b350b50bda6956fb1bfb4d419ab74a67c57f2edb1285efb2"
+    "catalogDigest": "e90fa927eb9e25d13bdfb3cadf90458bb8f89b18ac45e11d366381dfc78c2d3a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 475,
-    "proofCount": 483,
-    "resolvedProofCount": 483,
+    "operationCount": 476,
+    "proofCount": 484,
+    "resolvedProofCount": 484,
     "failureClassCount": 325,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -86,6 +86,7 @@
       "operations": [
         "atlassian.credential.rejected",
         "chat.compaction.facts.classified",
+        "chat.context.selected",
         "chat.creation.rejected",
         "chat.regeneration.rejected",
         "chat.response.message",
@@ -1016,6 +1017,10 @@
     ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
+    ],
+    "chat.context.selected.budget": [
+      "packages/keiko-server/src/chat-activity.test.ts",
+      "packages/keiko-server/src/chat-stream-handlers.test.ts"
     ],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],

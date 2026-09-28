@@ -45,6 +45,13 @@ evaluates the complete registered inventory by composing `check:op-catalog`,
 `arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
 a narrower change set never narrows what it proves.
 
+Chat context selection emits `chat.context.selected` before the provider call for buffered,
+streaming and regenerated turns. Its request correlation joins the compacted/retained history
+counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
+effective input budget and image reserve. This evidence survives generation timeout or
+cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
+not provider-measured usage, and no conversation or image content is recorded.
+
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
 events. Neither path records customer diffs or generated text.

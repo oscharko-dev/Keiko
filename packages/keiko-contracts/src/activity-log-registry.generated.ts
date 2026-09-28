@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7deee9bddec7f5a5b350b50bda6956fb1bfb4d419ab74a67c57f2edb1285efb2" as const;
+  "e90fa927eb9e25d13bdfb3cadf90458bb8f89b18ac45e11d366381dfc78c2d3a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -879,6 +879,83 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["compaction-fact-classification"],
     proofIds: ["chat.compaction.facts.classified.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "chat.context.selected",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "chat-activity.logChatContextSelection",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["verbatim", "compacted"],
+      },
+      compactedHistoryMessages: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      retainedHistoryMessages: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      tokensBefore: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      tokensAfter: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      tokensSaved: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      promptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      inputBudget: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      imageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      imageReserveTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-turn"],
+    proofIds: ["chat.context.selected.budget"],
     releaseImpact: "patch",
   },
   {
@@ -30686,12 +30763,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["start", "state"],
       lifecycleOperations: {
         start: ["chat.turn.started"],
-        state: ["chat.response.message"],
+        state: ["chat.context.selected", "chat.response.message"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "chat.context.selected",
+          mode: "correlation",
+        },
         {
           op: "chat.response.message",
           mode: "correlation",
@@ -30702,9 +30783,87 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["chat.response.message", "chat.turn.started"],
+      resourceSignals: ["chat.context.selected", "chat.response.message", "chat.turn.started"],
       replayReferences: [],
       operations: [
+        {
+          op: "chat.context.selected",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "compactedHistoryMessages",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "imageCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "imageReserveTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "inputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "promptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "retainedHistoryMessages",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "tokensAfter",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "tokensBefore",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "tokensSaved",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["chat.context.selected.budget"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "chat.response.message",
           owner: "keiko-server",
@@ -63921,6 +64080,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "activity-log.writer-rejected": "lifecycle-crash",
     "atlassian.credential.rejected": "bff",
     "chat.compaction.facts.classified": "bff",
+    "chat.context.selected": "bff",
     "chat.creation.rejected": "bff",
     "chat.regeneration.rejected": "bff",
     "chat.request.compatibility-retry": "model-gateway",

@@ -821,6 +821,13 @@ proof updates, not acceptance of another arbitrary machine-shaped string.
 
 ### D13 — HTTP and SSE lifecycle detail, and a body-free browser diagnostic ingest (Wave 5, landed)
 
+Chat context selection emits `chat.context.selected` before the provider call for buffered,
+streaming and regenerated turns. Its request correlation joins the compacted/retained history
+counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
+effective input budget and image reserve. This evidence survives generation timeout or
+cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
+not provider-measured usage, and no conversation or image content is recorded.
+
 Git draft resilience correction (2026-09-27): `git.commit.draft.completed` also records observed
 `promptTokens`, `maxPromptTokens`, `diffCompacted`, `generationAttempts` and `reused`. The values
 explain model-context compaction, a corrective generation and a cached result without retaining

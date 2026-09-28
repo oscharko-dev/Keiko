@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -144,8 +147,12 @@ function imageConversationHistory(target: ReturnType<typeof fixture>): GatewayTu
   return { history, currentUserMessageId: current.id };
 }
 
+afterEach(resetServerLogger);
+
 describe("conversation image finalization", () => {
   it("reserves image capacity before compacting history without resolving bytes early", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
     const target = fixture();
     const profile = deriveContextProfile({
       maxInputTokens: 10_000,
@@ -163,10 +170,25 @@ describe("conversation image finalization", () => {
       },
       "vision-chat",
       snapshot,
+      "image-selection-before-bytes",
     );
     expect(built.compaction).toBeDefined();
     expect(target.resolve).not.toHaveBeenCalled();
     expect(built.messages.every((message) => message.contentParts === undefined)).toBe(true);
+    expect(sink.events.find((event) => event.op === "chat.context.selected")).toMatchObject({
+      correlationId: "image-selection-before-bytes",
+      extra: {
+        imageCount: 1,
+        imageReserveTokens:
+          built.diagnostics.totalEstimatedTokens -
+          countGatewayPromptTokens({ messages: built.messages }, profile.tokenAccounting, {
+            contextWindow: profile.maxInputTokens,
+          }),
+        promptTokens: built.diagnostics.totalEstimatedTokens,
+        inputBudget: profile.effectiveInputBudget,
+        compactedHistoryMessages: built.compaction?.itemsBefore,
+      },
+    });
     const delivered = assemblyWithConversationImages(deps, target.request, "vision-chat", built);
     const tokens = countGatewayPromptTokens(
       { messages: delivered.messages },

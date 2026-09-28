@@ -513,6 +513,13 @@ system that exists, never beside it:
   names its check, rule, site, and remediation. Run it before every pull request that changes
   product runtime behaviour.
 
+Chat context selection emits `chat.context.selected` before the provider call for buffered,
+streaming and regenerated turns. Its request correlation joins the compacted/retained history
+counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
+effective input budget and image reserve. This evidence survives generation timeout or
+cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
+not provider-measured usage, and no conversation or image content is recorded.
+
 ### Rule 2 — when you debug, the log is your primary source
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
