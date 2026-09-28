@@ -2931,6 +2931,68 @@
       "userActionRequired": true,
       "remediation": "restart-required",
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-09-28-keiko-1.1.12-chat-context-and-gateway-reliability",
+      "packageVersion": "1.1.12",
+      "releaseTag": "v1.1.12",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Long chats use consistent complete-prompt accounting for history selection, compaction and final admission. Vision requests avoid charging encoded image bytes as text. Gateway admission preserves schema and retry costs, provider output defaults, request deadlines and conservative LiteLLM alias capabilities, with correlated support evidence.",
+      "affectedStateStores": ["activity-log"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "Gateway discovery, prompt admission, counter cooldown and pre-dispatch chat-context selection extend the registered body-free operations and fields, changing the catalog digest. Existing records are retained unchanged under normal retention. Use the version that wrote an older log when its catalog digest differs; no data migration occurs.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Chat: history selection, summaries, compaction savings and final request admission use consistent token accounting, reducing context refusals in long conversations and repeated compaction.",
+        "Chat: image input is budgeted separately from text, so encoded image bytes do not cause false context overflows. Small vision windows use provider measurements when available and a model-scaled estimate otherwise.",
+        "Gateways: complete prompt budgets include tools and response schemas across corrective retries. Explicit answer allocations stay aligned with reserved context; calls without an allocation preserve provider defaults.",
+        "LiteLLM: model rediscovery preserves proven limits when metadata is absent, clears explicitly unsupported reasoning choices, and intersects routed deployments conservatively. Unavailable token counters use a bounded cooldown inside the original request deadline.",
+        "Support: correlated Activity Log evidence records context selection before generation, admission refusals, image accounting and counter fallback decisions without message bodies or credentials."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-28",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3670",
+        "rationale": "The owner confirmed the merge of PR #3664 and explicitly requested publishing stable v1.1.12 in the current task. Issue #3670 records that decision. This append-only entry describes only the merged gateway/chat-context reliability increment since v1.1.11. Unmerged Composer work and Windows fixes are excluded. Publication remains subject to the protected release-cut PR, current-candidate checks, governed owner workflow, customer-shape qualification and artifact alignment. Published metadata is unchanged.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null
     }
   ]
 }
