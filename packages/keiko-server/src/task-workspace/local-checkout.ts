@@ -228,7 +228,10 @@ function sameDirectoryIdentity(left: string, right: string): boolean {
 
 function gitDirectoryIdentity(root: string, gitdir: string): string {
   const stat = statSync(gitdir);
-  return digest(`${root}\0${gitdir}\0${String(stat.dev)}\0${String(stat.ino)}`);
+  // Keep the registered workspace path as the repository anchor, but identify the Git
+  // directory by its filesystem ID. Windows can spell the same directory with a long path,
+  // an 8.3 alias, or different casing between Git and Node's realpath implementation.
+  return digest(`${root}\0${String(stat.dev)}\0${String(stat.ino)}`);
 }
 
 function localHead(root: string): string | undefined {
