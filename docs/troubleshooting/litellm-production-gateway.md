@@ -12,6 +12,35 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ---
 
+## Context limits and token admission
+
+Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Keiko intersects
+the limits of every backend sharing an alias; missing bounds use conservative defaults, and
+conflicting task kinds are rejected. A catalog model name alone does not prove that the deployment
+is callable or that a larger context window is available.
+
+Keiko reserves a bounded answer budget rather than the model's full output ceiling. Before a chat
+request, the gateway checks the complete prompt, tool context, and response schema against the
+remaining input budget. Discovery through `/model/info` enables `"tokenCounter": "litellm"` for
+those providers. The count request goes to `/utils/token_counter` on the configured proxy (including
+any reverse-proxy prefix), uses the same authorization and egress policy, and has a five-second
+limit. A proxy key may be permitted to generate but forbidden to count; Keiko then uses its local
+estimate. This counter is an additional estimate, not a guarantee of the backend tokenizer.
+
+Inspect `gateway.prompt.admission` in the activity log for `counterStatus`, `counterSource`,
+`tokenizer`, `promptTokens`, `inputBudget`, and `outputBudget`. No prompt or counter response body is
+logged. A local overflow ends before generation. If counting is unavailable, check the key's route
+permissions and the proxy version; do not grant broader model access solely to enable counting.
+
+The [LiteLLM Docker guide](https://docs.litellm.ai/docs/proxy/docker_quick_start) describes the
+OpenAI-compatible generation endpoint and Bearer authentication. Azure development routes retain
+either the configured deployment endpoint/API version or the
+[Azure v1 endpoint](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle).
+They use local token admission without calling the LiteLLM counter. An alias for a reasoning model
+may still need the explicit output-token parameter described below.
+
+---
+
 ## Coding Workbench turn has no assistant reply
 
 For a Workbench run that accepted a message but has no assistant reply, note the run id and export a

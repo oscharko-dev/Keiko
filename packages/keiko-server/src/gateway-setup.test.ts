@@ -5591,14 +5591,16 @@ describe("handleGatewaySetup", () => {
         },
         "corr-alias-intersection",
       );
-      const event = sink.events.find(
-        (entry) => entry.op === "gateway.discovery.alias-intersection",
-      );
+      const event = sink.events
+        .filter((entry) => entry.op === "gateway.discovery.alias-intersection")
+        .at(-1);
       expect(event).toMatchObject({
         correlationId: "corr-alias-intersection",
         extra: {
           state: "intersected",
           contextWindow: 4_096,
+          maxOutputTokens: 0,
+          undeclaredOutputLimit: true,
           undeclaredLimit: true,
           reasoningOptionCount: 0,
           completeness: "complete",
@@ -5610,6 +5612,62 @@ describe("handleGatewaySetup", () => {
         "gateway.discovery.alias-intersection.line",
         formatActivityLogProofLine(event ?? {}),
       );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it.each([false, true])(
+    "rejects explicit non-chat alias capabilities, reversed=%s",
+    (reversed) => {
+      const entries = [
+        { model_name: "mixed-chat", capabilities: { chat_completion: false } },
+        { model_name: "mixed-chat", model_info: { mode: "chat" } },
+      ];
+      const result = parseModelDiscovery({
+        data: [
+          ...(reversed ? entries.reverse() : entries),
+          { model_name: "mixed-chat", model_info: { mode: "chat" } },
+          { model_name: "healthy-chat", model_info: { mode: "chat" } },
+        ],
+      });
+      expect(result.chatModelIds).toEqual(["healthy-chat"]);
+    },
+  );
+
+  it("records both normalized bounds of a single deployment", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      parseModelDiscovery(
+        {
+          data: [
+            {
+              model_name: "private-single-alias",
+              max_input_tokens: 131_072,
+              model_info: { mode: "chat", max_input_tokens: 32_768, max_output_tokens: 8_192 },
+              litellm_params: { max_tokens: 2_048 },
+            },
+          ],
+        },
+        "corr-single-deployment",
+      );
+      const event = sink.events.find(
+        (entry) => entry.op === "gateway.discovery.alias-intersection",
+      );
+      expect(event).toMatchObject({
+        correlationId: "corr-single-deployment",
+        extra: {
+          state: "normalized",
+          contextWindow: 32_768,
+          maxOutputTokens: 2_048,
+          undeclaredLimit: false,
+          undeclaredOutputLimit: false,
+        },
+      });
+      const line = formatActivityLogProofLine(event ?? {});
+      expectActivityLogProof("gateway.discovery.alias-intersection.line", line);
+      expect(line).not.toContain("private-single-alias");
     } finally {
       resetServerLogger();
     }
@@ -8449,12 +8507,14 @@ describe("handleGatewaySetup", () => {
         maxOutputTokens: 128_000,
         toolCalling: false,
       });
+      expectLiteLlmCounter(config);
       expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
       expect(saved).toContain("litellm-embedding");
       expect(saved).toContain('"kind": "embedding"');
       expect(saved).not.toContain("litellm-image");
+      expect(saved).toContain('"tokenCounter": "litellm"');
     } finally {
       globalThis.fetch = originalFetch;
       deps.store.close();
@@ -11003,3 +11063,9 @@ describe("gateway setup embedding spend ceiling", () => {
     }
   });
 });
+
+function expectLiteLlmCounter(config: GatewayConfig | undefined): void {
+  expect(config?.providers).toContainEqual(
+    expect.objectContaining({ modelId: "litellm-chat-large", tokenCounter: "litellm" }),
+  );
+}

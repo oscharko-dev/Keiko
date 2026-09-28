@@ -1,6 +1,9 @@
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfile,
+  deriveContextProfileFromCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import {
@@ -373,8 +376,9 @@ describe("Gateway bounded tool-schema repair", () => {
     ]);
   });
 
-  it("fails before a second provider call when prompt fits but its output reservation would overflow", async () => {
-    const base = request();
+  it("rejects an overflowing explicit output reservation before even the first provider call", async () => {
+    // Relocated to admission: the old repair-only guard allowed the first over-budget request.
+    const base = { ...request(), maxOutputTokens: 4_096 };
     const tools = createGatewayToolCatalogBridge(base, (): number => NOW).tools;
     const basePromptTokens = countGatewayPromptTokens({ messages: base.messages, tools });
     const contextWindow = basePromptTokens + 2_048;
@@ -385,27 +389,11 @@ describe("Gateway bounded tool-schema repair", () => {
       clock: clock(),
       log: { write: (event): void => void events.push(event) },
     });
-
     await expect(gateway.chat(base)).rejects.toBeInstanceOf(ContextOverflowError);
-
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    const repair = events.find((event) => event.op === "gateway.tool-catalog.repair");
-    expect(repair).toMatchObject({
-      extra: {
-        state: "denied",
-        reason: "context-window-exceeded",
-        toolCallId: "call-context",
-        offeredAlias: "keiko_changeset_edit",
-        maxOutputTokens: 4_096,
-        effectStarted: false,
-      },
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "gateway.prompt.admission")).toMatchObject({
+      extra: { state: "overflow", promptTokens: basePromptTokens, outputBudget: 4_096 },
     });
-    expect(repair?.extra?.promptTokens).toBeLessThan(contextWindow);
-    const capability = config(contextWindow).capabilities?.[0];
-    if (capability === undefined) throw new TypeError("Expected fixture capability");
-    expect(repair?.extra?.maxPromptTokens).toBe(
-      deriveContextProfileFromCapability(capability).effectiveInputBudget,
-    );
     expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
   });
 
@@ -422,12 +410,17 @@ describe("Gateway bounded tool-schema repair", () => {
     ).toThrow(expect.objectContaining({ repair: undefined }));
   });
 
-  it("refuses a repair inside the reserved safety margin before another provider call", async () => {
+  it("refuses the reserved safety margin before a provider or repair call", async () => {
     const promptTokens = await observedRepairPromptTokens();
     const boundedConfig = config(promptTokens + 4_096);
     const capability = boundedConfig.capabilities?.[0];
     if (capability === undefined) throw new TypeError("Expected fixture capability");
-    const context = deriveContextProfileFromCapability(capability);
+    const defaults = deriveContextProfileFromCapability(capability);
+    const context = deriveContextProfile({
+      maxInputTokens: defaults.maxInputTokens,
+      reservedOutputTokens: 4_096,
+      safetyMarginTokens: defaults.safetyMarginTokens,
+    });
     expect(context.safetyMarginTokens).toBeGreaterThan(0);
     expect(promptTokens).toBe(context.maxInputTokens - context.reservedOutputTokens);
     expect(promptTokens).toBeGreaterThan(context.effectiveInputBudget);
@@ -440,15 +433,16 @@ describe("Gateway bounded tool-schema repair", () => {
       log: { write: (event): void => void events.push(event) },
     });
 
-    await expect(gateway.chat(request())).rejects.toBeInstanceOf(ContextOverflowError);
+    await expect(gateway.chat({ ...request(), maxOutputTokens: 4_096 })).rejects.toBeInstanceOf(
+      ContextOverflowError,
+    );
 
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(events.find((event) => event.op === "gateway.tool-catalog.repair")).toMatchObject({
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "gateway.prompt.admission")).toMatchObject({
       extra: {
-        state: "denied",
-        promptTokens,
-        safetyMarginTokens: context.safetyMarginTokens,
-        effectStarted: false,
+        state: "overflow",
+        inputBudget: context.effectiveInputBudget,
+        outputBudget: 4_096,
       },
     });
   });

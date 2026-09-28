@@ -72,7 +72,9 @@ every lane. Properties:
 - **Conservative (over-estimates slightly)**: it computes UTF-8 byte length with a conservative baseline
   bytes-per-token divisor, applies a stricter dense-text floor for CJK, emoji, short-line, and structural
   code-shaped content, then **rounds up** and adds a small fixed per-segment structural overhead. Over-estimation
-  is the safe direction: it makes the allocator fit *fewer* tokens than the provider would, never *more*.
+  is the intended safe direction. This remains an estimate: no byte heuristic guarantees the token
+  count for every provider tokenizer, chat template, or modality. Model calibration, a safety margin,
+  and final gateway admission remain necessary.
 - **Total / never throws**: empty string → a defined small constant (the structural overhead, never `NaN` or a
   divide-by-zero), huge input → a finite integer, non-ASCII / emoji / surrogate pairs → counted by UTF-8 bytes
   using `TextEncoder` with a manual UTF-8 fallback when `TextEncoder` is absent. It must **never fail a
@@ -95,6 +97,21 @@ profile-derived override (through `OrchestratorInput.budget` for path 1 and the 
 **never** by editing call sites. We do **not** raise the existing `DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax`
 default of `32_000` (`connected-context.ts:122`) — that is a breaking change to path 1; profile-derived
 overrides thread through `OrchestratorInput.budget` as today.
+
+The capability's output maximum is a provider ceiling, not the default response reservation. The
+shared derivation limits the default reservation to a bounded fraction of the window and to any
+known output ceiling. A model declaring equal input/output maxima must retain usable input space.
+An explicit caller allocation is validated against both the output ceiling and the remaining input
+budget, including the safety margin.
+
+Before both buffered and streaming calls, `keiko-model-gateway` accounts for the complete provider
+projection: message roles, tool-call arguments and identifiers, offered tool schemas, and structured
+response schemas. LiteLLM discovery additionally enables the same-origin `/utils/token_counter`
+request with the configured credential header and egress policy. Admission uses the larger of the
+local complete estimate and a valid reported count. A denied, malformed, cancelled, or timed-out
+counter never silently becomes an exact zero; the local estimate remains available and the
+body-free `gateway.prompt.admission` event records the source, counter status, tokenizer category,
+and input/output budgets. Azure routes do not acquire this LiteLLM-specific endpoint.
 
 ### D3 — Eight-lane taxonomy with a fixed allocation order
 

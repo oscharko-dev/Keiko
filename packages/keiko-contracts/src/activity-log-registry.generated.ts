@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "586a1ac5f98eec526f61ab70f9ad4ba21ecaa14c62b52cad26520581148904b8" as const;
+  "0e531a190503fbef92395b2b190e66cfe810c4b889d9e620626da95c1aa05905" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -11683,11 +11683,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["intersected", "conflicting"],
+        values: ["normalized", "intersected", "conflicting"],
       },
       contextWindow: {
         type: "integer",
         dataClass: "count",
+        required: true,
+      },
+      maxOutputTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      undeclaredOutputLimit: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: true,
       },
       undeclaredLimit: {
@@ -11890,6 +11900,108 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "capability",
     failureClasses: ["activity-log-sink-failure"],
     proofIds: ["gateway.log.sink-failed.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.prompt.admission",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "prompt-admission.admitGatewayPrompt",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["admitted", "overflow"],
+      },
+      counterSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["calibrated", "fallback-estimated", "gateway-reported"],
+      },
+      counterStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["disabled", "available", "unavailable", "invalid"],
+      },
+      tokenizer: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["openai", "huggingface", "other", "unknown"],
+      },
+      promptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      inputBudget: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      outputBudget: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      contextWindow: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-context-admission"],
+    proofIds: ["gateway.prompt.admission.bounds"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.prompt.counter-failed",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "provider-token-counter.logCounterFailure",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      fallback: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["local-estimate"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["gateway-context-admission"],
+    proofIds: ["gateway.prompt.counter-failed.fallback"],
     releaseImpact: "patch",
   },
   {
@@ -28711,8 +28823,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 324,
-  completeClassCount: 324,
+  supportedClassCount: 325,
+  completeClassCount: 325,
   completeness: "complete",
   classes: [
     {
@@ -42855,6 +42967,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "maxOutputTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "reasoningOptionCount",
               type: "integer",
               dataClass: "count",
@@ -42868,6 +42986,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "undeclaredLimit",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "undeclaredOutputLimit",
               type: "boolean",
               dataClass: "closed-enum",
               required: true,
@@ -43738,6 +43862,126 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.config.resolved.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "gateway-context-admission",
+      requirementContract: "gateway-context-admission",
+      productSurfaces: ["keiko-model-gateway"],
+      lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.prompt.admission"],
+        end: [],
+        failure: ["gateway.prompt.counter-failed"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "gateway.prompt.admission",
+          mode: "correlation",
+        },
+        {
+          op: "gateway.prompt.counter-failed",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["gateway.prompt.admission"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "gateway.prompt.admission",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "contextWindow",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "counterSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "counterStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "inputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "promptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "tokenizer",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.prompt.admission.bounds"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.prompt.counter-failed",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "fallback",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.prompt.counter-failed.fallback"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -63570,6 +63814,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.instance.reused": "model-gateway",
     "gateway.instance.unavailable": "model-gateway",
     "gateway.log.sink-failed": "model-gateway",
+    "gateway.prompt.admission": "model-gateway",
+    "gateway.prompt.counter-failed": "model-gateway",
     "gateway.readiness.automatic.completed": "model-gateway",
     "gateway.readiness.automatic.joined": "model-gateway",
     "gateway.readiness.automatic.started": "model-gateway",

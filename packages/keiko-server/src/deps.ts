@@ -577,6 +577,7 @@ export interface GatewayDiscoveredModels {
 }
 
 export interface GatewayDiscoveredModelMetadata {
+  readonly tokenCounter?: "litellm" | undefined;
   readonly contextWindow?: number | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;

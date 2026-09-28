@@ -1722,6 +1722,7 @@ function parseProviderConfig(
     ...(apiVersion === undefined ? {} : { apiVersion }),
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
+    ...tokenCounterConfig(raw.tokenCounter, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
@@ -2221,4 +2222,13 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
           },
         }),
   };
+}
+
+function tokenCounterConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "tokenCounter"> {
+  return value === undefined
+    ? {}
+    : { tokenCounter: requireEnum<"litellm">(value, `${path}.tokenCounter`, ["litellm"]) };
 }

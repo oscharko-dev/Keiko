@@ -24,7 +24,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },
-
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
+    failureClass: "gateway-context-admission",
+    requiredProductSurfaces: ["keiko-model-gateway"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["gateway.prompt.admission"],
+      end: [],
+      failure: ["gateway.prompt.counter-failed"],
+      loss: [],
+    },
+    requiredCausalOperations: ["gateway.prompt.admission", "gateway.prompt.counter-failed"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["gateway.prompt.admission", "gateway.prompt.counter-failed"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["gateway.prompt.admission"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,

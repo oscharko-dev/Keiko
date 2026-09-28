@@ -663,6 +663,7 @@ function providerRaw(
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     ...genericEndpointProtocolRaw(options),
+    ...modelTokenCounterMetadata(options, modelId),
     capability: {
       ...defaultCapability,
       // The provided list is authoritative, not additive: a model absent from it loses a stored
@@ -1076,6 +1077,7 @@ function rawProviderFromCurrent(
     ...(provider.outputTokenParameter === undefined
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
+    ...tokenCounterMetadata(provider.tokenCounter),
     ...(provider.realtimeAuthMode === undefined
       ? {}
       : { realtimeAuthMode: provider.realtimeAuthMode }),
@@ -1364,9 +1366,7 @@ function classifyUndeclaredDiscoveryItem(
 // model-agnostic — the customer hosts whatever models they like, so only the gateway's own
 // statement about a model can decide its role.
 function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefined {
-  if (!isRecord(item)) {
-    return undefined;
-  }
+  if (!isRecord(item)) return undefined;
   const id = modelIdFromKnownFields(item);
   if (id === undefined) {
     return undefined;
@@ -1415,6 +1415,7 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
           supportsImageInput: false,
           metadata,
           reason: "not-chat-capable",
+          declaredNonChat: true,
         };
   }
   return classifyUndeclaredDiscoveryItem(item, id, metadata);
@@ -1533,6 +1534,7 @@ function intersectDeploymentMetadata(
     .sort((left, right) => left.localeCompare(right, "en"));
   return {
     contextWindow: Math.min(left.contextWindow ?? 4_096, right.contextWindow ?? 4_096),
+    ...commonTokenCounter(left, right),
     maxOutputTokens: Math.min(left.maxOutputTokens ?? 0, right.maxOutputTokens ?? 0),
     toolCalling: left.toolCalling === true && right.toolCalling === true,
     reasoningEfforts,
@@ -1671,10 +1673,19 @@ async function discoverLiteLlmModelInfo(
 ): Promise<GatewayDiscoveredModels | undefined> {
   for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
     try {
-      return parseModelDiscovery(
+      const discovered = parseModelDiscovery(
         await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress),
         correlationId,
       );
+      return {
+        ...discovered,
+        modelMetadata: Object.fromEntries(
+          discovered.modelIds.map((id) => [
+            id,
+            { ...discovered.modelMetadata?.[id], tokenCounter: "litellm" as const },
+          ]),
+        ),
+      };
     } catch (cause) {
       if (modelInfoAnswerIsUnusable(cause) && cause instanceof Error) throw cause;
     }
@@ -7237,23 +7248,53 @@ export async function handleApplyGatewayVerifiedCapabilities(
   );
 }
 
+function tokenCounterMetadata(
+  tokenCounter: "litellm" | undefined,
+): Pick<GatewayDiscoveredModelMetadata, "tokenCounter"> {
+  return tokenCounter === undefined ? {} : { tokenCounter };
+}
+function commonTokenCounter(
+  left: GatewayDiscoveredModelMetadata,
+  right: GatewayDiscoveredModelMetadata,
+): Pick<GatewayDiscoveredModelMetadata, "tokenCounter"> {
+  return tokenCounterMetadata(
+    left.tokenCounter === right.tokenCounter ? left.tokenCounter : undefined,
+  );
+}
+
+function modelTokenCounterMetadata(
+  options: ProviderRawOptions,
+  modelId: string,
+): Pick<GatewayDiscoveredModelMetadata, "tokenCounter"> {
+  return tokenCounterMetadata(options.modelMetadata?.[modelId]?.tokenCounter);
+}
+
 function logDiscoveryMerge(
   existing: ClassifiedDiscoveryModel | undefined,
   incoming: ClassifiedDiscoveryModel,
   merged: ClassifiedDiscoveryModel,
   correlationId: string | undefined,
 ): void {
-  if (existing === undefined) return;
   logAliasIntersection(
     {
       alias: merged.id,
       contextWindow: merged.metadata.contextWindow ?? 0,
       undeclaredLimit:
-        existing.metadata.contextWindow === undefined ||
+        (existing !== undefined && existing.metadata.contextWindow === undefined) ||
         incoming.metadata.contextWindow === undefined,
-      conflicting: merged.deploymentConflict === true,
+      state: discoveryMergeState(existing, merged),
+      maxOutputTokens: merged.metadata.maxOutputTokens ?? 0,
+      undeclaredOutputLimit: (merged.metadata.maxOutputTokens ?? 0) === 0,
       reasoningOptionCount: merged.metadata.reasoningEfforts?.length ?? 0,
     },
     correlationId,
   );
+}
+
+function discoveryMergeState(
+  existing: ClassifiedDiscoveryModel | undefined,
+  merged: ClassifiedDiscoveryModel,
+): "normalized" | "intersected" | "conflicting" {
+  if (merged.deploymentConflict === true) return "conflicting";
+  return existing === undefined ? "normalized" : "intersected";
 }

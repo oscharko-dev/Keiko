@@ -19,9 +19,11 @@ const ALIAS_INTERSECTION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["intersected", "conflicting"],
+      values: ["normalized", "intersected", "conflicting"],
     },
     contextWindow: { type: "integer", dataClass: "count", required: true },
+    maxOutputTokens: { type: "integer", dataClass: "count", required: true },
+    undeclaredOutputLimit: { type: "boolean", dataClass: "closed-enum", required: true },
     undeclaredLimit: { type: "boolean", dataClass: "closed-enum", required: true },
     reasoningOptionCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -40,7 +42,9 @@ export function logAliasIntersection(
     readonly alias: string;
     readonly contextWindow: number;
     readonly undeclaredLimit: boolean;
-    readonly conflicting: boolean;
+    readonly state: "normalized" | "intersected" | "conflicting";
+    readonly maxOutputTokens: number;
+    readonly undeclaredOutputLimit: boolean;
     readonly reasoningOptionCount: number;
   },
   correlationId: string | undefined,
@@ -51,7 +55,9 @@ export function logAliasIntersection(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         aliasHash: sha256Hex(input.alias),
-        state: input.conflicting ? "conflicting" : "intersected",
+        state: input.state,
+        maxOutputTokens: input.maxOutputTokens,
+        undeclaredOutputLimit: input.undeclaredOutputLimit,
         contextWindow: input.contextWindow,
         undeclaredLimit: input.undeclaredLimit,
         reasoningOptionCount: input.reasoningOptionCount,

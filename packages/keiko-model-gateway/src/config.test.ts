@@ -187,6 +187,16 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/outputTokenParameter must be one of/u);
   });
 
+  it("enables only the declared LiteLLM counting protocol", () => {
+    const config = parseGatewayConfig(
+      rawWithProvider((provider) => ({ ...provider, tokenCounter: "litellm" })),
+    );
+    expect(config.providers[0]?.tokenCounter).toBe("litellm");
+    expect(() =>
+      parseGatewayConfig(rawWithProvider((provider) => ({ ...provider, tokenCounter: "azure" }))),
+    ).toThrow(/tokenCounter must be one of/u);
+  });
+
   it("rejects endpoint API version without the Azure deployment endpoint style", () => {
     expect(() =>
       parseGatewayConfig(

@@ -22,6 +22,8 @@ import {
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { admitGatewayPrompt } from "./prompt-admission.js";
+import { countProviderPromptTokens } from "./provider-token-counter.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import {
   activityLogErrorKind,
@@ -831,8 +833,38 @@ export class Gateway {
     capability: ModelCapability,
   ): GatewayCallRequest {
     assertValidGatewaySamplingParameters(request);
-    if (this.spendBudget === undefined || request.maxOutputTokens !== undefined) return request;
-    return { ...request, maxOutputTokens: capability.maxOutputTokens };
+    if (request.maxOutputTokens !== undefined) return request;
+    return {
+      ...request,
+      maxOutputTokens: deriveContextProfileFromCapability(capability).reservedOutputTokens,
+    };
+  }
+
+  private async admitPrompt(
+    request: GatewayCallRequest,
+    route: { readonly provider: ModelProviderConfig; readonly capability: ModelCapability },
+    ids: CallIds,
+  ): Promise<GatewayCallRequest> {
+    const tools = createGatewayToolCatalogBridge(
+      request,
+      (): number => this.clock.now(),
+      this.log,
+    ).tools;
+    const projected = { ...request, tools };
+    const measured = await countProviderPromptTokens(
+      { ...projected, logContext: { ...projected.logContext, correlationId: ids.correlationId } },
+      route.provider,
+      this.log,
+      this.fetchImpl,
+    );
+    const admitted = admitGatewayPrompt(
+      projected,
+      route.capability,
+      this.log,
+      ids.correlationId,
+      measured,
+    );
+    return { ...request, maxOutputTokens: admitted.maxOutputTokens };
   }
 
   // ONE-TIME configuration snapshot, written once per Gateway construction (the process-wide
@@ -871,15 +903,15 @@ export class Gateway {
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
     const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
-    const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const ids = callIds(requestId, request);
+    request = await this.admitPrompt(request, route, ids);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(requestId, route, ids.correlationId);
     const attempt: BufferedChatAttempt = {
       route,
-      breaker,
+      breaker: this.breakerFor(route.provider),
       adapter,
       originalRequest: request,
       correlationId: ids.correlationId,
@@ -1030,6 +1062,7 @@ export class Gateway {
     request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const ids = callIds(randomUUID(), request);
+    request = await this.admitPrompt(request, route, ids);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);

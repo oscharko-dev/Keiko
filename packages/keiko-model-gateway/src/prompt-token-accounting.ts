@@ -1,10 +1,13 @@
-import { countContextTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  countContextTokensForSegments,
+  type ContextTokenAccounting,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import type {
   ChatMessage,
   ChatMessageContentPart,
-  ModelTokenAccounting,
   ToolDefinition,
+  ResponseFormat,
 } from "./types.js";
 
 export type { ModelTokenAccounting } from "./types.js";
@@ -12,6 +15,7 @@ export type { ModelTokenAccounting } from "./types.js";
 export interface GatewayPromptTokenInput {
   readonly messages: readonly ChatMessage[];
   readonly tools?: readonly ToolDefinition[] | undefined;
+  readonly responseFormat?: ResponseFormat | undefined;
 }
 
 type ProviderMessageContentParts = readonly (
@@ -85,13 +89,15 @@ export function openAiCompatiblePromptTools(
  * calibration. Tool-call arguments and ids are context just like visible message content. */
 export function countGatewayPromptTokens(
   input: GatewayPromptTokenInput,
-  accounting?: ModelTokenAccounting,
+  accounting?: ContextTokenAccounting,
 ): number {
   const segments = input.messages.map((message) =>
     JSON.stringify(openAiCompatiblePromptMessage(message)),
   );
-  if (input.tools !== undefined) {
+  if (input.tools !== undefined && input.tools.length > 0) {
     segments.push(JSON.stringify(openAiCompatiblePromptTools(input.tools)));
   }
+  if (input.responseFormat?.type === "json_schema")
+    segments.push(JSON.stringify(input.responseFormat));
   return countContextTokensForSegments(segments, accounting);
 }
