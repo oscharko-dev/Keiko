@@ -23,17 +23,17 @@ On Windows with Node 24.18.0 and the installed MSVC toolchain:
 node scripts/testing/test-windows-gateway-filters.mjs
 ```
 
-Compiles both C files using `/W4 /WX /analyze /MT` and runs input validation. Tests reject null,
+Compiles the three C files using `/W4 /WX /analyze /MT` and runs input validation. Tests reject null,
 broad and capability identities, invalid address families, port zero, missing output storage, and
 attempts to overwrite an active session. The default test makes no WFP calls and changes no network
 filters. It is also invoked by the existing Windows native quality gate.
 
-## Outstanding work and qualification
+## Outstanding production work and qualification
 
 - Authenticated, narrowly scoped installed service and capability negotiation.
-- Real unique per-tree AppContainer identity, workspace access and descendant restrictions.
-- Suspended child creation, filter readback and verification before resume, Job Object supervision.
-- Exact gateway socket success, hostile loopback/public/UDP denial, and cross-tree isolation.
+- Production per-tree identity and filesystem access for the actual runtime payload.
+- Native supervisor integration of suspended launch, verified filters and Job Object supervision.
+- Public/LAN denial and adversarial token, executable and Job Object escape tests.
 - Fail-closed behavior if the service, filtering engine or supervisor fails while a tree is active.
 - Reap-before-filter-removal ordering and cleanup/reconciliation on every exit path.
 - Installer, repair/uninstall, runtime packaging and npm composition.
@@ -63,6 +63,33 @@ filters and their private sublayer were removed. All steps of this dedicated wor
 This result proves native filter installation and cleanup only. It does not prove socket isolation,
 runtime integration, npm installation, the DesignPatterns workbench task, or the complete repository
 CI matrix. Those acceptance criteria remain outstanding.
+
+### Real socket and descendant proof, 2026-09-28
+
+[GitHub Actions run 36452143283](https://github.com/oscharko-dev/Keiko/actions/runs/36452143283)
+passed at commit `227a9918b23a23fd76d81bc13933aa506967b3a9`. Its `--socket-proof` test creates
+two unique AppContainer profiles, two live TCP listeners and UDP receivers, and child processes
+that themselves launch descendants. Before installing filters, both identities reach both TCP
+ports and deliver UDP datagrams. With both trees running concurrently under separate policies,
+each reaches only its own TCP port; neither UDP receiver receives a datagram. Both IPv4 and IPv6
+pass. Children verify that their tokens are AppContainer tokens. The parent creates roots suspended,
+assigns kill-on-close Job Objects before resume and reaps them before filter removal.
+
+Full installed-filter readback verifies the layer, sublayer, action, weight, identity, destination,
+port, protocol and condition cardinality. Windows adds `FWPM_FILTER_FLAG_INDEXED` metadata to
+returned filters; that lookup optimization is accepted, while other flags remain rejected. UDP
+proof uses actual reception, because Windows may complete `sendto` successfully for a datagram
+subsequently blocked by filtering. The unfiltered reception baseline prevents a vacuous denial pass.
+
+The fixture temporarily adds loopback exemptions for its unique identities and restores the
+previous exemption list and executable ACL before deleting the profiles. This is explicitly
+test-only: a crash between those operations is not reconciled by an installed service. A passing
+socket fixture does not justify using that lifecycle in production or enabling availability.
+
+Implementation is tracked in [draft PR #3668](https://github.com/oscharko-dev/Keiko/pull/3668),
+stacked on the checkout fix in [PR #3667](https://github.com/oscharko-dev/Keiko/pull/3667).
+The local Sonar gate was attempted but could not start because the Docker daemon is unavailable.
+The full repository CI matrix and the actual DesignPatterns workbench commit remain unverified.
 
 ## Platform references
 
