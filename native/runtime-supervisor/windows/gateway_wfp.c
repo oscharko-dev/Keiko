@@ -1,6 +1,18 @@
 #include "gateway_wfp.h"
 #include <rpc.h>
 #include <string.h>
+#ifdef KEIKO_GATEWAY_TEST_DIAGNOSTICS
+#include <stdio.h>
+#endif
+
+static int readback_mismatch(const char *reason) {
+#ifdef KEIKO_GATEWAY_TEST_DIAGNOSTICS
+  printf("filter-readback: mismatch=%s\n", reason);
+#else
+  (void)reason;
+#endif
+  return 0;
+}
 
 static int package_sid_valid(PSID sid) {
   const SID_IDENTIFIER_AUTHORITY application_authority = SECURITY_APP_PACKAGE_AUTHORITY;
@@ -85,35 +97,35 @@ static int verify_conditions(const FWPM_FILTER0 *filter, PSID sid, UINT16 family
   UINT32 index, seen = 0;
   const BYTE loopback[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
   if (filter->numFilterConditions != (UINT32)(allow ? 4 : 1) || filter->filterCondition == NULL)
-    return 0;
+    return readback_mismatch("condition-count");
   for (index = 0; index < filter->numFilterConditions; index++) {
     const FWPM_FILTER_CONDITION0 *condition = &filter->filterCondition[index];
     UINT32 bit = 0;
-    if (condition->matchType != FWP_MATCH_EQUAL) return 0;
+    if (condition->matchType != FWP_MATCH_EQUAL) return readback_mismatch("match-type");
     if (same_guid(&condition->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID)) {
       if (condition->conditionValue.type != FWP_SID ||
           !package_sid_valid(condition->conditionValue.sid) ||
-          !EqualSid(condition->conditionValue.sid, sid)) return 0;
+          !EqualSid(condition->conditionValue.sid, sid)) return readback_mismatch("package");
       bit = 1;
     } else if (allow && same_guid(&condition->fieldKey, &FWPM_CONDITION_IP_REMOTE_ADDRESS)) {
       if (family == AF_INET) {
         if (condition->conditionValue.type != FWP_UINT32 ||
-            condition->conditionValue.uint32 != 0x7f000001u) return 0;
+            condition->conditionValue.uint32 != 0x7f000001u) return readback_mismatch("ipv4-address");
       } else if (condition->conditionValue.type != FWP_BYTE_ARRAY16_TYPE ||
                  condition->conditionValue.byteArray16 == NULL ||
                  memcmp(condition->conditionValue.byteArray16->byteArray16, loopback, 16) != 0)
-        return 0;
+        return readback_mismatch("ipv6-address");
       bit = 2;
     } else if (allow && same_guid(&condition->fieldKey, &FWPM_CONDITION_IP_REMOTE_PORT)) {
       if (condition->conditionValue.type != FWP_UINT16 || condition->conditionValue.uint16 != port)
-        return 0;
+        return readback_mismatch("port");
       bit = 4;
     } else if (allow && same_guid(&condition->fieldKey, &FWPM_CONDITION_IP_PROTOCOL)) {
       if (condition->conditionValue.type != FWP_UINT8 || condition->conditionValue.uint8 != IPPROTO_TCP)
-        return 0;
+        return readback_mismatch("protocol");
       bit = 8;
-    } else return 0;
-    if ((seen & bit) != 0) return 0;
+    } else return readback_mismatch("unknown-condition");
+    if ((seen & bit) != 0) return readback_mismatch("duplicate-condition");
     seen |= bit;
   }
   return seen == (UINT32)(allow ? 15 : 1);
@@ -128,12 +140,17 @@ static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters, PSID
     if (result != ERROR_SUCCESS) return result;
     const GUID *layer = index == 0 || (index == 2 && family == AF_INET)
                           ? &FWPM_LAYER_ALE_AUTH_CONNECT_V4 : &FWPM_LAYER_ALE_AUTH_CONNECT_V6;
-    if (filter == NULL || !same_guid(&filter->subLayerKey, &filters->sublayer) ||
-        !same_guid(&filter->layerKey, layer) || filter->flags != 0 ||
-        filter->action.type != (UINT32)(index == 2 ? FWP_ACTION_PERMIT : FWP_ACTION_BLOCK) ||
-        filter->weight.type != FWP_UINT64 || filter->weight.uint64 == NULL ||
-        *filter->weight.uint64 != (UINT64)(index == 2 ? 2 : 1) ||
-        !verify_conditions(filter, sid, family, port, index == 2)) {
+    int valid = 1;
+    if (filter == NULL) valid = readback_mismatch("missing-filter");
+    else if (!same_guid(&filter->subLayerKey, &filters->sublayer)) valid = readback_mismatch("sublayer");
+    else if (!same_guid(&filter->layerKey, layer)) valid = readback_mismatch("layer");
+    else if (filter->flags != 0) valid = readback_mismatch("flags");
+    else if (filter->action.type != (UINT32)(index == 2 ? FWP_ACTION_PERMIT : FWP_ACTION_BLOCK))
+      valid = readback_mismatch("action");
+    else if (filter->weight.type != FWP_UINT64 || filter->weight.uint64 == NULL ||
+             *filter->weight.uint64 != (UINT64)(index == 2 ? 2 : 1)) valid = readback_mismatch("weight");
+    else valid = verify_conditions(filter, sid, family, port, index == 2);
+    if (!valid) {
       FwpmFreeMemory0((void **)&filter);
       return ERROR_INVALID_DATA;
     }

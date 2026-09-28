@@ -32,6 +32,7 @@ if (
     "/MT",
     "/DUNICODE",
     "/D_UNICODE",
+    "/DKEIKO_GATEWAY_TEST_DIAGNOSTICS",
     "/D_WIN32_WINNT=0x0A00",
     `/Fe:${executable}`,
     `/Fo:${scratch}\\`,
