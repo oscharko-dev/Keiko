@@ -212,18 +212,14 @@ function isCanonicalLocalRoot(root: string): boolean {
 }
 
 function sameDirectoryIdentity(left: string, right: string): boolean {
-  try {
-    const leftStats = statSync(left);
-    const rightStats = statSync(right);
-    return (
-      leftStats.isDirectory() &&
-      rightStats.isDirectory() &&
-      leftStats.ino !== 0 &&
-      leftStats.ino === rightStats.ino
-    );
-  } catch {
-    return false;
-  }
+  const leftStats = statSync(left);
+  const rightStats = statSync(right);
+  return (
+    leftStats.isDirectory() &&
+    rightStats.isDirectory() &&
+    leftStats.ino !== 0 &&
+    leftStats.ino === rightStats.ino
+  );
 }
 
 function gitDirectoryIdentity(root: string, gitdir: string): string {

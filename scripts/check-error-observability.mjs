@@ -197,10 +197,6 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
   ],
   [
-    "packages/keiko-server/src/task-workspace/local-checkout.ts:sameDirectoryIdentity",
-    "A failed identity read is the fail-closed false result of this local checkout trust-boundary predicate.",
-  ],
-  [
     "packages/keiko-server/src/coding-runtime/productionWorkspaceHeadReader.ts:hasNoSymbolicLinkComponents",
     "A failed no-follow path probe is the fail-closed false result of this filesystem trust-boundary predicate.",
   ],
