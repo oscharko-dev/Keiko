@@ -70,7 +70,30 @@ static int connect_target(int family, UINT16 port) {
   return result == 0;
 }
 
-int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile) {
+static int udp_send(int family, UINT16 port) {
+  SOCKADDR_STORAGE storage = {0};
+  SOCKET client = socket(family, SOCK_DGRAM, IPPROTO_UDP);
+  int length, result;
+  if (client == INVALID_SOCKET) return 0;
+  if (family == AF_INET) {
+    SOCKADDR_IN *address = (SOCKADDR_IN *)&storage;
+    address->sin_family = AF_INET;
+    address->sin_port = htons(port);
+    address->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    length = sizeof(*address);
+  } else {
+    SOCKADDR_IN6 *address = (SOCKADDR_IN6 *)&storage;
+    address->sin6_family = AF_INET6;
+    address->sin6_port = htons(port);
+    address->sin6_addr.u.Byte[15] = 1;
+    length = sizeof(*address);
+  }
+  result = sendto(client, "K", 1, 0, (SOCKADDR *)&storage, length);
+  closesocket(client);
+  return result == 1;
+}
+
+int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile) {
   WSADATA data;
   HANDLE token = NULL;
   DWORD contained = 0, returned = 0;
@@ -81,9 +104,50 @@ int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile) {
   }
   CloseHandle(token);
   if (!contained || WSAStartup(MAKEWORD(2, 2), &data) != 0) return 82;
-  result = (connect_target(family, gateway) ? 1 : 0) | (connect_target(family, hostile) ? 2 : 0);
+  result = (connect_target(family, gateway) ? 1 : 0) | (connect_target(family, hostile) ? 2 : 0) |
+           (udp_send(family, gateway) ? 4 : 0);
   WSACleanup();
   return result;
+}
+
+int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile) {
+  STARTUPINFOW startup = {0};
+  PROCESS_INFORMATION process = {0};
+  wchar_t *executable = calloc(32768, sizeof(wchar_t));
+  wchar_t *command = calloc(32768, sizeof(wchar_t));
+  DWORD descendant = 99;
+  int result = gateway_socket_leaf(family, gateway, hostile);
+  if (executable == NULL || command == NULL) { result = 83; goto done; }
+  if (GetModuleFileNameW(NULL, executable, 32768) == 0 ||
+      _snwprintf_s(command, 32768, _TRUNCATE, L"\"%ls\" --socket-leaf %d %u %u",
+          executable, family, (unsigned)gateway, (unsigned)hostile) < 0) { result = 84; goto done; }
+  startup.cb = sizeof(startup);
+  /* No explicit security attributes: verify a normal descendant inherits the same restriction. */
+  if (!CreateProcessW(executable, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                      NULL, NULL, &startup, &process)) { result = 85; goto done; }
+  if (WaitForSingleObject(process.hProcess, 10000) != WAIT_OBJECT_0 ||
+      !GetExitCodeProcess(process.hProcess, &descendant)) {
+    (void)TerminateProcess(process.hProcess, 86);
+    (void)WaitForSingleObject(process.hProcess, INFINITE);
+    result = 86;
+  } else if (descendant != (DWORD)result) result = 87;
+done:
+  if (process.hThread != NULL) CloseHandle(process.hThread);
+  if (process.hProcess != NULL) CloseHandle(process.hProcess);
+  free(executable); free(command);
+  return result;
+}
+
+static int udp_received(SOCKET listener) {
+  fd_set read_set;
+  struct timeval timeout = {0, 200000};
+  char bytes[8];
+  int count;
+  FD_ZERO(&read_set); FD_SET(listener, &read_set);
+  count = select(0, &read_set, NULL, NULL, &timeout);
+  if (count < 0) return -1;
+  if (count == 0) return 0;
+  return recv(listener, bytes, sizeof(bytes), 0) == 1 && bytes[0] == 'K' ? 1 : -1;
 }
 
 static DWORD run_child(PSID sid, const wchar_t *executable, int family,
@@ -221,27 +285,35 @@ int gateway_socket_proof(void) {
   for (family = AF_INET; family <= AF_INET6; family += AF_INET6 - AF_INET) {
     struct socket_target gateway = {0}, hostile = {0};
     struct keiko_gateway_filters filters = {0};
+    SOCKET udp = INVALID_SOCKET;
     DWORD observed = 99, closed;
     gateway.listener = INVALID_SOCKET; hostile.listener = INVALID_SOCKET;
     if (!listen_target(family, &gateway) || !listen_target(family, &hostile)) {
       result = ERROR_NOT_READY;
     } else {
+      udp = socket(family, SOCK_DGRAM, IPPROTO_UDP);
+      if (udp == INVALID_SOCKET || bind(udp, (SOCKADDR *)&gateway.address, gateway.size) != 0) {
+        result = ERROR_NOT_READY;
+      }
+      if (result == ERROR_SUCCESS)
       result = run_child(sid, executable, family, gateway.port, hostile.port, &observed);
-      printf("socket-baseline: family=%d code=%lu connections=%lu expected=3\n", family, result, observed);
-      if (result == ERROR_SUCCESS && observed != 3) result = ERROR_INVALID_DATA;
+      printf("socket-baseline: family=%d code=%lu connections=%lu expected=7 descendant=same\n", family, result, observed);
+      if (result == ERROR_SUCCESS && (observed != 7 || udp_received(udp) != 1 || udp_received(udp) != 1))
+        result = ERROR_INVALID_DATA;
       if (result == ERROR_SUCCESS)
         result = keiko_gateway_filters_open(sid, (UINT16)family, gateway.port, &filters);
       if (result == ERROR_SUCCESS) {
         observed = 99;
         result = run_child(sid, executable, family, gateway.port, hostile.port, &observed);
-        printf("socket-filtered: family=%d code=%lu connections=%lu expected=1\n", family, result, observed);
-        if (result == ERROR_SUCCESS && observed != 1) result = ERROR_INVALID_DATA;
+        printf("socket-filtered: family=%d code=%lu connections=%lu expected=1 descendant=same\n", family, result, observed);
+        if (result == ERROR_SUCCESS && (observed != 1 || udp_received(udp) != 0)) result = ERROR_INVALID_DATA;
       }
     }
     closed = keiko_gateway_filters_close(&filters);
     if (closed != ERROR_SUCCESS) result = closed;
     if (gateway.listener != INVALID_SOCKET) closesocket(gateway.listener);
     if (hostile.listener != INVALID_SOCKET) closesocket(hostile.listener);
+    if (udp != INVALID_SOCKET) closesocket(udp);
     if (result != ERROR_SUCCESS) break;
   }
 done:

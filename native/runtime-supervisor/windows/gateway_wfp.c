@@ -76,14 +76,64 @@ static DWORD add_gateway_allow(struct keiko_gateway_filters *filters, PSID sid,
   return FwpmFilterAdd0(filters->engine, &filter, NULL, &filters->ids[2]);
 }
 
-static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters) {
+static int same_guid(const GUID *left, const GUID *right) {
+  return memcmp(left, right, sizeof(GUID)) == 0;
+}
+
+static int verify_conditions(const FWPM_FILTER0 *filter, PSID sid, UINT16 family, UINT16 port,
+                              int allow) {
+  UINT32 index, seen = 0;
+  const BYTE loopback[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+  if (filter->numFilterConditions != (UINT32)(allow ? 4 : 1) || filter->filterCondition == NULL)
+    return 0;
+  for (index = 0; index < filter->numFilterConditions; index++) {
+    const FWPM_FILTER_CONDITION0 *condition = &filter->filterCondition[index];
+    UINT32 bit = 0;
+    if (condition->matchType != FWP_MATCH_EQUAL) return 0;
+    if (same_guid(&condition->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID)) {
+      if (condition->conditionValue.type != FWP_SID ||
+          !package_sid_valid(condition->conditionValue.sid) ||
+          !EqualSid(condition->conditionValue.sid, sid)) return 0;
+      bit = 1;
+    } else if (allow && same_guid(&condition->fieldKey, &FWPM_CONDITION_IP_REMOTE_ADDRESS)) {
+      if (family == AF_INET) {
+        if (condition->conditionValue.type != FWP_UINT32 ||
+            condition->conditionValue.uint32 != 0x7f000001u) return 0;
+      } else if (condition->conditionValue.type != FWP_BYTE_ARRAY16_TYPE ||
+                 condition->conditionValue.byteArray16 == NULL ||
+                 memcmp(condition->conditionValue.byteArray16->byteArray16, loopback, 16) != 0)
+        return 0;
+      bit = 2;
+    } else if (allow && same_guid(&condition->fieldKey, &FWPM_CONDITION_IP_REMOTE_PORT)) {
+      if (condition->conditionValue.type != FWP_UINT16 || condition->conditionValue.uint16 != port)
+        return 0;
+      bit = 4;
+    } else if (allow && same_guid(&condition->fieldKey, &FWPM_CONDITION_IP_PROTOCOL)) {
+      if (condition->conditionValue.type != FWP_UINT8 || condition->conditionValue.uint8 != IPPROTO_TCP)
+        return 0;
+      bit = 8;
+    } else return 0;
+    if ((seen & bit) != 0) return 0;
+    seen |= bit;
+  }
+  return seen == (UINT32)(allow ? 15 : 1);
+}
+
+static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters, PSID sid,
+                                UINT16 family, UINT16 port) {
   size_t index;
   for (index = 0; index < 3; index++) {
     FWPM_FILTER0 *filter = NULL;
     DWORD result = FwpmFilterGetById0(filters->engine, filters->ids[index], &filter);
     if (result != ERROR_SUCCESS) return result;
-    if (filter == NULL || memcmp(&filter->subLayerKey, &filters->sublayer, sizeof(GUID)) != 0 ||
-        filter->action.type != (UINT32)(index == 2 ? FWP_ACTION_PERMIT : FWP_ACTION_BLOCK)) {
+    const GUID *layer = index == 0 || (index == 2 && family == AF_INET)
+                          ? &FWPM_LAYER_ALE_AUTH_CONNECT_V4 : &FWPM_LAYER_ALE_AUTH_CONNECT_V6;
+    if (filter == NULL || !same_guid(&filter->subLayerKey, &filters->sublayer) ||
+        !same_guid(&filter->layerKey, layer) || filter->flags != 0 ||
+        filter->action.type != (UINT32)(index == 2 ? FWP_ACTION_PERMIT : FWP_ACTION_BLOCK) ||
+        filter->weight.type != FWP_UINT64 || filter->weight.uint64 == NULL ||
+        *filter->weight.uint64 != (UINT64)(index == 2 ? 2 : 1) ||
+        !verify_conditions(filter, sid, family, port, index == 2)) {
       FwpmFreeMemory0((void **)&filter);
       return ERROR_INVALID_DATA;
     }
@@ -108,7 +158,7 @@ static DWORD install_transaction(struct keiko_gateway_filters *filters, PSID sid
   if (result == ERROR_SUCCESS) result = add_gateway_allow(filters, sid, family, port);
   if (result == ERROR_SUCCESS) result = FwpmTransactionCommit0(filters->engine);
   else (void)FwpmTransactionAbort0(filters->engine);
-  if (result == ERROR_SUCCESS) result = verify_filter_ids(filters);
+  if (result == ERROR_SUCCESS) result = verify_filter_ids(filters, sid, family, port);
   return result;
 }
 
