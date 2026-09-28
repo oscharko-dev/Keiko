@@ -45,9 +45,12 @@ approval and appropriate Windows privileges. It exercises only a synthetic ident
 qualify AppContainer sockets. Do not invoke it in routine local validation or enable the runtime
 because it passes.
 
-The local operator declined network-filter changes on 2026-09-28. No filter-installation test was
-executed. Continue testing that boundary on a separately approved Windows test machine. Do not
-remove the runtime's fail-closed refusal or label the end-to-end issue fixed without that evidence.
+The local operator declined network-filter changes on this PC on 2026-09-28 and subsequently
+approved testing on disposable GitHub-hosted Windows runners. The dedicated
+`windows-gateway-confinement.yml` development workflow runs the explicitly privileged lifecycle
+test there, including IPv4/IPv6 installation and independent readback of filter and sublayer removal.
+No filter-installation test runs on the developer PC. Do not remove the runtime's fail-closed refusal
+or label the end-to-end issue fixed without actual socket and workbench evidence.
 
 ## Platform references
 

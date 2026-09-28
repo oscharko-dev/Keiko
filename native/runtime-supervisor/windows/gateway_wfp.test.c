@@ -3,6 +3,7 @@
 #include <sddl.h>
 #include <stdio.h>
 #include <string.h>
+#include <rpc.h>
 
 static int validation_tests(void) {
   struct keiko_gateway_filters filters = {0};
@@ -37,16 +38,45 @@ static int validation_tests(void) {
   return ok ? 0 : 1;
 }
 
-static int lifecycle_test(void) {
+static DWORD assert_removed(const struct keiko_gateway_filters *before) {
+  HANDLE engine = NULL;
+  size_t index;
+  DWORD result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &engine);
+  if (result != ERROR_SUCCESS) return result;
+  for (index = 0; index < 3; index++) {
+    FWPM_FILTER0 *filter = NULL;
+    DWORD found = FwpmFilterGetById0(engine, before->ids[index], &filter);
+    if (filter != NULL) FwpmFreeMemory0((void **)&filter);
+    if (found != FWP_E_FILTER_NOT_FOUND) result = ERROR_INVALID_DATA;
+  }
+  {
+    FWPM_SUBLAYER0 *sublayer = NULL;
+    DWORD found = FwpmSubLayerGetByKey0(engine, &before->sublayer, &sublayer);
+    if (sublayer != NULL) FwpmFreeMemory0((void **)&sublayer);
+    if (found != FWP_E_SUBLAYER_NOT_FOUND) result = ERROR_INVALID_DATA;
+  }
+  {
+    DWORD closed = FwpmEngineClose0(engine);
+    if (closed != ERROR_SUCCESS) return closed;
+  }
+  return result;
+}
+
+static int lifecycle_test(UINT16 family) {
   struct keiko_gateway_filters filters = {0};
+  struct keiko_gateway_filters before = {0};
   PSID sid = NULL;
   DWORD result;
   if (!ConvertStringSidToSidW(L"S-1-15-2-112233-445566-778899-112244-335577-669988-123456", &sid))
     return 1;
   /* Synthetic package identity: these filters cannot affect any existing application. This is
    * only an installation/cleanup proof; the socket proof must use a real unique AppContainer. */
-  result = keiko_gateway_filters_open(sid, AF_INET, 1983, &filters);
-  if (result == ERROR_SUCCESS) result = keiko_gateway_filters_close(&filters);
+  result = keiko_gateway_filters_open(sid, family, 1983, &filters);
+  if (result == ERROR_SUCCESS) {
+    before = filters;
+    result = keiko_gateway_filters_close(&filters);
+    if (result == ERROR_SUCCESS) result = assert_removed(&before);
+  }
   LocalFree(sid);
   printf("gateway-filter-lifecycle: %s; code=%lu\n", result == ERROR_SUCCESS ? "passed" : "failed",
          (unsigned long)result);
@@ -55,6 +85,9 @@ static int lifecycle_test(void) {
 
 int main(int argc, char **argv) {
   if (argc == 1) return validation_tests();
-  if (argc == 2 && strcmp(argv[1], "--filter-lifecycle") == 0) return lifecycle_test();
+  if (argc == 2 && strcmp(argv[1], "--filter-lifecycle") == 0) {
+    if (lifecycle_test(AF_INET) != 0) return 1;
+    return lifecycle_test(AF_INET6);
+  }
   return 2;
 }

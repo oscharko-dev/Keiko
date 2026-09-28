@@ -1,0 +1,38 @@
+name: Windows gateway confinement development proof
+
+# Explicit development lane for #3666/#3423. Only a disposable hosted runner changes WFP state.
+# This proves filter lifecycle, not production runtime or socket qualification.
+on:
+  push:
+    branches: [fix/3666-windows-coding-runtime]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  filter-lifecycle:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Require disposable runner administrator context
+        shell: pwsh
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw "The native WFP proof requires an administrator token on the hosted runner."
+          }
+          if ((Get-Service BFE).Status -ne 'Running') { throw "BFE is not running." }
+      - name: Compile, analyze, validate and prove dynamic filter cleanup
+        run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle
