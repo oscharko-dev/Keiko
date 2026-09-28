@@ -228,6 +228,21 @@ static DWORD grant_execute(wchar_t *path, PSID sid, PSECURITY_DESCRIPTOR *origin
   return result;
 }
 
+struct concurrent_probe {
+  PSID sid;
+  const wchar_t *executable;
+  int family;
+  UINT16 gateway, hostile;
+  DWORD result, observed;
+};
+
+static DWORD WINAPI concurrent_child(void *context) {
+  struct concurrent_probe *probe = context;
+  probe->result = run_child(probe->sid, probe->executable, probe->family,
+                            probe->gateway, probe->hostile, &probe->observed);
+  return 0;
+}
+
 static DWORD restore_access(wchar_t *path, PSECURITY_DESCRIPTOR original) {
   PACL acl = NULL;
   BOOL present = FALSE, defaulted = FALSE;
@@ -243,13 +258,13 @@ int gateway_socket_proof(void) {
   WSADATA data;
   UUID uuid;
   RPC_WSTR uuid_text = NULL;
-  wchar_t profile[80] = {0};
+  wchar_t profile[80] = {0}, peer_profile[88] = {0};
   wchar_t *executable = calloc(32768, sizeof(wchar_t));
-  PSID sid = NULL;
+  PSID sid = NULL, peer_sid = NULL;
   PSID_AND_ATTRIBUTES previous = NULL, configured = NULL;
-  PSECURITY_DESCRIPTOR original = NULL;
+  PSECURITY_DESCRIPTOR original = NULL, intermediate = NULL;
   DWORD count = 0, result = ERROR_SUCCESS, index;
-  int exemption_changed = 0, profile_created = 0, sockets_started = 0, family;
+  int exemption_changed = 0, profile_created = 0, peer_created = 0, sockets_started = 0, family;
   if (executable == NULL) return 1;
   firewall = LoadLibraryExW(L"FirewallAPI.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (firewall == NULL) { result = GetLastError(); goto done; }
@@ -267,32 +282,44 @@ int gateway_socket_proof(void) {
   result = (DWORD)CreateAppContainerProfile(profile, profile, L"Disposable Keiko socket test", NULL, 0, &sid);
   if (FAILED((HRESULT)result)) goto done;
   profile_created = 1;
+  if (_snwprintf_s(peer_profile, 88, _TRUNCATE, L"%ls.Peer", profile) < 0) {
+    result = ERROR_BUFFER_OVERFLOW; goto done;
+  }
+  result = (DWORD)CreateAppContainerProfile(peer_profile, peer_profile, L"Disposable peer test", NULL, 0, &peer_sid);
+  if (FAILED((HRESULT)result)) goto done;
+  peer_created = 1;
   result = grant_execute(executable, sid, &original);
+  if (result != ERROR_SUCCESS) goto done;
+  result = grant_execute(executable, peer_sid, &intermediate);
   if (result != ERROR_SUCCESS) goto done;
   /* Test-only scoped loopback exemption. Preserve and restore the existing configuration.
    * This debug API plus dynamic WFP is NOT a crash-safe production service design. */
   result = get_config.call(&count, &previous);
   if (result != ERROR_SUCCESS) goto done;
-  configured = calloc((size_t)count + 1, sizeof(*configured));
+  configured = calloc((size_t)count + 2, sizeof(*configured));
   if (configured == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
   for (index = 0; index < count; index++) configured[index] = previous[index];
   configured[count].Sid = sid;
-  result = set_config.call(count + 1, configured);
+  configured[count + 1].Sid = peer_sid;
+  result = set_config.call(count + 2, configured);
   if (result != ERROR_SUCCESS) goto done;
   exemption_changed = 1;
   if (WSAStartup(MAKEWORD(2, 2), &data) != 0) { result = ERROR_NOT_READY; goto done; }
   sockets_started = 1;
   for (family = AF_INET; family <= AF_INET6; family += AF_INET6 - AF_INET) {
     struct socket_target gateway = {0}, hostile = {0};
-    struct keiko_gateway_filters filters = {0};
-    SOCKET udp = INVALID_SOCKET;
+    struct keiko_gateway_filters filters = {0}, peer_filters = {0};
+    SOCKET udp = INVALID_SOCKET, peer_udp = INVALID_SOCKET;
     DWORD observed = 99, closed;
     gateway.listener = INVALID_SOCKET; hostile.listener = INVALID_SOCKET;
     if (!listen_target(family, &gateway) || !listen_target(family, &hostile)) {
       result = ERROR_NOT_READY;
     } else {
       udp = socket(family, SOCK_DGRAM, IPPROTO_UDP);
-      if (udp == INVALID_SOCKET || bind(udp, (SOCKADDR *)&gateway.address, gateway.size) != 0) {
+      peer_udp = socket(family, SOCK_DGRAM, IPPROTO_UDP);
+      if (udp == INVALID_SOCKET || peer_udp == INVALID_SOCKET ||
+          bind(udp, (SOCKADDR *)&gateway.address, gateway.size) != 0 ||
+          bind(peer_udp, (SOCKADDR *)&hostile.address, hostile.size) != 0) {
         result = ERROR_NOT_READY;
       }
       if (result == ERROR_SUCCESS)
@@ -300,20 +327,55 @@ int gateway_socket_proof(void) {
       printf("socket-baseline: family=%d code=%lu connections=%lu expected=7 descendant=same\n", family, result, observed);
       if (result == ERROR_SUCCESS && (observed != 7 || udp_received(udp) != 1 || udp_received(udp) != 1))
         result = ERROR_INVALID_DATA;
+      if (result == ERROR_SUCCESS) {
+        result = run_child(peer_sid, executable, family, hostile.port, gateway.port, &observed);
+        printf("socket-peer-baseline: family=%d code=%lu connections=%lu expected=7 descendant=same\n", family, result, observed);
+        if (result == ERROR_SUCCESS &&
+            (observed != 7 || udp_received(peer_udp) != 1 || udp_received(peer_udp) != 1))
+          result = ERROR_INVALID_DATA;
+      }
       if (result == ERROR_SUCCESS)
         result = keiko_gateway_filters_open(sid, (UINT16)family, gateway.port, &filters);
+      if (result == ERROR_SUCCESS)
+        result = keiko_gateway_filters_open(peer_sid, (UINT16)family, hostile.port, &peer_filters);
       if (result == ERROR_SUCCESS) {
-        observed = 99;
-        result = run_child(sid, executable, family, gateway.port, hostile.port, &observed);
-        printf("socket-filtered: family=%d code=%lu connections=%lu expected=1 descendant=same\n", family, result, observed);
-        if (result == ERROR_SUCCESS && (observed != 1 || udp_received(udp) != 0)) result = ERROR_INVALID_DATA;
+        struct concurrent_probe probes[2] = {
+          {sid, executable, family, gateway.port, hostile.port, ERROR_NOT_READY, 99},
+          {peer_sid, executable, family, hostile.port, gateway.port, ERROR_NOT_READY, 99}
+        };
+        HANDLE threads[2] = {NULL, NULL};
+        size_t probe_index;
+        for (probe_index = 0; probe_index < 2; probe_index++) {
+          threads[probe_index] = CreateThread(NULL, 0, concurrent_child, &probes[probe_index], 0, NULL);
+          if (threads[probe_index] == NULL) result = GetLastError();
+        }
+        for (probe_index = 0; probe_index < 2; probe_index++) {
+          if (threads[probe_index] != NULL) {
+            (void)WaitForSingleObject(threads[probe_index], INFINITE);
+            CloseHandle(threads[probe_index]);
+          }
+          printf("socket-filtered: family=%d tree=%zu code=%lu observations=%lu expected-tcp-mask=1 descendant=same\n",
+                  family, probe_index, probes[probe_index].result, probes[probe_index].observed);
+          /* UDP send completion only means locally accepted; reception is the enforcement oracle. */
+          if (probes[probe_index].result != ERROR_SUCCESS || probes[probe_index].observed > 7 ||
+              (probes[probe_index].observed & 3) != 1)
+            result = ERROR_INVALID_DATA;
+        }
+        {
+          int received = udp_received(udp), peer_received = udp_received(peer_udp);
+          printf("socket-udp-reception: family=%d first=%d peer=%d expected=0\n", family, received, peer_received);
+          if (received != 0 || peer_received != 0) result = ERROR_INVALID_DATA;
+        }
       }
     }
     closed = keiko_gateway_filters_close(&filters);
     if (closed != ERROR_SUCCESS) result = closed;
+    closed = keiko_gateway_filters_close(&peer_filters);
+    if (closed != ERROR_SUCCESS) result = closed;
     if (gateway.listener != INVALID_SOCKET) closesocket(gateway.listener);
     if (hostile.listener != INVALID_SOCKET) closesocket(hostile.listener);
     if (udp != INVALID_SOCKET) closesocket(udp);
+    if (peer_udp != INVALID_SOCKET) closesocket(peer_udp);
     if (result != ERROR_SUCCESS) break;
   }
 done:
@@ -329,8 +391,14 @@ done:
     HRESULT deleted = DeleteAppContainerProfile(profile);
     if (FAILED(deleted)) result = (DWORD)deleted;
   }
+  if (peer_created) {
+    HRESULT deleted = DeleteAppContainerProfile(peer_profile);
+    if (FAILED(deleted)) result = (DWORD)deleted;
+  }
   if (original != NULL) LocalFree(original);
+  if (intermediate != NULL) LocalFree(intermediate);
   if (sid != NULL) FreeSid(sid);
+  if (peer_sid != NULL) FreeSid(peer_sid);
   for (index = 0; index < count; index++) HeapFree(GetProcessHeap(), 0, previous[index].Sid);
   if (previous != NULL) HeapFree(GetProcessHeap(), 0, previous);
   free(configured); free(executable);
