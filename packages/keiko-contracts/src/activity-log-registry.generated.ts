@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "09040f2ba44d899a2ea3cb1b93daf17b94cb947eb2be86e32ee5450cba463d73" as const;
+  "eb0d93554962247edeecfe20430c87f904e740d45e4b5005ed16986b334d4c40" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -12026,7 +12026,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["calibrated", "fallback-estimated", "gateway-reported"],
+        values: ["calibrated", "fallback-estimated", "gateway-reported", "retained-measurement"],
       },
       counterStatus: {
         type: "string",
@@ -12054,7 +12054,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["none", "fallback-estimated", "provider-measured"],
+        values: ["none", "fallback-estimated", "provider-measured", "retained-measurement"],
       },
       imageReserveTokens: {
         type: "integer",
@@ -12077,6 +12077,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       providerPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      retainedPromptTokens: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -44335,6 +44340,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "reportedPromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "retainedPromptTokens",
               type: "integer",
               dataClass: "count",
               required: false,

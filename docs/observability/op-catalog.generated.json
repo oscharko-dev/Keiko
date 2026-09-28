@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "09040f2ba44d899a2ea3cb1b93daf17b94cb947eb2be86e32ee5450cba463d73",
+    "catalogDigest": "eb0d93554962247edeecfe20430c87f904e740d45e4b5005ed16986b334d4c40",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12672,7 +12672,12 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["calibrated", "fallback-estimated", "gateway-reported"]
+            "values": [
+              "calibrated",
+              "fallback-estimated",
+              "gateway-reported",
+              "retained-measurement"
+            ]
           },
           "counterStatus": {
             "type": "string",
@@ -12700,7 +12705,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["none", "fallback-estimated", "provider-measured"]
+            "values": ["none", "fallback-estimated", "provider-measured", "retained-measurement"]
           },
           "imageReserveTokens": {
             "type": "integer",
@@ -12723,6 +12728,11 @@
             "required": false
           },
           "providerPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "retainedPromptTokens": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -12750,7 +12760,7 @@
         "proofIds": ["gateway.prompt.admission.bounds"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/prompt-admission.ts:25",
-        "emitterSites": ["packages/keiko-model-gateway/src/prompt-admission.ts:104"]
+        "emitterSites": ["packages/keiko-model-gateway/src/prompt-admission.ts:110"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -12808,7 +12818,7 @@
         "proofIds": ["gateway.prompt.admission-failed.budget"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway-prompt-admission.ts:55",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway-prompt-admission.ts:220"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway-prompt-admission.ts:221"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -54852,6 +54862,12 @@
                 },
                 {
                   "name": "reportedPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "retainedPromptTokens",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false

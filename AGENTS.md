@@ -526,6 +526,14 @@ Gateway admission additionally records `imageCount`, the selected `imageAccounti
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 
+On retries, `reportedPromptTokens` always describes only the current counter response and is
+absent when that response has no count. `providerPromptTokens` adds the current response-schema
+cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
+plus schema cost. Admission preserves the maximum of local, current-provider and retained
+candidates. `counterSource` identifies a winning retained floor as `retained-measurement`, and
+`imageAccounting` uses that disposition when only the retained positive measurement replaces the
+image reserve. Neither retained value is presented as a new provider observation.
+
 ### Rule 2 — when you debug, the log is your primary source
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product

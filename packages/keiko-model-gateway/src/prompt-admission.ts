@@ -41,7 +41,7 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["calibrated", "fallback-estimated", "gateway-reported"],
+      values: ["calibrated", "fallback-estimated", "gateway-reported", "retained-measurement"],
     },
     counterStatus: {
       type: "string",
@@ -61,13 +61,14 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["none", "fallback-estimated", "provider-measured"],
+      values: ["none", "fallback-estimated", "provider-measured", "retained-measurement"],
     },
     imageReserveTokens: { type: "integer", dataClass: "count", required: true },
     localPromptTokens: { type: "integer", dataClass: "count", required: true },
     fallbackPromptTokens: { type: "integer", dataClass: "count", required: true },
     reportedPromptTokens: { type: "integer", dataClass: "count", required: false },
     providerPromptTokens: { type: "integer", dataClass: "count", required: false },
+    retainedPromptTokens: { type: "integer", dataClass: "count", required: false },
     inputBudget: { type: "integer", dataClass: "count", required: true },
     outputBudget: { type: "integer", dataClass: "count", required: true },
     contextWindow: { type: "integer", dataClass: "count", required: true },
@@ -90,6 +91,7 @@ export function admitGatewayPrompt(
   log: ModelGatewayLogSink,
   correlationId: string,
   measured: ProviderTokenCount = DISABLED_COUNTER,
+  retainedTokens?: number,
 ): GatewayCallRequest {
   const profile = deriveContextProfileFromCapability(capability);
   const outputBudget = outputAllocation(request.maxOutputTokens, profile.reservedOutputTokens);
@@ -97,8 +99,12 @@ export function admitGatewayPrompt(
     0,
     profile.maxInputTokens - outputBudget - profile.safetyMarginTokens,
   );
-  const evidence = promptTokenEvidence(request, profile, measured);
-  const promptTokens = Math.max(evidence.localPromptTokens, evidence.providerPromptTokens ?? 0);
+  const evidence = promptTokenEvidence(request, profile, measured, retainedTokens);
+  const promptTokens = Math.max(
+    evidence.localPromptTokens,
+    evidence.providerPromptTokens ?? 0,
+    evidence.retainedPromptTokens ?? 0,
+  );
   const refusal = promptRefusal(promptTokens, inputBudget, outputBudget, capability);
   log.write(
     activityLogEvent(
@@ -107,11 +113,7 @@ export function admitGatewayPrompt(
       {
         ...(refusal === undefined ? {} : gatewayFailureEvidence(log, refusal)),
         state: refusal === undefined ? "admitted" : "overflow",
-        counterSource: selectedCounterSource(
-          evidence.providerPromptTokens,
-          evidence.localPromptTokens,
-          profile.tokenAccounting?.source,
-        ),
+        counterSource: selectedCounterSource(evidence, profile.tokenAccounting?.source),
         counterStatus: measured.status,
         tokenizer: measured.tokenizer ?? "unknown",
         ...evidence,
@@ -130,25 +132,28 @@ export function admitGatewayPrompt(
 
 interface PromptTokenEvidence {
   readonly imageCount: number;
-  readonly imageAccounting: "none" | "fallback-estimated" | "provider-measured";
+  readonly imageAccounting:
+    "none" | "fallback-estimated" | "provider-measured" | "retained-measurement";
   readonly imageReserveTokens: number;
   readonly localPromptTokens: number;
   readonly fallbackPromptTokens: number;
   readonly reportedPromptTokens?: number;
   readonly providerPromptTokens?: number;
+  readonly retainedPromptTokens?: number;
 }
 
 function promptTokenEvidence(
   request: GatewayPromptTokenInput,
   profile: ContextProfile,
   measured: ProviderTokenCount,
+  retainedTokens: number | undefined,
 ): PromptTokenEvidence {
   const imageCount = request.messages.reduce(
     (count, message) =>
       count + (message.contentParts?.filter((part) => part.type === "image_url").length ?? 0),
     0,
   );
-  const imageTokensMeasured = measured.tokens !== undefined && measured.tokens > 0;
+  const imageAccounting = imageAccountingSource(imageCount, measured.tokens, retainedTokens);
   const options = { contextWindow: profile.maxInputTokens };
   const fallbackPromptTokens = countGatewayPromptTokens(request, profile.tokenAccounting, options);
   const textFloor =
@@ -158,18 +163,38 @@ function promptTokenEvidence(
           ...options,
           imageTokensMeasured: true,
         });
-  const localPromptTokens = imageTokensMeasured ? textFloor : fallbackPromptTokens;
-  const providerPromptTokens = completeMeasuredTokens(request, measured, profile.tokenAccounting);
-  const imageAccounting = imageTokensMeasured ? "provider-measured" : "fallback-estimated";
+  const localPromptTokens =
+    imageAccounting === "fallback-estimated" ? fallbackPromptTokens : textFloor;
+  const providerPromptTokens = completeMeasuredTokens(
+    request,
+    measured.tokens,
+    profile.tokenAccounting,
+  );
+  const retainedPromptTokens = completeMeasuredTokens(
+    request,
+    retainedTokens,
+    profile.tokenAccounting,
+  );
   return {
     imageCount,
-    imageAccounting: imageCount === 0 ? "none" : imageAccounting,
+    imageAccounting,
     imageReserveTokens: localPromptTokens - textFloor,
     localPromptTokens,
     fallbackPromptTokens,
     ...(measured.tokens === undefined ? {} : { reportedPromptTokens: measured.tokens }),
     ...(providerPromptTokens === undefined ? {} : { providerPromptTokens }),
+    ...(retainedPromptTokens === undefined ? {} : { retainedPromptTokens }),
   };
+}
+
+function imageAccountingSource(
+  imageCount: number,
+  current: number | undefined,
+  retained: number | undefined,
+): PromptTokenEvidence["imageAccounting"] {
+  if (imageCount === 0) return "none";
+  if ((current ?? 0) > 0) return "provider-measured";
+  return (retained ?? 0) > 0 ? "retained-measurement" : "fallback-estimated";
 }
 
 function promptRefusal(
@@ -187,12 +212,12 @@ function promptRefusal(
 
 function completeMeasuredTokens(
   request: GatewayPromptTokenInput,
-  measured: ProviderTokenCount,
+  tokens: number | undefined,
   accounting: ContextTokenAccounting | undefined,
 ): number | undefined {
-  return measured.tokens === undefined
+  return tokens === undefined
     ? undefined
-    : measured.tokens + countGatewayResponseFormatTokens(request, accounting);
+    : tokens + countGatewayResponseFormatTokens(request, accounting);
 }
 
 function outputExceedsCapability(output: number, capability: ModelCapability): boolean {
@@ -209,11 +234,13 @@ function outputAllocation(requested: number | undefined, fallback: number): numb
 }
 
 function selectedCounterSource(
-  measured: number | undefined,
-  estimated: number,
+  evidence: PromptTokenEvidence,
   source: "calibrated" | "fallback-estimated" | undefined,
-): "calibrated" | "fallback-estimated" | "gateway-reported" {
-  return measured !== undefined && measured >= estimated
+): "calibrated" | "fallback-estimated" | "gateway-reported" | "retained-measurement" {
+  const measured = evidence.providerPromptTokens;
+  const retained = evidence.retainedPromptTokens ?? 0;
+  if (retained > Math.max(evidence.localPromptTokens, measured ?? 0)) return "retained-measurement";
+  return measured !== undefined && measured >= evidence.localPromptTokens
     ? "gateway-reported"
     : (source ?? "fallback-estimated");
 }

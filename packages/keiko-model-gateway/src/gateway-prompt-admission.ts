@@ -180,7 +180,8 @@ export class GatewayPromptAdmission {
       this.options.capability,
       this.log,
       this.options.correlationId,
-      this.retainedMeasurement(projected, measured),
+      measured,
+      this.retainedTokenFloor(projected, measured),
     );
     return this.remainingBudget(request, budgetMs, start, "validation");
   }
@@ -236,10 +237,10 @@ export class GatewayPromptAdmission {
     throw error;
   }
 
-  private retainedMeasurement(
+  private retainedTokenFloor(
     request: GatewayCallRequest & GatewayPromptTokenInput,
     count: ProviderTokenCount,
-  ): ProviderTokenCount {
+  ): number | undefined {
     const profile = deriveContextProfileFromCapability(this.options.capability);
     // The remote payload omits responseFormat, so the retained floor must omit it too.
     const estimated = countGatewayPromptTokens(
@@ -252,8 +253,8 @@ export class GatewayPromptAdmission {
         ? 0
         : this.previous.measured + Math.max(0, estimated - this.previous.estimated);
     const measured = Math.max(retained, count.tokens ?? 0);
-    if (measured === 0) return count;
+    if (measured === 0) return undefined;
     this.previous = { estimated, measured };
-    return { ...count, tokens: measured };
+    return retained > 0 ? retained : undefined;
   }
 }

@@ -10,7 +10,10 @@ import type { GatewayCallRequest } from "./gateway.js";
 import type { ModelProviderConfig } from "./types.js";
 import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
+import {
+  countGatewayPromptTokens,
+  countGatewayResponseFormatTokens,
+} from "./prompt-token-accounting.js";
 
 const provider: ModelProviderConfig = {
   modelId: "fixture",
@@ -155,6 +158,125 @@ function captureAdmissionEvents(): {
       causeChain: [],
     }),
   };
+}
+
+function retryEvidenceRequests(
+  image: boolean,
+  schema: boolean,
+): {
+  initial: GatewayCallRequest;
+  repaired: GatewayCallRequest;
+} {
+  const initial: GatewayCallRequest = image
+    ? {
+        ...request,
+        messages: [
+          {
+            role: "user",
+            content: "question",
+            contentParts: [
+              { type: "text", text: "question" },
+              { type: "image_url", image_url: { url: "https://private.example/image.png" } },
+            ],
+          },
+        ],
+      }
+    : request;
+  return {
+    initial,
+    repaired: {
+      ...initial,
+      messages: [
+        ...initial.messages,
+        { role: "system", content: "Correct the previous invalid tool call." },
+      ],
+      ...(schema
+        ? {
+            responseFormat: {
+              type: "json_schema" as const,
+              name: "result",
+              schema: { type: "object" },
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+describe.each([false, true])("retry measurement evidence with image=%s", (image) => {
+  it.each(
+    [undefined, 0, 50, 150].flatMap((reported) =>
+      [false, true].map((schema) => ({ reported, schema })),
+    ),
+  )(
+    "keeps the current report $reported separate from the retained floor, schema=$schema",
+    async ({ reported, schema }) => {
+      const sink = captureAdmissionEvents();
+      const { initial, repaired } = retryEvidenceRequests(image, schema);
+      const admission = new GatewayPromptAdmission({
+        provider,
+        capability,
+        now: (): number => 1,
+        counter: new ProviderPromptCounter(() => 1),
+        correlationId: "retry-measurement-evidence",
+        log: sink,
+        fetchImpl: vi
+          .fn<typeof fetch>()
+          .mockResolvedValueOnce(Response.json({ total_tokens: 100 }))
+          .mockResolvedValueOnce(
+            reported === undefined
+              ? new Response(null, { status: 503 })
+              : Response.json({ total_tokens: reported }),
+          ),
+      });
+      await admission.admit(initial, 1000);
+      const first = sink.events.find((entry) => entry.op === "gateway.prompt.admission");
+      expect(first?.extra).toMatchObject({ reportedPromptTokens: 100, providerPromptTokens: 100 });
+      expect(first?.extra).not.toHaveProperty("retainedPromptTokens");
+      await admission.admit(repaired, 1000);
+      const event = sink.events.filter((entry) => entry.op === "gateway.prompt.admission").at(-1);
+      // The current counter result must stay raw, including an absent measurement on failure.
+      expect(event?.extra?.reportedPromptTokens).toBe(reported);
+      const persisted = expectActivityLogProof(
+        "gateway.prompt.admission.bounds",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      assertRetryMeasurementEvidence(persisted, { initial, repaired, reported, image });
+    },
+  );
+});
+
+function assertRetryMeasurementEvidence(
+  evidence: Record<string, unknown>,
+  input: ReturnType<typeof retryEvidenceRequests> & {
+    reported: number | undefined;
+    image: boolean;
+  },
+): void {
+  const profile = deriveContextProfileFromCapability(capability);
+  const options = { contextWindow: profile.maxInputTokens };
+  const growth =
+    countGatewayPromptTokens(
+      { messages: input.repaired.messages },
+      profile.tokenAccounting,
+      options,
+    ) - countGatewayPromptTokens(input.initial, profile.tokenAccounting, options);
+  const schemaTokens = countGatewayResponseFormatTokens(input.repaired, profile.tokenAccounting);
+  const retained = 100 + growth + schemaTokens;
+  expect(evidence).toMatchObject({
+    retainedPromptTokens: retained,
+    counterStatus: input.reported === undefined ? "unavailable" : "available",
+    counterSource:
+      (input.reported ?? 0) > 100 + growth ? "gateway-reported" : "retained-measurement",
+    imageReserveTokens: 0,
+  });
+  const imageSource = (input.reported ?? 0) > 0 ? "provider-measured" : "retained-measurement";
+  expect(evidence.imageAccounting).toBe(input.image ? imageSource : "none");
+  expect(evidence.reportedPromptTokens).toBe(input.reported);
+  expect(evidence.providerPromptTokens).toBe(
+    input.reported === undefined ? undefined : input.reported + schemaTokens,
+  );
+  expect(evidence.promptTokens).toBe(Math.max(retained, (input.reported ?? 0) + schemaTokens));
 }
 
 it("records cooldown activation, per-call suppression, and expiry with model scope", async () => {
