@@ -828,6 +828,12 @@ effective input budget and image reserve. This evidence survives generation time
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
 
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
 Git draft resilience correction (2026-09-27): `git.commit.draft.completed` also records observed
 `promptTokens`, `maxPromptTokens`, `diffCompacted`, `generationAttempts` and `reused`. The values
 explain model-context compaction, a corrective generation and a cached result without retaining

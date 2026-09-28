@@ -48,6 +48,12 @@ Image bytes remain subject to the existing final authority check. A higher proxy
 still reject a locally fitting prompt; compare the local and reported counts when diagnosing that
 case, rather than increasing the deployed window without evidence.
 
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
 Inspect `gateway.prompt.admission` in the activity log for `counterStatus`, `counterSource`,
 `tokenizer`, `promptTokens`, `inputBudget`, and `outputBudget`. No prompt or counter response body is
 logged. For a counter that stays unavailable, inspect `gateway.prompt.counter-cooldown`: its

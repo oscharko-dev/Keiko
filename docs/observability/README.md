@@ -611,6 +611,12 @@ effective input budget and image reserve. This evidence survives generation time
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
 
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
 Epic #3384's repository-delivery journey (intake, mutation authority, verified commit, push, draft
 PR, CI readiness — including the `pr-mark-ready` draft-to-ready transition (#3389) — description
 generation/apply, and the recorded journey outcome) reconstructs on the same per-correlation

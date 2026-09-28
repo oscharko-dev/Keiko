@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e90fa927eb9e25d13bdfb3cadf90458bb8f89b18ac45e11d366381dfc78c2d3a" as const;
+  "09040f2ba44d899a2ea3cb1b93daf17b94cb947eb2be86e32ee5450cba463d73" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -12044,6 +12044,42 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      imageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      imageAccounting: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["none", "fallback-estimated", "provider-measured"],
+      },
+      imageReserveTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      localPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      fallbackPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      reportedPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      providerPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       inputBudget: {
         type: "integer",
@@ -44238,13 +44274,43 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "fallbackPromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
               required: false,
             },
             {
+              name: "imageAccounting",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "imageCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "imageReserveTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "inputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "localPromptTokens",
               type: "integer",
               dataClass: "count",
               required: true,
@@ -44260,6 +44326,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "providerPromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reportedPromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "state",

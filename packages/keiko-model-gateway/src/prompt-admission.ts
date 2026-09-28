@@ -1,6 +1,7 @@
 import {
   deriveContextProfileFromCapability,
   type ContextTokenAccounting,
+  type ContextProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   activityLogEvent,
@@ -55,6 +56,18 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
       values: ["openai", "huggingface", "other", "unknown"],
     },
     promptTokens: { type: "integer", dataClass: "count", required: true },
+    imageCount: { type: "integer", dataClass: "count", required: true },
+    imageAccounting: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "fallback-estimated", "provider-measured"],
+    },
+    imageReserveTokens: { type: "integer", dataClass: "count", required: true },
+    localPromptTokens: { type: "integer", dataClass: "count", required: true },
+    fallbackPromptTokens: { type: "integer", dataClass: "count", required: true },
+    reportedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    providerPromptTokens: { type: "integer", dataClass: "count", required: false },
     inputBudget: { type: "integer", dataClass: "count", required: true },
     outputBudget: { type: "integer", dataClass: "count", required: true },
     contextWindow: { type: "integer", dataClass: "count", required: true },
@@ -84,12 +97,8 @@ export function admitGatewayPrompt(
     0,
     profile.maxInputTokens - outputBudget - profile.safetyMarginTokens,
   );
-  const estimatedTokens = countGatewayPromptTokens(request, profile.tokenAccounting, {
-    contextWindow: profile.maxInputTokens,
-    imageTokensMeasured: measured.tokens !== undefined && measured.tokens > 0,
-  });
-  const measuredTokens = completeMeasuredTokens(request, measured, profile.tokenAccounting);
-  const promptTokens = Math.max(estimatedTokens, measuredTokens ?? 0);
+  const evidence = promptTokenEvidence(request, profile, measured);
+  const promptTokens = Math.max(evidence.localPromptTokens, evidence.providerPromptTokens ?? 0);
   const refusal = promptRefusal(promptTokens, inputBudget, outputBudget, capability);
   log.write(
     activityLogEvent(
@@ -99,12 +108,13 @@ export function admitGatewayPrompt(
         ...(refusal === undefined ? {} : gatewayFailureEvidence(log, refusal)),
         state: refusal === undefined ? "admitted" : "overflow",
         counterSource: selectedCounterSource(
-          measuredTokens,
-          estimatedTokens,
+          evidence.providerPromptTokens,
+          evidence.localPromptTokens,
           profile.tokenAccounting?.source,
         ),
         counterStatus: measured.status,
         tokenizer: measured.tokenizer ?? "unknown",
+        ...evidence,
         promptTokens,
         inputBudget,
         outputBudget,
@@ -116,6 +126,50 @@ export function admitGatewayPrompt(
   );
   if (refusal !== undefined) throw refusal;
   return request;
+}
+
+interface PromptTokenEvidence {
+  readonly imageCount: number;
+  readonly imageAccounting: "none" | "fallback-estimated" | "provider-measured";
+  readonly imageReserveTokens: number;
+  readonly localPromptTokens: number;
+  readonly fallbackPromptTokens: number;
+  readonly reportedPromptTokens?: number;
+  readonly providerPromptTokens?: number;
+}
+
+function promptTokenEvidence(
+  request: GatewayPromptTokenInput,
+  profile: ContextProfile,
+  measured: ProviderTokenCount,
+): PromptTokenEvidence {
+  const imageCount = request.messages.reduce(
+    (count, message) =>
+      count + (message.contentParts?.filter((part) => part.type === "image_url").length ?? 0),
+    0,
+  );
+  const imageTokensMeasured = measured.tokens !== undefined && measured.tokens > 0;
+  const options = { contextWindow: profile.maxInputTokens };
+  const fallbackPromptTokens = countGatewayPromptTokens(request, profile.tokenAccounting, options);
+  const textFloor =
+    imageCount === 0
+      ? fallbackPromptTokens
+      : countGatewayPromptTokens(request, profile.tokenAccounting, {
+          ...options,
+          imageTokensMeasured: true,
+        });
+  const localPromptTokens = imageTokensMeasured ? textFloor : fallbackPromptTokens;
+  const providerPromptTokens = completeMeasuredTokens(request, measured, profile.tokenAccounting);
+  const imageAccounting = imageTokensMeasured ? "provider-measured" : "fallback-estimated";
+  return {
+    imageCount,
+    imageAccounting: imageCount === 0 ? "none" : imageAccounting,
+    imageReserveTokens: localPromptTokens - textFloor,
+    localPromptTokens,
+    fallbackPromptTokens,
+    ...(measured.tokens === undefined ? {} : { reportedPromptTokens: measured.tokens }),
+    ...(providerPromptTokens === undefined ? {} : { providerPromptTokens }),
+  };
 }
 
 function promptRefusal(

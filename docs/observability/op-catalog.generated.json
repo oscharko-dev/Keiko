@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e90fa927eb9e25d13bdfb3cadf90458bb8f89b18ac45e11d366381dfc78c2d3a",
+    "catalogDigest": "09040f2ba44d899a2ea3cb1b93daf17b94cb947eb2be86e32ee5450cba463d73",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12691,6 +12691,42 @@
             "dataClass": "count",
             "required": true
           },
+          "imageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "imageAccounting": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["none", "fallback-estimated", "provider-measured"]
+          },
+          "imageReserveTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "localPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "fallbackPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reportedPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "providerPromptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "inputBudget": {
             "type": "integer",
             "dataClass": "count",
@@ -12713,8 +12749,8 @@
         "failureClasses": ["gateway-context-admission"],
         "proofIds": ["gateway.prompt.admission.bounds"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/prompt-admission.ts:24",
-        "emitterSites": ["packages/keiko-model-gateway/src/prompt-admission.ts:95"]
+        "registrationSite": "packages/keiko-model-gateway/src/prompt-admission.ts:25",
+        "emitterSites": ["packages/keiko-model-gateway/src/prompt-admission.ts:104"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -54755,13 +54791,43 @@
                   "required": true
                 },
                 {
+                  "name": "fallbackPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "frames",
                   "type": "string-array",
                   "dataClass": "opaque-id",
                   "required": false
                 },
                 {
+                  "name": "imageAccounting",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "imageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "imageReserveTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "inputBudget",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "localPromptTokens",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
@@ -54777,6 +54843,18 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "providerPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "reportedPromptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "state",
@@ -76027,7 +76105,7 @@
     {
       "op": "gateway.prompt.admission",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/prompt-admission.ts:27",
+      "site": "packages/keiko-model-gateway/src/prompt-admission.ts:28",
       "package": "keiko-model-gateway"
     },
     {

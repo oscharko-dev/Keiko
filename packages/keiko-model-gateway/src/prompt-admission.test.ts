@@ -4,6 +4,11 @@ import { admitGatewayPrompt } from "./prompt-admission.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
+import type { GatewayCallRequest } from "./gateway.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const capability = {
   ...createDefaultChatCapability("fixture"),
@@ -166,3 +171,57 @@ it("refuses multiple unmeasured images when their combined allowance exceeds the
     ),
   ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
 });
+
+function imageAccountingRequest(length: number): GatewayCallRequest {
+  return {
+    ...request,
+    maxOutputTokens: 1024,
+    messages: [
+      {
+        role: "user",
+        content: "private-image-prompt",
+        contentParts: [
+          { type: "text", text: "x".repeat(length) },
+          { type: "image_url", image_url: { url: "https://private.example/image.png" } },
+        ],
+      },
+    ],
+  };
+}
+
+it.each([0, 100])(
+  "persists the image accounting rule when the local floor wins over %s",
+  (reported) => {
+    const log = recorder();
+    const vision = { ...capability, contextWindow: 8192, supportsImageInput: true };
+    const profile = deriveContextProfileFromCapability(vision);
+    const input = imageAccountingRequest(reported === 0 ? 2832 : 10_000);
+    const measured = {
+      status: "available" as const,
+      tokens: reported,
+      tokenizer: "openai" as const,
+    };
+    const fallback = countGatewayPromptTokens(input, profile.tokenAccounting, {
+      contextWindow: 8192,
+    });
+    const textFloor = countGatewayPromptTokens(input, profile.tokenAccounting, {
+      contextWindow: 8192,
+      imageTokensMeasured: true,
+    });
+    admitGatewayPrompt(input, vision, log, "image-accounting-floor", measured);
+    const line = formatActivityLogProofLine(log.events[0] ?? {});
+    const persisted = expectActivityLogProof("gateway.prompt.admission.bounds", line);
+    expect(persisted).toMatchObject({
+      imageCount: 1,
+      imageAccounting: reported === 0 ? "fallback-estimated" : "provider-measured",
+      imageReserveTokens: reported === 0 ? fallback - textFloor : 0,
+      reportedPromptTokens: reported,
+      providerPromptTokens: reported,
+      fallbackPromptTokens: fallback,
+      localPromptTokens: reported === 0 ? fallback : textFloor,
+      counterSource: "fallback-estimated",
+    });
+    expect(line).not.toContain("private-image-prompt");
+    expect(line).not.toContain("private.example");
+  },
+);
