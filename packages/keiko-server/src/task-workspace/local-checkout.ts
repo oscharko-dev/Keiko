@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
 import { execFileSync } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, normalize, parse } from "node:path";
 
 import { gitEnv, GIT_BASE_ARGS, resolveGitExecutable } from "@oscharko-dev/keiko-git";
 import {
@@ -184,16 +185,45 @@ function currentBranch(root: string): string | undefined {
 }
 
 function localIdentity(root: string): string | undefined {
-  // Git for Windows prints forward slashes; compare canonical filesystem identities, not
-  // Git's presentation spelling. The selected root must still be canonical and repository-top.
-  if (
-    realpathSync(root) !== root ||
-    realpathSync(git(root, "rev-parse", "--show-toplevel")) !== root
-  ) {
+  // Windows can resolve one directory through either its long or 8.3 path spelling. Node may
+  // return the short spelling for the registered root and Git the long spelling for the same
+  // directory, so string equality after realpath is not a filesystem identity check. Preserve
+  // canonical-root/reparse-point rejection, then compare the actual directory file IDs.
+  if (!isCanonicalLocalRoot(root)) {
     return undefined;
   }
+  const gitRoot = git(root, "rev-parse", "--show-toplevel");
+  if (!sameDirectoryIdentity(root, gitRoot)) return undefined;
   const gitdir = realpathSync(git(root, "rev-parse", "--absolute-git-dir"));
   return gitDirectoryIdentity(root, gitdir);
+}
+
+function isCanonicalLocalRoot(root: string): boolean {
+  if (!isAbsolute(root) || normalize(root) !== root) return false;
+  let current = parse(root).root;
+  for (const segment of root
+    .slice(current.length)
+    .split(/[\\/]+/u)
+    .filter(Boolean)) {
+    current = join(current, segment);
+    if (lstatSync(current).isSymbolicLink()) return false;
+  }
+  return statSync(root).isDirectory();
+}
+
+function sameDirectoryIdentity(left: string, right: string): boolean {
+  try {
+    const leftStats = statSync(left);
+    const rightStats = statSync(right);
+    return (
+      leftStats.isDirectory() &&
+      rightStats.isDirectory() &&
+      leftStats.ino !== 0 &&
+      leftStats.ino === rightStats.ino
+    );
+  } catch {
+    return false;
+  }
 }
 
 function gitDirectoryIdentity(root: string, gitdir: string): string {
@@ -214,7 +244,7 @@ function localView(
   if (persisted?.executionLocation !== "local") return undefined;
   const root = persisted.repositoryRoot;
   if (!store.listProjects().some((project) => project.path === root)) return undefined;
-  if (realpathSync(root) !== root) return undefined;
+  if (!isCanonicalLocalRoot(root)) return undefined;
   const state = readProductionWorkspaceGitState(root, root);
   if (state?.branch !== persisted.taskBranch) return undefined;
   const identity = gitDirectoryIdentity(root, state.gitDir);

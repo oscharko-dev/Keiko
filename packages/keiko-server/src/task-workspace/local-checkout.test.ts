@@ -6,6 +6,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  statSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -109,7 +110,10 @@ afterEach(() => {
 describe("local checkout selection", () => {
   it("binds Git's native top-level path spelling and preserves correlated lifecycle evidence", () => {
     const gitRoot = git("rev-parse", "--show-toplevel");
-    expect(realpathSync(gitRoot)).toBe(root);
+    const registeredIdentity = statSync(root);
+    const gitIdentity = statSync(gitRoot);
+    expect(gitIdentity.dev).toBe(registeredIdentity.dev);
+    expect(gitIdentity.ino).toBe(registeredIdentity.ino);
     if (process.platform === "win32") {
       expect(gitRoot).toContain("/");
       expect(gitRoot).not.toBe(root);
