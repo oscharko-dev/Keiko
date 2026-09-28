@@ -5744,9 +5744,16 @@ describe("handleGatewaySetup", () => {
     }
   });
 
-  it.each([1, 2, 3])(
-    "preserves proven bounds for %s wholly undeclared replicas",
-    async (replicas) => {
+  it.each([
+    { replicas: 1, explicitEmpty: false },
+    { replicas: 2, explicitEmpty: false },
+    { replicas: 3, explicitEmpty: false },
+    { replicas: 1, explicitEmpty: true },
+    { replicas: 2, explicitEmpty: true },
+    { replicas: 3, explicitEmpty: true },
+  ])(
+    "preserves proven context bounds and respects reasoning declarations: %j",
+    async ({ replicas, explicitEmpty }) => {
       const uiDir = await tempDir("keiko-alias-reasoning-");
       const deps = buildUiHandlerDeps({
         configPath: undefined,
@@ -5759,7 +5766,10 @@ describe("handleGatewaySetup", () => {
             parseModelDiscovery({
               data: Array.from({ length: replicas }, () => ({
                 model_name: "shared-chat",
-                model_info: { mode: "chat" },
+                model_info: {
+                  mode: "chat",
+                  ...(explicitEmpty ? { supported_reasoning_efforts: [] } : {}),
+                },
               })),
             }),
           ),
@@ -5798,7 +5808,7 @@ describe("handleGatewaySetup", () => {
           currentGatewayConfig(deps)?.capabilities?.find(
             (capability) => capability.id === "shared-chat",
           )?.reasoningEfforts ?? [],
-        ).toEqual(["medium"]);
+        ).toEqual(explicitEmpty ? [] : ["medium"]);
         expect(
           currentGatewayConfig(deps)?.capabilities?.find(
             (capability) => capability.id === "shared-chat",

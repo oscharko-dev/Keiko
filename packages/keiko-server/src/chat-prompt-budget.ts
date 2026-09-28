@@ -371,7 +371,7 @@ function buildLatestUserTurn(input: PromptAssemblyInput): string {
 function promptScaffoldTokens(
   latestTurn: string,
   compactionContextText: string | undefined,
-  tokenAccounting: ContextProfile["tokenAccounting"],
+  profile: ContextProfile,
   imageCount: number | undefined,
 ): number {
   const messages = gatewayConversationImageAccounting(
@@ -381,7 +381,9 @@ function promptScaffoldTokens(
     ],
     imageCount,
   );
-  return countGatewayPromptTokens({ messages }, tokenAccounting);
+  return countGatewayPromptTokens({ messages }, profile.tokenAccounting, {
+    contextWindow: profile.maxInputTokens,
+  });
 }
 
 function buildPromptMessages(
@@ -402,7 +404,7 @@ function assembleGatewayPromptCandidate(
   const scaffoldTokens = promptScaffoldTokens(
     latestTurn,
     input.compactionContextText,
-    input.profile.tokenAccounting,
+    input.profile,
     input.request.imageCount,
   );
   if (scaffoldTokens > input.profile.effectiveInputBudget) {
@@ -414,8 +416,9 @@ function assembleGatewayPromptCandidate(
   const messages = buildPromptMessages(historyOutcome, latestTurn, input.compactionContextText);
   const accountedMessages = gatewayConversationImageAccounting(messages, input.request.imageCount);
   if (
-    countGatewayPromptTokens({ messages: accountedMessages }, input.profile.tokenAccounting) >
-    input.profile.effectiveInputBudget
+    countGatewayPromptTokens({ messages: accountedMessages }, input.profile.tokenAccounting, {
+      contextWindow: input.profile.maxInputTokens,
+    }) > input.profile.effectiveInputBudget
   ) {
     return undefined;
   }

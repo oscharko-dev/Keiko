@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2e24526273d5b496a2377d43b0972406b7a72b83b63c4abd65c193983f9906bb"
+    "catalogDigest": "7deee9bddec7f5a5b350b50bda6956fb1bfb4d419ab74a67c57f2edb1285efb2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 473,
-    "proofCount": 481,
-    "resolvedProofCount": 481,
+    "operationCount": 475,
+    "proofCount": 483,
+    "resolvedProofCount": 483,
     "failureClassCount": 325,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -178,6 +178,8 @@
         "gateway.instance.unavailable",
         "gateway.log.sink-failed",
         "gateway.prompt.admission",
+        "gateway.prompt.admission-failed",
+        "gateway.prompt.counter-cooldown",
         "gateway.prompt.counter-failed",
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
@@ -1533,6 +1535,12 @@
       "packages/keiko-model-gateway/src/observability.test.ts"
     ],
     "gateway.prompt.admission.bounds": ["packages/keiko-model-gateway/src/gateway.test.ts"],
+    "gateway.prompt.admission-failed.budget": [
+      "packages/keiko-model-gateway/src/gateway-prompt-admission.test.ts"
+    ],
+    "gateway.prompt.counter-cooldown.lifecycle": [
+      "packages/keiko-model-gateway/src/gateway-prompt-admission.test.ts"
+    ],
     "gateway.prompt.counter-failed.fallback": [
       "packages/keiko-model-gateway/src/provider-token-counter.test.ts"
     ],

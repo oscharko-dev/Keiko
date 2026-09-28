@@ -17,7 +17,8 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Keiko intersects
 the limits of every backend sharing an alias; missing bounds use conservative defaults, and
 conflicting task kinds are rejected. If every replica omits context/reasoning metadata, same-endpoint
-rediscovery retains previously verified capability evidence. A mixture of declared and undeclared
+rediscovery retains previously verified capability evidence. An explicitly empty reasoning list
+clears stored reasoning choices; it is not treated as missing metadata. A mixture of declared and undeclared
 context bounds remains conservative. One final event per selected alias records `deploymentCount`,
 `modelIdDigest`, effective bounds, and persistent unknown-bound provenance. A catalog model name alone does not prove that the deployment
 is callable or that a larger context window is available.
@@ -26,7 +27,11 @@ Keiko reserves a bounded answer budget rather than the model's full output ceili
 request, the gateway checks the complete prompt, tool context, and response schema against the
 remaining input budget on every attempt, including schema-correction retries. Without an explicit
 caller allocation or spend guard, the output field stays absent and the provider's default remains
-in effect. Images use a separate fallback token allowance, never their base64 text length.
+in effect. Images use a separate fallback allowance, never their base64 text length: one quarter
+of the declared context window per image, capped at 8,192 tokens. A positive provider count replaces
+the image allowance while the local text/tool/schema floor still applies. Zero counts retain the
+fallback. These estimates do not prove a model's image-token cost; a larger provider count can
+still refuse admission.
 Discovery through `/model/info` enables `"tokenCounter": "litellm"` for
 those providers. The count request goes to `/utils/token_counter` on the configured proxy (including
 any reverse-proxy prefix), uses the same authorization and egress policy, and has a five-second
@@ -45,7 +50,12 @@ case, rather than increasing the deployed window without evidence.
 
 Inspect `gateway.prompt.admission` in the activity log for `counterStatus`, `counterSource`,
 `tokenizer`, `promptTokens`, `inputBudget`, and `outputBudget`. No prompt or counter response body is
-logged. A local overflow ends before generation. If counting is unavailable, check the key's route
+logged. For a counter that stays unavailable, inspect `gateway.prompt.counter-cooldown`: its
+`state` distinguishes a new 60-second cooldown, suppression on the current call, and expiry;
+`modelIdDigest` joins the affected model and `remainingMs` states when the next probe is allowed.
+For a pre-generation timeout or cancellation, `gateway.prompt.admission-failed` records `phase`
+(counter or validation), `budgetMs`, `elapsedMs`, and structured stack/cause evidence.
+A local overflow ends before generation. If counting is unavailable, check the key's route
 permissions and the proxy version; do not grant broader model access solely to enable counting.
 
 The [LiteLLM Docker guide](https://docs.litellm.ai/docs/proxy/docker_quick_start) describes the

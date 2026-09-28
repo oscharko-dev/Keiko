@@ -1,9 +1,14 @@
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import type { GatewayCallRequest } from "./gateway.js";
 import type { ModelProviderConfig } from "./types.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { GatewayFailureEvidence, ModelGatewayLogEvent } from "./observability.js";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 
@@ -133,3 +138,116 @@ it.each([50, 100])("charges the complete local admission duration of %i ms", asy
   if (duration === 100) await expect(result).rejects.toMatchObject({ code: "GATEWAY_TIMEOUT" });
   else await expect(result).resolves.toBe(50);
 });
+
+function captureAdmissionEvents(): {
+  events: ModelGatewayLogEvent[];
+  write: (event: ModelGatewayLogEvent) => void;
+  errorEvidence: () => GatewayFailureEvidence;
+} {
+  const events: ModelGatewayLogEvent[] = [];
+  return {
+    events,
+    write: (event): void => {
+      events.push(event);
+    },
+    errorEvidence: (): GatewayFailureEvidence => ({
+      frames: ["packages/keiko-model-gateway/dist/gateway-prompt-admission.js:90:4"],
+      causeChain: [],
+    }),
+  };
+}
+
+it("records cooldown activation, per-call suppression, and expiry with model scope", async () => {
+  let now = 0;
+  const sink = captureAdmissionEvents();
+  const counter = new ProviderPromptCounter(() => now);
+  const fetchImpl = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 403 }))
+    .mockResolvedValue(Response.json({ total_tokens: 20 }));
+  await counter.count(
+    { ...request, logContext: { correlationId: "cooldown-first" } },
+    provider,
+    sink,
+    fetchImpl,
+  );
+  now = 1_000;
+  await counter.count(
+    { ...request, logContext: { correlationId: "cooldown-second" } },
+    provider,
+    sink,
+    fetchImpl,
+  );
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  now = 60_000;
+  await counter.count(
+    { ...request, logContext: { correlationId: "cooldown-third" } },
+    provider,
+    sink,
+    fetchImpl,
+  );
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  const events = sink.events.filter((event) => event.op === "gateway.prompt.counter-cooldown");
+  expect(
+    events.map((event) => [event.correlationId, event.extra?.state, event.extra?.remainingMs]),
+  ).toEqual([
+    ["cooldown-first", "activated", 60_000],
+    ["cooldown-second", "suppressed", 59_000],
+    ["cooldown-third", "expired", 0],
+  ]);
+  for (const event of events) {
+    const line = formatActivityLogProofLine(event);
+    expect(expectActivityLogProof("gateway.prompt.counter-cooldown.lifecycle", line)).toMatchObject(
+      {
+        modelIdDigest: sha256Hex(provider.modelId).slice(0, 16),
+        cooldownMs: 60_000,
+      },
+    );
+    expect(line).not.toContain(provider.baseUrl);
+    expect(line).not.toContain(provider.apiKey);
+  }
+});
+
+it.each(["counter", "validation"] as const)(
+  "records structured admission exhaustion in phase %s",
+  async (phase) => {
+    let now = 0;
+    const sink = captureAdmissionEvents();
+    const admission = new GatewayPromptAdmission({
+      provider,
+      capability,
+      now: (): number => now,
+      counter: new ProviderPromptCounter(() => now),
+      correlationId: "admission-exhaustion",
+      log: {
+        ...sink,
+        write: (event): void => {
+          sink.write(event);
+          if (phase === "validation" && event.op === "gateway.prompt.admission") now = 100;
+        },
+      },
+      fetchImpl: (): Promise<Response> => {
+        if (phase === "counter") now = 100;
+        return Promise.resolve(Response.json({ total_tokens: 20 }));
+      },
+    });
+    await expect(admission.admit(request, 100)).rejects.toMatchObject({ code: "GATEWAY_TIMEOUT" });
+    const event = sink.events.find((entry) => entry.op === "gateway.prompt.admission-failed");
+    expect(event).toMatchObject({
+      correlationId: "admission-exhaustion",
+      errorKind: "timeout",
+      extra: { causeChain: [] },
+    });
+    expect(
+      expectActivityLogProof(
+        "gateway.prompt.admission-failed.budget",
+        formatActivityLogProofLine(event ?? {}),
+      ),
+    ).toMatchObject({
+      phase,
+      budgetMs: 100,
+      elapsedMs: 100,
+      frames: ["packages/keiko-model-gateway/dist/gateway-prompt-admission.js:90:4"],
+    });
+  },
+);

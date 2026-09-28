@@ -1,3 +1,4 @@
+import type { ModelGatewayLogEvent } from "./observability.js";
 import { describe, expect, it, vi } from "vitest";
 import { Gateway } from "./gateway.js";
 import { createDefaultChatCapability } from "./capabilities.js";
@@ -192,3 +193,74 @@ it.each([false, true])(
     expect(bounds).toEqual([{ budgetMs: total - 4_000, silenceMs: GATEWAY_SILENCE_FLOOR_MS }]);
   },
 );
+
+const smallVisionRequest: GatewayRequest = {
+  ...request,
+  maxOutputTokens: 1024,
+  messages: [
+    {
+      role: "user",
+      content: "describe",
+      contentParts: [
+        { type: "text", text: "describe" },
+        {
+          type: "image_url",
+          image_url: {
+            url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6fcAAAAASUVORK5CYII=",
+          },
+        },
+      ],
+    },
+  ],
+};
+
+describe.each([false, true])("8k vision admission, streaming=%s", (streaming) => {
+  it.each([undefined, 0, 100])("admits an image with reported count %s", async (reported) => {
+    const events: ModelGatewayLogEvent[] = [];
+    const adapterCall = vi.fn<ProviderAdapter["call"]>(() => Promise.resolve(response));
+    const gateway = new Gateway(
+      {
+        ...config,
+        capabilities:
+          config.capabilities?.map((entry) => ({
+            ...entry,
+            contextWindow: 8192,
+            maxOutputTokens: 1024,
+          })) ?? [],
+        providers: config.providers.map((entry) => ({
+          ...entry,
+          ...(reported === undefined ? {} : { tokenCounter: "litellm" as const }),
+        })),
+      },
+      {
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        adapter: {
+          call: adapterCall,
+          callStream: async function* (input, provider): AsyncGenerator<GatewayStreamChunk> {
+            yield { type: "done", response: await adapterCall(input, provider) };
+          },
+        },
+        fetchImpl: (): Promise<Response> =>
+          Promise.resolve(
+            Response.json({ total_tokens: reported, tokenizer_type: "openai_tokenizer" }),
+          ),
+      },
+    );
+    await call(gateway, streaming, smallVisionRequest);
+    expect(adapterCall).toHaveBeenCalledOnce();
+    const admission = events.find((event) => event.op === "gateway.prompt.admission");
+    if (reported === 100)
+      expect(admission?.extra).toMatchObject({
+        promptTokens: 100,
+        counterSource: "gateway-reported",
+      });
+    else {
+      expect(admission?.extra?.promptTokens).toBeGreaterThan(100);
+      expect(admission?.extra?.promptTokens).toBeLessThan(6912);
+    }
+  });
+});

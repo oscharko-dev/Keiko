@@ -86,12 +86,27 @@ export function openAiCompatiblePromptTools(
   }));
 }
 
-// A deliberately conservative, model-independent fallback, not an exact vision tokenizer.
-// Encoded bytes/URL length do not describe the patches/tiles a provider puts in its context.
-// Keep this allowance separate from text calibration; a text probe cannot calibrate image cost.
-const FALLBACK_IMAGE_TOKENS = 8_192;
+export interface GatewayPromptTokenOptions {
+  readonly contextWindow?: number | undefined;
+  /** A positive provider count already includes the image contribution. Keep the local text floor. */
+  readonly imageTokensMeasured?: boolean | undefined;
+}
 
-function countMessageTokens(message: ChatMessage, accounting?: ContextTokenAccounting): number {
+// A context-scaled fallback estimate, not a model-independent vision bound. Encoded byte length
+// does not describe provider patches/tiles. Text calibration must not scale the image allowance.
+function fallbackImageTokens(options: GatewayPromptTokenOptions): number {
+  if (options.imageTokensMeasured === true) return 0;
+  const window = options.contextWindow;
+  return window !== undefined && Number.isSafeInteger(window) && window > 0
+    ? Math.min(8_192, Math.max(1, Math.floor(window / 4)))
+    : 8_192;
+}
+
+function countMessageTokens(
+  message: ChatMessage,
+  accounting: ContextTokenAccounting | undefined,
+  options: GatewayPromptTokenOptions,
+): number {
   const projected = openAiCompatiblePromptMessage(message);
   const parts =
     typeof projected.content === "string" || projected.content === null
@@ -112,7 +127,7 @@ function countMessageTokens(message: ChatMessage, accounting?: ContextTokenAccou
       countContextTokens(text, accounting),
       countContextTokens(JSON.stringify({ ...projected, content }), accounting),
     ) +
-    imageCount * FALLBACK_IMAGE_TOKENS
+    imageCount * fallbackImageTokens(options)
   );
 }
 
@@ -130,9 +145,10 @@ export function countGatewayResponseFormatTokens(
 export function countGatewayPromptTokens(
   input: GatewayPromptTokenInput,
   accounting?: ContextTokenAccounting,
+  options: GatewayPromptTokenOptions = {},
 ): number {
   const messageTokens = input.messages.reduce(
-    (sum, message) => sum + countMessageTokens(message, accounting),
+    (sum, message) => sum + countMessageTokens(message, accounting, options),
     0,
   );
   const segments =

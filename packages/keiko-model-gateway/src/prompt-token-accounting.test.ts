@@ -65,3 +65,24 @@ describe("countGatewayPromptTokens", () => {
     expect(calibrated).toBeLessThan(128_000);
   });
 });
+
+it("scales the unmeasured image allowance to a small model without counting encoded bytes", () => {
+  const image = {
+    type: "image_url" as const,
+    image_url: { url: "data:image/png;base64," + "A".repeat(1_000_000) },
+  };
+  const input = {
+    messages: [
+      {
+        role: "user" as const,
+        content: "describe",
+        contentParts: [{ type: "text" as const, text: "describe" }, image],
+      },
+    ],
+  };
+  const text = countGatewayPromptTokens(input, undefined, { imageTokensMeasured: true });
+  expect(countGatewayPromptTokens(input, undefined, { contextWindow: 8192 }) - text).toBe(2048);
+  expect(countGatewayPromptTokens(input, undefined, { contextWindow: 131072 }) - text).toBe(8192);
+  expect(countGatewayPromptTokens(input) - text).toBe(8192);
+  expect(countGatewayPromptTokens(input, undefined, { contextWindow: NaN }) - text).toBe(8192);
+});

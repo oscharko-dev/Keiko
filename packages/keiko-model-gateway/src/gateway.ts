@@ -1004,7 +1004,9 @@ export class Gateway {
       false,
     ).tools;
     this.logToolSchemaRepair(attempt.correlationId, attempt.state.repair, state, {
-      promptTokens: countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting),
+      promptTokens: countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting, {
+        contextWindow: profile.maxInputTokens,
+      }),
       maxOutputTokens,
       safetyMarginTokens: profile.safetyMarginTokens,
       maxPromptTokens: Math.max(

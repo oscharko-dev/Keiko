@@ -125,3 +125,44 @@ it("classifies overflow refusals with structured evidence before throwing", () =
     },
   });
 });
+
+it("retains the text/tool/schema floor when a provider reports the image contribution", () => {
+  const image = {
+    type: "image_url" as const,
+    image_url: { url: "https://fixture.example/image.png" },
+  };
+  const imageRequest = {
+    ...request,
+    messages: [
+      {
+        role: "user" as const,
+        content: "describe",
+        contentParts: [{ type: "text" as const, text: "requirement ".repeat(8000) }, image],
+      },
+    ],
+  };
+  expect(() =>
+    admitGatewayPrompt(
+      imageRequest,
+      { ...capability, contextWindow: 8192 },
+      recorder(),
+      "image-text-floor",
+      { status: "available", tokens: 100 },
+    ),
+  ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
+});
+
+it("refuses multiple unmeasured images when their combined allowance exceeds the budget", () => {
+  const images = Array.from({ length: 5 }, () => ({
+    type: "image_url" as const,
+    image_url: { url: "https://fixture.example/image.png" },
+  }));
+  expect(() =>
+    admitGatewayPrompt(
+      { ...request, messages: [{ role: "user", content: "describe", contentParts: images }] },
+      { ...capability, contextWindow: 8192 },
+      recorder(),
+      "image-fallback-overflow",
+    ),
+  ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
+});

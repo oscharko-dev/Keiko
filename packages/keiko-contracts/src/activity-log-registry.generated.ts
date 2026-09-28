@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "2e24526273d5b496a2377d43b0972406b7a72b83b63c4abd65c193983f9906bb" as const;
+  "7deee9bddec7f5a5b350b50bda6956fb1bfb4d419ab74a67c57f2edb1285efb2" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -11989,6 +11989,110 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["gateway-context-admission"],
     proofIds: ["gateway.prompt.admission.bounds"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.prompt.admission-failed",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "gateway-prompt-admission.GatewayPromptAdmission.refuseBudget",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
+      phase: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["counter", "validation"],
+      },
+      budgetMs: {
+        type: "number",
+        dataClass: "duration",
+        required: true,
+      },
+      elapsedMs: {
+        type: "number",
+        dataClass: "duration",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["gateway-context-admission"],
+    proofIds: ["gateway.prompt.admission-failed.budget"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.prompt.counter-cooldown",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "gateway-prompt-admission.ProviderPromptCounter.logCooldown",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["activated", "suppressed", "expired"],
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 16,
+      },
+      remainingMs: {
+        type: "number",
+        dataClass: "duration",
+        required: true,
+      },
+      cooldownMs: {
+        type: "number",
+        dataClass: "duration",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-context-admission"],
+    proofIds: ["gateway.prompt.counter-cooldown.lifecycle"],
     releaseImpact: "patch",
   },
   {
@@ -43915,9 +44019,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["gateway.prompt.admission"],
+        state: ["gateway.prompt.admission", "gateway.prompt.counter-cooldown"],
         end: [],
-        failure: ["gateway.prompt.counter-failed"],
+        failure: ["gateway.prompt.admission-failed", "gateway.prompt.counter-failed"],
         loss: [],
       },
       causalEdges: [
@@ -43926,12 +44030,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "gateway.prompt.admission-failed",
+          mode: "correlation",
+        },
+        {
+          op: "gateway.prompt.counter-cooldown",
+          mode: "correlation",
+        },
+        {
           op: "gateway.prompt.counter-failed",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["gateway.prompt.admission"],
+      resourceSignals: ["gateway.prompt.admission", "gateway.prompt.counter-cooldown"],
       replayReferences: [],
       operations: [
         {
@@ -44016,6 +44128,109 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["gateway.prompt.admission.bounds"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.prompt.admission-failed",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "budgetMs",
+              type: "number",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "elapsedMs",
+              type: "number",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["gateway.prompt.admission-failed.budget"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.prompt.counter-cooldown",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "cooldownMs",
+              type: "number",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "remainingMs",
+              type: "number",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "duration",
+            "loss-state",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.prompt.counter-cooldown.lifecycle"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -63891,6 +64106,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.instance.unavailable": "model-gateway",
     "gateway.log.sink-failed": "model-gateway",
     "gateway.prompt.admission": "model-gateway",
+    "gateway.prompt.admission-failed": "model-gateway",
+    "gateway.prompt.counter-cooldown": "model-gateway",
     "gateway.prompt.counter-failed": "model-gateway",
     "gateway.readiness.automatic.completed": "model-gateway",
     "gateway.readiness.automatic.joined": "model-gateway",

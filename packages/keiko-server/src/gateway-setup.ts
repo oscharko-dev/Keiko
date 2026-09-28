@@ -857,6 +857,18 @@ function numberFieldFromRecords(
   return values.length === 0 ? undefined : Math.min(...values);
 }
 
+function reasoningEffortsFromDiscoveryRecords(
+  records: readonly Record<string, unknown>[],
+): readonly ModelReasoningEffort[] | undefined {
+  const fields = ["supported_reasoning_efforts", "reasoning_efforts"];
+  const declared = records.some((record) =>
+    fields.some((field) => Array.isArray(record[field]) || typeof record[field] === "string"),
+  );
+  return declared
+    ? [...new Set(stringListFieldFromRecords(records, fields).filter(isModelReasoningEffort))]
+    : undefined;
+}
+
 function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscoveredModelMetadata {
   const records = discoveryRecords(item);
   const contextWindow = numberFieldFromRecords(records, ["max_input_tokens"]);
@@ -865,14 +877,7 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
     "supports_function_calling",
     "supportsFunctionCalling",
   ]);
-  const reasoningEfforts = [
-    ...new Set(
-      stringListFieldFromRecords(records, [
-        "supported_reasoning_efforts",
-        "reasoning_efforts",
-      ]).filter(isModelReasoningEffort),
-    ),
-  ];
+  const reasoningEfforts = reasoningEffortsFromDiscoveryRecords(records);
   // An affirmative chat-compatible `mode` declaration ranks the model ahead of mode-less
   // entries as the conversation default (keiko-contracts conversationDefaultRank). Only ever
   // true — declared NON-chat modes never reach the chat list, and "no mode" is no signal.
@@ -882,7 +887,7 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(toolCalling === undefined ? {} : { toolCalling }),
-    ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
+    ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
     ...(chatModeDeclared ? { chatModeDeclared } : {}),
   };
 }

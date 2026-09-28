@@ -110,14 +110,22 @@ Before both buffered and streaming calls, `keiko-model-gateway` accounts for the
 projection: message roles, tool-call arguments and identifiers, offered tool schemas, and structured
 response schemas. LiteLLM discovery additionally enables the same-origin `/utils/token_counter`
 request with the configured credential header and egress policy. Admission uses the larger of the
-local complete estimate and a valid reported message/tool count plus the locally counted response
-schema, which the counter endpoint does not receive. Image URLs and base64 are not text tokens:
-unmeasured images carry an 8,192-token fallback allowance per image, separate from text calibration.
-This is a fallback estimate, not a provider-independent bound or exact image tokenizer.
+local text/tool/schema floor and a valid reported message/tool count plus the locally counted
+response schema, which the counter endpoint does not receive. Image URLs and base64 are not text
+tokens. Without a positive provider count, each image receives a fallback allowance of one quarter
+of the declared context window, capped at 8,192 tokens (8,192 if the window is unknown), separate
+from text calibration. This keeps a supported small vision window usable without pretending that
+encoded bytes measure provider patches. A positive provider count replaces only that image
+allowance; the local text/tool/schema floor remains enforced. Zero is not image measurement evidence.
+The fallback is an estimate, not a provider-independent bound or exact image tokenizer.
 Counting takes place after circuit admission, inside the attempt budget. Corrective retries repeat
 the complete check and retain the previous measured contribution plus added local context if a
 counter becomes unavailable. A rejected or malformed counter is retried after a 60-second cooldown
 scoped to the configured gateway instance/provider; cancellation does not disable later counting.
+`gateway.prompt.counter-cooldown` records activation, suppression and expiry with the current call's
+correlation, a model digest, and remaining milliseconds. `gateway.prompt.admission-failed` records
+counter/validation phase, budget and elapsed milliseconds, error kind, and structured stack/cause
+evidence when admission exhausts its deadline or is cancelled before generation.
 A denied, malformed, cancelled, or timed-out counter never silently becomes an exact zero; the local estimate remains available and the
 body-free `gateway.prompt.admission` event records the source, counter status, tokenizer category,
 and input/output budgets. Azure routes do not acquire this LiteLLM-specific endpoint.

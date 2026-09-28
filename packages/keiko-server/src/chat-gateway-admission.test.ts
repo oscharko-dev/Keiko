@@ -134,7 +134,9 @@ async function admittedTurn(
     for await (const chunk of target.gateway.chatStream(input)) chunks.push(chunk);
     expect(chunks.at(-1)?.type).toBe("done");
   } else await expect(target.gateway.chat(input)).resolves.toMatchObject({ content: answer });
-  const counted = countGatewayPromptTokens(input, profile.tokenAccounting);
+  const counted = countGatewayPromptTokens(input, profile.tokenAccounting, {
+    contextWindow: profile.maxInputTokens,
+  });
   expect(counted).toBeLessThanOrEqual(profile.effectiveInputBudget);
   appendTurn(target, turn);
   return {

@@ -84,7 +84,10 @@ export function admitGatewayPrompt(
     0,
     profile.maxInputTokens - outputBudget - profile.safetyMarginTokens,
   );
-  const estimatedTokens = countGatewayPromptTokens(request, profile.tokenAccounting);
+  const estimatedTokens = countGatewayPromptTokens(request, profile.tokenAccounting, {
+    contextWindow: profile.maxInputTokens,
+    imageTokensMeasured: measured.tokens !== undefined && measured.tokens > 0,
+  });
   const measuredTokens = completeMeasuredTokens(request, measured, profile.tokenAccounting);
   const promptTokens = Math.max(estimatedTokens, measuredTokens ?? 0);
   const refusal = promptRefusal(promptTokens, inputBudget, outputBudget, capability);

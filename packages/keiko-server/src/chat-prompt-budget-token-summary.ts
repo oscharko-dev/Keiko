@@ -16,8 +16,9 @@ import type { ConversationCompactionOutcome } from "./conversation-compaction.js
 export function estimateFinalPromptTokens(
   finalMessages: readonly GatewayConversationMessage[],
   tokenAccounting: ContextTokenAccounting | undefined,
+  contextWindow?: number,
 ): number {
-  return countGatewayPromptTokens({ messages: finalMessages }, tokenAccounting);
+  return countGatewayPromptTokens({ messages: finalMessages }, tokenAccounting, { contextWindow });
 }
 
 export function estimateHistoryLaneTokens(input: {
@@ -68,6 +69,7 @@ function userProjectionTokens(input: TokenSummaryInput, includeMemory: boolean):
   return estimateFinalPromptTokens(
     withGatewayConversationImages([{ role: "user", content }], images),
     input.profile.tokenAccounting,
+    input.profile.maxInputTokens,
   );
 }
 
@@ -80,6 +82,7 @@ function currentTurnLaneTokens(input: TokenSummaryInput): {
   const total = estimateFinalPromptTokens(
     current === undefined ? [] : [current],
     input.profile.tokenAccounting,
+    input.profile.maxInputTokens,
   );
   // Attribute incremental serialization costs in assembly order. Bounds keep lane sums exact even
   // when calibrated token estimates are not additive across the text blocks of one message.
@@ -93,6 +96,7 @@ function currentTurnLaneTokens(input: TokenSummaryInput): {
       ? []
       : [{ role: "system", content: input.compactionContextText }],
     input.profile.tokenAccounting,
+    input.profile.maxInputTokens,
   );
   return {
     latestTurnTokens,
@@ -122,6 +126,10 @@ export function buildPromptAssemblyTokenSummary(input: TokenSummaryInput): {
       tokenAccounting,
     }),
     ...currentTurnLaneTokens(input),
-    totalEstimatedTokens: estimateFinalPromptTokens(input.finalMessages, tokenAccounting),
+    totalEstimatedTokens: estimateFinalPromptTokens(
+      input.finalMessages,
+      tokenAccounting,
+      input.profile.maxInputTokens,
+    ),
   };
 }

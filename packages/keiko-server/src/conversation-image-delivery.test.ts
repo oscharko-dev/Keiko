@@ -148,7 +148,7 @@ describe("conversation image finalization", () => {
   it("reserves image capacity before compacting history without resolving bytes early", () => {
     const target = fixture();
     const profile = deriveContextProfile({
-      maxInputTokens: 12_000,
+      maxInputTokens: 10_000,
       reservedOutputTokens: 0,
       safetyMarginTokens: 0,
     });
@@ -171,6 +171,7 @@ describe("conversation image finalization", () => {
     const tokens = countGatewayPromptTokens(
       { messages: delivered.messages },
       profile.tokenAccounting,
+      { contextWindow: profile.maxInputTokens },
     );
     expect(tokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
     expect(built.diagnostics.totalEstimatedTokens).toBe(tokens);
