@@ -821,6 +821,27 @@ proof updates, not acceptance of another arbitrary machine-shaped string.
 
 ### D13 — HTTP and SSE lifecycle detail, and a body-free browser diagnostic ingest (Wave 5, landed)
 
+Chat context selection emits `chat.context.selected` before the provider call for buffered,
+streaming and regenerated turns. Its request correlation joins the compacted/retained history
+counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
+effective input budget and image reserve. This evidence survives generation timeout or
+cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
+not provider-measured usage, and no conversation or image content is recorded.
+
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
+On retries, `reportedPromptTokens` always describes only the current counter response and is
+absent when that response has no count. `providerPromptTokens` adds the current response-schema
+cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
+plus schema cost. Admission preserves the maximum of local, current-provider and retained
+candidates. `counterSource` identifies a winning retained floor as `retained-measurement`, and
+`imageAccounting` uses that disposition when only the retained positive measurement replaces the
+image reserve. Neither retained value is presented as a new provider observation.
+
 Git draft resilience correction (2026-09-27): `git.commit.draft.completed` also records observed
 `promptTokens`, `maxPromptTokens`, `diffCompacted`, `generationAttempts` and `reused`. The values
 explain model-context compaction, a corrective generation and a cached result without retaining

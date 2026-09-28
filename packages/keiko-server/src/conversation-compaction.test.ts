@@ -7,12 +7,11 @@
 //    preserve the retained tail.
 //  - determinism: same input -> same output (no clock / no random).
 
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { describe, expect, it } from "vitest";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CONTEXT_PROFILE,
-  countContextTokens,
-  countContextTokensForSegments,
   deriveContextProfile,
   estimateTokensForSegments,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -327,19 +326,28 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       contextProfile: calibratedProfile,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const finalTokens = countContextTokensForSegments(
-      outcome.messages.map((message) => message.content),
+    const finalTokens = countGatewayPromptTokens(
+      { messages: outcome.messages },
       calibratedProfile.tokenAccounting,
     );
-    const systemContent = requiredSystemContent(outcome);
-    const summaryStart = systemContent.indexOf("[Automated structured summary");
-    const footerStart = systemContent.indexOf("\nAttribution: Keiko generated", summaryStart);
-    const summaryContent = systemContent.slice(summaryStart, footerStart);
+    const before = fullConversation(multiDropMessages);
+    const system = before.slice(0, 1);
+    const systemTokens = countGatewayPromptTokens(
+      { messages: system },
+      calibratedProfile.tokenAccounting,
+    );
 
     expect(outcome.compaction).toBeDefined();
     expect(finalTokens).toBeLessThanOrEqual(calibratedProfile.effectiveInputBudget);
     expect(outcome.compaction?.tokensAfter).toBe(
-      countContextTokens(summaryContent, calibratedProfile.tokenAccounting),
+      countGatewayPromptTokens(
+        { messages: outcome.messages.slice(0, 1) },
+        calibratedProfile.tokenAccounting,
+      ) - systemTokens,
+    );
+    expect((outcome.compaction?.tokensBefore ?? 0) - (outcome.compaction?.tokensAfter ?? 0)).toBe(
+      countGatewayPromptTokens({ messages: before }, calibratedProfile.tokenAccounting) -
+        finalTokens,
     );
     expect(finalTokens).toBeGreaterThan(
       estimateTokensForSegments(outcome.messages.map((message) => message.content)),

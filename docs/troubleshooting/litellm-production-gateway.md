@@ -12,6 +12,75 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ---
 
+## Context limits and token admission
+
+Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Keiko intersects
+the limits of every backend sharing an alias; missing bounds use conservative defaults, and
+conflicting task kinds are rejected. If every replica omits context/reasoning metadata, same-endpoint
+rediscovery retains previously verified capability evidence. An explicitly empty reasoning list
+clears stored reasoning choices; it is not treated as missing metadata. A mixture of declared and undeclared
+context bounds remains conservative. One final event per selected alias records `deploymentCount`,
+`modelIdDigest`, effective bounds, and persistent unknown-bound provenance. A catalog model name alone does not prove that the deployment
+is callable or that a larger context window is available.
+
+Keiko reserves a bounded answer budget rather than the model's full output ceiling. Before a chat
+request, the gateway checks the complete prompt, tool context, and response schema against the
+remaining input budget on every attempt, including schema-correction retries. Without an explicit
+caller allocation or spend guard, the output field stays absent and the provider's default remains
+in effect. Images use a separate fallback allowance, never their base64 text length: one quarter
+of the declared context window per image, capped at 8,192 tokens. A positive provider count replaces
+the image allowance while the local text/tool/schema floor still applies. Zero counts retain the
+fallback. These estimates do not prove a model's image-token cost; a larger provider count can
+still refuse admission.
+Discovery through `/model/info` enables `"tokenCounter": "litellm"` for
+those providers. The count request goes to `/utils/token_counter` on the configured proxy (including
+any reverse-proxy prefix), uses the same authorization and egress policy, and has a five-second
+limit inside the attempt's time budget; an open circuit makes no counting request. A proxy key may be permitted to generate but forbidden to count; Keiko then uses its local
+estimate and waits 60 seconds before probing that unavailable counter again. Response-schema cost
+is added to the reported message/tool count before admission. Counter failures, malformed responses,
+and admission refusals carry correlated closed error kinds and body-free stack/cause evidence.
+This counter is an additional estimate, not a guarantee of the backend tokenizer.
+
+Desktop chat reserves complete message framing and image capacity before choosing or compacting
+history. Prompt assembly, compaction savings, and gateway local admission use the same accountant;
+long conversations therefore do not fill a text-only budget that fails at the next gateway check.
+Image bytes remain subject to the existing final authority check. A higher proxy-reported count can
+still reject a locally fitting prompt; compare the local and reported counts when diagnosing that
+case, rather than increasing the deployed window without evidence.
+
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
+On retries, `reportedPromptTokens` always describes only the current counter response and is
+absent when that response has no count. `providerPromptTokens` adds the current response-schema
+cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
+plus schema cost. Admission preserves the maximum of local, current-provider and retained
+candidates. `counterSource` identifies a winning retained floor as `retained-measurement`, and
+`imageAccounting` uses that disposition when only the retained positive measurement replaces the
+image reserve. Neither retained value is presented as a new provider observation.
+
+Inspect `gateway.prompt.admission` in the activity log for `counterStatus`, `counterSource`,
+`tokenizer`, `promptTokens`, `inputBudget`, and `outputBudget`. No prompt or counter response body is
+logged. For a counter that stays unavailable, inspect `gateway.prompt.counter-cooldown`: its
+`state` distinguishes a new 60-second cooldown, suppression on the current call, and expiry;
+`modelIdDigest` joins the affected model and `remainingMs` states when the next probe is allowed.
+For a pre-generation timeout or cancellation, `gateway.prompt.admission-failed` records `phase`
+(counter or validation), `budgetMs`, `elapsedMs`, and structured stack/cause evidence.
+A local overflow ends before generation. If counting is unavailable, check the key's route
+permissions and the proxy version; do not grant broader model access solely to enable counting.
+
+The [LiteLLM Docker guide](https://docs.litellm.ai/docs/proxy/docker_quick_start) describes the
+OpenAI-compatible generation endpoint and Bearer authentication. Azure development routes retain
+either the configured deployment endpoint/API version or the
+[Azure v1 endpoint](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle).
+They use local token admission without calling the LiteLLM counter. An alias for a reasoning model
+may still need the explicit output-token parameter described below.
+
+---
+
 ## Coding Workbench turn has no assistant reply
 
 For a Workbench run that accepted a message but has no assistant reply, note the run id and export a

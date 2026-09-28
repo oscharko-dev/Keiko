@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "10c900e9140a35aeefec1eb7dc202d228116fb37231a84d461ac7c08f99ee6d3"
+    "catalogDigest": "eb0d93554962247edeecfe20430c87f904e740d45e4b5005ed16986b334d4c40"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 470,
-    "proofCount": 478,
-    "resolvedProofCount": 478,
-    "failureClassCount": 323,
+    "operationCount": 476,
+    "proofCount": 484,
+    "resolvedProofCount": 484,
+    "failureClassCount": 325,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -86,6 +86,7 @@
       "operations": [
         "atlassian.credential.rejected",
         "chat.compaction.facts.classified",
+        "chat.context.selected",
         "chat.creation.rejected",
         "chat.regeneration.rejected",
         "chat.response.message",
@@ -171,11 +172,16 @@
         "gateway.circuit.opened",
         "gateway.circuit.rejected",
         "gateway.config.resolved",
+        "gateway.discovery.alias-intersection",
         "gateway.instance.bound",
         "gateway.instance.reset",
         "gateway.instance.reused",
         "gateway.instance.unavailable",
         "gateway.log.sink-failed",
+        "gateway.prompt.admission",
+        "gateway.prompt.admission-failed",
+        "gateway.prompt.counter-cooldown",
+        "gateway.prompt.counter-failed",
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
@@ -640,6 +646,8 @@
     }
   ],
   "failureClassScenarios": {
+    "gateway-alias-intersection": ["model-gateway.dependency-failure"],
+    "gateway-context-admission": ["model-gateway.dependency-failure"],
     "coding-history-persistence": ["tools-workflows.dependency-failure"],
     "activity-log-contract": ["lifecycle-crash.loss"],
     "activity-log-loss": ["lifecycle-crash.loss"],
@@ -1009,6 +1017,10 @@
     ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
+    ],
+    "chat.context.selected.budget": [
+      "packages/keiko-server/src/chat-activity.test.ts",
+      "packages/keiko-server/src/chat-stream-handlers.test.ts"
     ],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
@@ -1515,6 +1527,9 @@
     "gateway.config.resolved.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
+    "gateway.discovery.alias-intersection.line": [
+      "packages/keiko-server/src/gateway-setup.test.ts"
+    ],
     "gateway.instance.bound.line": ["packages/keiko-server/src/gateway-instance-cache.test.ts"],
     "gateway.instance.reset.line": ["packages/keiko-server/src/gateway-instance-cache.test.ts"],
     "gateway.instance.reused.line": ["packages/keiko-server/src/gateway-instance-cache.test.ts"],
@@ -1523,6 +1538,20 @@
     ],
     "gateway.log.sink-failed.emitted-line": [
       "packages/keiko-model-gateway/src/observability.test.ts"
+    ],
+    "gateway.prompt.admission.bounds": [
+      "packages/keiko-model-gateway/src/gateway-prompt-admission.test.ts",
+      "packages/keiko-model-gateway/src/gateway.test.ts",
+      "packages/keiko-model-gateway/src/prompt-admission.test.ts"
+    ],
+    "gateway.prompt.admission-failed.budget": [
+      "packages/keiko-model-gateway/src/gateway-prompt-admission.test.ts"
+    ],
+    "gateway.prompt.counter-cooldown.lifecycle": [
+      "packages/keiko-model-gateway/src/gateway-prompt-admission.test.ts"
+    ],
+    "gateway.prompt.counter-failed.fallback": [
+      "packages/keiko-model-gateway/src/provider-token-counter.test.ts"
     ],
     "gateway.readiness.automatic.completed.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"

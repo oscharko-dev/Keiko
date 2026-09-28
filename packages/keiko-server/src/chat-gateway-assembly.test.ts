@@ -6,20 +6,18 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
   buildGatewayAssembly,
-  type GatewayConversationMessage,
   type GatewayTurnSnapshot,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
   ContextProfile,
   ConversationDocumentContextWire,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CONTEXT_PROFILE,
-  countContextTokens,
-  countContextTokensForSegments,
   deriveContextProfile,
   estimateTokensForSegments,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -211,10 +209,6 @@ function makeRequest(
   };
 }
 
-function assemblyMessages(outcome: ReturnType<typeof buildGatewayAssembly>): string[] {
-  return outcome.messages.map((message: GatewayConversationMessage) => message.content);
-}
-
 describe("buildGatewayAssembly", () => {
   it("keeps the final prompt within the effective budget after trimming memory, docs, and history", () => {
     const { store, chatId } = createStore();
@@ -248,7 +242,10 @@ describe("buildGatewayAssembly", () => {
       CHAT_MODEL,
       gatewayTurnSnapshot(store, chatId),
     );
-    const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
+    const totalTokens = countGatewayPromptTokens(
+      { messages: outcome.messages },
+      profile.tokenAccounting,
+    );
     const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
 
     expect(totalTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
@@ -297,7 +294,10 @@ describe("buildGatewayAssembly", () => {
       CHAT_MODEL,
       gatewayTurnSnapshot(store, chatId),
     );
-    const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
+    const totalTokens = countGatewayPromptTokens(
+      { messages: outcome.messages },
+      profile.tokenAccounting,
+    );
     const historyLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
     const promptLaneTokens = outcome.diagnostics.lanes
       .filter((lane) => lane.laneId !== "verification-evidence")
@@ -349,8 +349,8 @@ describe("buildGatewayAssembly", () => {
     const systemLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "system-contract");
     const historyLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
     const retainedTurns = outcome.messages.slice(1, -1);
-    const retainedTurnsTokens = countContextTokensForSegments(
-      retainedTurns.map((message) => message.content),
+    const retainedTurnsTokens = countGatewayPromptTokens(
+      { messages: retainedTurns },
       tokenAccounting,
     );
     const laneTokenSum = outcome.diagnostics.lanes.reduce(
@@ -361,7 +361,10 @@ describe("buildGatewayAssembly", () => {
     expect(outcome.compaction).toBeDefined();
     expect(retainedTurns.length).toBeGreaterThan(0);
     expect(systemLane?.estimatedTokens).toBe(
-      countContextTokens(CONVERSATION_SYSTEM_PROMPT, tokenAccounting),
+      countGatewayPromptTokens(
+        { messages: [{ role: "system", content: CONVERSATION_SYSTEM_PROMPT }] },
+        tokenAccounting,
+      ),
     );
     expect(historyLane?.includedItems).toBe(retainedTurns.length + 1);
     expect(historyLane?.estimatedTokens).toBeGreaterThan(retainedTurnsTokens);
@@ -430,9 +433,9 @@ describe("buildGatewayAssembly", () => {
       CHAT_MODEL,
       gatewayTurnSnapshot(store, chatId),
     );
-    const messages = assemblyMessages(outcome);
-    const calibratedTotal = countContextTokensForSegments(messages, profile.tokenAccounting);
-    const fallbackTotal = estimateTokensForSegments(messages);
+    const input = { messages: outcome.messages };
+    const calibratedTotal = countGatewayPromptTokens(input, profile.tokenAccounting);
+    const fallbackTotal = countGatewayPromptTokens(input);
 
     expect(outcome.diagnostics.profile.tokenAccounting?.source).toBe("calibrated");
     expect(outcome.diagnostics.profile.tokenAccounting?.counterId).toBe(
@@ -507,7 +510,10 @@ describe("buildGatewayAssembly", () => {
       gatewayTurnSnapshot(store, chatId),
     );
     const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
-    const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
+    const totalTokens = countGatewayPromptTokens(
+      { messages: outcome.messages },
+      profile.tokenAccounting,
+    );
     const repoLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence");
 
     expect(totalTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
@@ -580,11 +586,13 @@ describe("buildGatewayAssembly", () => {
     const requestContent = "Continue.";
     const compactionContextText =
       "# Persisted compaction context\nModel-written continuity summary:\n- " + "c".repeat(80);
-    const tightBudget = estimateTokensForSegments([
-      CONVERSATION_SYSTEM_PROMPT,
-      compactionContextText,
-      requestContent,
-    ]);
+    const tightBudget = countGatewayPromptTokens({
+      messages: [
+        { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+        { role: "system", content: compactionContextText },
+        { role: "user", content: requestContent },
+      ],
+    });
     const profile = deriveContextProfile({
       maxInputTokens: tightBudget,
       reservedOutputTokens: 0,
@@ -609,8 +617,9 @@ describe("buildGatewayAssembly", () => {
       .map((message) => message.content)
       .join("\n");
     const memoryLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "working-memory");
-    const totalTokens = estimateTokensForSegments(
-      outcome.messages.map((message) => message.content),
+    const totalTokens = countGatewayPromptTokens(
+      { messages: outcome.messages },
+      profile.tokenAccounting,
     );
 
     expect(latestUserTurn).toBe(requestContent);

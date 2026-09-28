@@ -498,6 +498,15 @@ describe("deriveContextProfile", () => {
 });
 
 describe("deriveContextProfileFromCapability", () => {
+  it("treats the output ceiling as a limit, leaving room for a GPT OSS request", () => {
+    const profile = deriveContextProfileFromCapability(
+      chatCapability("gpt-oss-120b", 131_072, 131_072),
+    );
+    expect(profile.effectiveInputBudget).toBeGreaterThan(100_000);
+    expect(profile.reservedOutputTokens).toBe(undeclaredOutputReserveTokens(131_072));
+    expect(validateContextProfile(profile).ok).toBe(true);
+  });
+
   it("derives distinct effective budgets for 32k, 128k, and 200k chat capabilities", () => {
     const profile32 = deriveContextProfileFromCapability(chatCapability("ctx-32k", 32_000, 2_048));
     const profile128 = deriveContextProfileFromCapability(

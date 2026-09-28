@@ -20,12 +20,15 @@ import {
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
+  logChatContextSelection,
   logChatResponse,
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
   logGitChangeTurnAuthorityEvent,
 } from "./chat-activity.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 function captureServerLog(): BufferedServerLogSink {
   const sink = createBufferedServerLogSink();
@@ -38,6 +41,36 @@ afterEach(() => {
 });
 
 describe("chat-activity.ts Activity Log proofs (#3532)", () => {
+  it("records a verbatim context selection with zero compaction and image costs", () => {
+    const sink = captureServerLog();
+    const assembly = selectGatewayPromptAssembly({
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "private prompt", discussionMode: undefined },
+      profile: DEFAULT_CONTEXT_PROFILE,
+      memoryEntries: [],
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    if (assembly === undefined) throw new Error("Missing fixture assembly");
+    logChatContextSelection(undefined, assembly, 0);
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    const persisted = expectActivityLogProof("chat.context.selected.budget", line);
+    expect(persisted).toMatchObject({
+      state: "verbatim",
+      compactedHistoryMessages: 0,
+      retainedHistoryMessages: 0,
+      tokensBefore: 0,
+      tokensAfter: 0,
+      tokensSaved: 0,
+      imageCount: 0,
+      imageReserveTokens: 0,
+      promptTokens: assembly.diagnostics.totalEstimatedTokens,
+      inputBudget: assembly.diagnostics.profile.effectiveInputBudget,
+    });
+    expect(line).not.toContain("private prompt");
+  });
+
   it("chat.creation.rejected — persists the readiness rejection reason and model kind", () => {
     const sink = captureServerLog();
 

@@ -98,6 +98,8 @@ export interface ModelProviderConfig {
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly outputTokenParameter?: OutputTokenParameter | undefined;
+  /** Use the configured LiteLLM proxy's authenticated token-counting endpoint. */
+  readonly tokenCounter?: "litellm" | undefined;
   // Bounds ONE attempt. The whole buffered call is bounded by the budget `providerRequestBudgetMs`
   // (resilience.ts) derives from this and `maxRetries`.
   readonly timeoutMs: number;

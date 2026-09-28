@@ -1,3 +1,4 @@
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 // The process-wide activity log, exposed as the SINK shape the domain packages accept.
 //
 // WHY AN ADAPTER RATHER THAN A DIRECT IMPORT
@@ -50,10 +51,15 @@ import {
 // rather than on `ServerLogSink` because the predicate is a consumer-side optimisation, not part
 // of what it means to be a server log transport.
 export interface ProcessServerLogSink extends ServerLogSink {
+  readonly errorEvidence: (error: unknown) => {
+    readonly frames: readonly string[];
+    readonly causeChain: readonly string[];
+  };
   readonly enabled: (level: ServerLogLevel) => boolean;
 }
 
 const PROCESS_SERVER_LOG_SINK: ProcessServerLogSink = {
+  errorEvidence: (error) => ({ frames: keikoStackFrames(error), causeChain: causeChain(error) }),
   write(event: ServerLogEvent): void {
     // The logger applies the threshold, merges any bound context, and swallows a sink failure so
     // a log line can never become a new failure mode for the operation being logged.
@@ -81,6 +87,7 @@ export function processServerLogSink(): ProcessServerLogSink {
 export function processServerLogSinkFor(correlationId: string): ProcessServerLogSink {
   const sink = processServerLogSink();
   return {
+    errorEvidence: sink.errorEvidence,
     write(event: ServerLogEvent): void {
       sink.write(withActivityLogCorrelation(event, event.correlationId ?? correlationId));
     },

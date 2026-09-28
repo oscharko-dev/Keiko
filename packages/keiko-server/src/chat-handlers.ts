@@ -168,6 +168,7 @@ import {
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
+  logChatContextSelection,
   logChatResponse,
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
@@ -215,7 +216,11 @@ import {
   selectGatewayPromptAssembly,
   type GatewayPromptAssembly,
 } from "./chat-prompt-budget.js";
-import { MAX_CONTEXT_MESSAGES, usableGatewayMessages } from "./conversation-gateway.js";
+import {
+  MAX_CONTEXT_MESSAGES,
+  usableGatewayMessages,
+  withGatewayConversationImages,
+} from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
@@ -1731,12 +1736,31 @@ export function captureGatewayTurnSnapshot(
   };
 }
 
+function finalizeGatewayAssembly(
+  selected: GatewayPromptAssembly | undefined,
+  request: SendDesktopChatRequest,
+  correlationId: string | undefined,
+): GatewayPromptAssembly {
+  if (selected === undefined) {
+    throw new ContextOverflowError(
+      "conversation prompt exceeds the effective input budget and cannot be assembled without overflow.",
+    );
+  }
+  logChatContextSelection(
+    correlationId,
+    selected,
+    request.attachments.filter((attachment) => attachment.kind === "image").length,
+  );
+  return selected;
+}
+
 export function buildGatewayAssembly(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memory: ConversationMemoryResultWire,
   modelId: string | undefined,
   snapshot: GatewayTurnSnapshot,
+  correlationId?: string,
 ): GatewayPromptAssembly {
   const currentUserIndex = snapshot.history.findIndex(
     (message) => message.id === snapshot.currentUserMessageId,
@@ -1751,6 +1775,7 @@ export function buildGatewayAssembly(
     request: {
       content: request.content,
       discussionMode: request.discussionMode,
+      imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
@@ -1758,12 +1783,7 @@ export function buildGatewayAssembly(
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
   });
-  if (selected === undefined) {
-    throw new ContextOverflowError(
-      "conversation prompt exceeds the effective input budget and cannot be assembled without overflow.",
-    );
-  }
-  return selected;
+  return finalizeGatewayAssembly(selected, request, correlationId);
 }
 
 // ADR-0173 D5 g9 — the INPUT shape of a chat turn, never its content: how many messages the
@@ -1910,6 +1930,7 @@ function buildRegenerateGatewayAssembly(
   memory: ConversationMemoryResultWire,
   modelId: string,
   historyBeforeAssistant: readonly ChatMessage[],
+  correlationId: string | undefined,
 ): GatewayPromptAssembly {
   let latestUserIndex = -1;
   for (let index = historyBeforeAssistant.length - 1; index >= 0; index -= 1) {
@@ -1926,6 +1947,7 @@ function buildRegenerateGatewayAssembly(
     request: {
       content: request.content,
       discussionMode: request.discussionMode,
+      imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
@@ -1933,12 +1955,7 @@ function buildRegenerateGatewayAssembly(
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
   });
-  if (selected === undefined) {
-    throw new ContextOverflowError(
-      "conversation prompt exceeds the effective input budget and cannot be assembled without overflow.",
-    );
-  }
-  return selected;
+  return finalizeGatewayAssembly(selected, request, correlationId);
 }
 
 function latestRegenerableTurn(
@@ -2167,6 +2184,30 @@ async function persistModelChatTurn(
   }
 }
 
+function buildBufferedGatewayAssembly(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memory: ConversationMemoryResultWire,
+  modelId: string,
+  gatewayTurn: GatewayTurnSnapshot,
+  correlationId: string | undefined,
+): GatewayPromptAssembly {
+  const baseAssembly = buildGatewayAssembly(
+    deps,
+    request,
+    memory,
+    modelId,
+    gatewayTurn,
+    correlationId,
+  );
+  // Logged from the base assembly, BEFORE image content parts are spliced in: image delivery can
+  // still fail its own (unrelated) authority/session check below, and this shape evidence must
+  // exist either way. Splicing only augments the final message's contentParts, never message
+  // count or role — so the counted shape is identical from either assembly.
+  logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
+  return assemblyWithConversationImages(deps, request, modelId, baseAssembly);
+}
+
 async function executeBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2183,13 +2224,14 @@ async function executeBufferedModelTurn(
   const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
-  const baseAssembly = buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn);
-  // Logged from the base assembly, BEFORE image content parts are spliced in: image delivery can
-  // still fail its own (unrelated) authority/session check below, and this shape evidence must
-  // exist either way. Splicing only augments the final message's contentParts, never message
-  // count or role — so the counted shape is identical from either assembly.
-  logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
-  const assembly = assemblyWithConversationImages(deps, request, modelId, baseAssembly);
+  const assembly = buildBufferedGatewayAssembly(
+    deps,
+    request,
+    memory,
+    modelId,
+    gatewayTurn,
+    correlationId,
+  );
   const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
   if (isRouteResult(model)) {
     settleRejectedDesktopChatTurn(deps, prepared, admitted);
@@ -3537,15 +3579,7 @@ export function assemblyWithConversationImages(
 ): GatewayPromptAssembly {
   const imageParts = conversationImageParts(deps, request, modelId);
   if (imageParts.length === 0) return assembly;
-  const lastIndex = assembly.messages.length - 1;
-  const messages = assembly.messages.map((message, index): GatewayConversationMessage =>
-    index === lastIndex
-      ? {
-          ...message,
-          contentParts: [{ type: "text", text: message.content }, ...imageParts],
-        }
-      : message,
-  );
+  const messages = withGatewayConversationImages(assembly.messages, imageParts);
   return { ...assembly, messages };
 }
 
@@ -3719,9 +3753,10 @@ function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmi
   return { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
 }
 
-async function buildRegenerateMemoryAndMessages(
+async function buildRegenerateContext(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
+  correlationId: string | undefined,
 ): Promise<{
   readonly memory: ConversationMemoryResultWire;
   readonly messages: readonly GatewayConversationMessage[];
@@ -3737,6 +3772,7 @@ async function buildRegenerateMemoryAndMessages(
     memory,
     modelId,
     turn.beforeAssistant,
+    correlationId,
   );
   return { memory, messages: assembly.messages };
 }
@@ -3773,7 +3809,7 @@ async function persistRegeneratedChatTurn(
 ): Promise<RouteResult> {
   const { chat, modelId, memoryRequest, executionAdmission } = prepared;
   try {
-    const { memory, messages } = await buildRegenerateMemoryAndMessages(deps, prepared);
+    const { memory, messages } = await buildRegenerateContext(deps, prepared, correlationId);
     if (requestSignalAborted(signal)) return requestCancelledResult();
     const model = bufferedModelAtProviderBoundary(
       deps,

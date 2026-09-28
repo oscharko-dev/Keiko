@@ -544,6 +544,7 @@ function prepare(
   request: GatewayRequest,
   now: () => number,
   log: ModelGatewayLogSink,
+  recordProjection: boolean,
 ): GatewayToolCatalogBridge {
   const input = dataField(request, "toolCatalog");
   const oldTools = dataField(request, "tools");
@@ -555,17 +556,18 @@ function prepare(
   const normalizer = normalizerFor(advertisement);
   const tools = definitions(normalizer, now());
   requireBridge(oldTools === undefined, "projection-mismatch");
-  log.write(
-    activityLogEvent(TOOL_CATALOG_PROJECTED_OPERATION, toolCatalogEnvelope(log, "info"), {
-      projectionDigest: normalizer.binding.projection.projectionDigest,
-      toolCount: tools.length,
-      compatibility: advertisement.kind,
-      // How long the advertised offer stays bindable from this point. Read next to the fetch's own
-      // `durationMs` it reconstructs an `expired-compatibility` rejection from the log alone: a
-      // response that took longer than this window was bound against an offer that had run out.
-      offerRemainingMs: Math.max(0, Date.parse(advertisement.offered.expiresAt) - now()),
-    }),
-  );
+  if (recordProjection)
+    log.write(
+      activityLogEvent(TOOL_CATALOG_PROJECTED_OPERATION, toolCatalogEnvelope(log, "info"), {
+        projectionDigest: normalizer.binding.projection.projectionDigest,
+        toolCount: tools.length,
+        compatibility: advertisement.kind,
+        // How long the advertised offer stays bindable from this point. Read next to the fetch's own
+        // `durationMs` it reconstructs an `expired-compatibility` rejection from the log alone: a
+        // response that took longer than this window was bound against an offer that had run out.
+        offerRemainingMs: Math.max(0, Date.parse(advertisement.offered.expiresAt) - now()),
+      }),
+    );
   return bridge(normalizer, tools, now, log);
 }
 /**
@@ -577,10 +579,11 @@ export function createGatewayToolCatalogBridge(
   request: GatewayRequest,
   now: () => number,
   sink?: ModelGatewayLogSink,
+  recordProjection = true,
 ): GatewayToolCatalogBridge {
   const log = resolveLogSink(sink);
   try {
-    return prepare(request, now, log);
+    return prepare(request, now, log, recordProjection);
   } catch (cause) {
     return reject(log, "projection", cause);
   }
