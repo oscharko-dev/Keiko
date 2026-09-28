@@ -12,10 +12,11 @@ const options = process.argv.slice(2);
 if (
   process.platform !== "win32" ||
   options.length > 1 ||
-  (options.length === 1 && !new Set(["--filter-lifecycle", "--socket-proof"]).has(options[0]))
+  (options.length === 1 &&
+    !new Set(["--filter-lifecycle", "--guarded-lifecycle", "--socket-proof"]).has(options[0]))
 ) {
   process.stderr.write(
-    "Requires Windows; usage: test-windows-gateway-filters.mjs [--filter-lifecycle|--socket-proof]\n",
+    "Requires Windows; usage: test-windows-gateway-filters.mjs [--filter-lifecycle|--guarded-lifecycle|--socket-proof]\n",
   );
   process.exitCode = 2;
 } else {

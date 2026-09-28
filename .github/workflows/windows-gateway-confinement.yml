@@ -36,5 +36,7 @@ jobs:
           if ((Get-Service BFE).Status -ne 'Running') { throw "BFE is not running." }
       - name: Compile, analyze, validate and prove dynamic filter cleanup
         run: node scripts/testing/test-windows-gateway-filters.mjs --filter-lifecycle
+      - name: Prove durable-deny guard cleanup after gateway permit revocation
+        run: node scripts/testing/test-windows-gateway-filters.mjs --guarded-lifecycle
       - name: Prove real AppContainer gateway access and hostile loopback denial
         run: node scripts/testing/test-windows-gateway-filters.mjs --socket-proof
