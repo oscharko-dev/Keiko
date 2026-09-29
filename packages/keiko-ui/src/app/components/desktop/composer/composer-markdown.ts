@@ -6,6 +6,7 @@ import {
   schema,
 } from "prosemirror-markdown";
 import { TextSelection, type Selection, type EditorState } from "prosemirror-state";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 // Drafts are inert: links cannot navigate and Markdown images never fetch remote resources.
 export const composerSchema = new Schema({
@@ -32,7 +33,7 @@ export function serializeComposerMarkdown(doc: DocumentNode): string {
 
 /** Locate the caret in the Markdown handed to existing mention/dictation integrations. */
 export function markdownCursor(state: EditorState): number {
-  const marker = "\uE000";
+  const marker = cursorMarker(serializeComposerMarkdown(state.doc));
   const marked = state.tr.insertText(marker, state.selection.head).doc;
   return serializeComposerMarkdown(marked).indexOf(marker);
 }
@@ -42,7 +43,7 @@ export function selectionFromMarkdown(
   offset: number,
   value: string,
 ): Selection {
-  const marker = "\uE000";
+  const marker = cursorMarker(value);
   const marked = parseComposerMarkdown(value.slice(0, offset) + marker + value.slice(offset));
   let position = state.doc.content.size;
   marked.descendants((node, pos) => {
@@ -50,4 +51,11 @@ export function selectionFromMarkdown(
     if (index >= 0) position = pos + index;
   });
   return TextSelection.near(state.doc.resolve(Math.min(position, state.doc.content.size)));
+}
+
+function cursorMarker(value: string): string {
+  let marker = "\uE000";
+  while (value.includes(marker)) marker += marker;
+  if (marker.length > 1) reportClientDiagnostic("Keiko composer cursor marker collision avoided.");
+  return marker;
 }

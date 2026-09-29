@@ -4,10 +4,43 @@ import {
   composerSchema,
   parseComposerMarkdown,
   serializeComposerMarkdown,
+  markdownCursor,
+  selectionFromMarkdown,
 } from "./composer-markdown";
 import { openComposerCodeBlock } from "./composer-input-rules";
 
 describe("composer Markdown", () => {
+  it("maps cursor offsets without colliding with private-use characters in pasted text", () => {
+    const value = "\uE000 Grüße 😀 \uE000\uE000 Ziel \uE000\uE000\uE000\uE000";
+    const doc = parseComposerMarkdown(value);
+    const offset = value.indexOf("Ziel") + 2;
+    const state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, offset + 1),
+    });
+    expect(markdownCursor(state)).toBe(offset);
+    expect(selectionFromMarkdown(state, offset, value).head).toBe(offset + 1);
+    expect(serializeComposerMarkdown(state.doc)).toBe(value);
+  });
+
+  it("maps text positions through headings, marks, lists, code and Unicode", () => {
+    const doc = parseComposerMarkdown(
+      "# Grüße 😀\n\n**Owner**: Anna und `@team`\n\n* Budget: 900 Euro\n\n```typescript\nconst value = 2;\n```",
+    );
+    const value = serializeComposerMarkdown(doc);
+    doc.descendants((node, position) => {
+      if (!node.isText) return;
+      for (let index = 0; index <= node.nodeSize; index += 1) {
+        const state = EditorState.create({
+          doc,
+          selection: TextSelection.create(doc, position + index),
+        });
+        const offset = markdownCursor(state);
+        expect(selectionFromMarkdown(state, offset, value).head).toBe(state.selection.head);
+      }
+    });
+  });
+
   it("round-trips mixed Markdown, Unicode and code with embedded fences", () => {
     const source =
       '# Aufgabe\n\n**Prüfe** diese Liste:\n\n* eins\n* zwei\n\n````typescript\nconst prompt = "```";\n  // Grüße\n````\n\n> Weiter';
