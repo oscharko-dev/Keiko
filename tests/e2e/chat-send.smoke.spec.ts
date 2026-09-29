@@ -205,6 +205,10 @@ async function copyComposerText(
   composer: ReturnType<Page["getByRole"]>,
   source: string,
 ): Promise<void> {
+  const nativeModifier = await page.evaluate(() =>
+    navigator.platform.startsWith("Mac") ? "Meta" : "Control",
+  );
+  expect(await editorModifier(page)).toBe(nativeModifier);
   await composer.pressSequentially("```");
   await composer.press("Shift+Enter");
   const code = composer.locator(".monaco-editor");
@@ -285,12 +289,17 @@ test.describe("native Composer clipboard", () => {
       .toBe(source);
   });
   // Native clipboard shortcuts and Monaco must observe the same actual browser platform.
-  // Desktop device presets force a Windows user agent even on a macOS browser process.
+  // Desktop presets can force Windows on macOS; Linux WebKit even defaults to a Macintosh UA.
+  // Align the fixture UA with the native platform so Monaco and the OS clipboard use one chord.
   test.use({
     userAgent: async ({ browser }, use) => {
       const probe = await browser.newPage();
       try {
-        const userAgent = await probe.evaluate(() => navigator.userAgent);
+        const userAgent = await probe.evaluate(() =>
+          navigator.platform.startsWith("Linux")
+            ? navigator.userAgent.replace(/\(Macintosh;[^)]*\)/u, "(X11; Linux)")
+            : navigator.userAgent,
+        );
         await use(userAgent);
       } finally {
         await probe.close();
