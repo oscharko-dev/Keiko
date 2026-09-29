@@ -137,6 +137,7 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
     ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
+    backgroundAttempt: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -438,12 +439,18 @@ function logAutomaticReadinessStarted(
   modelId: string,
   probeCount: number,
   timeouts: ProbeTimeoutEvidence,
+  backgroundAttempt?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), ...timeouts, probeCount },
+      {
+        ...modelIdEvidence(modelId),
+        ...timeouts,
+        probeCount,
+        ...(backgroundAttempt === undefined ? {} : { backgroundAttempt }),
+      },
     ),
   );
 }
@@ -614,6 +621,7 @@ function logOnDemandProbeStarted(
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
   correlationId: string,
+  backgroundAttempt?: number,
 ): void {
   const selection = chooseProvider(holder.current(), modelId, ON_DEMAND_PROBE_OPTIONS);
   logAutomaticReadinessStarted(
@@ -629,6 +637,7 @@ function logOnDemandProbeStarted(
           ["chat"],
           ON_DEMAND_PROBE_OPTIONS,
         ),
+    backgroundAttempt,
   );
 }
 
@@ -2238,6 +2247,7 @@ function enqueueConversationProbe(
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
   correlationId: string,
+  backgroundAttempt?: number,
 ): Promise<void> {
   const generation = holder.generation();
   const queue = conversationQueue(holder);
@@ -2250,6 +2260,7 @@ function enqueueConversationProbe(
             holder,
             modelId,
             correlationId,
+            backgroundAttempt,
           );
         resolve();
       } catch (error) {
@@ -2318,15 +2329,13 @@ function monitorConversationInitialization(
   modelId: string,
   generation: number,
   parentCorrelationId: string | undefined,
+  attempt: number,
 ): void {
   const holder = deps.gatewayConfig;
   if (holder?.generation() !== generation || conversationQueue(holder).disposed) return;
-  const probeCorrelationId =
-    parentCorrelationId === undefined
-      ? (holder.initializationCorrelationId ?? newCorrelationId())
-      : newCorrelationId();
+  const probeCorrelationId = newCorrelationId();
   const observedDeps = initializationDeps(deps, parentCorrelationId);
-  void ensureOnDemandConversationReadiness(observedDeps, modelId, probeCorrelationId)
+  void ensureOnDemandConversationReadiness(observedDeps, modelId, probeCorrelationId, attempt)
     .catch((error: unknown) => {
       emitServerDiagnostic(
         deps.diagnostics,
@@ -2342,22 +2351,46 @@ function monitorConversationInitialization(
       );
     })
     .then(() => {
-      const queue = conversationQueue(holder);
-      if (
-        queue.disposed ||
-        holder.generation() !== generation ||
-        currentConversationReady(deps, modelId)
-      )
-        return;
-      if (queue.retryable.get(modelId) === false) return;
-      clearTimeout(queue.retries.get(modelId));
-      const retry = setTimeout(() => {
-        queue.retries.delete(modelId);
-        monitorConversationInitialization(deps, modelId, generation, parentCorrelationId);
-      }, NOT_READY_REPROBE_COOLDOWN_MS + 1);
-      retry.unref();
-      queue.retries.set(modelId, retry);
+      scheduleConversationRecovery(deps, modelId, generation, parentCorrelationId, attempt);
     });
+}
+
+export const MAX_CONVERSATION_INITIALIZATION_ATTEMPTS = 4;
+
+function scheduleConversationRecovery(
+  deps: UiHandlerDeps,
+  modelId: string,
+  generation: number,
+  parentCorrelationId: string | undefined,
+  attempt: number,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return;
+  const queue = conversationQueue(holder);
+  if (
+    queue.disposed ||
+    holder.generation() !== generation ||
+    currentConversationReady(deps, modelId)
+  )
+    return;
+  if (queue.retryable.get(modelId) === false || attempt >= MAX_CONVERSATION_INITIALIZATION_ATTEMPTS)
+    return;
+  clearTimeout(queue.retries.get(modelId));
+  const retry = setTimeout(
+    () => {
+      queue.retries.delete(modelId);
+      monitorConversationInitialization(
+        deps,
+        modelId,
+        generation,
+        parentCorrelationId,
+        attempt + 1,
+      );
+    },
+    Math.min(NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1), 300_000) + 1,
+  );
+  retry.unref();
+  queue.retries.set(modelId, retry);
 }
 
 /** Configuration-owned, bounded background probes heal outages without per-question checks. */
@@ -2378,7 +2411,7 @@ export function initializeConfiguredConversationReadiness(
   if (config === undefined) return;
   for (const model of listConfiguredCapabilities(config)) {
     if (model.kind === "chat")
-      monitorConversationInitialization(deps, model.id, generation, correlationId);
+      monitorConversationInitialization(deps, model.id, generation, correlationId, 1);
   }
 }
 
@@ -2433,6 +2466,7 @@ export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
   correlationId?: string,
+  backgroundAttempt?: number,
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
@@ -2455,7 +2489,13 @@ export async function ensureOnDemandConversationReadiness(
     return;
   }
   const probeCorrelationId = correlationId ?? newCorrelationId();
-  const probe = enqueueConversationProbe(deps, holder, modelId, probeCorrelationId).finally(() => {
+  const probe = enqueueConversationProbe(
+    deps,
+    holder,
+    modelId,
+    probeCorrelationId,
+    backgroundAttempt,
+  ).finally(() => {
     onDemandReadinessProbes.delete(key);
   });
   onDemandReadinessProbes.set(key, { promise: probe, correlationId: probeCorrelationId });
@@ -2519,10 +2559,11 @@ async function runOnDemandReadinessProbe(
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
   correlationId?: string,
+  backgroundAttempt?: number,
 ): Promise<void> {
   const generation = holder.generation();
   const probeCorrelationId = correlationId ?? newCorrelationId();
-  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId);
+  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
   const outcome = await observeOnDemandProbe(deps, modelId, probeCorrelationId);
   if (holder.generation() === generation) {
     conversationQueue(holder).retryable.set(modelId, outcome.inconclusiveProbes > 0);

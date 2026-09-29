@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1d5080542e47fd621d140f8641f2873bb2c1736ef70b91874d31b47cefbe6651" as const;
+  "c2e6a8cce1f97038d8e259e89740d1bdc626919daae057d084ef11be5b22c265" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -12769,6 +12769,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      backgroundAttempt: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -45825,6 +45830,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
+            {
+              name: "backgroundAttempt",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
             {
               name: "chatProbeTimeoutMs",
               type: "integer",

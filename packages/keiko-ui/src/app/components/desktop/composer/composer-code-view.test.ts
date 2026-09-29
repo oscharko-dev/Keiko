@@ -6,11 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { ComposerCodeView } from "./composer-code-view";
-import {
-  parseComposerMarkdown,
-  serializeComposerMarkdown,
-  parseComposerDraft,
-} from "./composer-markdown";
+import { serializeComposerMarkdown, parseComposerDraft } from "./composer-markdown";
 import { CLIENT_COMPOSER_CODE_STAGES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ComposerCodeEditor, ComposerCodePort } from "./composer-code-runtime";
 import styles from "./MarkdownComposer.module.css";

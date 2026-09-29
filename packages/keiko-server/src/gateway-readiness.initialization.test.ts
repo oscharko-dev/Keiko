@@ -7,6 +7,7 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
   awaitInitializedConversationReadiness,
+  MAX_CONVERSATION_INITIALIZATION_ATTEMPTS,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -107,4 +108,31 @@ it("disposal cancels recovery timers and ignores subsequent configuration change
   configure(deps, "corr-after-disposal");
   await vi.advanceTimersByTimeAsync(3 * NOT_READY_REPROBE_COOLDOWN_MS);
   expect(fetch).toHaveBeenCalledTimes(calls);
+});
+
+it("stops background recovery after a bounded number of inconclusive probes", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  const deps = composition();
+  vi.useFakeTimers();
+  const fetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-prolonged-outage");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalled();
+  });
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  expect(fetch).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS + 1);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(2 * NOT_READY_REPROBE_COOLDOWN_MS + 1);
+  expect(fetch).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(4 * NOT_READY_REPROBE_COOLDOWN_MS + 1);
+  expect(fetch).toHaveBeenCalledTimes(4);
+  await vi.advanceTimersByTimeAsync(60 * NOT_READY_REPROBE_COOLDOWN_MS);
+  expect(fetch).toHaveBeenCalledTimes(MAX_CONVERSATION_INITIALIZATION_ATTEMPTS);
+  const started = sink.events.filter((event) => event.op === "gateway.readiness.automatic.started");
+  expect(started).toHaveLength(MAX_CONVERSATION_INITIALIZATION_ATTEMPTS);
+  expect(started.map((event) => event.extra?.backgroundAttempt)).toEqual([1, 2, 3, 4]);
+  expect(new Set(started.map((event) => event.correlationId)).size).toBe(started.length);
 });

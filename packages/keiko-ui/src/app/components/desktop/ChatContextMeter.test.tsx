@@ -231,6 +231,48 @@ describe("Chat context request diagnostics", () => {
     expect(JSON.stringify(contextApi.report.mock.calls)).not.toContain("canary");
   });
 
+  it("runs manual compaction when a status refresh is still pending", async () => {
+    const session = contextSession();
+    const view = render(<ChatContextMeterContainer session={session} />);
+    await screen.findByRole("button", { name: /approximately 80% used/ });
+    let finishStatus!: (value: ChatContextStatusWire) => void;
+    contextApi.fetch.mockImplementationOnce(
+      () =>
+        new Promise<ChatContextStatusWire>((resolve) => {
+          finishStatus = resolve;
+        }),
+    );
+    view.rerender(
+      <ChatContextMeterContainer
+        session={{
+          ...session,
+          messages: [
+            {
+              id: "new-turn",
+              chatId: "chat-private-canary",
+              role: "user",
+              content: "A new turn",
+              timestamp: 1,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+        }}
+      />,
+    );
+    await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledTimes(2));
+    const pendingSignal = contextApi.fetch.mock.calls.at(-1)?.[3] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
+    await waitFor(() => expect(contextApi.compact).toHaveBeenCalledOnce());
+    expect(pendingSignal.aborted).toBe(true);
+    await act(async () => finishStatus(status(9_000)));
+    expect(screen.getByRole("button", { name: /approximately 10% used/ })).toBeInTheDocument();
+  });
+
   it("does not report a superseded or unmounted request as a failure", async () => {
     let reject: ((error: Error) => void) | undefined;
     contextApi.fetch.mockImplementation(

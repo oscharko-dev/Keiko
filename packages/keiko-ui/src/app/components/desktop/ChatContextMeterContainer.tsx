@@ -79,7 +79,11 @@ function useContextRefresh(
 ): (compact: boolean) => Promise<number | undefined> {
   return useCallback(
     async (compact: boolean): Promise<number | undefined> => {
-      if (controller.current !== null) return undefined;
+      if (controller.current !== null) {
+        if (!compact) return undefined;
+        controller.current.abort();
+        controller.current = null;
+      }
       if (chatId === undefined || projectPath === undefined || modelId === undefined)
         return undefined;
       const request = new AbortController();
