@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d045c7f2220dd074667ccd72a4c9fb789ee13b9db620496f80a34df332c54364",
+    "catalogDigest": "1b7aadb0f9366608efcf6c23053e9f61a9c0e63cc4c3dc0430d87a823870ba42",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -925,7 +925,7 @@
         "proofIds": ["chat.compaction.facts.classified.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-compaction-model-summary.ts:56",
-        "emitterSites": ["packages/keiko-server/src/chat-compaction-model-summary.ts:487"]
+        "emitterSites": ["packages/keiko-server/src/chat-compaction-model-summary.ts:486"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1114,7 +1114,7 @@
         "proofIds": ["chat.context.selected.budget"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:168",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:409"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:408"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1548,7 +1548,7 @@
         "proofIds": ["chat.response.message.causality"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:149",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:448"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:462"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14903,7 +14903,7 @@
         "proofIds": ["git-change.chat.apply.outcome"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:274",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:540"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:554"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15038,7 +15038,7 @@
         "proofIds": ["git-change.chat.description-target.denied.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:249",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:522"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:536"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23035,7 +23035,7 @@
         "proofIds": ["pr-description.chat.turn.admitted.relationship"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:203",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:490"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:504"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23075,7 +23075,7 @@
         "proofIds": ["pr-description.chat.turn.denied.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:223",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:499"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:513"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -77492,14 +77492,14 @@
     {
       "op": "chat.compaction.read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-compaction-resurfacing.ts:116",
+      "site": "packages/keiko-server/src/chat-compaction-resurfacing.ts:111",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "chat.compaction.summary",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:843",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:842",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -76,12 +76,12 @@ export function persistChatCompactionEvidence(
     // Best-effort stays best-effort — the send is unaffected — but the failure is no longer a
     // `console.warn` carrying the raw error object on a channel production never overrode. It goes to
     // the server's single redacted diagnostic sink so a compaction-evidence gap is observable.
+    const runCorrelationId =
+      runId !== undefined && isValidCorrelationId(runId) ? runId : randomUUID();
     const correlationId =
       input.correlationId !== undefined && isValidCorrelationId(input.correlationId)
         ? input.correlationId
-        : runId !== undefined && isValidCorrelationId(runId)
-          ? runId
-          : randomUUID();
+        : runCorrelationId;
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({

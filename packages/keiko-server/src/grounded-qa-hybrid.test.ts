@@ -186,11 +186,25 @@ function routeCtx(body: string, res: RouteContext["res"] = fakeRes()): RouteCont
 function seedGermanContinuity(chatId: string): string {
   let correctionId = "";
   for (let index = 0; index < 120; index += 1) {
-    const content = index === 100 ? "Verbindliche Korrektur: Das Budget beträgt jetzt 60000 EUR." :
-      index === 118 ? "Welche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?" :
-      "Wir prüfen die Dokumentation zur Rechnungsextraktion ohne neue Entscheidung. ".repeat(20);
-    const message = store.createMessage({ chatId, role: index % 2 === 0 ? "user" : "assistant", content,
-      timestamp: NOW + index * 10, runId: undefined, workflowId: undefined, workflowStatus: undefined, shortResult: undefined, taskType: undefined });
+    const content =
+      index === 100
+        ? "Verbindliche Korrektur: Das Budget beträgt jetzt 60000 EUR."
+        : index === 118
+          ? "Welche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?"
+          : "Wir prüfen die Dokumentation zur Rechnungsextraktion ohne neue Entscheidung. ".repeat(
+              20,
+            );
+    const message = store.createMessage({
+      chatId,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content,
+      timestamp: NOW + index * 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
     if (index === 100) correctionId = message.id;
   }
   return correctionId;
@@ -2144,7 +2158,13 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
       },
     };
     const configuredDeps: UiHandlerDeps = {
-      ...hybridDeps({ evidenceStore: createInMemoryEvidenceStore(), localKnowledgeEmbeddingRequest: (request) => { embeddingInputs.push(request.input); return adapter.request(request); } }),
+      ...hybridDeps({
+        evidenceStore: createInMemoryEvidenceStore(),
+        localKnowledgeEmbeddingRequest: (request) => {
+          embeddingInputs.push(request.input);
+          return adapter.request(request);
+        },
+      }),
       config: {
         providers: [
           {
@@ -2211,25 +2231,65 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
     const lkAnswer = asLocalKnowledge(answer);
     expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
-    expect(embeddingInputs).toContain(`${followUp}\nWelche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?`);
+    expect(embeddingInputs).toContain(
+      `${followUp}\nWelche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?`,
+    );
     expect(modelPrompts.some((prompt) => prompt.includes("60000 EUR"))).toBe(true);
     expect(store.listMessages(chatId, 500).slice(0, 120)).toEqual(originalMessages);
-    const firstCheckpoint = loadChatContinuityCheckpoint(configuredDeps.evidenceStore, chatId, store.chatHistoryRevision(chatId));
+    const firstCheckpoint = loadChatContinuityCheckpoint(
+      configuredDeps.evidenceStore,
+      chatId,
+      store.chatHistoryRevision(chatId),
+    );
     expect(firstCheckpoint?.conversationCoverage?.contextWindowTokens).toBe(8000);
     expect(firstCheckpoint?.itemsBefore).toBeGreaterThan(0);
-    const repeated = await handleGroundedAsk(routeCtx(JSON.stringify({ chatId, content: "Bitte erkläre das nochmal.", modelId: CHAT_MODEL })), configuredDeps, undefined, undefined, hybrid);
+    const repeated = await handleGroundedAsk(
+      routeCtx(
+        JSON.stringify({ chatId, content: "Bitte erkläre das nochmal.", modelId: CHAT_MODEL }),
+      ),
+      configuredDeps,
+      undefined,
+      undefined,
+      hybrid,
+    );
     expect(repeated.status, JSON.stringify(repeated.body)).toBe(200);
     expect(store.findMessageById(correctionId)?.content).toContain("60000 EUR");
     const previousRevision = store.chatHistoryRevision(chatId);
-    store.createMessage({ chatId, role: "user", content: "Verbindliche Korrektur: Das Budget beträgt jetzt 55000 EUR.", timestamp: NOW + 1005, runId: undefined, workflowId: undefined, workflowStatus: undefined, shortResult: undefined, taskType: undefined });
+    store.createMessage({
+      chatId,
+      role: "user",
+      content: "Verbindliche Korrektur: Das Budget beträgt jetzt 55000 EUR.",
+      timestamp: NOW + 1005,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
     expect(store.chatHistoryRevision(chatId)).toBeGreaterThan(previousRevision);
     modelPrompts.length = 0;
-    const revised = await handleGroundedAsk(routeCtx(JSON.stringify({ chatId, content: "Welches Budget ist gültig?", modelId: CHAT_MODEL })), configuredDeps, undefined, undefined, hybrid);
+    const revised = await handleGroundedAsk(
+      routeCtx(
+        JSON.stringify({ chatId, content: "Welches Budget ist gültig?", modelId: CHAT_MODEL }),
+      ),
+      configuredDeps,
+      undefined,
+      undefined,
+      hybrid,
+    );
     expect(revised.status, JSON.stringify(revised.body)).toBe(200);
     expect(modelPrompts.some((prompt) => prompt.includes("55000 EUR"))).toBe(true);
     const revisedPrompt = modelPrompts.find((prompt) => prompt.includes("55000 EUR")) ?? "";
-    expect(revisedPrompt.lastIndexOf("55000 EUR")).toBeGreaterThan(revisedPrompt.lastIndexOf("60000 EUR"));
-    expect(loadChatContinuityCheckpoint(configuredDeps.evidenceStore, chatId, store.chatHistoryRevision(chatId))?.conversationCoverage?.historyRevision).toBe(store.chatHistoryRevision(chatId));
+    expect(revisedPrompt.lastIndexOf("55000 EUR")).toBeGreaterThan(
+      revisedPrompt.lastIndexOf("60000 EUR"),
+    );
+    expect(
+      loadChatContinuityCheckpoint(
+        configuredDeps.evidenceStore,
+        chatId,
+        store.chatHistoryRevision(chatId),
+      )?.conversationCoverage?.historyRevision,
+    ).toBe(store.chatHistoryRevision(chatId));
   });
 
   // ADR-0173 D5: local-knowledge-grounded-qa.ts's StoreBackedAnswerGenerator.generate is the real

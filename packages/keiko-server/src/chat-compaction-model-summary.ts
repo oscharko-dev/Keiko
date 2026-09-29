@@ -253,15 +253,14 @@ function logRejectedSummary(
   modelUnavailable: boolean,
 ): void {
   if (summary?.status === "invalid" || summary?.status === "timed-out" || modelUnavailable) {
-    logSummaryFailure(
-      deps,
-      correlationIdOrUnknown(correlationId),
-      summary?.status === "invalid"
-        ? new TypeError("Running summary validation failed.")
-        : summary?.status === "timed-out"
-          ? new TimeoutError("Running summary refresh timed out.")
-          : new Error("Running summary refresh was unavailable."),
-    );
+    const unavailable = new Error("Running summary refresh was unavailable.");
+    const timeout =
+      summary?.status === "timed-out"
+        ? new TimeoutError("Running summary refresh timed out.")
+        : unavailable;
+    const error =
+      summary?.status === "invalid" ? new TypeError("Running summary validation failed.") : timeout;
+    logSummaryFailure(deps, correlationIdOrUnknown(correlationId), error);
   }
 }
 

@@ -153,13 +153,59 @@ function renderContinuityMessages(
 const REFERENT_PATTERNS: readonly RegExp[] = [
   /\b(?:dazu|davon|dessen|hierzu|dabei|dort|weitermachen|weiterführen)\b/iu,
   /\b(?:was|wie|warum)\s+(?:ist|bedeutet|funktioniert)\s+(?:das|dies)\s*[.!?]*$/iu,
-  /\b(?:erklär(?:e)?|beschreib(?:e)?|prüf(?:e)?|vergleich(?:e)?|fass(?:e)?)\s+(?:mir\s+)?(?:das|dies(?:es|en|e|em)?)(?:\s+(?:bitte|genauer|nochmal|zusammen))?\s*[.!?]*$/iu,
-  /\b(?:what|how|why)\s+(?:does|is|do|are|was)\s+(?:it|this|that|they|these|those)(?:\s+(?:work|mean|behave|happen))?\s*[.!?]*$/iu,
   /\b(?:explain|summarize|compare|continue|clarify|describe)\s+(?:it|this|that|them|these|those)\s*[.!?]*$/iu,
 ];
 
+const REFERENT_PUNCTUATION = new Set([".", "!", "?"]);
+const GERMAN_REFERENT_SUFFIXES = new Set(["bitte", "genauer", "nochmal", "zusammen"]);
+const ENGLISH_REFERENT_SUFFIXES = new Set(["work", "mean", "behave", "happen"]);
+
+function trimReferentPunctuation(content: string): string {
+  let end = content.length;
+  while (end > 0 && REFERENT_PUNCTUATION.has(content.charAt(end - 1))) end -= 1;
+  return content.slice(0, end).trimEnd();
+}
+
+function stripReferentSuffix(content: string, suffixes: ReadonlySet<string>): string {
+  let start = content.length;
+  while (start > 0 && !/\s/u.test(content.charAt(start - 1))) start -= 1;
+  return start > 0 && suffixes.has(content.slice(start).toLowerCase())
+    ? content.slice(0, start).trimEnd()
+    : content;
+}
+
+function matchesReferentCommand(
+  content: string,
+  prefix: RegExp,
+  object: RegExp,
+  suffixes: ReadonlySet<string>,
+): boolean {
+  for (const match of content.matchAll(prefix)) {
+    const remainder = stripReferentSuffix(
+      trimReferentPunctuation(content.slice(match.index + match[0].length)),
+      suffixes,
+    );
+    if (object.test(remainder)) return true;
+  }
+  return false;
+}
+
 function needsReferentResolution(content: string): boolean {
-  return REFERENT_PATTERNS.some((pattern) => pattern.test(content));
+  return (
+    REFERENT_PATTERNS.some((pattern) => pattern.test(content)) ||
+    matchesReferentCommand(
+      content,
+      /\b(?:erkläre?|beschreibe?|prüfe?|vergleiche?|fasse?)\s+/giu,
+      /^(?:mir\s+)?(?:das|dies|dieses|diesen|diese|diesem)$/iu,
+      GERMAN_REFERENT_SUFFIXES,
+    ) ||
+    matchesReferentCommand(
+      content,
+      /\b(?:what|how|why)\s+(?:does|is|do|are|was)\s+/giu,
+      /^(?:it|this|that|they|these|those)$/iu,
+      ENGLISH_REFERENT_SUFFIXES,
+    )
+  );
 }
 
 function resolvedRetrievalContent(
@@ -167,8 +213,8 @@ function resolvedRetrievalContent(
   query: string,
   previous: string | undefined,
 ): string {
-  if (previous === undefined || !needsReferentResolution(query)) return content;
   // The existing anchor planner accepts at most 4096 characters. Never shorten the current query.
   const remaining = Math.min(1500, 4096 - content.length - 1);
-  return remaining <= 0 ? content : `${content}\n${previous.slice(0, remaining)}`;
+  if (remaining <= 0 || previous === undefined || !needsReferentResolution(query)) return content;
+  return `${content}\n${previous.slice(0, remaining)}`;
 }

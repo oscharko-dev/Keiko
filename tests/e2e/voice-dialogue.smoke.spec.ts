@@ -888,8 +888,11 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
     fullPage: true,
   });
 
-  const composer = page.locator(".cmp-input");
+  const composer = page.locator('[data-markdown-composer-scope] [contenteditable="true"]');
   await expect(composer).toHaveCount(1);
+  const normalLayer = page.locator('[data-composer-layer="normal"]');
+  await expect(normalLayer).toHaveAttribute("inert", "");
+  await expect(normalLayer).toHaveCSS("opacity", "0");
   await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
   const conversation = page.getByRole("log", { name: "Conversation" });
   await expect(conversation.getByText("what is the deploy status", { exact: true })).toHaveCount(1);

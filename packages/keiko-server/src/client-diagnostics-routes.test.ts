@@ -113,6 +113,15 @@ function selectDismissedEvent(sink: BufferedServerLogSink): ServerLogEvent {
 }
 
 describe("POST /api/diagnostics/client", () => {
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
+
+  afterEach(() => {
+    resetServerLogger();
+    resetClientDiagnosticsIngestStateForTests();
+  });
+
   it("projects routine Composer evidence separately and keeps code failure stages reconstructible", async () => {
     const sink = captureServerLog();
     for (let index = 0; index < 30; index += 1) {
@@ -160,14 +169,6 @@ describe("POST /api/diagnostics/client", () => {
     );
     expect(result.status).toBe(400);
     expect(sink.events.some((event) => event.op === "client.composer.activity")).toBe(false);
-  });
-  beforeEach(() => {
-    resetClientDiagnosticsIngestStateForTests();
-  });
-
-  afterEach(() => {
-    resetServerLogger();
-    resetClientDiagnosticsIngestStateForTests();
   });
 
   // The FATAL-FLAW FIX (all three design-panel judges independently flagged it): the field is

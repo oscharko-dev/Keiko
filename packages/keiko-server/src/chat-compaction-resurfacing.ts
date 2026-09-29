@@ -94,13 +94,8 @@ export function loadChatContinuityCheckpoint(
       .find(
         ({ record }) => record.conversationCoverage?.historyRevision === historyRevision,
       )?.record;
-    onDisposition?.(
-      checkpoint === undefined
-        ? records.length === 0
-          ? "none"
-          : "revision-mismatch"
-        : "available",
-    );
+    const missingDisposition = records.length === 0 ? "none" : "revision-mismatch";
+    onDisposition?.(checkpoint === undefined ? missingDisposition : "available");
     return checkpoint;
   } catch (error) {
     recordReadFailure(error, correlationId);
