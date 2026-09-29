@@ -47,6 +47,59 @@ function fixture(content: string): CurrentPromptCompactionInput {
 }
 
 describe("current prompt semantic compaction", () => {
+  it("preserves original boundary instructions when a summary omits exact output constraints", async () => {
+    const opening = "Return JSON with owner and symbol. Keep identifiers exactly.";
+    const closing = "Correction: owner Mara Linke. No prose; use only the JSON object.";
+    const input = fixture(`${opening}\n${"Redundant project notes. ".repeat(900)}\n${closing}`);
+    const call: CurrentPromptCompactionInput["call"] = () =>
+      Promise.resolve(response("A project record was requested with corrected responsibility."));
+    const compacted = await compactCurrentChatPrompt({ ...input, call });
+    expect(compacted).toContain(opening);
+    expect(compacted).toContain(closing);
+    expect(compacted.indexOf(closing)).toBeGreaterThan(compacted.indexOf(opening));
+  });
+
+  it("does not restore secrets through protected original fragments", async () => {
+    const input = fixture(
+      `secret-fixture-key ${"Project notes. ".repeat(1600)} secret-fixture-key`,
+    );
+    const compacted = await compactCurrentChatPrompt({
+      ...input,
+      redact: (value) => value.replaceAll("secret-fixture-key", "[redacted]"),
+    });
+    expect(compacted).not.toContain("secret-fixture-key");
+    expect(compacted).toContain("[redacted]");
+  });
+
+  it("keeps non-BMP characters intact at compaction and protected-fragment boundaries", async () => {
+    const input = fixture("🧁".repeat(7000));
+    const sources: string[] = [];
+    const call: CurrentPromptCompactionInput["call"] = (request) => {
+      const chunk = request.messages.at(-1)?.content ?? "";
+      sources.push(chunk);
+      expect(chunk).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u);
+      return Promise.resolve(response("Discuss the cupcake symbols."));
+    };
+    const compacted = await compactCurrentChatPrompt({ ...input, call });
+    expect(sources.join("")).toBe(input.content);
+    expect(compacted).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("refuses a window that cannot hold the preparation instructions", async () => {
+    const input = fixture("Project notes. ".repeat(1600));
+    const profile = deriveContextProfile({
+      maxInputTokens: 256,
+      reservedOutputTokens: 64,
+      safetyMarginTokens: 8,
+    });
+    await expect(compactCurrentChatPrompt({ ...input, profile })).rejects.toMatchObject({
+      code: "GATEWAY_CONTEXT_OVERFLOW",
+    });
+    expect(input.call).not.toHaveBeenCalled();
+  });
+
   it("frames descriptive summaries as the current task rather than another request to summarize", async () => {
     const input = fixture("Project notes. ".repeat(1600));
     const call: CurrentPromptCompactionInput["call"] = () =>

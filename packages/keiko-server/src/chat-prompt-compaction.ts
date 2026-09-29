@@ -46,12 +46,13 @@ export async function compactCurrentChatPrompt(
   const before = promptTokens(input.content, input.profile);
   if (before <= input.profile.effectiveInputBudget * 0.9) return input.content;
   let content = input.content;
+  const originalFragments = originalPromptFragments(input);
   const target = Math.floor(input.profile.effectiveInputBudget * 0.7);
   const counter = { calls: 0, deadline: Date.now() + 90_000 };
   try {
     for (let round = 0; round < MAX_COMPACTION_ROUNDS; round += 1) {
       content = await compactPromptRound(input, content, target, counter);
-      const prepared = `${COMPACTED_CURRENT_TASK}\n\n${content}`;
+      const prepared = [COMPACTED_CURRENT_TASK, content, ...originalFragments].join("\n\n");
       const after = promptTokens(prepared, input.profile);
       if (after <= target) {
         logPromptCompaction(input, "prompt-compacted", before, after);
@@ -91,8 +92,47 @@ function fittingPrefix(source: string, input: CurrentPromptCompactionInput): num
   }
   const newline = source.lastIndexOf("\n", low - 1);
   if (newline > low / 2) return newline + 1;
-  const previous = source.charCodeAt(low - 1);
-  return previous >= 0xd800 && previous <= 0xdbff ? low - 1 : low;
+  const previous = source.codePointAt(low - 1) ?? 0;
+  return previous > 0xffff || (previous >= 0xd800 && previous <= 0xdbff) ? low - 1 : low;
+}
+
+function originalPromptFragments(input: CurrentPromptCompactionInput): readonly string[] {
+  const source = input.redact(input.content);
+  const opening = boundedOriginalFragment(source, input, false);
+  const closing = boundedOriginalFragment(source, input, true);
+  return [
+    opening === "" ? "" : `Original opening fragment:\n${opening}`,
+    closing === ""
+      ? ""
+      : `Original closing fragment (latest corrections take precedence):\n${closing}`,
+  ].filter((fragment) => fragment !== "");
+}
+
+function boundedOriginalFragment(
+  source: string,
+  input: CurrentPromptCompactionInput,
+  tail: boolean,
+): string {
+  const budget = Math.floor(input.profile.effectiveInputBudget * 0.08);
+  let low = 0;
+  let high = Math.min(768, source.length);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const content = tail ? source.slice(-middle) : source.slice(0, middle);
+    const tokens = countGatewayPromptTokens(
+      { messages: [{ role: "user", content }] },
+      input.profile.tokenAccounting,
+      { contextWindow: input.profile.maxInputTokens },
+    );
+    if (tokens <= budget) low = middle;
+    else high = middle - 1;
+  }
+  if (low === 0) return "";
+  if (tail) {
+    const start = source.length - low;
+    return source.slice((source.codePointAt(start - 1) ?? 0) > 0xffff ? start + 1 : start);
+  }
+  return source.slice(0, (source.codePointAt(low - 1) ?? 0) > 0xffff ? low - 1 : low);
 }
 
 function promptChunks(content: string, input: CurrentPromptCompactionInput): string[] {
