@@ -78830,14 +78830,14 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2345",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2346",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2537",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2540",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

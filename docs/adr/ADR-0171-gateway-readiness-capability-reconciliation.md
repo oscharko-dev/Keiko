@@ -48,7 +48,8 @@ credential-setup chat checks populate the same generation-bound ledger and are r
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization, but must never initiate a provider readiness test. Failed initialization remains
 visible. Inconclusive transport or provider failures recover through configuration-owned background
-probes after a bounded cooldown; a conclusive unsupported-model rejection waits for a Settings
+probes with exponential backoff capped at one hour; retries continue at that capped rate until the
+provider recovers or the configuration changes. A conclusive unsupported-model rejection waits for a Settings
 change or explicit verification. Disposal aborts active requests, clears retries, and unsubscribes
 the configuration listener.
 At most two probes run concurrently per configuration holder, including across replacements;

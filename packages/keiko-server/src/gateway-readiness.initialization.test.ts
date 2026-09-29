@@ -7,7 +7,6 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
   awaitInitializedConversationReadiness,
-  MAX_CONVERSATION_INITIALIZATION_ATTEMPTS,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -110,12 +109,21 @@ it("disposal cancels recovery timers and ignores subsequent configuration change
   expect(fetch).toHaveBeenCalledTimes(calls);
 });
 
-it("stops background recovery after a bounded number of inconclusive probes", async () => {
+it("bounds recovery traffic during a long outage and heals when the provider returns", async () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
   const deps = composition();
   vi.useFakeTimers();
-  const fetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
+  let available = false;
+  const fetch = vi.fn().mockImplementation(() =>
+    Promise.resolve(
+      available
+        ? new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+            headers: { "content-type": "application/json" },
+          })
+        : new Response("", { status: 503 }),
+    ),
+  );
   vi.stubGlobal("fetch", fetch);
   configure(deps, "corr-prolonged-outage");
   await vi.waitFor(() => {
@@ -129,10 +137,23 @@ it("stops background recovery after a bounded number of inconclusive probes", as
   expect(fetch).toHaveBeenCalledTimes(3);
   await vi.advanceTimersByTimeAsync(4 * NOT_READY_REPROBE_COOLDOWN_MS + 1);
   expect(fetch).toHaveBeenCalledTimes(4);
-  await vi.advanceTimersByTimeAsync(60 * NOT_READY_REPROBE_COOLDOWN_MS);
-  expect(fetch).toHaveBeenCalledTimes(MAX_CONVERSATION_INITIALIZATION_ATTEMPTS);
+  await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
+  expect(fetch.mock.calls.length).toBeGreaterThan(4);
+  expect(fetch.mock.calls.length).toBeLessThanOrEqual(15);
+  available = true;
+  const callsBeforeRecovery = fetch.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
+  expect(fetch.mock.calls.length).toBeGreaterThan(callsBeforeRecovery);
+  expect(deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady).toBe(true);
+  const callsAfterRecovery = fetch.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+  expect(fetch).toHaveBeenCalledTimes(callsAfterRecovery);
   const started = sink.events.filter((event) => event.op === "gateway.readiness.automatic.started");
-  expect(started).toHaveLength(MAX_CONVERSATION_INITIALIZATION_ATTEMPTS);
-  expect(started.map((event) => event.extra?.backgroundAttempt)).toEqual([1, 2, 3, 4]);
+  expect(started.map((event) => event.extra?.backgroundAttempt)).toEqual(
+    Array.from({ length: started.length }, (_, index) => index + 1),
+  );
   expect(new Set(started.map((event) => event.correlationId)).size).toBe(started.length);
+  expect(started.every((event) => event.parentCorrelationId === "corr-prolonged-outage")).toBe(
+    true,
+  );
 });

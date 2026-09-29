@@ -2333,15 +2333,16 @@ function monitorConversationInitialization(
 ): void {
   const holder = deps.gatewayConfig;
   if (holder?.generation() !== generation || conversationQueue(holder).disposed) return;
+  const causalParent = parentCorrelationId ?? holder.initializationCorrelationId;
   const probeCorrelationId = newCorrelationId();
-  const observedDeps = initializationDeps(deps, parentCorrelationId);
+  const observedDeps = initializationDeps(deps, causalParent);
   void ensureOnDemandConversationReadiness(observedDeps, modelId, probeCorrelationId, attempt)
     .catch((error: unknown) => {
       emitServerDiagnostic(
         deps.diagnostics,
         serverDiagnosticFromError({
           correlationId: probeCorrelationId,
-          parentCorrelationId,
+          parentCorrelationId: causalParent,
           operation: "gateway.readiness",
           source: "gateway-readiness.initialization",
           error,
@@ -2351,11 +2352,11 @@ function monitorConversationInitialization(
       );
     })
     .then(() => {
-      scheduleConversationRecovery(deps, modelId, generation, parentCorrelationId, attempt);
+      scheduleConversationRecovery(deps, modelId, generation, causalParent, attempt);
     });
 }
 
-export const MAX_CONVERSATION_INITIALIZATION_ATTEMPTS = 4;
+const MAX_CONVERSATION_RECOVERY_DELAY_MS = 60 * 60_000;
 
 function scheduleConversationRecovery(
   deps: UiHandlerDeps,
@@ -2373,8 +2374,7 @@ function scheduleConversationRecovery(
     currentConversationReady(deps, modelId)
   )
     return;
-  if (queue.retryable.get(modelId) === false || attempt >= MAX_CONVERSATION_INITIALIZATION_ATTEMPTS)
-    return;
+  if (queue.retryable.get(modelId) === false) return;
   clearTimeout(queue.retries.get(modelId));
   const retry = setTimeout(
     () => {
@@ -2387,13 +2387,16 @@ function scheduleConversationRecovery(
         attempt + 1,
       );
     },
-    Math.min(NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1), 300_000) + 1,
+    Math.min(
+      NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1),
+      MAX_CONVERSATION_RECOVERY_DELAY_MS,
+    ) + 1,
   );
   retry.unref();
   queue.retries.set(modelId, retry);
 }
 
-/** Configuration-owned, bounded background probes heal outages without per-question checks. */
+/** Configuration-owned, rate-bounded background probes heal outages without per-question checks. */
 export function initializeConfiguredConversationReadiness(
   deps: UiHandlerDeps,
   correlationId?: string,
