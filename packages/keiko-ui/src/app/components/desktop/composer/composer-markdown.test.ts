@@ -3,6 +3,7 @@ import { EditorState, TextSelection } from "prosemirror-state";
 import {
   composerSchema,
   parseComposerMarkdown,
+  parseComposerText,
   serializeComposerMarkdown,
   markdownCursor,
   selectionFromMarkdown,
@@ -10,6 +11,31 @@ import {
 import { openComposerCodeBlock } from "./composer-input-rules";
 
 describe("composer Markdown", () => {
+  it("shows the complete inert link and image destinations and titles, including empty image alt", () => {
+    const destination = "https://example.com/private-reference";
+    const image = composerSchema.nodes.image!;
+    expect(
+      JSON.stringify(
+        image.spec.toDOM?.(image.create({ src: destination, alt: "", title: "Image title" })),
+      ),
+    ).toContain(destination);
+    expect(
+      JSON.stringify(
+        image.spec.toDOM?.(image.create({ src: destination, alt: "", title: "Image title" })),
+      ),
+    ).toContain("Image title");
+    const link = composerSchema.marks.link!;
+    expect(
+      JSON.stringify(
+        link.spec.toDOM?.(link.create({ href: destination, title: "Link title" }), true),
+      ),
+    ).toContain(destination);
+    expect(
+      JSON.stringify(
+        link.spec.toDOM?.(link.create({ href: destination, title: "Link title" }), true),
+      ),
+    ).toContain("Link title");
+  });
   it("maps cursor offsets without colliding with private-use characters in pasted text", () => {
     const value = "\uE000 Grüße 😀 \uE000\uE000 Ziel \uE000\uE000\uE000\uE000";
     const doc = parseComposerMarkdown(value);
@@ -22,6 +48,37 @@ describe("composer Markdown", () => {
     expect(selectionFromMarkdown(state, offset, value).head).toBe(offset + 1);
     expect(serializeComposerMarkdown(state.doc)).toBe(value);
   });
+
+  it.each(["a\uE000", "\uE000\uE001a", "a\uE000\uE000\uE001\uE000", "\uE001\uE000\uE001"])(
+    "maps every caret next to adjacent private-use runs in %s",
+    (value) => {
+      for (const marked of [false, true]) {
+        const plain = parseComposerText(value);
+        const doc = marked
+          ? composerSchema.node(
+              "doc",
+              null,
+              composerSchema.node(
+                "paragraph",
+                null,
+                composerSchema.text(value, [composerSchema.marks.strong!.create()]),
+              ),
+            )
+          : plain;
+        const serialized = serializeComposerMarkdown(doc);
+        for (let offset = 0; offset <= value.length; offset += 1) {
+          const state = EditorState.create({
+            doc,
+            selection: TextSelection.create(doc, offset + 1),
+          });
+          const markdownOffset = marked ? offset + 2 : offset;
+          expect(markdownCursor(state)).toBe(markdownOffset);
+          expect(selectionFromMarkdown(state, markdownOffset, serialized).head).toBe(offset + 1);
+        }
+        expect(serializeComposerMarkdown(doc)).toBe(serialized);
+      }
+    },
+  );
 
   it("maps text positions through headings, marks, lists, code and Unicode", () => {
     const doc = parseComposerMarkdown(
@@ -79,12 +136,17 @@ describe("composer Markdown", () => {
     const image = composerSchema.nodes.image!;
     expect(
       image.spec.toDOM?.(image.create({ src: "https://example.com", alt: "private" })),
-    ).toEqual(["span", { "data-markdown-image": "" }, "private"]);
+    ).toEqual(["span", { "data-markdown-image": "" }, "![private](https://example.com)"]);
     expect(
       composerSchema.marks.link!.spec.toDOM?.(
         composerSchema.marks.link!.create({ href: "javascript:alert(1)" }),
         true,
       ),
-    ).toEqual(["span", { "data-markdown-link": "" }, 0]);
+    ).toEqual([
+      "span",
+      { "data-markdown-link": "" },
+      ["span", {}, 0],
+      ["span", { "data-markdown-destination": "" }, " (javascript:alert(1))"],
+    ]);
   });
 });

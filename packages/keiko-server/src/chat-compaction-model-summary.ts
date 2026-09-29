@@ -1,3 +1,4 @@
+import { countConversationCheckpointTokens } from "./conversation-compaction.js";
 import { callChatCompactionModel } from "./chat-compaction-model-call.js";
 import { TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
@@ -27,7 +28,12 @@ import {
   type ResponseFormat,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { currentGatewayConfig, type UiHandlerDeps, type Redactor } from "./deps.js";
+import {
+  currentGatewayConfig,
+  currentContextProfileForModel,
+  type UiHandlerDeps,
+  type Redactor,
+} from "./deps.js";
 import { usableGatewayMessages } from "./conversation-gateway.js";
 import type { ChatMessage } from "./store/index.js";
 import {
@@ -201,12 +207,17 @@ export async function enrichChatCompactionWithModelSummary(
       model === undefined
         ? failureModelSummary(record, input.modelId, "unavailable", "model-unavailable")
         : await buildModelSummary(model, deps, input, record, prompt, responseMode);
+    logRejectedSummary(deps, input.correlationId, modelSummary, model === undefined);
     if (modelSummary !== undefined && currentSummaryTarget(deps, input, record)) {
+      const enriched = { ...record, modelSummary: refreshedModelSummary(record, modelSummary) };
       persistChatCompactionEvidence(deps, {
         ...input,
         compaction: {
-          ...record,
-          modelSummary: { ...modelSummary, coveredItems: record.itemsBefore },
+          ...enriched,
+          tokensAfter: countConversationCheckpointTokens(
+            enriched,
+            currentContextProfileForModel(deps, input.modelId)?.tokenAccounting,
+          ),
         },
       });
     }
@@ -215,12 +226,43 @@ export async function enrichChatCompactionWithModelSummary(
   }
 }
 
+function refreshedModelSummary(
+  record: ContextCompactionRecord,
+  refresh: ContextCompactionModelSummary,
+): ContextCompactionModelSummary {
+  return refresh.status !== "valid" && record.modelSummary?.status === "valid"
+    ? record.modelSummary
+    : {
+        ...refresh,
+        ...(refresh.status === "valid" ? { coveredItems: record.itemsBefore } : {}),
+      };
+}
+
 function summaryAlreadyCoversRecord(record: ContextCompactionRecord): boolean {
   return (
-    record.modelSummary !== undefined &&
+    record.modelSummary?.status === "valid" &&
     (record.conversationCoverage === undefined ||
       record.modelSummary.coveredItems === record.itemsBefore)
   );
+}
+
+function logRejectedSummary(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  summary: ContextCompactionModelSummary | undefined,
+  modelUnavailable: boolean,
+): void {
+  if (summary?.status === "invalid" || summary?.status === "timed-out" || modelUnavailable) {
+    logSummaryFailure(
+      deps,
+      correlationIdOrUnknown(correlationId),
+      summary?.status === "invalid"
+        ? new TypeError("Running summary validation failed.")
+        : summary?.status === "timed-out"
+          ? new TimeoutError("Running summary refresh timed out.")
+          : new Error("Running summary refresh was unavailable."),
+    );
+  }
 }
 
 function currentSummaryTarget(
@@ -267,11 +309,17 @@ async function buildModelSummary(
     input.modelId,
     prompt,
     responseMode,
-    input.chatId,
+    correlationIdOrUnknown(input.correlationId),
   );
   return result.kind === "response"
     ? modelSummaryFromResponse(record, input.modelId, result.response, deps.redactor, responseMode)
-    : modelSummaryFromCallFailure(deps, input.chatId, record, input.modelId, result);
+    : modelSummaryFromCallFailure(
+        deps,
+        correlationIdOrUnknown(input.correlationId),
+        record,
+        input.modelId,
+        result,
+      );
 }
 
 function modelSummaryFromResponse(
@@ -786,7 +834,7 @@ function failureModelSummary(
 // Replaces a bare `console.warn` (ADR-0173 D5 g25): a best-effort background enrichment failure
 // (send unaffected — the compaction record itself already persisted) is still an operator-visible
 // event, not a silent one. `correlationId` is the chat id (see `buildModelSummary` above): this
-// background job has no live request id in scope, so the chat's own id is the stable join key.
+// Background work retains the initiating request correlation or the explicit unknown sentinel.
 function logSummaryFailure(deps: UiHandlerDeps, correlationId: string, error: unknown): void {
   emitServerDiagnostic(
     deps.diagnostics,

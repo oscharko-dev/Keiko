@@ -179,6 +179,7 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["verbatim", "compacted"],
     },
+    omittedSummaryCategories: { type: "integer", dataClass: "count", required: true },
     compactedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     retainedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     tokensBefore: { type: "integer", dataClass: "count", required: true },
@@ -410,6 +411,7 @@ export function logChatContextSelection(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         state: compacted ? "compacted" : "verbatim",
+        omittedSummaryCategories: history?.provenanceCounts?.omittedSummaryCategories ?? 0,
         compactedHistoryMessages: compaction?.itemsBefore ?? 0,
         retainedHistoryMessages: Math.max(0, (history?.includedItems ?? 0) - Number(compacted)),
         tokensBefore,

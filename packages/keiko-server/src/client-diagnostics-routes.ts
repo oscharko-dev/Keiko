@@ -71,6 +71,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_COMPOSER_ACTIVITIES,
+  CLIENT_COMPOSER_CODE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
@@ -121,6 +123,31 @@ const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS = {
   routine: "client-diagnostics-routine",
   loss: "client-diagnostics-loss",
 } as const;
+
+const CLIENT_COMPOSER_ACTIVITY = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.composer.activity",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientComposerActivity",
+  fields: {
+    activity: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_COMPOSER_ACTIVITIES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["client.composer.activity.line"],
+  releaseImpact: "patch",
+});
 
 const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -299,6 +326,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    composerCodeStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_COMPOSER_CODE_STAGES,
+    },
     codingIssueOutcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -1404,6 +1437,17 @@ function logClientSelectDismissed(
   return true;
 }
 
+function projectClientStageContext(
+  request: ClientDiagnosticIngestRequest,
+  extra: Record<string, unknown>,
+): void {
+  if (request.composerCodeStage !== undefined) extra.composerCodeStage = request.composerCodeStage;
+  if (request.readyState !== undefined) extra.readyState = request.readyState;
+  if (request.kind !== undefined) extra.clientKind = request.kind;
+  if (request.voiceDialogueStage !== undefined)
+    extra.voiceDialogueStage = request.voiceDialogueStage;
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1416,6 +1460,7 @@ function logClientDiagnostic(
     logVoiceDialogueStage(request, correlationId) ||
     logMarkdownLayout(request, correlationId) ||
     logClientGitOperationSettled(request, correlationId) ||
+    logClientComposerActivity(request, correlationId) ||
     logClientSelectDismissed(request, correlationId)
   ) {
     return;
@@ -1424,11 +1469,7 @@ function logClientDiagnostic(
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };
   projectClientFailure(request, extra);
-  if (request.readyState !== undefined) extra.readyState = request.readyState;
-  if (request.kind !== undefined) extra.clientKind = request.kind;
-  if (request.voiceDialogueStage !== undefined) {
-    extra.voiceDialogueStage = request.voiceDialogueStage;
-  }
+  projectClientStageContext(request, extra);
   projectGitContext(request, extra);
   projectCodingContext(request, extra);
   projectClientLoss(request.loss, extra);
@@ -1444,6 +1485,21 @@ function logClientDiagnostic(
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );
+}
+
+function logClientComposerActivity(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  if (request.composerActivity === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_COMPOSER_ACTIVITY,
+      clientDiagnosticCorrelation(request, correlationId),
+      { activity: request.composerActivity, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
 }
 
 function logClientStageStarted(
@@ -1864,6 +1920,7 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
   if (report.kind === "delivery-loss") return "loss";
   if (report.selectDismissal !== undefined) return "routine";
+  if (report.composerActivity !== undefined) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";
   return CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";

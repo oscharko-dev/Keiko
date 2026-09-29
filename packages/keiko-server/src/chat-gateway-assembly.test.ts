@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
@@ -15,7 +15,11 @@ import {
   gatewayAssemblyOutputAllocation,
   selectGatewayPromptAssembly,
 } from "./chat-prompt-budget.js";
-import { Gateway, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  Gateway,
+  type GatewayConfig,
+  type GatewayRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
   ContextProfile,
@@ -29,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONVERSATION_SYSTEM_PROMPT,
+  composeConversationPrompt,
   renderConversationDocumentContextBlock,
 } from "./conversation-prompt.js";
 import type {
@@ -216,6 +221,38 @@ function makeRequest(
 }
 
 describe("buildGatewayAssembly", () => {
+  it("skips the second history scan when a Git description consumes no rehydrated context", () => {
+    const { store, chatId } = createStore();
+    seedHistory(
+      chatId,
+      store,
+      Array.from({ length: 40 }, () => "Earlier planning discussion. ".repeat(80)),
+    );
+    const current = store.createMessage(
+      createMessage(chatId, "user", "Describe the current changes.", NOW + 100),
+    );
+    const handlers = createDeps(
+      store,
+      deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    );
+    const visit = vi.spyOn(store, "visitGatewayMessageUnits");
+    const snapshot = captureGatewayTurnSnapshot(
+      handlers,
+      makeRequest(chatId, current.content),
+      current,
+      "corr-description-no-recall",
+      false,
+    );
+    expect(snapshot.earlierCompaction).toBeDefined();
+    expect(snapshot.rehydratedContext).toBeUndefined();
+    expect(visit).toHaveBeenCalledTimes(1);
+    store.close();
+  });
+
   it("keeps a budget-safe fact beyond the former 48-message read boundary", () => {
     const { store, chatId } = createStore();
     seedHistory(
@@ -867,45 +904,170 @@ it.each([
   },
 );
 
-it("keeps a large current prompt by reducing the default answer reserve", () => {
-  const config = customModelConfig();
-  const capability = config.capabilities?.[0];
-  if (capability === undefined) throw new Error("Missing fixture model");
-  const profile = deriveContextProfileFromCapability({
-    ...capability,
-    contextWindow: 30_000,
-    maxOutputTokens: 0,
+function adaptedFixtureProfile(
+  capability: NonNullable<ReturnType<typeof customModelConfig>["capabilities"]>[number],
+  proactiveCompaction: boolean,
+): ReturnType<typeof deriveContextProfile> {
+  return proactiveCompaction
+    ? deriveContextProfile({
+        maxInputTokens: 30000,
+        reservedOutputTokens: 18000,
+        safetyMarginTokens: 1000,
+      })
+    : deriveContextProfileFromCapability({
+        ...capability,
+        contextWindow: 30_000,
+        maxOutputTokens: 0,
+      });
+}
+
+it.each([false, true])(
+  "dispatches an adapted large prompt with its actual output cap (proactive=%s)",
+  async (proactiveCompaction) => {
+    const config = customModelConfig();
+    const capability = config.capabilities?.[0];
+    if (capability === undefined) throw new Error("Missing fixture model");
+    const profile = adaptedFixtureProfile(capability, proactiveCompaction);
+    const content = "x".repeat(proactiveCompaction ? 55000 : 95000);
+    const requiredTokens = countGatewayPromptTokens({
+      messages: [
+        { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+        { role: "user", content },
+      ],
+    });
+    expect(requiredTokens).toBeGreaterThan(profile.effectiveInputBudget);
+    expect(requiredTokens).toBeLessThan(profile.maxInputTokens - profile.safetyMarginTokens);
+    const assembly = selectGatewayPromptAssembly({
+      proactiveCompaction,
+      historyPrefix: proactiveCompaction
+        ? [
+            {
+              ...createMessage("fixture", "user", "Prior discussion. ".repeat(2000), NOW),
+              id: "prior-user",
+            },
+            {
+              ...createMessage("fixture", "assistant", "Acknowledged.", NOW + 1),
+              id: "prior-assistant",
+            },
+          ]
+        : [],
+      historyTurnCount: proactiveCompaction ? 2 : 0,
+      request: { content, discussionMode: undefined },
+      profile,
+      memoryEntries: [],
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    expect(assembly).toBeDefined();
+    if (assembly === undefined) return;
+    expect(assembly.messages.at(-1)?.content).toBe(content);
+    expect(assembly.diagnostics.profile.reservedOutputTokens).toBeGreaterThan(0);
+    expect(assembly.diagnostics.profile.reservedOutputTokens).toBeLessThan(
+      profile.reservedOutputTokens,
+    );
+    expect(
+      countGatewayPromptTokens({ messages: assembly.messages }) +
+        assembly.diagnostics.profile.reservedOutputTokens +
+        profile.safetyMarginTokens,
+    ).toBeLessThanOrEqual(profile.maxInputTokens);
+    const cap = assembly.diagnostics.profile.reservedOutputTokens;
+    expect(gatewayAssemblyOutputAllocation(assembly)).toEqual({ maxOutputTokens: cap });
+    if (proactiveCompaction) expect(assembly.compaction).toBeDefined();
+    const requests: GatewayRequest[] = [];
+    const gateway = new Gateway(
+      { ...config, capabilities: [{ ...capability, contextWindow: 30000, maxOutputTokens: 0 }] },
+      {
+        adapter: {
+          call: (
+            request,
+          ): Promise<import("@oscharko-dev/keiko-model-gateway").NormalizedResponse> => {
+            requests.push(request);
+            return Promise.resolve({
+              modelId: CHAT_MODEL,
+              content: "Accepted.",
+              toolCalls: [],
+              structuredOutput: null,
+              finishReason: "stop",
+              usage: {
+                requestId: "fixture",
+                promptTokens: 1,
+                completionTokens: 1,
+                latencyMs: 1,
+                costClass: "medium",
+              },
+            });
+          },
+        },
+      },
+    );
+    await gateway.chat({
+      modelId: CHAT_MODEL,
+      messages: assembly.messages,
+      ...gatewayAssemblyOutputAllocation(assembly),
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.maxOutputTokens).toBe(cap);
+  },
+);
+
+it("restores the original output reserve when the winning lane drops oversized documents", () => {
+  const profile = deriveContextProfile({
+    maxInputTokens: 32000,
+    reservedOutputTokens: 8000,
+    safetyMarginTokens: 1000,
   });
-  const content = "x".repeat(95_000);
-  const requiredTokens = countGatewayPromptTokens({
-    messages: [
-      { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
-      { role: "user", content },
-    ],
-  });
-  expect(requiredTokens).toBeGreaterThan(profile.effectiveInputBudget);
-  expect(requiredTokens).toBeLessThan(profile.maxInputTokens - profile.safetyMarginTokens);
+  let low = 0;
+  let high = 70000;
+  const documents = (size: number): ConversationDocumentContextWire[] => [
+    makeDocument("first", "first.txt", "a".repeat(size)),
+    makeDocument("second", "second.txt", "b".repeat(size)),
+  ];
+  const required = (size: number): number =>
+    countGatewayPromptTokens({
+      messages: [
+        { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: composeConversationPrompt(
+            "Use the available documents.",
+            documents(size),
+            undefined,
+            undefined,
+          ),
+        },
+      ],
+    });
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (required(mid) <= profile.maxInputTokens - profile.safetyMarginTokens - 1074) low = mid;
+    else high = mid - 1;
+  }
+  expect(required(low)).toBeGreaterThan(profile.effectiveInputBudget);
   const assembly = selectGatewayPromptAssembly({
-    historyPrefix: [],
-    historyTurnCount: 0,
-    request: { content, discussionMode: undefined },
+    historyPrefix: [
+      {
+        ...createMessage("fixture", "user", "Prior question. ".repeat(500), NOW),
+        id: "prior-user",
+      },
+      {
+        ...createMessage("fixture", "assistant", "Earlier answer", NOW + 1),
+        id: "prior-assistant",
+      },
+    ],
+    historyTurnCount: 2,
+    request: { content: "Use the available documents.", discussionMode: undefined },
     profile,
     memoryEntries: [],
-    documentContext: [],
+    documentContext: documents(low),
     redactionSecrets: [],
   });
-  expect(assembly).toBeDefined();
-  if (assembly === undefined) return;
-  expect(assembly.messages.at(-1)?.content).toBe(content);
-  expect(assembly.diagnostics.profile.reservedOutputTokens).toBeGreaterThan(0);
-  expect(assembly.diagnostics.profile.reservedOutputTokens).toBeLessThan(
-    profile.reservedOutputTokens,
-  );
+  if (assembly === undefined) throw new TypeError("Missing winning lane");
+  expect(assembly.diagnostics.totalEstimatedTokens).toBeLessThan(profile.effectiveInputBudget);
   expect(
-    countGatewayPromptTokens({ messages: assembly.messages }) +
-      assembly.diagnostics.profile.reservedOutputTokens +
-      profile.safetyMarginTokens,
-  ).toBeLessThanOrEqual(profile.maxInputTokens);
+    assembly.diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence")?.excludedItems,
+  ).toBeGreaterThan(0);
+  expect(gatewayAssemblyOutputAllocation(assembly)).toEqual({});
+  expect(assembly.diagnostics.profile.reservedOutputTokens).toBe(profile.reservedOutputTokens);
 });
 
 it("does not convert a normal conversation reserve into a provider output cap", () => {

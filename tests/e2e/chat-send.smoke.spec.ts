@@ -143,20 +143,52 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await expect(reopened.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30_000 });
 });
 
-async function openFixtureComposer(page: Page, request: APIRequestContext): Promise<void> {
-  const { chat } = await createChat(request);
+async function openFixtureComposer(
+  page: Page,
+  request: APIRequestContext,
+): Promise<Awaited<ReturnType<typeof createChat>>> {
+  const fixture = await createChat(request);
+  const { chat } = fixture;
   await seedChatWindow(page, chat);
   await page.goto("/");
   await expect(page.getByRole("textbox", { name: "Chat message" })).toBeVisible();
+  return fixture;
+}
+
+async function expectStoredPrompt(
+  request: APIRequestContext,
+  fixture: Awaited<ReturnType<typeof createChat>>,
+  source: string,
+): Promise<void> {
+  const params = new URLSearchParams({ chatId: fixture.chat.id, projectPath: fixture.projectPath });
+  await expect
+    .poll(
+      async () => {
+        const result = await request.get(`/api/chats/messages?${params.toString()}`);
+        const body = (await result.json()) as { messages: { role: string; content: string }[] };
+        return body.messages.find((message) => message.role === "user")?.content;
+      },
+      { timeout: 30000 },
+    )
+    .toBe(source);
 }
 
 async function copyComposerText(
+  page: Page,
   composer: ReturnType<Page["getByRole"]>,
   source: string,
 ): Promise<void> {
-  await composer.fill(source);
+  await composer.pressSequentially("```");
+  await composer.press("Shift+Enter");
+  const code = composer.locator(".monaco-editor");
+  await expect(code).toBeVisible({ timeout: 30000 });
+  await code.locator(".view-lines").click();
+  await page.keyboard.insertText(source);
+  const input = code.getByRole("textbox", { name: "Code input" });
+  await input.press(`${await editorModifier(page)}+A`);
+  await input.press(`${await editorModifier(page)}+C`);
+  await page.getByRole("button", { name: "Continue below ↵" }).click();
   await composer.press("ControlOrMeta+A");
-  await composer.press("ControlOrMeta+C");
   await composer.press("Backspace");
 }
 
@@ -175,6 +207,40 @@ test("removes heading formatting after deleting its last character @smoke", asyn
 });
 
 test.describe("native Composer clipboard", () => {
+  test("preserves literal pasted prompts through the gateway and shows keyboard focus @smoke", async ({
+    page,
+    request,
+  }) => {
+    const { chat, projectPath } = await createChat(request);
+    await seedChatWindow(page, chat);
+    await page.goto("/");
+    const composer = page.getByRole("textbox", { name: "Chat message" });
+    await expect(composer).toBeVisible();
+    await composer.click();
+    await composer.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(composer).toBeFocused();
+    const scope = page.locator("[data-markdown-composer-scope]");
+    await expect
+      .poll(() => scope.evaluate((element) => getComputedStyle(element).outlineStyle))
+      .toBe("solid");
+    const source = '@src/__tests__/file.ts\nC:\\temp\\[report]\\file.ts\n  run("* _ [value]");';
+    await copyComposerText(page, composer, source);
+    await composer.press(`${await editorModifier(page)}+V`);
+    await expect.poll(() => composer.innerText()).toBe(source);
+    await page.getByRole("button", { name: "Send message" }).click();
+    const params = new URLSearchParams({ chatId: chat.id, projectPath });
+    await expect
+      .poll(
+        async () => {
+          const result = await request.get(`/api/chats/messages?${params.toString()}`);
+          const body = (await result.json()) as { messages: { role: string; content: string }[] };
+          return body.messages.find((message) => message.role === "user")?.content;
+        },
+        { timeout: 30000 },
+      )
+      .toBe(source);
+  });
   // Native clipboard shortcuts and Monaco must observe the same actual browser platform.
   // Desktop device presets force a Windows user agent even on a macOS browser process.
   test.use({
@@ -193,13 +259,13 @@ test.describe("native Composer clipboard", () => {
     page,
     request,
   }) => {
-    await openFixtureComposer(page, request);
+    const fixture = await openFixtureComposer(page, request);
     const composer = page.getByRole("textbox", { name: "Chat message" });
     const source = Array.from(
       { length: 80 },
       (_, index) => `const value${String(index)} = ${String(index)};`,
     ).join("\n");
-    await copyComposerText(composer, source);
+    await copyComposerText(page, composer, source);
     await composer.pressSequentially("```typescript");
     await composer.press("Shift+Enter");
     const code = composer.locator(".monaco-editor");
@@ -233,6 +299,13 @@ test.describe("native Composer clipboard", () => {
     await page.getByRole("button", { name: "Continue below ↵" }).click();
     await composer.pressSequentially("Explain the code.");
     await expect(composer.locator("p").last()).toHaveText("Explain the code.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expectStoredPrompt(
+      request,
+      fixture,
+      `\`\`\`typescript\n${source}\n\`\`\`\n\nExplain the code.`,
+    );
+    await expect(page.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30000 });
   });
 });
 

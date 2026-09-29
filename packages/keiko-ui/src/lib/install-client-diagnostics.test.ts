@@ -820,6 +820,25 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
 // #3557: a page load posts about a dozen routine stage reports. With one shared budget, a failure
 // raised during boot (the one most likely to hold a real stall) was dropped console-only.
 describe("fanOutClientDiagnostic budgets", () => {
+  it("reserves failure capacity after routine Composer and scroll events", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    for (let index = 0; index < 30; index += 1) {
+      fanOutClientDiagnostic("Composer ready", { composerActivity: "initialized" });
+    }
+    fanOutClientDiagnostic("Code unavailable", {
+      kind: "other",
+      composerCodeStage: "editor-mount",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(31);
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      kind: "other",
+      composerCodeStage: "editor-mount",
+    });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+    expect(isClientDiagnosticIngestRequest(lastPostedBody(fetchMock))).toBe(true);
+  });
   it("never lets routine evidence use up the budget of a failure report", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

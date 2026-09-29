@@ -164,11 +164,13 @@ export class ComposerCodeView implements NodeView {
         return;
       }
       this.adoptEditor(editor);
-      reportClientDiagnostic("Keiko composer code editor ready.");
+      reportClientDiagnostic("Keiko composer code editor ready.", {
+        composerActivity: "code-ready",
+      });
     } catch (error) {
       reportClientDiagnostic(
         `Keiko composer code editor unavailable (${stage}): ${clientErrorSummary(error)}`,
-        { kind: "other", errorEvidence: clientErrorEvidence(error) },
+        { kind: "other", errorEvidence: clientErrorEvidence(error), composerCodeStage: stage },
       );
       if (this.disposed) return;
       this.host.hidden = true;
@@ -215,7 +217,11 @@ export class ComposerCodeView implements NodeView {
   private exit(): void {
     const pos = this.getPos();
     if (pos === undefined) return;
-    const end = pos + this.node.nodeSize;
+    let end = pos + this.node.nodeSize;
+    const $end = this.view.state.doc.resolve(end);
+    for (let depth = $end.depth; depth > 0; depth -= 1) {
+      if ($end.end(depth) === end) end = $end.after(depth);
+    }
     const tr = this.view.state.tr;
     const paragraph = this.view.state.schema.nodes.paragraph;
     if (end === tr.doc.content.size && paragraph) tr.insert(end, paragraph.create());
@@ -227,7 +233,7 @@ export class ComposerCodeView implements NodeView {
   private clearEmptyCode(): void {
     if (this.node.content.size !== 0) return;
     this.selectOuter(0, 0);
-    clearComposerFormatting(this.view.state, this.view.dispatch, this.view);
+    clearComposerFormatting(this.view.state, this.view.dispatch);
     this.view.focus();
   }
 

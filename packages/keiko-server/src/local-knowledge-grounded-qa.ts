@@ -135,6 +135,7 @@ interface CapsuleUsageSummary {
 interface AskInput {
   readonly chatId: string;
   readonly content: string;
+  readonly retrievalContent?: string | undefined;
   readonly answerContent?: string | undefined;
   readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly modelId: string | undefined;
@@ -986,7 +987,7 @@ function localKnowledgeQuery(
 ): Parameters<typeof runGroundedAnswer>[1] {
   return {
     conversationId: chat.id,
-    text: input.content,
+    text: input.retrievalContent ?? input.content,
     ...(input.answerContent === undefined
       ? {}
       : { answerQuestion: redactText(deps, input.answerContent) }),

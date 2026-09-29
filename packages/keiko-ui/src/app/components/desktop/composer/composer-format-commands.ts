@@ -24,6 +24,9 @@ const clearFormatting: Command = (state, dispatch) => {
 /** Backspace at a block's start removes its formatting before deleting neighbouring content. */
 export const clearComposerFormatting: Command = (state, dispatch) => {
   const handled = clearFormatting(state, dispatch);
-  if (handled && dispatch) reportClientDiagnostic("Keiko composer block formatting removed.");
+  if (handled && dispatch)
+    reportClientDiagnostic("Keiko composer block formatting removed.", {
+      composerActivity: "format-removed",
+    });
   return handled;
 };

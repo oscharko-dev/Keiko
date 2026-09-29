@@ -1,3 +1,4 @@
+import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 // PR4-W2 chat history-compaction splice (ADR-0055 D3) — the genuine behavioral change in the
 // context-engineering milestone. A pure, deterministic, offline, no-clock, no-random shim that
 // wraps conversationForGateway (conversation-gateway.ts).
@@ -52,6 +53,7 @@ export interface ConversationCompactionOptions {
 export interface ConversationCompactionOutcome {
   readonly messages: GatewayConversationMessage[];
   readonly compaction?: ContextCompactionRecord | undefined;
+  readonly omittedSummaryCategories?: readonly string[] | undefined;
 }
 
 interface DroppedTurn {
@@ -65,10 +67,12 @@ interface CompactionSelection {
   readonly dropCount: number;
   readonly summaryContent: string;
   readonly digest: CompactionDigest;
+  readonly omittedSummaryCategories: readonly string[];
   readonly modelSummary: ContextCompactionRecord["modelSummary"];
 }
 
 interface StructuredSummary {
+  readonly omittedSummaryCategories?: readonly string[] | undefined;
   readonly content: string;
   readonly digest: CompactionDigest;
   readonly modelSummary: ContextCompactionRecord["modelSummary"];
@@ -98,31 +102,53 @@ export function conversationForGatewayWithCompaction(
   }
 
   const prepared = prepareDroppedTurns(filtered, tokenAccounting);
+  const outcome = selectCompactionOutcome(
+    prepared,
+    systemMessage,
+    effectiveInputBudget,
+    opts,
+    tokenAccounting,
+  );
+  if (outcome !== undefined) return outcome;
+  throw new ContextOverflowError(
+    "conversation history exceeds the effective input budget and cannot be compacted without overflow.",
+  );
+}
+
+function selectCompactionOutcome(
+  prepared: readonly DroppedTurn[],
+  system: GatewayConversationMessage | undefined,
+  effectiveInputBudget: number,
+  opts: ConversationCompactionOptions,
+  tokenAccounting: ContextTokenAccounting | undefined,
+): ConversationCompactionOutcome | undefined {
+  const earlier = opts.earlierCompaction;
+  const budget = {
+    effectiveInputBudget,
+    redactionSecrets: opts.redactionSecrets,
+    preserveNewestTurn: opts.preserveNewestTurn ?? true,
+    tokenAccounting,
+    earlier,
+    allowTrimming: false,
+  };
+  const complete = selectCompaction(prepared, system, budget);
+  if (complete !== undefined)
+    return buildCompactedOutcome(prepared, system, complete, tokenAccounting, earlier);
   if (earlier !== undefined) {
     const refitted = refitEarlierCheckpoint(
       prepared,
-      systemMessage,
+      system,
       earlier,
       effectiveInputBudget,
       tokenAccounting,
     );
     if (refitted !== undefined) return refitted;
   }
-  const selection = selectCompaction(
-    prepared,
-    systemMessage,
-    effectiveInputBudget,
-    opts.redactionSecrets,
-    opts.preserveNewestTurn ?? true,
-    tokenAccounting,
-    earlier,
-  );
+  const selection = selectCompaction(prepared, system, { ...budget, allowTrimming: true });
   if (selection === undefined) {
-    throw new ContextOverflowError(
-      "conversation history exceeds the effective input budget and cannot be compacted without overflow.",
-    );
+    return undefined;
   }
-  return buildCompactedOutcome(prepared, systemMessage, selection, tokenAccounting, earlier);
+  return buildCompactedOutcome(prepared, system, selection, tokenAccounting, earlier);
 }
 
 function buildInitialMessages(
@@ -160,6 +186,7 @@ function buildCompactedOutcome(
   return {
     messages: buildCompactedMessages(systemMessage, selection.summaryContent, retained),
     compaction: record,
+    omittedSummaryCategories: selection.omittedSummaryCategories,
   };
 }
 
@@ -179,32 +206,20 @@ function buildCompactedMessages(
 function selectCompaction(
   prepared: readonly DroppedTurn[],
   systemMessage: GatewayConversationMessage | undefined,
-  effectiveInputBudget: number,
-  redactionSecrets: readonly string[] | undefined,
-  preserveNewestTurn: boolean,
-  tokenAccounting: ContextTokenAccounting | undefined,
-  earlier: ContextCompactionRecord | undefined,
+  budget: Omit<CompactionCandidateBudget, "systemContent"> & {
+    readonly preserveNewestTurn: boolean;
+  },
 ): CompactionSelection | undefined {
   const systemContent = systemMessage?.content;
-  if (systemContent === undefined && prepared.length === 0) {
-    return undefined;
-  }
+  if (systemContent === undefined && prepared.length === 0) return undefined;
   const tokenPrefix = buildTokenPrefix(prepared);
-  const maxDropCount = preserveNewestTurn ? prepared.length - 1 : prepared.length;
-  if (maxDropCount < 1) {
-    return undefined;
-  }
+  const maxDropCount = budget.preserveNewestTurn ? prepared.length - 1 : prepared.length;
   for (let dropCount = 1; dropCount <= maxDropCount; dropCount += 1) {
     const selection = selectCompactionCandidate(prepared, tokenPrefix, dropCount, {
+      ...budget,
       systemContent,
-      effectiveInputBudget,
-      redactionSecrets,
-      tokenAccounting,
-      earlier,
     });
-    if (selection !== undefined) {
-      return selection;
-    }
+    if (selection !== undefined) return selection;
   }
   return undefined;
 }
@@ -219,6 +234,7 @@ function buildTokenPrefix(prepared: readonly DroppedTurn[]): number[] {
 }
 
 interface CompactionCandidateBudget {
+  readonly allowTrimming: boolean;
   readonly systemContent: string | undefined;
   readonly effectiveInputBudget: number;
   readonly redactionSecrets: readonly string[] | undefined;
@@ -254,8 +270,7 @@ function selectCompactionCandidate(
     summaryBudget,
     redactionSecrets,
     tokenAccounting,
-    systemContent,
-    earlier,
+    { systemContent, earlier, allowTrimming: budget.allowTrimming },
   );
   if (summary === undefined) {
     return undefined;
@@ -269,6 +284,7 @@ function selectCompactionCandidate(
         summaryContent: summary.content,
         digest: summary.digest,
         modelSummary: summary.modelSummary,
+        omittedSummaryCategories: summary.omittedSummaryCategories,
       }
     : undefined;
 }
@@ -316,12 +332,9 @@ function buildSummaryContent(
   summaryTokenBudget: number,
   redactionSecrets: readonly string[] | undefined,
   tokenAccounting: ContextTokenAccounting | undefined,
-  systemContent: string | undefined,
-  earlier: ContextCompactionRecord | undefined,
-): StructuredSummary | undefined {
-  if (summaryTokenBudget <= 2) {
-    return undefined;
-  }
+  policy: Pick<CompactionCandidateBudget, "systemContent" | "earlier" | "allowTrimming">,
+): (StructuredSummary & { readonly omittedSummaryCategories: readonly string[] }) | undefined {
+  if (summaryTokenBudget <= 2) return undefined;
   const newDigest = buildStructuredCompactionDigest({
     entries: dropped.map((turn) => ({
       stableId: turn.stableId,
@@ -330,14 +343,37 @@ function buildSummaryContent(
     })),
     redactionSecrets,
   });
+  const { earlier, systemContent, allowTrimming } = policy;
   const digest = earlier === undefined ? newDigest : mergeHistoryDigests(earlier, newDigest);
-  return fitStructuredSummary(
+  const modelSummary = earlier?.modelSummary;
+  const droppedCount = dropped.length + (earlier?.itemsBefore ?? 0);
+  const full = renderStructuredSummaryLines(droppedCount, digest, modelSummary).join("\n");
+  if (countSystemSummaryTokens(systemContent, full, tokenAccounting) <= summaryTokenBudget)
+    return { content: full, digest, modelSummary, omittedSummaryCategories: [] };
+  if (!allowTrimming) return undefined;
+  const projection = fitStructuredSummary(
     digest,
-    earlier?.modelSummary,
-    dropped.length + (earlier?.itemsBefore ?? 0),
+    modelSummary,
+    droppedCount,
     summaryTokenBudget,
     tokenAccounting,
     systemContent,
+  );
+  if (projection === undefined) return undefined;
+  return {
+    content: projection.content,
+    digest,
+    modelSummary,
+    omittedSummaryCategories: projectionOmissions(digest, projection.digest),
+  };
+}
+
+function projectionOmissions(
+  canonical: CompactionDigest,
+  projected: CompactionDigest,
+): readonly string[] {
+  return (projected.droppedCategories ?? []).filter(
+    (category) => !(canonical.droppedCategories ?? []).includes(category),
   );
 }
 
@@ -517,12 +553,8 @@ function refitEarlierCheckpoint(
   if (countGatewayPromptTokens({ messages }, accounting) > budget) return undefined;
   return {
     messages,
-    compaction: {
-      ...earlier,
-      ...summary.digest,
-      modelSummary: summary.modelSummary,
-      tokensAfter: summaryContributionTokens(system, summary.content, accounting),
-    },
+    compaction: { ...earlier, tokensAfter: countConversationCheckpointTokens(earlier, accounting) },
+    omittedSummaryCategories: projectionOmissions(earlier, summary.digest),
   };
 }
 
@@ -538,16 +570,21 @@ function buildRecord(
     throw new Error("conversation-compaction cannot emit a zero-item summary record");
   }
   const tokensBefore = dropped.reduce((sum, turn) => sum + turn.gatewayTokens, 0);
+  const earlierItems = earlier?.itemsBefore ?? 0;
   const record: ContextCompactionRecord = {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
     laneId: "history-summary",
     reason: "exceeded effective input budget",
-    itemsBefore: dropped.length + (earlier?.itemsBefore ?? 0),
+    itemsBefore: dropped.length + earlierItems,
     itemsAfter: 1,
     tokensBefore: tokensBefore + (earlier?.tokensBefore ?? 0),
     tokensAfter: summaryContributionTokens(
       systemMessage,
-      selection.summaryContent,
+      renderStructuredSummaryLines(
+        dropped.length + earlierItems,
+        selection.digest,
+        selection.modelSummary,
+      ).join("\n"),
       tokenAccounting,
     ),
     orderedAt: dropped.length,
@@ -570,6 +607,22 @@ function buildRecord(
     );
   }
   return record;
+}
+
+export function countConversationCheckpointTokens(
+  record: ContextCompactionRecord,
+  accounting: ContextTokenAccounting | undefined,
+): number {
+  const summary = renderStructuredSummaryLines(
+    record.itemsBefore,
+    record,
+    record.modelSummary,
+  ).join("\n");
+  return summaryContributionTokens(
+    { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+    summary,
+    accounting,
+  );
 }
 
 function summaryContributionTokens(

@@ -9,15 +9,22 @@ import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/cont
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { createInMemoryUiStore, type UiStore, type ChatMessage } from "./store/index.js";
 import { compactChatContext, readChatContextStatus } from "./chat-context-status.js";
 import { captureChatHistory } from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { groundedConversationContinuity } from "./grounded-conversation-continuity.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  formatRegisteredServerLogLine,
+  serverLogProcessIdentity,
+} from "@oscharko-dev/keiko-activity-log";
+import { logChatContextManagement } from "./chat-context-log.js";
 
 const stores: UiStore[] = [];
 const paths: string[] = [];
@@ -72,7 +79,128 @@ function fixture(
   return { deps, chatId };
 }
 
+function currentMessage(deps: UiHandlerDeps, chatId: string, content: string): ChatMessage {
+  return deps.store.createMessage({
+    chatId,
+    role: "user",
+    content,
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+}
+
 describe("composer context status and manual maintenance", () => {
+  it.each([
+    "inspected",
+    "compacted",
+    "unchanged",
+    "failed",
+    "summary-discarded",
+    "prompt-compacted",
+    "prompt-failed",
+  ] as const)("reconstructs the closed %s outcome from emitted maintenance evidence", (outcome) => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    logChatContextManagement(
+      outcome,
+      { estimatedInputTokens: 1000, inputBudgetTokens: 2000 },
+      500,
+      "corr-maintenance-outcome",
+    );
+    const event = sink.events[0];
+    expect(event).toMatchObject({
+      correlationId: "corr-maintenance-outcome",
+      extra: { outcome, inputTokens: 1000, inputBudget: 2000, tokensSaved: 500 },
+    });
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.context.management.line", line);
+    const report = analyzeLogText(line);
+    expect(report.sufficiency.status).toBe("complete");
+    expect(
+      report.timelines
+        .find((timeline) => timeline.correlationId === "corr-maintenance-outcome")
+        ?.lines.some((entry) => entry.op === "chat.context.management"),
+    ).toBe(true);
+  });
+  it.each([
+    "Was kostet das Modell Qwen?",
+    "Wie groß ist dieses Kontextfenster von Mistral?",
+    "What is this model's context window?",
+    "They deployed Qwen yesterday. What is its pricing?",
+  ])("does not add an unrelated old question to the explicit retrieval query: %s", (query) => {
+    const { deps, chatId } = fixture(1, "Unrelated old payroll policy.");
+    const continuity = groundedConversationContinuity(
+      deps,
+      currentMessage(deps, chatId, query),
+      "fixture",
+    );
+    expect(continuity.retrievalContent).toBe(query);
+  });
+  it.each([
+    "Wie funktioniert das?",
+    "Was bedeutet das?",
+    "Erkläre das bitte.",
+    "How does it work?",
+    "What does this mean?",
+    "Summarize that.",
+  ])("resolves a concrete anaphoric follow-up: %s", (query) => {
+    const { deps, chatId } = fixture(1, "Qwen invoice extraction process.");
+    const continuity = groundedConversationContinuity(
+      deps,
+      currentMessage(deps, chatId, query),
+      "fixture",
+    );
+    expect(continuity.retrievalContent).toContain("Qwen invoice extraction process.");
+    expect(continuity.retrievalContent.startsWith(query)).toBe(true);
+  });
+  it("keeps an expanded retrieval query within the existing anchor planner limit", () => {
+    const { deps, chatId } = fixture(1, "Prior contract documentation. ".repeat(60));
+    const query = "Current contract details. ".repeat(150) + " Dazu bitte mehr Informationen.";
+    const continuity = groundedConversationContinuity(
+      deps,
+      currentMessage(deps, chatId, query),
+      "fixture",
+    );
+    expect(continuity.retrievalContent.length).toBeLessThanOrEqual(4096);
+    expect(continuity.retrievalContent.startsWith(query)).toBe(true);
+    expect(continuity.retrievalContent).not.toContain(
+      "Previous user question for referent resolution:",
+    );
+  });
+  it("omits optional grounded continuity that cannot fit without failing the current ask", () => {
+    const seeded = fixture(40, "Dokumentation Freigabe. " + "A ".repeat(170));
+    const deps = {
+      ...seeded.deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    };
+    const user = currentMessage(deps, seeded.chatId, "Welche Dokumentation gilt dazu?");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const continuity = groundedConversationContinuity(
+      deps,
+      user,
+      "fixture",
+      "corr-optional-continuity",
+    );
+    expect(continuity.answerContext).toBe("");
+    expect(continuity.retrievalContent).toBe(user.content);
+    expect(continuity.compaction).toBeUndefined();
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.degraded");
+    expect(event?.correlationId).toBe("corr-optional-continuity");
+    expectActivityLogProof(
+      "chat.continuity.degraded.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("Dokumentation Freigabe");
+  });
   it("rehydrates grounded continuity with the original query while keeping prepared retrieval bounded", () => {
     const { deps, chatId } = fixture(0);
     const modelDeps = {
@@ -247,6 +375,42 @@ describe("composer context status and manual maintenance", () => {
     });
     expectActivityLogProof("chat.context.management.line", formatActivityLogProofLine(event ?? {}));
     expect(JSON.stringify(sink.events)).not.toContain("We review the documentation");
+  });
+
+  it("reports a failed manual checkpoint as a correlated failure with stack evidence", () => {
+    const { deps, chatId } = fixture();
+    const records: ServerDiagnosticRecord[] = [];
+    vi.spyOn(deps.evidenceStore, "put").mockImplementation(() => {
+      throw new Error("PRIVATE_WRITE_CANARY");
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(() =>
+      compactChatContext(
+        { ...deps, diagnostics: { record: (record) => records.push(record) } },
+        chatId,
+        "fixture",
+        "corr-manual-failure",
+      ),
+    ).toThrow("could not be saved");
+    expect(records[0]?.correlationId).toBe("corr-manual-failure");
+    expect(records[0]?.frames?.length).toBeGreaterThan(0);
+    const event = sink.events.find((entry) => entry.op === "chat.context.failed");
+    expect(event).toMatchObject({
+      correlationId: "corr-manual-failure",
+      errorKind: "internal",
+      level: "error",
+    });
+    expect(event?.extra?.frames).not.toEqual([]);
+    expectActivityLogProof("chat.context.failed.line", formatActivityLogProofLine(event ?? {}));
+    const identity = serverLogProcessIdentity();
+    const text = sink.events
+      .map((entry, index) =>
+        formatRegisteredServerLogLine(entry, new Date(), { ...identity, seq: index + 1 }),
+      )
+      .join("");
+    expect(analyzeLogText(text).sufficiency.status).toBe("complete");
+    expect(text).not.toContain("PRIVATE_WRITE_CANARY");
   });
 
   it("keeps an uncompressible small conversation unchanged", () => {

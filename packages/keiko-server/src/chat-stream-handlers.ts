@@ -49,6 +49,7 @@ import {
   failDesktopChatTurn,
   settleRejectedDesktopChatTurn,
   settlePromptPreparationRejection,
+  settleFailedChatPromptPreparation,
   type AdmittedTurnHandle,
   gatewayHistoryPrefix,
   admitDesktopChatTurn,
@@ -386,27 +387,32 @@ async function buildPreparedStreamAssembly(
   signal: AbortSignal,
 ): Promise<ReturnType<typeof buildGatewayAssembly>> {
   const { request, modelId } = turn.prepared;
-  const executionRequest = await prepareDesktopChatPrompt(
-    deps,
-    request,
-    modelId,
-    turn.executionAdmission,
-    signal,
-    ctx.correlationId,
-  );
-  return assemblyWithConversationImages(
-    deps,
-    executionRequest,
-    modelId,
-    buildGatewayAssembly(
+  try {
+    const executionRequest = await prepareDesktopChatPrompt(
+      deps,
+      request,
+      modelId,
+      turn.executionAdmission,
+      signal,
+      ctx.correlationId,
+    );
+    return assemblyWithConversationImages(
       deps,
       executionRequest,
-      memory,
       modelId,
-      turn.gatewayTurn,
-      ctx.correlationId,
-    ),
-  );
+      buildGatewayAssembly(
+        deps,
+        executionRequest,
+        memory,
+        modelId,
+        turn.gatewayTurn,
+        ctx.correlationId,
+      ),
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, turn.prepared, turn.admitted, error, signal);
+    throw error;
+  }
 }
 
 // Split out of streamAndPersist to keep it within the line budget: records the compaction evidence
@@ -771,7 +777,7 @@ function streamTurnSnapshot(
 ): GatewayTurnSnapshot {
   return captureGatewayTurnSnapshot(
     deps,
-    prepared.request,
+    { ...prepared.request, modelId: prepared.modelId },
     admission.userMessage,
     ctx.correlationId,
   );

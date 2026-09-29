@@ -1,3 +1,5 @@
+import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -8,7 +10,10 @@ import type {
   ContextCompactionModelSummary,
   ContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
-import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createInMemoryEvidenceStore,
@@ -35,6 +40,7 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
+import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 
 const CHAT_ID = "chat-model-summary-1";
 const MODEL_ID = "summary-model";
@@ -305,6 +311,84 @@ afterEach(() => {
 });
 
 describe("enrichChatCompactionWithModelSummary", () => {
+  it.each(["unavailable", "invalid", "timed-out"] as const)(
+    "preserves a valid running summary after a %s refresh and retries uncovered turns",
+    async (failure) => {
+      vi.useFakeTimers();
+      const history = createInMemoryUiStore();
+      const path = mkdtempSync(join(tmpdir(), "keiko-summary-refresh-"));
+      history.createProject(path, "Summary fixture");
+      const chatId = history.createChat(path, "Summary fixture", MODEL_ID).id;
+      const evidence = createInMemoryEvidenceStore();
+      const prior: ContextCompactionModelSummary = {
+        promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+        modelId: MODEL_ID,
+        status: "valid",
+        validationState: "accepted",
+        content: "The current owner is Mara and the corrected budget is 60000 euros.",
+        coveredItems: 2,
+      };
+      const input = {
+        ...defaultEnrichmentInput(70),
+        chatId,
+        compaction: {
+          ...compactionRecord(),
+          itemsBefore: 70,
+          modelSummary: prior,
+          conversationCoverage: {
+            version: 1 as const,
+            throughMessageId: "old-boundary",
+            historyRevision: history.chatHistoryRevision(chatId),
+            contextWindowTokens: 4096,
+          },
+        },
+      };
+      const failedModel =
+        failure === "unavailable"
+          ? rejectingModel()
+          : failure === "timed-out"
+            ? neverResolvingModel()
+            : {
+                call: (): Promise<NormalizedResponse> =>
+                  Promise.resolve(response("", { content: 5 })),
+              };
+      const dependencies = { ...deps(evidence, failedModel), store: history };
+      try {
+        persistChatCompactionEvidence(dependencies, input);
+        const enrichment = enrichChatCompactionWithModelSummary(dependencies, input);
+        await vi.advanceTimersByTimeAsync(15000);
+        await enrichment;
+        const id = `chat-${sha256Hex(chatId).slice(0, 16)}-t70`;
+        const record = loadEvidence(evidence, id)?.compaction?.[0];
+        expect(record?.modelSummary).toEqual(prior);
+        const calls: GatewayRequest[] = [];
+        await enrichChatCompactionWithModelSummary(
+          { ...dependencies, modelPortFactory: () => structuredSummaryModel(calls) },
+          { ...input, compaction: record },
+        );
+        expect(calls).toHaveLength(1);
+        expect(loadEvidence(evidence, id)?.compaction?.[0]?.modelSummary?.coveredItems).toBe(70);
+      } finally {
+        history.close();
+        rmSync(path, { recursive: true, force: true });
+      }
+    },
+  );
+  it("recounts the stored checkpoint after model-written continuity changes its token cost", async () => {
+    const store = createInMemoryEvidenceStore();
+    const input = defaultEnrichmentInput();
+    await enrichChatCompactionWithModelSummary(deps(store, structuredSummaryModel([])), input);
+    const id = `chat-${sha256Hex(CHAT_ID).slice(0, 16)}-t2`;
+    const record = loadEvidence(store, id)?.compaction?.[0];
+    if (record === undefined) throw new Error("Missing enriched checkpoint");
+    const canonical = conversationForGatewayWithCompaction([], { earlierCompaction: record });
+    const empty = conversationForGatewayWithCompaction([]);
+    expect(record.tokensAfter).toBe(
+      countGatewayPromptTokens({ messages: canonical.messages }) -
+        countGatewayPromptTokens({ messages: empty.messages }),
+    );
+  });
+
   it("labels inferred preserved facts instead of presenting them to the model as facts", async () => {
     const store = createInMemoryEvidenceStore();
     const calls: GatewayRequest[] = [];
@@ -366,20 +450,22 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expectStructuredSummaryPersisted(persisted);
   });
 
-  // ADR-0173 D5: this best-effort background summarization has no live HTTP request in scope, so
-  // the chat's own (internally-minted, opaque) id is the stable correlation key stamped into the
-  // model's GatewayCallRequest.logContext.
-  it("stamps the chat id into the model gateway call's logContext", async () => {
-    const store = createInMemoryEvidenceStore();
-    const calls: GatewayRequest[] = [];
-    await enrichChatCompactionWithModelSummary(
-      deps(store, structuredSummaryModel(calls)),
-      defaultEnrichmentInput(),
-    );
+  it.each([CORRELATION_ID, undefined])(
+    "retains the originating correlation in detached model calls: %s",
+    async (correlationId) => {
+      const store = createInMemoryEvidenceStore();
+      const calls: GatewayRequest[] = [];
+      await enrichChatCompactionWithModelSummary(deps(store, structuredSummaryModel(calls)), {
+        ...defaultEnrichmentInput(),
+        correlationId,
+      });
 
-    const request = requireFirstRequest(calls);
-    expect((request as GatewayCallRequest).logContext?.correlationId).toBe(CHAT_ID);
-  });
+      const request = requireFirstRequest(calls);
+      expect((request as GatewayCallRequest).logContext?.correlationId).toBe(
+        correlationId ?? UNKNOWN_CORRELATION_ID,
+      );
+    },
+  );
 
   it("keeps a safe legacy text fallback when the model lacks response-format support", async () => {
     const store = createInMemoryEvidenceStore();
@@ -524,11 +610,7 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(persisted.content).toBe("");
   });
 
-  // ADR-0173 D5 g25 — a scheduled-enrichment call failure used to reach only a bare `console.warn`
-  // (see the source-grep pin below); background summarization has no live REQUEST correlation id
-  // in scope, so the chat's own id — already the stable job key `callModelWithTimeout` labels its
-  // own call with — is the join key this diagnostic carries instead.
-  it("routes a model-call failure through the diagnostic sink, keyed by chatId", async () => {
+  it("routes a detached model-call failure through the originating request diagnostic", async () => {
     const store = createInMemoryEvidenceStore();
     const events: ServerDiagnosticRecord[] = [];
     const diagnostics: ServerDiagnosticSink = {
@@ -545,7 +627,7 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(events).toHaveLength(1);
     const [event] = events;
     if (event === undefined) throw new Error("expected a diagnostic record");
-    expect(event.correlationId).toBe(CHAT_ID);
+    expect(event.correlationId).toBe(CORRELATION_ID);
     expect(event.operation).toBe("chat.compaction.summary");
     expect(event.source).toBe("chat.compaction.model-summary");
     expect(event.errorClass).toBe("Error");

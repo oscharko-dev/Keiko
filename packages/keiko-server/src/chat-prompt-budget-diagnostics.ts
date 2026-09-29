@@ -172,6 +172,7 @@ function buildHistorySummaryLane(input: {
           provenanceCounts: {
             droppedTurns: droppedHistoryTurns,
             retainedTurns: retainedHistoryTurns,
+            omittedSummaryCategories: input.historyOutcome.omittedSummaryCategories?.length ?? 0,
           },
         }),
   });

@@ -3,6 +3,7 @@ import {
   defaultMarkdownParser,
   defaultMarkdownSerializer,
   MarkdownParser,
+  MarkdownSerializer,
   schema,
 } from "prosemirror-markdown";
 import { TextSelection, type Selection, type EditorState } from "prosemirror-state";
@@ -12,23 +13,64 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 export const composerSchema = new Schema({
   nodes: schema.spec.nodes.update("image", {
     ...schema.spec.nodes.get("image"),
-    toDOM: (node) => ["span", { "data-markdown-image": "" }, String(node.attrs.alt ?? "")],
+    toDOM: (node) => [
+      "span",
+      { "data-markdown-image": "" },
+      `![${String(node.attrs.alt ?? "")}](${String(node.attrs.src ?? "")}${visibleTitle(node.attrs.title)})`,
+    ],
   }),
   marks: schema.spec.marks.update("link", {
     ...schema.spec.marks.get("link"),
-    toDOM: () => ["span", { "data-markdown-link": "" }, 0],
+    toDOM: (mark) => [
+      "span",
+      { "data-markdown-link": "" },
+      ["span", {}, 0],
+      [
+        "span",
+        { "data-markdown-destination": "" },
+        ` (${String(mark.attrs.href ?? "")}${visibleTitle(mark.attrs.title)})`,
+      ],
+    ],
   }),
 });
 
+function visibleTitle(title: unknown): string {
+  return typeof title === "string" && title.length > 0 ? ` "${title}"` : "";
+}
+
 const tokenizer = defaultMarkdownParser.tokenizer;
 const parser = new MarkdownParser(composerSchema, tokenizer, defaultMarkdownParser.tokens);
+const serializer = new MarkdownSerializer(
+  {
+    ...defaultMarkdownSerializer.nodes,
+    text: (state, node): void => state.write(node.text ?? ""),
+    hard_break: (state): void => state.write("\n"),
+  },
+  defaultMarkdownSerializer.marks,
+);
 
 export function parseComposerMarkdown(value: string): DocumentNode {
   return parser.parse(value);
 }
 
 export function serializeComposerMarkdown(doc: DocumentNode): string {
-  return defaultMarkdownSerializer.serialize(doc);
+  return serializer.serialize(doc);
+}
+
+/** Clipboard and external draft text is literal; only explicit Markdown is interpreted. */
+export function parseComposerText(value: string): DocumentNode {
+  const content: DocumentNode[] = [];
+  value.split("\n").forEach((line, index) => {
+    if (index > 0) content.push(composerSchema.node("hard_break"));
+    if (line) content.push(composerSchema.text(line));
+  });
+  return composerSchema.node("doc", null, composerSchema.node("paragraph", null, content));
+}
+
+/** Restore formatting only when interpretation would leave the complete saved draft unchanged. */
+export function parseComposerDraft(value: string): DocumentNode {
+  const doc = parseComposerMarkdown(value);
+  return serializeComposerMarkdown(doc) === value ? doc : parseComposerText(value);
 }
 
 /** Locate the caret in the Markdown handed to existing mention/dictation integrations. */
@@ -44,18 +86,26 @@ export function selectionFromMarkdown(
   value: string,
 ): Selection {
   const marker = cursorMarker(value);
-  const marked = parseComposerMarkdown(value.slice(0, offset) + marker + value.slice(offset));
-  let position = state.doc.content.size;
-  marked.descendants((node, pos) => {
-    const index = node.text?.indexOf(marker) ?? -1;
-    if (index >= 0) position = pos + index;
-  });
-  return TextSelection.near(state.doc.resolve(Math.min(position, state.doc.content.size)));
+  let low = 0;
+  let high = state.doc.content.size;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    const selection = TextSelection.near(state.doc.resolve(mid));
+    const marked = state.tr.insertText(marker, selection.head).doc;
+    const current = serializeComposerMarkdown(marked).indexOf(marker);
+    if (current < offset) low = mid + 1;
+    else high = mid;
+  }
+  return TextSelection.near(state.doc.resolve(low));
 }
 
 function cursorMarker(value: string): string {
-  let marker = "\uE000";
-  while (value.includes(marker)) marker += marker;
-  if (marker.length > 1) reportClientDiagnostic("Keiko composer cursor marker collision avoided.");
+  let prefix = "\uE000";
+  while (value.includes(`${prefix}\uE001`)) prefix += prefix;
+  const marker = `${prefix}\uE001`;
+  if (prefix.length > 1)
+    reportClientDiagnostic("Keiko composer cursor marker collision avoided.", {
+      composerActivity: "cursor-collision",
+    });
   return marker;
 }

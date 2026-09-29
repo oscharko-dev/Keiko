@@ -74,6 +74,8 @@ import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import { mockRequest, mockResponse } from "./_support.js";
@@ -179,6 +181,19 @@ function routeCtx(body: string, res: RouteContext["res"] = fakeRes()): RouteCont
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
+}
+
+function seedGermanContinuity(chatId: string): string {
+  let correctionId = "";
+  for (let index = 0; index < 120; index += 1) {
+    const content = index === 100 ? "Verbindliche Korrektur: Das Budget beträgt jetzt 60000 EUR." :
+      index === 118 ? "Welche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?" :
+      "Wir prüfen die Dokumentation zur Rechnungsextraktion ohne neue Entscheidung. ".repeat(20);
+    const message = store.createMessage({ chatId, role: index % 2 === 0 ? "user" : "assistant", content,
+      timestamp: NOW + index * 10, runId: undefined, workflowId: undefined, workflowStatus: undefined, shortResult: undefined, taskType: undefined });
+    if (index === 100) correctionId = message.id;
+  }
+  return correctionId;
 }
 
 // ─── Deps builder ─────────────────────────────────────────────────────────────
@@ -2107,9 +2122,12 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // We provide a full config with the chat model + embedding model so capability resolution passes.
     const embeddingModelId = "text-embedding-3-small"; // matches seedCapsuleWithVectors default
     const adapter = scriptedAdapter();
+    const embeddingInputs: string[] = [];
+    const modelPrompts: string[] = [];
     const fakeModelPort: ModelPort = {
-      call: () =>
-        Promise.resolve({
+      call: (request) => {
+        modelPrompts.push(request.messages.map((message) => message.content).join("\n"));
+        return Promise.resolve({
           modelId: CHAT_MODEL,
           content: "Local knowledge answer [1].",
           finishReason: "stop" as const,
@@ -2122,10 +2140,11 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
             latencyMs: 5,
             costClass: "medium" as const,
           },
-        }),
+        });
+      },
     };
     const configuredDeps: UiHandlerDeps = {
-      ...hybridDeps({ localKnowledgeEmbeddingRequest: adapter.request }),
+      ...hybridDeps({ evidenceStore: createInMemoryEvidenceStore(), localKnowledgeEmbeddingRequest: (request) => { embeddingInputs.push(request.input); return adapter.request(request); } }),
       config: {
         providers: [
           {
@@ -2170,9 +2189,11 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
       modelPortFactory: () => fakeModelPort,
     };
 
-    // Act
+    const correctionId = seedGermanContinuity(chatId);
+    const originalMessages = store.listMessages(chatId, 500);
+    const followUp = "Erkläre das.";
     const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "Solo question", modelId: CHAT_MODEL })),
+      routeCtx(JSON.stringify({ chatId, content: followUp, modelId: CHAT_MODEL })),
       configuredDeps,
       undefined,
       undefined,
@@ -2190,6 +2211,25 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
     const lkAnswer = asLocalKnowledge(answer);
     expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
+    expect(embeddingInputs).toContain(`${followUp}\nWelche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?`);
+    expect(modelPrompts.some((prompt) => prompt.includes("60000 EUR"))).toBe(true);
+    expect(store.listMessages(chatId, 500).slice(0, 120)).toEqual(originalMessages);
+    const firstCheckpoint = loadChatContinuityCheckpoint(configuredDeps.evidenceStore, chatId, store.chatHistoryRevision(chatId));
+    expect(firstCheckpoint?.conversationCoverage?.contextWindowTokens).toBe(8000);
+    expect(firstCheckpoint?.itemsBefore).toBeGreaterThan(0);
+    const repeated = await handleGroundedAsk(routeCtx(JSON.stringify({ chatId, content: "Bitte erkläre das nochmal.", modelId: CHAT_MODEL })), configuredDeps, undefined, undefined, hybrid);
+    expect(repeated.status, JSON.stringify(repeated.body)).toBe(200);
+    expect(store.findMessageById(correctionId)?.content).toContain("60000 EUR");
+    const previousRevision = store.chatHistoryRevision(chatId);
+    store.createMessage({ chatId, role: "user", content: "Verbindliche Korrektur: Das Budget beträgt jetzt 55000 EUR.", timestamp: NOW + 1005, runId: undefined, workflowId: undefined, workflowStatus: undefined, shortResult: undefined, taskType: undefined });
+    expect(store.chatHistoryRevision(chatId)).toBeGreaterThan(previousRevision);
+    modelPrompts.length = 0;
+    const revised = await handleGroundedAsk(routeCtx(JSON.stringify({ chatId, content: "Welches Budget ist gültig?", modelId: CHAT_MODEL })), configuredDeps, undefined, undefined, hybrid);
+    expect(revised.status, JSON.stringify(revised.body)).toBe(200);
+    expect(modelPrompts.some((prompt) => prompt.includes("55000 EUR"))).toBe(true);
+    const revisedPrompt = modelPrompts.find((prompt) => prompt.includes("55000 EUR")) ?? "";
+    expect(revisedPrompt.lastIndexOf("55000 EUR")).toBeGreaterThan(revisedPrompt.lastIndexOf("60000 EUR"));
+    expect(loadChatContinuityCheckpoint(configuredDeps.evidenceStore, chatId, store.chatHistoryRevision(chatId))?.conversationCoverage?.historyRevision).toBe(store.chatHistoryRevision(chatId));
   });
 
   // ADR-0173 D5: local-knowledge-grounded-qa.ts's StoreBackedAnswerGenerator.generate is the real
@@ -2290,6 +2330,56 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
 // ─── Case 4c: Configured model reranker over hybrid candidates ────────────────
 
 describe("hybrid model reranker", () => {
+  it("passes the resolved follow-up to real connector retrieval without answer-only memory", async () => {
+    const { capsuleId: first } = await seedReadyCapsule("Resolved Query A");
+    const { capsuleId: second } = await seedReadyCapsule("Resolved Query B");
+    const chatId = makeHybridChat(
+      [],
+      [first, second].map((capsuleId) => ({
+        kind: "capsule" as const,
+        capsuleId,
+        connectedAtMs: NOW,
+      })),
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("Missing chat");
+    const embeddingInputs: string[] = [];
+    const adapter = scriptedAdapter();
+    const config = parseGatewayConfig({
+      providers: [
+        {
+          modelId: "text-embedding-3-small",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "example-secret-token",
+        },
+      ],
+    });
+    const deps = hybridDeps({
+      config,
+      configPresent: true,
+      localKnowledgeEmbeddingRequest: (request) => {
+        embeddingInputs.push(request.input);
+        return adapter.request(request);
+      },
+    });
+    const retrievalContent = "Erkläre das.\nQwen invoice extraction";
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "Erkläre das.",
+      retrievalContent,
+      answerContent: "Erkläre das.\nANSWER_ONLY_PRIVATE_MEMORY",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps,
+      signal: new AbortController().signal,
+      answer: sentinelAnswerer(),
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    // The shared embedding cache coalesces the identical query used by both real connectors.
+    expect(embeddingInputs.filter((input) => input === retrievalContent)).toHaveLength(1);
+    expect(embeddingInputs).not.toContain("Erkläre das.");
+    expect(embeddingInputs.join("\n")).not.toContain("ANSWER_ONLY_PRIVATE_MEMORY");
+  });
   it("keeps memory context out of retrieval and reranking while including it in generation", async () => {
     const { capsuleId } = await seedReadyCapsule("Memory Boundary Docs");
     const canonicalQuestion = "Where is the payment handler defined?";

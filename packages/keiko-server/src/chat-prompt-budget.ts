@@ -562,7 +562,7 @@ export function selectGatewayPromptAssembly(
   const candidate =
     selected === undefined
       ? undefined
-      : withAdaptiveOutputAllocation(selected, input.profile, adjusted.profile);
+      : withAdaptiveOutputAllocation(selected, input.profile, input.request.imageCount);
   if (candidate === undefined || input.proactiveCompaction !== true) return candidate;
   const before = countGatewayPromptTokens(
     { messages: candidate.messages },
@@ -579,11 +579,7 @@ export function selectGatewayPromptAssembly(
   if (compacted?.compaction === undefined) return candidate;
   // Proactive maintenance must not remove this turn's attachments or retrieved memories.
   if (compacted.messages.at(-1)?.content !== candidate.messages.at(-1)?.content) return candidate;
-  return {
-    ...compacted,
-    ...gatewayAssemblyOutputAllocation(candidate),
-    diagnostics: withDeploymentContextProfile(compacted.diagnostics, adjusted.profile),
-  };
+  return withAdaptiveOutputAllocation(compacted, input.profile, input.request.imageCount);
 }
 
 function adjustLatestPromptOutputBudget<
@@ -615,7 +611,7 @@ function adjustLatestPromptOutputBudget<
     ...input,
     profile: {
       ...input.profile,
-      ...deriveContextProfile({ ...input.profile, reservedOutputTokens: available }),
+      ...deriveContextProfile({ ...input.profile, reservedOutputTokens: minimumAnswerBudget }),
     },
   };
 }
@@ -631,9 +627,22 @@ export function gatewayAssemblyOutputAllocation(assembly: GatewayPromptAssembly)
 function withAdaptiveOutputAllocation(
   assembly: GatewayPromptAssembly,
   original: ContextProfile,
-  adjusted: ContextProfile,
+  imageCount: number | undefined,
 ): GatewayPromptAssembly {
-  return adjusted.reservedOutputTokens < original.reservedOutputTokens
-    ? { ...assembly, maxOutputTokens: adjusted.reservedOutputTokens }
-    : assembly;
+  const promptTokens = countGatewayPromptTokens(
+    { messages: gatewayConversationImageAccounting(assembly.messages, imageCount) },
+    original.tokenAccounting,
+    { contextWindow: original.maxInputTokens },
+  );
+  const available = original.maxInputTokens - original.safetyMarginTokens - promptTokens;
+  const reserve = Math.min(original.reservedOutputTokens, available);
+  const profile =
+    reserve < original.reservedOutputTokens
+      ? { ...original, ...deriveContextProfile({ ...original, reservedOutputTokens: reserve }) }
+      : original;
+  return {
+    ...assembly,
+    ...(reserve < original.reservedOutputTokens ? { maxOutputTokens: reserve } : {}),
+    diagnostics: withDeploymentContextProfile(assembly.diagnostics, profile),
+  };
 }

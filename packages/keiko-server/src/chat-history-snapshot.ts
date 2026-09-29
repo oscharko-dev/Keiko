@@ -1,7 +1,6 @@
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  countContextTokens,
   countContextTokensForSegments,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
@@ -13,8 +12,9 @@ import type { ChatMessage, UiStore } from "./store/index.js";
 import { usableGatewayTurns } from "./conversation-gateway.js";
 import {
   boundedConversationSourceSpans,
-  renderStructuredSummaryLines,
+  countConversationCheckpointTokens,
 } from "./conversation-compaction.js";
+import { logChatHistoryCapture, type CheckpointDisposition } from "./chat-continuity-log.js";
 
 export interface GatewayHistorySnapshot {
   readonly history: readonly ChatMessage[];
@@ -33,6 +33,13 @@ interface HistoryAccumulator {
   modelSummary: ContextCompactionRecord["modelSummary"];
   sourceSpans: NonNullable<ContextCompactionRecord["sourceSpans"]>[number][];
   throughMessageId: string | undefined;
+  unitsVisited: number;
+  checkpointDisposition: CheckpointDisposition;
+}
+
+export interface HistoryCaptureOptions {
+  readonly correlationId?: string | undefined;
+  readonly checkpointDisposition?: "none" | "revision-mismatch" | "available" | undefined;
 }
 
 // The database visitor retains canonical turn eligibility and reads bounded pages. Keep a bounded
@@ -45,6 +52,7 @@ export function captureChatHistory(
   profile: ContextProfile,
   redactionSecrets: readonly string[],
   suppliedCheckpoint?: ContextCompactionRecord,
+  options: HistoryCaptureOptions = {},
 ): GatewayHistorySnapshot {
   const historyRevision = store.chatHistoryRevision(chatId);
   const checkpoint =
@@ -52,26 +60,30 @@ export function captureChatHistory(
       ? suppliedCheckpoint
       : undefined;
   const state = emptyHistoryAccumulator();
-  store.visitGatewayMessageUnits(chatId, currentUserMessageId, (unit) => {
-    const boundary = unit.findIndex(
-      (message) => message.id === checkpoint?.conversationCoverage?.throughMessageId,
-    );
-    if (
-      checkpoint !== undefined &&
-      boundary >= 0 &&
-      shouldRestoreCheckpoint(state, checkpoint, profile)
-    ) {
-      const afterBoundary = unit.slice(boundary + 1);
-      if (afterBoundary.length > 0)
-        consumeHistoryUnit(state, afterBoundary, currentUserMessageId, profile, redactionSecrets);
-      restoreCheckpoint(state, checkpoint);
-      return false;
-    }
-    consumeHistoryUnit(state, unit, currentUserMessageId, profile, redactionSecrets);
-    return undefined;
-  });
+  state.checkpointDisposition = initialCheckpointDisposition(
+    suppliedCheckpoint,
+    checkpoint,
+    profile,
+    options,
+  );
+  store.visitGatewayMessageUnits(
+    chatId,
+    currentUserMessageId,
+    historyUnitVisitor(state, checkpoint, currentUserMessageId, profile, redactionSecrets),
+  );
   state.units.reverse();
   const history = state.units.flat();
+  logChatHistoryCapture(
+    {
+      historyRevision,
+      checkpointDisposition: state.checkpointDisposition,
+      unitsVisited: state.unitsVisited,
+      foldedItems: state.compactedCount,
+      retainedItems: history.length,
+      contextWindowTokens: profile.maxInputTokens,
+    },
+    options.correlationId,
+  );
   return {
     history,
     currentUserMessageId,
@@ -82,6 +94,53 @@ export function captureChatHistory(
       profile.maxInputTokens,
     ),
   };
+}
+
+function historyUnitVisitor(
+  state: HistoryAccumulator,
+  checkpoint: ContextCompactionRecord | undefined,
+  currentUserMessageId: string,
+  profile: ContextProfile,
+  redactionSecrets: readonly string[],
+): (unit: readonly ChatMessage[]) => boolean | undefined {
+  return (unit) => {
+    state.unitsVisited += 1;
+    const boundary = unit.findIndex(
+      (message) => message.id === checkpoint?.conversationCoverage?.throughMessageId,
+    );
+    if (boundary >= 0 && unit.some((message) => message.id === currentUserMessageId))
+      state.checkpointDisposition = "current-turn-protected";
+    if (
+      checkpoint !== undefined &&
+      boundary >= 0 &&
+      !unit.some((message) => message.id === currentUserMessageId) &&
+      shouldRestoreCheckpoint(state, checkpoint, profile)
+    ) {
+      const afterBoundary = unit.slice(boundary + 1);
+      if (afterBoundary.length > 0)
+        consumeHistoryUnit(state, afterBoundary, currentUserMessageId, profile, redactionSecrets);
+      restoreCheckpoint(state, checkpoint);
+      state.checkpointDisposition = "restored";
+      return false;
+    }
+    consumeHistoryUnit(state, unit, currentUserMessageId, profile, redactionSecrets);
+    return undefined;
+  };
+}
+
+function initialCheckpointDisposition(
+  supplied: ContextCompactionRecord | undefined,
+  checkpoint: ContextCompactionRecord | undefined,
+  profile: ContextProfile,
+  options: HistoryCaptureOptions,
+): CheckpointDisposition {
+  if (supplied !== undefined && checkpoint === undefined) return "revision-mismatch";
+  if (checkpoint === undefined)
+    return options.checkpointDisposition === "revision-mismatch" ? "revision-mismatch" : "none";
+  const originalWindow = checkpoint.conversationCoverage?.contextWindowTokens;
+  return originalWindow !== undefined && profile.maxInputTokens > originalWindow
+    ? "window-expanded"
+    : "boundary-missing";
 }
 
 function consumeHistoryUnit(
@@ -130,19 +189,14 @@ function earlierRecord(
   profile: ContextProfile,
 ): ContextCompactionRecord | undefined {
   if (state.compactedCount === 0) return undefined;
-  const summary = renderStructuredSummaryLines(
-    state.compactedCount,
-    state.digest,
-    state.modelSummary,
-  ).join("\n");
-  return {
+  const record: ContextCompactionRecord = {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
     laneId: "history-summary",
     reason: "paged history exceeded the verbatim token budget",
     itemsBefore: state.compactedCount,
     itemsAfter: 1,
     tokensBefore: state.compactedTokens,
-    tokensAfter: countContextTokens(summary, profile.tokenAccounting),
+    tokensAfter: 0,
     orderedAt: state.compactedCount,
     sourceSpans: state.sourceSpans,
     ...state.digest,
@@ -156,6 +210,10 @@ function earlierRecord(
             historyRevision: 0,
           },
         }),
+  };
+  return {
+    ...record,
+    tokensAfter: countConversationCheckpointTokens(record, profile.tokenAccounting),
   };
 }
 
@@ -198,5 +256,7 @@ function emptyHistoryAccumulator(): HistoryAccumulator {
     sourceSpans: [],
     throughMessageId: undefined,
     modelSummary: undefined,
+    unitsVisited: 0,
+    checkpointDisposition: "none",
   };
 }

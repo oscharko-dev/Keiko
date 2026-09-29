@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "001ac1880d6c1f28be5de86b0587e95c3515c0f80c64ce82087162f68af08268"
+    "catalogDigest": "d045c7f2220dd074667ccd72a4c9fb789ee13b9db620496f80a34df332c54364"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 477,
-    "proofCount": 485,
-    "resolvedProofCount": 485,
+    "operationCount": 482,
+    "proofCount": 490,
+    "resolvedProofCount": 490,
     "failureClassCount": 326,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -86,8 +86,12 @@
       "operations": [
         "atlassian.credential.rejected",
         "chat.compaction.facts.classified",
+        "chat.context.failed",
         "chat.context.management",
         "chat.context.selected",
+        "chat.continuity.capture",
+        "chat.continuity.degraded",
+        "chat.continuity.rehydration",
         "chat.creation.rejected",
         "chat.regeneration.rejected",
         "chat.response.message",
@@ -123,6 +127,7 @@
         "client.binding.choice-withdrawn",
         "client.binding.resolved",
         "client.binding.target-missing",
+        "client.composer.activity",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
@@ -1020,11 +1025,15 @@
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
+    "chat.context.failed.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.management.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.selected.budget": [
       "packages/keiko-server/src/chat-activity.test.ts",
       "packages/keiko-server/src/chat-stream-handlers.test.ts"
     ],
+    "chat.continuity.capture.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],
+    "chat.continuity.degraded.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
+    "chat.continuity.rehydration.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [
@@ -1082,6 +1091,9 @@
     "client.binding.resolved.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.binding.target-missing.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.composer.activity.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.diagnostic.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.diagnostic.rate-limited.line": [

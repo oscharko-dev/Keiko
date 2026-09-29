@@ -8,15 +8,8 @@ import {
 } from "../widgets/cards/editorMonacoRuntime";
 import { readEditorThemeVariant } from "../hooks/useEditorThemeVariant";
 
-export type ComposerCodeStage =
-  | "module-load"
-  | "runtime"
-  | "language"
-  | "theme"
-  | "theme-tokens"
-  | "theme-register"
-  | "editor-mount"
-  | "editor-wiring";
+import type { ClientComposerCodeStage as ComposerCodeStage } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+export type { ClientComposerCodeStage as ComposerCodeStage } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export interface ComposerCodePort {
   readonly value: string;

@@ -85,12 +85,23 @@ export function loadChatContinuityCheckpoint(
   chatId: string,
   historyRevision: number,
   correlationId?: string,
+  onDisposition?: (disposition: "none" | "revision-mismatch" | "available") => void,
 ): ContextCompactionRecord | undefined {
   try {
-    return [...loadChatCompactionRecords(store, chatId, correlationId)]
+    const records = loadChatCompactionRecords(store, chatId, correlationId);
+    const checkpoint = [...records]
       .reverse()
-      .find(({ record }) => record.conversationCoverage?.historyRevision === historyRevision)
-      ?.record;
+      .find(
+        ({ record }) => record.conversationCoverage?.historyRevision === historyRevision,
+      )?.record;
+    onDisposition?.(
+      checkpoint === undefined
+        ? records.length === 0
+          ? "none"
+          : "revision-mismatch"
+        : "available",
+    );
+    return checkpoint;
   } catch (error) {
     recordReadFailure(error, correlationId);
     return undefined;

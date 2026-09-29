@@ -29,7 +29,7 @@ export function MarkdownComposer(props: MarkdownComposerProps): ReactNode {
     controller.current?.update(props);
   });
   return (
-    <div>
+    <div className={styles.cmpRoot} data-markdown-composer-scope="">
       <div ref={host} />
       <div className={styles.cmpHint}>{props.labels.hint}</div>
       {notice && <output className={styles.cmpNotice}>{notice}</output>}

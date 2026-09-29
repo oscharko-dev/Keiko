@@ -9,6 +9,8 @@ import { liftListItem, sinkListItem } from "prosemirror-schema-list";
 import {
   composerSchema,
   parseComposerMarkdown,
+  parseComposerDraft,
+  parseComposerText,
   serializeComposerMarkdown,
 } from "./composer-markdown";
 import { composerInputRules, composerNewline } from "./composer-input-rules";
@@ -29,7 +31,8 @@ function editorKeymap(): Plugin {
     "Mod-i": toggleMark(em),
     "Mod-`": toggleMark(code),
     Backspace: chainCommands(clearComposerFormatting, undoInputRule),
-    Delete: clearComposerFormatting,
+    Delete: (state, dispatch, view) =>
+      state.selection.$from.parent.content.size === 0 && clearComposerFormatting(state, dispatch),
     Tab: sinkListItem(item),
     "Shift-Tab": liftListItem(item),
   });
@@ -41,7 +44,7 @@ export function createComposerState(
   onLimit: () => void,
 ): EditorState {
   return EditorState.create({
-    doc: parseComposerMarkdown(value),
+    doc: parseComposerDraft(value),
     plugins: [
       composerInputRules(),
       editorKeymap(),
@@ -61,9 +64,17 @@ export function createComposerState(
 export function pasteComposerMarkdown(view: EditorView, event: ClipboardEvent): boolean {
   const text = event.clipboardData?.getData("text/plain");
   if (text === undefined) return false;
+  const markdown = event.clipboardData?.types?.includes("text/markdown")
+    ? event.clipboardData.getData("text/markdown")
+    : undefined;
   view.dispatch(
     view.state.tr
-      .replaceSelection(Slice.maxOpen(parseComposerMarkdown(text).content))
+      .replaceSelection(
+        Slice.maxOpen(
+          (markdown === undefined ? parseComposerText(text) : parseComposerMarkdown(markdown))
+            .content,
+        ),
+      )
       .scrollIntoView(),
   );
   return true;

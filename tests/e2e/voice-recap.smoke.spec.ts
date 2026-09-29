@@ -66,7 +66,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
   await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
-  await expect(composer).toHaveValue("plain typed message");
+  await expect(composer).toHaveText("plain typed message");
   await expect(page.getByRole("button", { name: RECAP_BUTTON })).toHaveCount(0);
 }
 
@@ -85,7 +85,7 @@ async function noRecapControlFlow(page: Page, body: unknown, text: string): Prom
   await expect(page.getByRole("button", { name: RECAP_BUTTON })).toHaveCount(0);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill(text);
-  await expect(composer).toHaveValue(text);
+  await expect(composer).toHaveText(text);
 }
 
 test("voice recap @smoke — no-voice composer has no recap control (AC1)", async ({ page }) => {

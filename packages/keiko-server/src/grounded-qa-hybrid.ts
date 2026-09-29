@@ -652,7 +652,7 @@ function defaultConnectorRetrieve(
     }
     return runLocalKnowledgeRetrieval(
       { store, embeddingAdapter, signal: ctx.signal, vectorIndex },
-      connectorQuery(scope, ctx.content, connectorScopeCount),
+      connectorQuery(scope, ctx.retrievalContent ?? ctx.content, connectorScopeCount),
     );
   };
 }

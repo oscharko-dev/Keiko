@@ -1,15 +1,26 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
-import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  deriveContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createInMemoryUiStore, type ChatMessage, type UiStore } from "./store/index.js";
 import { captureChatHistory } from "./chat-history-snapshot.js";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const stores: UiStore[] = [];
 const paths: string[] = [];
 afterEach(() => {
+  resetServerLogger();
   for (const store of stores.splice(0)) store.close();
   for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
 });
@@ -53,6 +64,37 @@ function profile(tokens: number): ReturnType<typeof deriveContextProfile> {
 }
 
 describe("paged conversation continuity", () => {
+  it.each(["user", "assistant"] as const)(
+    "retains the current user unit when the checkpoint boundary is its %s",
+    (boundaryRole) => {
+      const { store, chatId, add } = fixture();
+      add("user", "An older question");
+      add("assistant", "An older answer");
+      const user = add("user", "The mandatory current question");
+      const assistant = add("assistant", "The answer being regenerated");
+      const checkpoint = {
+        schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+        laneId: "history-summary" as const,
+        reason: "manual maintenance",
+        itemsBefore: 3,
+        itemsAfter: 1,
+        tokensBefore: 100,
+        tokensAfter: 20,
+        conversationCoverage: {
+          version: 1 as const,
+          throughMessageId: boundaryRole === "user" ? user.id : assistant.id,
+          historyRevision: store.chatHistoryRevision(chatId),
+          contextWindowTokens: 4096,
+        },
+      };
+      const snapshot = captureChatHistory(store, chatId, user.id, profile(4096), [], checkpoint);
+      expect(snapshot.history.map((message) => message.id)).toContain(user.id);
+      expect(snapshot.history.find((message) => message.id === user.id)?.content).toBe(
+        user.content,
+      );
+      expect(snapshot.earlierCompaction?.conversationCoverage?.throughMessageId).not.toBe(user.id);
+    },
+  );
   it("retains all budget-safe turns across database page boundaries", () => {
     const { store, chatId, add } = fixture();
     for (let i = 0; i < 90; i += 1) {
@@ -199,6 +241,119 @@ it("rehydrates source facts matched by letters outside the Unicode basic plane",
   const result = rehydrateChatHistory(store, chatId, "𐐀𐐁𐐂𐐃𐐄?", new Set(), []);
   expect(result).toContain(source.id);
   expect(result).toContain("900 euros");
+});
+
+it("bounds optional recall work while retaining the newest matching correction", () => {
+  const { store, chatId, add } = fixture();
+  for (let index = 0; index < 1_100; index += 1) {
+    add("user", "Unrelated documentation without the requested subject.");
+    add("assistant", "Acknowledged.");
+  }
+  add("user", "Correction: the budget is now 60000 euros.");
+  add("assistant", "Acknowledged.");
+  const visit = store.visitGatewayMessageUnits.bind(store);
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  let unitsVisited = 0;
+  vi.spyOn(store, "visitGatewayMessageUnits").mockImplementation((id, current, visitor) => {
+    visit(id, current, (unit) => {
+      unitsVisited += 1;
+      return visitor(unit);
+    });
+  });
+  const result = rehydrateChatHistory(
+    store,
+    chatId,
+    "What is the budget?",
+    new Set(),
+    [],
+    "corr-recall-limit",
+  );
+  expect(result).toContain("60000 euros");
+  expect(unitsVisited).toBeLessThanOrEqual(1024);
+  const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+  expect(event).toMatchObject({
+    correlationId: "corr-recall-limit",
+    extra: { unitsVisited: 1024, scanDisposition: "unit-limit", completeness: "partial" },
+  });
+  expectActivityLogProof(
+    "chat.continuity.rehydration.line",
+    formatActivityLogProofLine(event ?? {}),
+  );
+  expect(JSON.stringify(sink.events)).not.toContain("60000 euros");
+});
+
+it("bounds scanned characters and final token cost while searching the latest part of a huge source", () => {
+  const { store, chatId, add } = fixture();
+  add("user", "Unrelated notes. ".repeat(80_000) + "\nCorrection: the budget is 60000 euros.");
+  add("assistant", "Acknowledged.");
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  const result = rehydrateChatHistory(
+    store,
+    chatId,
+    "What is the budget?",
+    new Set(),
+    [],
+    "corr-character-limit",
+  );
+  expect(result).toContain("60000 euros");
+  const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+  expect(event).toMatchObject({
+    correlationId: "corr-character-limit",
+    extra: { scannedChars: 1_048_576, scanDisposition: "character-limit", completeness: "partial" },
+  });
+  expect(Number(event?.extra?.rehydratedTokens)).toBeLessThanOrEqual(800);
+  expectActivityLogProof(
+    "chat.continuity.rehydration.line",
+    formatActivityLogProofLine(event ?? {}),
+  );
+});
+
+it("reports checkpoint reuse, model expansion and revision invalidation without conversation bodies", () => {
+  const { store, chatId, add } = fixture();
+  for (let index = 0; index < 30; index += 1) {
+    add("user", "Budget 60000 euros. ".repeat(40));
+    add("assistant", "Acknowledged. ".repeat(30));
+  }
+  const current = add("user", "Continue");
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  const first = captureChatHistory(store, chatId, current.id, profile(2000), [], undefined, {
+    correlationId: "corr-capture",
+  });
+  const checkpoint = first.earlierCompaction;
+  if (checkpoint?.conversationCoverage === undefined) throw new TypeError("Missing checkpoint");
+  captureChatHistory(store, chatId, current.id, profile(2000), [], checkpoint, {
+    correlationId: "corr-capture",
+  });
+  captureChatHistory(store, chatId, current.id, profile(64000), [], checkpoint, {
+    correlationId: "corr-capture",
+  });
+  captureChatHistory(
+    store,
+    chatId,
+    current.id,
+    profile(2000),
+    [],
+    {
+      ...checkpoint,
+      conversationCoverage: { ...checkpoint.conversationCoverage, historyRevision: -1 },
+    },
+    { correlationId: "corr-capture" },
+  );
+  const events = sink.events.filter((entry) => entry.op === "chat.continuity.capture");
+  expect(events.map((event) => event.extra?.checkpointDisposition)).toEqual([
+    "none",
+    "restored",
+    "window-expanded",
+    "revision-mismatch",
+  ]);
+  for (const event of events) {
+    expect(event.correlationId).toBe("corr-capture");
+    expectActivityLogProof("chat.continuity.capture.line", formatActivityLogProofLine(event));
+  }
+  expect(JSON.stringify(events)).not.toContain("Budget 60000 euros");
 });
 
 function canonicalTurn(

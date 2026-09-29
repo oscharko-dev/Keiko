@@ -1,3 +1,4 @@
+import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 // Desktop chat BFF routes for the Keiko canvas UI. These routes intentionally keep the model call
 // behind the existing ModelPort/Gateway boundary: the browser sends only chat content and a registry
@@ -1212,6 +1213,20 @@ export function settleRejectedDesktopChatTurn(
   );
 }
 
+export function settleFailedChatPromptPreparation(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  admitted: AdmittedTurnHandle,
+  error: unknown,
+  signal: AbortSignal,
+): void {
+  const cancelled =
+    signal.aborted ||
+    error instanceof CancelledError ||
+    (error instanceof Error && error.name === "AbortError");
+  settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
+}
+
 export function settlePromptPreparationRejection(
   deps: UiHandlerDeps,
   prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
@@ -1750,21 +1765,28 @@ export function captureGatewayTurnSnapshot(
   request: SendDesktopChatRequest,
   userMessage: ChatMessage,
   correlationId?: string,
+  rehydrate = true,
 ): GatewayTurnSnapshot {
+  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
+  const checkpoint = loadChatContinuityCheckpoint(
+    deps.evidenceStore,
+    request.chatId,
+    deps.store.chatHistoryRevision(request.chatId),
+    correlationId,
+    (disposition) => {
+      checkpointDisposition = disposition;
+    },
+  );
   const snapshot = captureChatHistory(
     deps.store,
     request.chatId,
     userMessage.id,
     currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
     currentRedactionSecrets(deps),
-    loadChatContinuityCheckpoint(
-      deps.evidenceStore,
-      request.chatId,
-      deps.store.chatHistoryRevision(request.chatId),
-      correlationId,
-    ),
+    checkpoint,
+    { correlationId, checkpointDisposition },
   );
-  return snapshot.earlierCompaction === undefined
+  return snapshot.earlierCompaction === undefined || !rehydrate
     ? snapshot
     : {
         ...snapshot,
@@ -1774,6 +1796,7 @@ export function captureGatewayTurnSnapshot(
           request.content,
           new Set(snapshot.history.map((message) => message.id)),
           currentRedactionSecrets(deps),
+          correlationId,
         ),
       };
 }
@@ -1944,6 +1967,7 @@ export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTu
     messageCount: turn.messageCount,
     startedAt: turn.startedAt,
     finishedAt: Date.now(),
+    correlationId: turn.correlationId,
   } satisfies ChatCompactionEvidenceInput;
   persistChatCompactionEvidence(deps, input);
   scheduleCompactionModelSummary(deps, input, turn.historyPrefix, turn.correlationId);
@@ -2334,25 +2358,27 @@ async function prepareBufferedGatewayAssembly(
 ): Promise<GatewayPromptAssembly> {
   const { request, modelId } = prepared;
   const { admitted, executionAdmission } = admission;
-  const executionRequest = await prepareDesktopChatPrompt(
-    deps,
-    request,
-    modelId,
-    executionAdmission,
-    signal,
-    correlationId,
-  ).catch((error: unknown) => {
-    settlePromptPreparationRejection(deps, prepared, admitted, error);
+  try {
+    const executionRequest = await prepareDesktopChatPrompt(
+      deps,
+      request,
+      modelId,
+      executionAdmission,
+      signal,
+      correlationId,
+    );
+    return buildBufferedGatewayAssembly(
+      deps,
+      executionRequest,
+      memory,
+      modelId,
+      gatewayTurn,
+      correlationId,
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
     throw error;
-  });
-  return buildBufferedGatewayAssembly(
-    deps,
-    executionRequest,
-    memory,
-    modelId,
-    gatewayTurn,
-    correlationId,
-  );
+  }
 }
 
 function callPreparedAssembly(
@@ -2387,7 +2413,8 @@ async function executeBufferedModelTurn(
   if (isRouteResult(outcome)) return outcome;
   const { admitted, executionAdmission } = outcome;
   const { userMessage } = admitted;
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage, correlationId);
+  const snapshotRequest = { ...request, modelId };
+  const snapshot = captureGatewayTurnSnapshot(deps, snapshotRequest, userMessage, correlationId);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
   const assembly = await prepareBufferedGatewayAssembly(
@@ -2395,7 +2422,7 @@ async function executeBufferedModelTurn(
     prepared,
     memory,
     outcome,
-    gatewayTurn,
+    snapshot,
     abortSignal,
     correlationId,
   );
@@ -2417,7 +2444,7 @@ async function executeBufferedModelTurn(
       assembly,
       messageCount: messageCountBeforeTurn,
       startedAt,
-      historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+      historyPrefix: gatewayHistoryPrefix(snapshot),
       correlationId,
     },
   );
@@ -2619,9 +2646,10 @@ async function generateAdmittedGitChangeTurn(
 ): Promise<Awaited<ReturnType<typeof generateGitChangeChatDescription>>> {
   const gatewayTurn = captureGatewayTurnSnapshot(
     deps,
-    prepared.request,
+    { ...prepared.request, modelId: prepared.modelId },
     admission.userMessage,
     correlationId,
+    false,
   );
   return generateGitChangeChatDescription({
     deps,

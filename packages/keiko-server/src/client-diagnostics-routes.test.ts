@@ -113,6 +113,54 @@ function selectDismissedEvent(sink: BufferedServerLogSink): ServerLogEvent {
 }
 
 describe("POST /api/diagnostics/client", () => {
+  it("projects routine Composer evidence separately and keeps code failure stages reconstructible", async () => {
+    const sink = captureServerLog();
+    for (let index = 0; index < 30; index += 1) {
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "PRIVATE_PROMPT_CANARY",
+            clientTs: CLIENT_TS,
+            composerActivity: "initialized",
+          }),
+        ),
+      );
+    }
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_ERROR_CANARY",
+          clientTs: CLIENT_TS,
+          kind: "other",
+          composerCodeStage: "runtime",
+        }),
+      ),
+    );
+    const routine = sink.events.find((event) => event.op === "client.composer.activity");
+    expect(routine).toMatchObject({ level: "info", extra: { activity: "initialized" } });
+    expect(routine?.errorKind).toBeUndefined();
+    expectActivityLogProof(
+      "client.composer.activity.line",
+      formatActivityLogProofLine(routine ?? {}),
+    );
+    expect(clientDiagnosticEvents(sink)).toHaveLength(1);
+    expect(clientDiagnosticEvents(sink)[0]?.extra?.composerCodeStage).toBe("runtime");
+    expectCompleteGitTimeline(sink.events);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_PROMPT_CANARY");
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_ERROR_CANARY");
+  });
+  it.each([
+    { composerActivity: "unsafe-content" },
+    { composerActivity: "initialized", kind: "other" },
+    { composerCodeStage: "unsafe-content" },
+  ])("rejects hostile or failure-masking Composer metadata: %j", async (metadata) => {
+    const sink = captureServerLog();
+    const result = await handleClientDiagnosticIngest(
+      context(JSON.stringify({ message: "canary", clientTs: CLIENT_TS, ...metadata })),
+    );
+    expect(result.status).toBe(400);
+    expect(sink.events.some((event) => event.op === "client.composer.activity")).toBe(false);
+  });
   beforeEach(() => {
     resetClientDiagnosticsIngestStateForTests();
   });

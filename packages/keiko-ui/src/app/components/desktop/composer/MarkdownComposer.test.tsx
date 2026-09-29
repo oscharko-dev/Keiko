@@ -75,6 +75,79 @@ function type(editor: ComposerEditorController, value: string): void {
 }
 
 describe("Markdown composer editing", () => {
+  it("preserves unfenced plain clipboard text and every newline without Markdown rewriting", () => {
+    const value =
+      'C:\\temp\\[report]\\__tests__\\file.ts\nconst amount = 42;\n  run(amount);\n\n{"path":"C:\\\\temp","items":["*", "_"]}\n';
+    const { editor, config } = setup();
+    fireEvent.paste(editor.view.dom, {
+      clipboardData: { getData: (kind: string) => (kind === "text/plain" ? value : ""), files: [] },
+    });
+    expect(config.onChange).toHaveBeenLastCalledWith(value, value.length);
+    expect(editor.view.dom.querySelector("strong")).toBeNull();
+  });
+
+  it("applies external mentions and dictated text literally while retaining existing formatting", () => {
+    const { editor, config } = setup("# Review");
+    const value = "# Review\n\n@src/__tests__/file.ts ";
+    editor.update({ ...config, value });
+    editor.setSelectionRange(value.length, value.length);
+    type(editor, "weiter");
+    expect(config.onChange).toHaveBeenLastCalledWith(value + "weiter", value.length + 6);
+    expect(editor.view.dom.querySelector("h1")?.textContent).toBe("Review");
+    expect(editor.view.dom.querySelector("strong")).toBeNull();
+    const dictated = value + "weiter\n  literal * [value] \\path";
+    editor.update({ ...config, value: dictated });
+    editor.setSelectionRange(dictated.length, dictated.length);
+    type(editor, "!");
+    expect(config.onChange).toHaveBeenLastCalledWith(dictated + "!", dictated.length + 1);
+  });
+
+  it("restores raw draft paths, newlines and trailing spaces without reinterpretation", () => {
+    const value = "C:\\temp\\[report]\\__tests__\\file.ts\n  indented\n";
+    const { editor, config } = setup(value);
+    type(editor, "next");
+    expect(config.onChange).toHaveBeenLastCalledWith(value + "next", value.length + 4);
+    expect(editor.view.dom.querySelector("strong")).toBeNull();
+  });
+
+  it("keeps typed literal punctuation in the outgoing prompt and repository mention offsets", () => {
+    const value = "@src/__tests__/file.ts C:\\temp\\[1] *literal*";
+    const { editor, config } = setup();
+    editor.view.dispatch(editor.view.state.tr.insertText(value));
+    expect(config.onChange).toHaveBeenLastCalledWith(value, value.length);
+    for (let offset = 0; offset <= value.length; offset += 1) {
+      editor.setSelectionRange(offset, offset);
+      expect(editor.selectionStart).toBe(offset);
+    }
+  });
+
+  it.each(["> ```typescript\n> const x = 1;\n> ```", "* ```typescript\n  const x = 1;\n  ```"])(
+    "continues outside the enclosing quote or list after a final code block: %s",
+    (value) => {
+      const { editor, config } = setup(value);
+      fireEvent.click(screen.getByRole("button", { name: "Continue below" }));
+      type(editor, "Ordinary prose");
+      expect(editor.view.state.selection.$from.depth).toBe(1);
+      expect(editor.view.state.selection.$from.parent.type.name).toBe("paragraph");
+      expect(config.onChange).toHaveBeenLastCalledWith(
+        expect.stringContaining("\n\nOrdinary prose"),
+        expect.any(Number),
+      );
+    },
+  );
+
+  it("does not strip a nonempty heading when Delete is pressed at its start", () => {
+    const { editor } = setup("# Title");
+    editor.view.dispatch(
+      editor.view.state.tr.setSelection(TextSelection.create(editor.view.state.doc, 1)),
+    );
+    expect(
+      editor.view.someProp("handleKeyDown", (handler) =>
+        handler(editor.view, new KeyboardEvent("keydown", { key: "Delete" })),
+      ),
+    ).not.toBe(true);
+    expect(editor.view.state.doc.firstChild?.type.name).toBe("heading");
+  });
   it.each(["> Hallo", "* Hallo", "1. Hallo"])(
     "removes empty quote/list formatting from %s before deleting neighbouring text",
     (source) => {
@@ -196,8 +269,9 @@ describe("Markdown composer editing", () => {
     const { editor, config } = setup();
     fireEvent.paste(editor.view.dom, {
       clipboardData: {
+        types: ["text/markdown", "text/plain"],
         getData: (type: string) =>
-          type === "text/plain"
+          type === "text/markdown" || type === "text/plain"
             ? "# Review\n\n<script>bad()</script>\n\n![alt](https://example.com/a.png)"
             : "<b>ignored</b>",
         files: [],
@@ -218,7 +292,7 @@ describe("Markdown composer editing", () => {
     const markdown = `# Review\n\n\`\`\`typescript\n${code}\n\`\`\`\n\nContinue here.\n\n\`\`\`python\n${second}\n\`\`\``;
     const { editor, config } = setup();
     fireEvent.paste(editor.view.dom, {
-      clipboardData: { getData: () => markdown, files: [] },
+      clipboardData: { types: ["text/markdown", "text/plain"], getData: () => markdown, files: [] },
     });
     const serialized = vi.mocked(config.onChange).mock.lastCall?.[0] ?? "";
     const document = parseComposerMarkdown(serialized);
@@ -232,12 +306,15 @@ describe("Markdown composer editing", () => {
     const config = props("# First");
     const rendered = render(<MarkdownComposer {...config} />);
     expect(screen.getByRole("heading", { name: "First" })).toBeVisible();
+    const first = config.inputRef.current;
+    if (!(first instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+    type(first, "Changed ");
     rendered.rerender(<MarkdownComposer {...config} value="**Second**" documentKey="chat-2" />);
     expect(screen.queryByRole("heading", { name: "First" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveTextContent("Second");
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Message" }), {
       key: "z",
-      metaKey: true,
+      ctrlKey: true,
     });
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveTextContent("Second");
     act(() => config.inputRef.current?.setSelectionRange(4, 4));

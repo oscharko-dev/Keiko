@@ -839,7 +839,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
   await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
-  await expect(composer).toHaveValue("plain typed message");
+  await expect(composer).toHaveText("plain typed message");
   await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveCount(0);
 }
 
@@ -900,7 +900,7 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
   expect(synthesizedTexts[0]).toContain("KEIKO_E2E_STREAM_OK");
   expect(synthesizedTexts[0]).not.toContain("The deploy is green.");
   await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
-  await expect(composer).toHaveValue("");
+  await expect(composer).toHaveText("");
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
   // Leaving is the same Keiko-logo switch: no separate Stop / Leave panel exists.
@@ -1315,7 +1315,7 @@ test("voice dialogue @smoke — failed spoken delivery can continue as editable 
     "aria-checked",
     "false",
   );
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveValue(
+  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveText(
     "recover these words",
   );
 });
@@ -1438,7 +1438,7 @@ async function unavailableProfileFlow(page: Page, capability: unknown): Promise<
   await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
-  await expect(composer).toHaveValue("plain typed message");
+  await expect(composer).toHaveText("plain typed message");
   // Partial or non-WebRTC deployments do not offer spoken dialogue; text chat is unaffected.
   await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);

@@ -1,10 +1,11 @@
 import { EditorView, Decoration, DecorationSet } from "prosemirror-view";
 import { type Transaction } from "prosemirror-state";
+import { Slice } from "prosemirror-model";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { createComposerState, pasteComposerMarkdown } from "./composer-editor-state";
 import {
   markdownCursor,
-  parseComposerMarkdown,
+  parseComposerText,
   selectionFromMarkdown,
   serializeComposerMarkdown,
 } from "./composer-markdown";
@@ -52,13 +53,17 @@ export class ComposerEditorController implements ComposerInputHandle {
       clipboardTextSerializer: (slice): string =>
         serializeComposerMarkdown(this.view.state.schema.node("doc", null, slice.content)),
     });
-    reportClientDiagnostic("Keiko Markdown composer initialized.");
+    reportClientDiagnostic("Keiko Markdown composer initialized.", {
+      composerActivity: "initialized",
+    });
   }
 
   private createState(value: string): ReturnType<typeof createComposerState> {
     return createComposerState(value, this.props.maxLength, () => {
       this.onNotice(this.props.labels.limit);
-      reportClientDiagnostic("Keiko Markdown composer input limit reached.");
+      reportClientDiagnostic("Keiko Markdown composer input limit reached.", {
+        composerActivity: "input-limit",
+      });
     });
   }
 
@@ -99,14 +104,44 @@ export class ComposerEditorController implements ComposerInputHandle {
     this.props = props;
     this.view.setProps({ attributes: this.attributes() });
     if (props.value === this.value) return;
-    this.value = props.value;
     if (!props.value) {
+      this.value = "";
       this.view.updateState(this.createState(""));
       return;
     }
-    const doc = parseComposerMarkdown(props.value);
-    const tr = this.view.state.tr.replaceWith(0, this.view.state.doc.content.size, doc.content);
+    const tr = this.externalDraftTransaction(props.value);
     this.view.updateState(this.view.state.apply(tr));
+    this.value = serializeComposerMarkdown(this.view.state.doc);
+  }
+
+  private externalDraftTransaction(value: string): Transaction {
+    let start = 0;
+    let oldEnd = this.value.length;
+    let newEnd = value.length;
+    while (start < Math.min(oldEnd, newEnd) && this.value[start] === value[start]) start += 1;
+    while (oldEnd > start && newEnd > start && this.value[oldEnd - 1] === value[newEnd - 1]) {
+      oldEnd -= 1;
+      newEnd -= 1;
+    }
+    const state = this.view.state;
+    const from = selectionFromMarkdown(state, start, this.value).head;
+    const to = selectionFromMarkdown(state, oldEnd, this.value).head;
+    let inserted = value.slice(start, newEnd);
+    const tr = state.tr.delete(from, to);
+    const $from = tr.doc.resolve(from);
+    if (
+      inserted.startsWith("\n\n") &&
+      $from.depth === 1 &&
+      $from.parentOffset === $from.parent.content.size
+    ) {
+      tr.split(from, 1, [{ type: state.schema.nodes.paragraph! }]);
+      inserted = inserted.slice(2);
+      tr.setSelection(selectionFromMarkdown(state, start, this.value).map(tr.doc, tr.mapping));
+      tr.insert(from + 2, parseComposerText(inserted).firstChild!.content);
+    } else {
+      tr.replaceRange(from, from, Slice.maxOpen(parseComposerText(inserted).content));
+    }
+    return tr;
   }
 
   focus(): void {

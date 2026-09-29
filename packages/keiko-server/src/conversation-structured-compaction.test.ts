@@ -94,6 +94,72 @@ function oversizedDigestHistory(): ChatMessage[] {
 }
 
 describe("conversationForGatewayWithCompaction — structured continuity summaries", () => {
+  it("retains the complete canonical checkpoint across a squeezed turn and a roomy follow-up", () => {
+    const prior = requiredCompaction(
+      conversationForGatewayWithCompaction(oversizedDigestHistory(), {
+        effectiveInputBudget: 6000,
+      }),
+    );
+    const earlier: ContextCompactionRecord = {
+      ...prior,
+      modelSummary: {
+        promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+        modelId: "fixture",
+        content: "Earlier valid generated continuity. ".repeat(30).trim(),
+        status: "valid",
+        validationState: "accepted",
+      },
+    };
+    const squeezed = conversationForGatewayWithCompaction([], {
+      earlierCompaction: earlier,
+      effectiveInputBudget: 900,
+    });
+    expect(countGatewayPromptTokens({ messages: squeezed.messages })).toBeLessThanOrEqual(900);
+    expect(requiredCompaction(squeezed).modelSummary).toEqual(earlier.modelSummary);
+    expect(requiredCompaction(squeezed).decisions).toEqual(earlier.decisions);
+    expect(requiredCompaction(squeezed).preservedFacts).toEqual(earlier.preservedFacts);
+    const roomy = conversationForGatewayWithCompaction([], {
+      earlierCompaction: requiredCompaction(squeezed),
+      effectiveInputBudget: 8000,
+    });
+    expect(requiredSystemContent(roomy)).toContain(
+      requiredCompaction(squeezed).modelSummary?.content,
+    );
+    for (const decision of earlier.decisions ?? [])
+      expect(requiredSystemContent(roomy)).toContain(decision);
+  });
+
+  it("folds additional old messages before omitting valid model-written continuity", () => {
+    const earlier: ContextCompactionRecord = {
+      ...requiredCompaction(compactStructuredHistory()),
+      modelSummary: {
+        promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+        modelId: "fixture",
+        content: "Retain this valid model-written continuity. ".repeat(20).trim(),
+        status: "valid",
+        validationState: "accepted",
+      },
+    };
+    const tail = Array.from({ length: 12 }, (_, index) =>
+      msg(
+        index % 2 === 0 ? "user" : "assistant",
+        "Ordinary earlier discussion. ".repeat(100),
+        index + 10,
+      ),
+    );
+    tail.push(msg("user", "Current question stays verbatim.", 30));
+    const full = conversationForGatewayWithCompaction(tail, { earlierCompaction: earlier });
+    const budget = countGatewayPromptTokens({ messages: full.messages }) - 400;
+    const result = conversationForGatewayWithCompaction(tail, {
+      earlierCompaction: earlier,
+      effectiveInputBudget: budget,
+    });
+    expect(countGatewayPromptTokens({ messages: result.messages })).toBeLessThanOrEqual(budget);
+    expect(requiredSystemContent(result)).toContain(earlier.modelSummary?.content);
+    expect(requiredCompaction(result).itemsBefore).toBeGreaterThan(earlier.itemsBefore);
+    expect(result.messages.at(-1)?.content).toBe("Current question stays verbatim.");
+  });
+
   it("fits an oversized digest honestly while retaining the newest constraints", () => {
     const outcome = conversationForGatewayWithCompaction(oversizedDigestHistory(), {
       effectiveInputBudget: 900,
@@ -103,10 +169,15 @@ describe("conversationForGatewayWithCompaction — structured continuity summari
     expect(requiredSystemContent(outcome)).toContain("60000 EUR");
     expect(record.droppedCategories?.length).toBeGreaterThan(0);
     expect(validateContextCompactionRecord(record).ok).toBe(true);
+    expect(outcome.omittedSummaryCategories).toContain("preservedFacts-requires-rehydration");
+    const roomy = conversationForGatewayWithCompaction([], {
+      earlierCompaction: record,
+      effectiveInputBudget: 8000,
+    });
     for (const fact of record.preservedFacts ?? [])
-      expect(requiredSystemContent(outcome)).toContain(fact.statement);
+      expect(requiredSystemContent(roomy)).toContain(fact.statement);
     for (const constraint of record.userConstraints ?? [])
-      expect(requiredSystemContent(outcome)).toContain(constraint.statement);
+      expect(requiredSystemContent(roomy)).toContain(constraint.statement);
     expect(record.sourceSpans).toContainEqual({ kind: "message", stableId: "m0" });
   });
 
@@ -121,7 +192,7 @@ describe("conversationForGatewayWithCompaction — structured continuity summari
       modelSummary: {
         promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
         modelId: "fixture",
-        content: "Older generated continuity. ".repeat(100),
+        content: "Older generated continuity. ".repeat(30).trim(),
       },
     };
     const outcome = conversationForGatewayWithCompaction([], {
@@ -132,8 +203,9 @@ describe("conversationForGatewayWithCompaction — structured continuity summari
     expect(requiredSystemContent(outcome)).toContain("60000 EUR");
     expect(requiredCompaction(outcome).itemsBefore).toBe(record.itemsBefore);
     expect(requiredCompaction(outcome).conversationCoverage).toEqual(record.conversationCoverage);
-    expect(requiredCompaction(outcome).modelSummary).toBeUndefined();
-    expect(requiredCompaction(outcome).droppedCategories).toContain(
+    expect(requiredCompaction(outcome).modelSummary).toEqual(earlier.modelSummary);
+    expect(requiredSystemContent(outcome)).not.toContain(earlier.modelSummary.content);
+    expect(outcome.omittedSummaryCategories).toContain(
       "model-written-continuity-requires-rehydration",
     );
     expect(validateContextCompactionRecord(requiredCompaction(outcome)).ok).toBe(true);

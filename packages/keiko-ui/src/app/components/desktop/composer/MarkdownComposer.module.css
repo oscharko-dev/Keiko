@@ -1,3 +1,20 @@
+.cmpRoot {
+  min-width: 0;
+  border-radius: 8px;
+}
+
+.cmpRoot:has(:focus-visible) {
+  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+@media (forced-colors: active) {
+  .cmpRoot:has(:focus-visible) {
+    outline-color: Highlight;
+  }
+}
+
 .cmpEditor {
   min-height: 76px;
   max-height: min(420px, 45dvh);

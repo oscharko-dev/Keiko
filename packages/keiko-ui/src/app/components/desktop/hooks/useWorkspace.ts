@@ -341,7 +341,9 @@ function installWorkspaceWheelListener(
   onWheel: (event: WheelEvent) => void,
 ): () => void {
   element.addEventListener("wheel", onWheel, { passive: false, capture: true });
-  reportClientDiagnostic("[keiko] workspace native and virtual scroll routing ready.");
+  reportClientDiagnostic("[keiko] workspace native and virtual scroll routing ready.", {
+    composerActivity: "workspace-scroll-ready",
+  });
   return (): void => element.removeEventListener("wheel", onWheel, { capture: true });
 }
 

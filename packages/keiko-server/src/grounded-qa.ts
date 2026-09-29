@@ -2128,6 +2128,7 @@ function persistGroundedContinuity(
     messageCount: prepared.messageCountBeforeTurn,
     startedAt: prepared.continuityStartedAt,
     finishedAt: Date.now(),
+    correlationId: prepared.correlationId,
   });
 }
 

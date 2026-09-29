@@ -11,13 +11,13 @@ import {
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
   conversationForGatewayWithCompaction,
-  renderStructuredSummaryLines,
+  countConversationCheckpointTokens,
 } from "./conversation-compaction.js";
 import { captureChatHistory, stampHistoryRevision } from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import { UiStoreError } from "./store/index.js";
-import { logChatContextManagement } from "./chat-context-log.js";
+import { logChatContextFailure, logChatContextManagement } from "./chat-context-log.js";
 
 function checkpointForProfile(
   deps: UiHandlerDeps,
@@ -42,27 +42,20 @@ function countHistory(
   chatId: string,
   profile: ContextProfile,
   checkpoint: ContextCompactionRecord | undefined,
-): { tokens: number; messages: number; checkpointUsed: boolean } {
+): { tokens: number; messages: number; checkpointUsed: boolean; checkpointTokens: number } {
   let tokens = countGatewayPromptTokens(
     { messages: [{ role: "system", content: CONVERSATION_SYSTEM_PROMPT }] },
     profile.tokenAccounting,
   );
   let messages = 0;
   let checkpointUsed = false;
+  let checkpointTokens = 0;
   const empty = countGatewayPromptTokens({ messages: [] }, profile.tokenAccounting);
   deps.store.visitGatewayMessageUnits(chatId, "", (unit) => {
     for (const message of [...unit].reverse()) {
       if (message.id === checkpoint?.conversationCoverage?.throughMessageId) {
-        const summary = renderStructuredSummaryLines(
-          checkpoint.itemsBefore,
-          checkpoint,
-          checkpoint.modelSummary,
-        ).join("\n");
-        tokens +=
-          countGatewayPromptTokens(
-            { messages: [{ role: "system", content: summary }] },
-            profile.tokenAccounting,
-          ) - empty;
+        checkpointTokens = countConversationCheckpointTokens(checkpoint, profile.tokenAccounting);
+        tokens += checkpointTokens;
         checkpointUsed = true;
         return false;
       }
@@ -76,7 +69,7 @@ function countHistory(
     }
     return undefined;
   });
-  return { tokens, messages, checkpointUsed };
+  return { tokens, messages, checkpointUsed, checkpointTokens };
 }
 
 export function readChatContextStatus(
@@ -101,8 +94,8 @@ export function readChatContextStatus(
       : {
           compaction: {
             tokensBefore: checkpoint.tokensBefore,
-            tokensAfter: checkpoint.tokensAfter,
-            tokensSaved: Math.max(0, checkpoint.tokensBefore - checkpoint.tokensAfter),
+            tokensAfter: counted.checkpointTokens,
+            tokensSaved: Math.max(0, checkpoint.tokensBefore - counted.checkpointTokens),
             messagesCompacted: checkpoint.itemsBefore,
           },
         }),
@@ -124,6 +117,7 @@ function manualCompactionCandidate(
     profile,
     currentRedactionSecrets(deps),
     checkpointForProfile(deps, chatId, profile, correlationId),
+    { correlationId },
   );
   const budget = Math.floor(
     Math.min(profile.effectiveInputBudget, status.estimatedInputTokens) * 0.7,
@@ -167,11 +161,14 @@ export function compactChatContext(
     messageCount: deps.store.countMessages(chatId),
     startedAt,
     finishedAt: Date.now(),
+    correlationId,
   });
   const after = readChatContextStatus(deps, chatId, modelId, correlationId);
   if (after.compaction?.messagesCompacted !== compaction.itemsBefore) {
     logChatContextManagement("failed", before, 0, correlationId);
-    throw new UiStoreError("INTERNAL", "Context compaction could not be saved.", 500);
+    const error = new UiStoreError("INTERNAL", "Context compaction could not be saved.", 500);
+    logChatContextFailure(error, correlationId);
+    throw error;
   }
   logChatContextManagement(
     "compacted",

@@ -418,6 +418,8 @@ describe("context maintenance HTTP routes", () => {
     [{ projectPath: "different-project" }, 404],
     [{ modelId: "unconfigured-model" }, 400],
     [{ chatId: "" }, 400],
+    [{ chatId: "unknown-chat" }, 404],
+    [{ modelId: "" }, 400],
   ] as const)("validates context compaction inputs before writing: %j", async (patch, status) => {
     const body = { ...contextRouteBody(), ...patch };
     const evidenceStore = createInMemoryEvidenceStore();
@@ -439,6 +441,18 @@ describe("context maintenance HTTP routes", () => {
       body: JSON.stringify(body),
     });
     expect(response.status).toBe(403);
+  });
+
+  it("rejects a hostile Origin before context maintenance reaches the store", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    await restartWithDeps({ evidenceStore });
+    const response = await fetch(url("/api/chats/context/compact"), {
+      method: "POST",
+      headers: { ...POST_HEADERS, Origin: "https://untrusted.example" },
+      body: JSON.stringify(contextRouteBody()),
+    });
+    expect(response.status).toBe(403);
+    expect(evidenceStore.list()).toEqual([]);
   });
 
   it.each(["aborted", "close"] as const)(
