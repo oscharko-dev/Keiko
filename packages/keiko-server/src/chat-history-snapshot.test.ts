@@ -156,6 +156,40 @@ describe("paged conversation continuity", () => {
     expect(result).toContain("60000");
     expect(result).not.toContain("75000");
   });
+
+  it.each([
+    "Was ist das aktuelle Budget für Projekt Linden nach der letzten Korrektur?",
+    "Was ist das aktuelle Budget für Projekt Linden? Antworte als JSON mit budgetEUR, deadline, owner und symbol.",
+  ])(
+    "keeps the correction paragraph when later output keys also match the follow-up: %s",
+    (query) => {
+      const { store, chatId, add } = fixture();
+      add(
+        "user",
+        "Projekt Linden: Budget 75000 Euro.\n" +
+          "Projektunterlagen ohne neue Entscheidung.\n".repeat(800) +
+          "Verbindliche Korrektur: Budget jetzt 60000 Euro, Termin jetzt 19. November, Verantwortliche Mara Linke, Symbol parseLocalStateFlags. Antworte ausschließlich als JSON mit budgetEUR, deadline, owner und symbol. Verwende die korrigierten Werte.",
+      );
+      add("assistant", "Verstanden.");
+      const result = rehydrateChatHistory(store, chatId, query, new Set(), []);
+      expect(result).toContain("60000");
+      expect(result).toContain("19. November");
+      expect(result).toContain("Mara Linke");
+      expect(result).not.toContain("75000");
+    },
+  );
+});
+
+it("keeps excerpt offsets in the original Unicode text when lowercase expansion changes length", () => {
+  const { store, chatId, add } = fixture();
+  add(
+    "user",
+    "İstanbul documentation without decisions. ".repeat(800) +
+      "\nKorrektur: Das Budget beträgt jetzt 60000 Euro.",
+  );
+  add("assistant", "Verstanden.");
+  const result = rehydrateChatHistory(store, chatId, "Welches Budget ist aktuell?", new Set(), []);
+  expect(result).toContain("60000");
 });
 
 function canonicalTurn(
@@ -178,6 +212,7 @@ function canonicalTurn(
     shortResult: undefined,
     taskType: undefined,
   });
+
   const turnId = `turn-${String(index)}`;
   const turn = store.admitChatTurn(turnId, draft("user", index * 2));
   if (turn.kind !== "admitted") throw new TypeError("Expected fixture admission");

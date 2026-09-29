@@ -37,12 +37,20 @@ function matchingExcerpt(
   secrets: readonly string[],
 ): string | undefined {
   const safe = stripUnsafeFormatChars(redact(message.content, secrets)).normalize("NFKC");
-  const lower = safe.toLowerCase();
-  const hits = terms.map((term) => lower.lastIndexOf(term)).filter((offset) => offset >= 0);
+  const hits = terms.map((term) => lastTermOffset(safe, term)).filter((offset) => offset >= 0);
   if (hits.length === 0) return undefined;
-  const start = Math.max(0, Math.max(...hits) - 120);
+  const latestHit = Math.max(...hits);
+  const paragraphStart = safe.lastIndexOf("\n", latestHit) + 1;
+  const start = latestHit - paragraphStart < 480 ? paragraphStart : Math.max(0, latestHit - 360);
   const excerpt = safe.slice(start, start + 480).replace(/\s+/gu, " ");
   return containsPseudoRoleMarker(excerpt) || containsAbsolutePath(excerpt) ? undefined : excerpt;
+}
+
+function lastTermOffset(source: string, term: string): number {
+  // queryTerms emits only Unicode letters, so these short patterns have no regex operators.
+  let last = -1;
+  for (const match of source.matchAll(new RegExp(term, "giu"))) last = match.index;
+  return last;
 }
 
 /** Re-read only eligible turns from the same chat. Search cannot widen a connector/workspace scope. */
