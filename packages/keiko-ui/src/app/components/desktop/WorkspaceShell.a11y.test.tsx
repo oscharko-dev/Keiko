@@ -43,6 +43,7 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
     wins,
     winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
+    layoutLocked: false,
     palOpen: false,
     setPalOpen: vi.fn(),
     conns: [],
@@ -68,7 +69,13 @@ describe("Workspace shell accessibility", () => {
 
     const { container } = render(
       <div className="app">
-        <Header onTileAll={vi.fn()} onSplitFront={vi.fn()} onCascade={vi.fn()} />
+        <Header
+          layoutLocked={false}
+          onToggleLayoutLock={vi.fn()}
+          onTileAll={vi.fn()}
+          onSplitFront={vi.fn()}
+          onCascade={vi.fn()}
+        />
         <div className="mid">
           <LeftRail
             openTools={new Set(["project", "inspector"])}
@@ -118,7 +125,13 @@ describe("Workspace shell accessibility", () => {
       const reviewWindow = appWindow({ id: "review-1", type: "review", cfg: { runId: "run-123" } });
       const { container } = render(
         <div className="app" data-theme="light">
-          <Header onTileAll={vi.fn()} onSplitFront={vi.fn()} onCascade={vi.fn()} />
+          <Header
+            layoutLocked={false}
+            onToggleLayoutLock={vi.fn()}
+            onTileAll={vi.fn()}
+            onSplitFront={vi.fn()}
+            onCascade={vi.fn()}
+          />
           <div className="mid">
             <LeftRail
               openTools={new Set(["project", "inspector"])}
@@ -213,7 +226,13 @@ describe("Workspace shell accessibility", () => {
 
     render(
       <div className="app">
-        <Header onTileAll={onTileAll} onSplitFront={onSplitFront} onCascade={onCascade} />
+        <Header
+          layoutLocked={false}
+          onToggleLayoutLock={vi.fn()}
+          onTileAll={onTileAll}
+          onSplitFront={onSplitFront}
+          onCascade={onCascade}
+        />
         <div className="mid">
           <LeftRail
             openTools={new Set(["chatHistory"])}

@@ -431,6 +431,7 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
+    toggleLayoutLock: vi.fn(),
     currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
     ...patch,
   };
@@ -445,6 +446,7 @@ function workspaceResult(
     wins,
     winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
+    layoutLocked: false,
     palOpen: false,
     setPalOpen: vi.fn(),
     conns,

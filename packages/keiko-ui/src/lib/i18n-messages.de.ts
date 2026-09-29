@@ -25,6 +25,8 @@ export const DE_MESSAGES = {
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
+  "header.lockLayout": "Anordnung sperren",
+  "header.unlockLayout": "Anordnung entsperren",
   "header.splitFront": "Vordere Fenster teilen",
   "header.cascade": "Fenster stapeln",
   "rail.primaryNavigation": "Primäre Arbeitsbereichsnavigation",

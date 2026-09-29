@@ -230,6 +230,7 @@ describe("Workspace clipboard status pill under the German locale", () => {
       resetView: vi.fn(),
       panBy: vi.fn(),
       rect: vi.fn(() => null),
+      toggleLayoutLock: vi.fn(),
       currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
       ...patch,
     };
@@ -240,6 +241,7 @@ describe("Workspace clipboard status pill under the German locale", () => {
       wins: [],
       winsById: new Map(),
       snapPrev: null,
+      layoutLocked: false,
       palOpen: false,
       setPalOpen: vi.fn(),
       conns: [],

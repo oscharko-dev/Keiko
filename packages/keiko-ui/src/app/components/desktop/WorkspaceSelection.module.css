@@ -1,3 +1,11 @@
+.workspaceSurface[data-layout-locked="true"] :global(.win-head) {
+  cursor: default;
+}
+
+.workspaceSurface[data-layout-locked="true"] :global(.win-body) {
+  overscroll-behavior: contain;
+}
+
 .marquee {
   position: absolute;
   z-index: 72;

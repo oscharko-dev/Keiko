@@ -57,6 +57,7 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
     wins,
     winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
+    layoutLocked: false,
     palOpen: false,
     setPalOpen: vi.fn(),
     conns: [],

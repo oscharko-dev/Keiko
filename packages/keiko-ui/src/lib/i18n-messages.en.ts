@@ -24,6 +24,8 @@ export const EN_MESSAGES = {
   "app.skipToContent": "Skip to content",
   "app.workspaceHeading": "Keiko workspace",
   "header.tileAll": "Tile all windows",
+  "header.lockLayout": "Lock layout",
+  "header.unlockLayout": "Unlock layout",
   "header.splitFront": "Split front windows",
   "header.cascade": "Cascade windows",
   "rail.primaryNavigation": "Primary workspace navigation",

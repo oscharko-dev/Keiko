@@ -1758,6 +1758,8 @@ function AppShellInner(): ReactNode {
                     {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
                     <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
                     <Header
+                      layoutLocked={ws.layoutLocked}
+                      onToggleLayoutLock={ws.api.toggleLayoutLock}
                       onTileAll={ws.api.tileAll}
                       onSplitFront={ws.api.splitFront}
                       onCascade={ws.api.cascade}

@@ -813,6 +813,7 @@ function WorkspaceEmptyState({ empty, onNewWindow }: WorkspaceEmptyStateProps): 
 }
 
 interface WorkspaceSceneProps {
+  readonly layoutLocked: boolean;
   readonly style: CSSProperties;
   readonly snapPrev: SnapPrev | null;
   readonly wins: readonly AppWindow[] | null;
@@ -828,6 +829,7 @@ interface WorkspaceSceneProps {
 }
 
 function WorkspaceScene({
+  layoutLocked,
   style,
   snapPrev,
   wins,
@@ -862,6 +864,7 @@ function WorkspaceScene({
               api={api}
               wsRef={wsRef}
               linkRevision={linkRevision}
+              layoutLocked={layoutLocked}
               selected={selectedWindowIds.has(w.id)}
               selectedWindowCount={selectedWindowIds.size}
             />
@@ -906,7 +909,7 @@ export function Workspace({
   children,
 }: WorkspaceProps): ReactNode {
   const t = useTranslate();
-  const { wins, view, snapPrev, conns, connecting, selection, api } = ws;
+  const { wins, view, snapPrev, conns, connecting, selection, api, layoutLocked } = ws;
   // GEN-PERF-WORKSPACE-003 — the four drop-handler add*Node callbacks read the live
   // `view` for drop-point→world conversion. Closing over `view` forced it into their
   // dep arrays, so each pan/zoom rAF frame re-created the callbacks and tore down +
@@ -1023,7 +1026,7 @@ export function Workspace({
       }
       return;
     }
-    if (!isCanvasPanPointer(event)) return;
+    if (layoutLocked || !isCanvasPanPointer(event)) return;
     if (isPrimaryActivationPointer(event)) {
       startMarqueeSelection(event, event.currentTarget.getBoundingClientRect());
       return;
@@ -1037,7 +1040,8 @@ export function Workspace({
       setHandTool(active);
     };
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.code !== "Space" || isHandToolKeyIgnoredTarget(event.target)) return;
+      if (layoutLocked || event.code !== "Space" || isHandToolKeyIgnoredTarget(event.target))
+        return;
       event.preventDefault();
       if (!handToolRef.current) setHandToolActive(true);
     };
@@ -1055,8 +1059,16 @@ export function Workspace({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      handToolRef.current = false;
     };
-  }, []);
+  }, [layoutLocked]);
+
+  useEffect(() => {
+    if (!layoutLocked) return;
+    setHandTool(false);
+    setPanning(false);
+    setMarquee(null);
+  }, [layoutLocked]);
 
   const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (handleWorkspaceSelectionShortcut(event, selection, api, t, announceClipboardStatus)) return;
@@ -1126,6 +1138,7 @@ export function Workspace({
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;
     if (
+      !layoutLocked &&
       handToolRef.current &&
       isPrimaryActivationPointer(event) &&
       connecting === null &&
@@ -1453,7 +1466,8 @@ export function Workspace({
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
     <main
-      className="workspace"
+      className={`workspace ${selectionStyles.workspaceSurface}`}
+      data-layout-locked={layoutLocked ? "true" : undefined}
       ref={wsRef}
       aria-label={t("workspace.surface")}
       tabIndex={0}
@@ -1487,6 +1501,7 @@ export function Workspace({
       <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
 
       <WorkspaceScene
+        layoutLocked={layoutLocked}
         style={sceneStyle}
         snapPrev={snapPrev}
         wins={wins}
@@ -1506,7 +1521,7 @@ export function Workspace({
           type="button"
           className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
-          disabled={view.zoom <= MIN_ZOOM}
+          disabled={layoutLocked || view.zoom <= MIN_ZOOM}
           aria-label={t("workspace.zoomOut")}
           data-tip={t("workspace.zoomOut")}
         >
@@ -1516,7 +1531,7 @@ export function Workspace({
           type="button"
           className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={api.fitView}
-          disabled={visibleWins === null || visibleWins.length === 0}
+          disabled={layoutLocked || visibleWins === null || visibleWins.length === 0}
           aria-label={t("workspace.fitToWindows")}
           data-tip={t("workspace.fitToWindows")}
         >
@@ -1526,6 +1541,7 @@ export function Workspace({
           type="button"
           className="ws-zoom-pct mono ui-tip"
           onClick={api.resetView}
+          disabled={layoutLocked}
           aria-label={t("workspace.zoomReset", { percent: Math.round(view.zoom * 100) })}
           data-tip={t("workspace.reset")}
         >
@@ -1535,7 +1551,7 @@ export function Workspace({
           type="button"
           className="ws-zoom-btn ui-tip cmp-tip-end"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
-          disabled={view.zoom >= MAX_ZOOM}
+          disabled={layoutLocked || view.zoom >= MAX_ZOOM}
           aria-label={t("workspace.zoomIn")}
           data-tip={t("workspace.zoomIn")}
         >

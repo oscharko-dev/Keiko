@@ -88,6 +88,7 @@ const WINDOW_TRAFFIC_GROUP_STYLE: CSSProperties = {
 };
 
 interface WindowFrameProps {
+  readonly layoutLocked?: boolean;
   readonly win: AppWindow;
   readonly top: boolean;
   readonly connState: ConnState;
@@ -896,6 +897,7 @@ function WindowFrameImpl({
   connState,
   api,
   wsRef,
+  layoutLocked = false,
   selected = false,
   selectedWindowCount = 0,
   linkRevision,
@@ -1043,7 +1045,8 @@ function WindowFrameImpl({
   }, [currentAutoGrowContentKey]);
 
   useEffect(() => {
-    if (!shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full") return;
+    if (layoutLocked || !shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full")
+      return;
     if (currentAutoGrowContentKey === null) return;
     const body = bodyRef.current;
     if (body === null) return;
@@ -1079,7 +1082,17 @@ function WindowFrameImpl({
       }
       observer?.disconnect();
     };
-  }, [api, bodyMode, currentAutoGrowContentKey, win.cfg, win.h, win.id, win.max, win.type]);
+  }, [
+    api,
+    bodyMode,
+    currentAutoGrowContentKey,
+    layoutLocked,
+    win.cfg,
+    win.h,
+    win.id,
+    win.max,
+    win.type,
+  ]);
 
   useEffect(
     () => () => {
@@ -1120,7 +1133,7 @@ function WindowFrameImpl({
 
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>): void => {
-      if (!isWindowDragPointer(e)) return;
+      if (layoutLocked || !isWindowDragPointer(e)) return;
       // When this window is a valid drop target for an in-flight connect, the
       // bubbling onPointerDown on <section> below confirms the link — don't
       // also start a header-drag, which would tear the window away from the
@@ -1165,6 +1178,7 @@ function WindowFrameImpl({
       connState,
       selected,
       selectedWindowCount,
+      layoutLocked,
       activateWindowForTarget,
     ],
   );
@@ -1172,7 +1186,7 @@ function WindowFrameImpl({
   const startResize = useCallback(
     (dir: Handle) =>
       (e: ReactPointerEvent<HTMLDivElement>): void => {
-        if (!isPrimaryActivationPointer(e)) return;
+        if (layoutLocked || !isPrimaryActivationPointer(e)) return;
         e.preventDefault();
         e.stopPropagation();
         resizeCleanupRef.current?.();
@@ -1193,7 +1207,17 @@ function WindowFrameImpl({
           resizeCleanupRef,
         );
       },
-    [api, win.id, win.x, win.y, win.w, win.h, win.type, suppressAutoGrowForManualResize],
+    [
+      api,
+      layoutLocked,
+      win.id,
+      win.x,
+      win.y,
+      win.w,
+      win.h,
+      win.type,
+      suppressAutoGrowForManualResize,
+    ],
   );
 
   // Stop propagation BEFORE delegating, so the parent .window's onPointerDown
@@ -1427,7 +1451,7 @@ function WindowFrameImpl({
             className="win-head"
             onPointerDown={onHeaderPointerDown}
             onDoubleClick={(e) => {
-              if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
+              if (!layoutLocked && shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
             }}
           >
             <span
@@ -1518,6 +1542,7 @@ function WindowFrameImpl({
               <button
                 type="button"
                 className="win-traffic-btn win-traffic-maximize ui-tip"
+                disabled={layoutLocked}
                 data-tip={win.max ? "Restore" : "Full screen"}
                 aria-label={
                   win.max
@@ -1561,7 +1586,7 @@ function WindowFrameImpl({
           </div>
         </div>
       </div>
-      {!win.max
+      {!win.max && !layoutLocked
         ? HANDLES.map((d: Handle) => (
             // GEN-UI-INTERACTION-007 — the resize handles are pointer-only affordances;
             // keyboard resize is the Alt+Arrow chord (useKeyboardCtrls). aria-hidden

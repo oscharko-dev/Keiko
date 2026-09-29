@@ -57,6 +57,7 @@ import {
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
@@ -298,6 +299,8 @@ function focusedWindowId(): string | null {
 }
 
 interface UsePanZoomArgs {
+  readonly layoutLocked: boolean;
+  readonly isLayoutLocked: () => boolean;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
   readonly cameraSmoothness: number;
@@ -411,6 +414,15 @@ function activeSelectedWindowId(selection: WorkspaceUiSelectionState): string | 
 function windowIdFromWheelTarget(target: EventTarget | null): string | null {
   if (!(target instanceof Element)) return null;
   return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
+}
+
+function routeLockedWorkspaceWheel(event: WheelEvent, locked: boolean): boolean {
+  if (!locked) return false;
+  // Every window owns its wheel input, including virtual editors and native scrollers
+  // at their boundaries. Background gestures and pinch must not move the camera.
+  if (event.ctrlKey || event.metaKey || windowIdFromWheelTarget(event.target) === null)
+    event.preventDefault();
+  return true;
 }
 
 function activeWindowOwnsWheelTarget(
@@ -557,6 +569,8 @@ function interpolateView(from: View, to: View, progress: number): View {
 }
 
 function usePanZoom({
+  layoutLocked,
+  isLayoutLocked,
   wsRef,
   view,
   cameraSmoothness,
@@ -582,6 +596,17 @@ function usePanZoom({
   const scheduleViewPersist = useCallback((): void => {
     viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
   }, []);
+
+  useEffect(() => {
+    if (!layoutLocked) return;
+    if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
+    frameRef.current = null;
+    animationFrameRef.current = null;
+    pendingViewRef.current = null;
+    viewRef.current = renderedViewRef.current;
+    scheduleViewPersist();
+  }, [layoutLocked, scheduleViewPersist]);
 
   // GEN-PERF-WORKSPACE-004 — flag the workspace host with data-view-active while a
   // wheel/trackpad pan or zoom gesture is in flight so WorkspaceShader can skip its
@@ -643,6 +668,7 @@ function usePanZoom({
 
   const animateView = useCallback(
     (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
+      if (isLayoutLocked()) return;
       const effectiveSmoothness = Math.min(100, Math.max(0, cameraSmoothness * smoothnessScale));
       if (
         effectiveSmoothness <= 0 ||
@@ -678,6 +704,10 @@ function usePanZoom({
 
       if (animationFrameRef.current !== null) return;
       const step = (time: number): void => {
+        if (isLayoutLocked()) {
+          animationFrameRef.current = null;
+          return;
+        }
         const progress = Math.min(
           1,
           Math.max(0, (time - animationStartedAtRef.current) / durationMs),
@@ -693,11 +723,12 @@ function usePanZoom({
       };
       animationFrameRef.current = window.requestAnimationFrame(step);
     },
-    [cameraSmoothness, setView],
+    [cameraSmoothness, isLayoutLocked, setView],
   );
 
   const queueView = useCallback(
     (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
+      if (isLayoutLocked()) return;
       const base = pendingViewRef.current ?? viewRef.current;
       const resolved = typeof next === "function" ? next(base) : next;
       const smoothnessScale = options.smoothnessScale ?? 1;
@@ -730,7 +761,7 @@ function usePanZoom({
         if (pending !== null) animateView(pending, pendingSmoothnessScale, pendingMinDurationMs);
       });
     },
-    [animateView, scheduleViewPersist, markViewActive, setView],
+    [animateView, isLayoutLocked, scheduleViewPersist, markViewActive, setView],
   );
 
   useEffect(() => {
@@ -755,6 +786,7 @@ function usePanZoom({
       return zoomRect;
     };
     const onWheel = (e: WheelEvent): void => {
+      if (routeLockedWorkspaceWheel(e, isLayoutLocked())) return;
       if (e.metaKey || e.ctrlKey) {
         if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
           e.preventDefault();
@@ -788,7 +820,7 @@ function usePanZoom({
       });
     };
     return installWorkspaceWheelListener(el, onWheel);
-  }, [wsRef, queueView, selectionRef]);
+  }, [wsRef, queueView, selectionRef, isLayoutLocked]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -1542,6 +1574,7 @@ interface SnapChordActions {
 }
 
 interface UseKeyboardArgs {
+  readonly isLayoutLocked: () => boolean;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly rect: () => DOMRect | null;
   readonly cancelConnectRef: CurrentRef<() => void>;
@@ -1681,7 +1714,13 @@ function runArrowChordKey(
   handleArrowKey(setWins, r, { key: e.key, shift: e.shiftKey }, size, targetId);
 }
 
-function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeyboardArgs): void {
+function useKeyboardCtrls({
+  setWins,
+  rect,
+  cancelConnectRef,
+  snapRef,
+  isLayoutLocked,
+}: UseKeyboardArgs): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       // Escape must cancel an in-flight connect even when focus sits in a form
@@ -1717,7 +1756,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
         runContentZoomChord(e, setWins, zoomKey, targetId);
         return;
       }
-      if (!e.key.startsWith("Arrow")) return;
+      if (isLayoutLocked() || !e.key.startsWith("Arrow")) return;
       // GEN-UI-KEYBOARD-009 — Cmd/Ctrl+Alt+Arrow snaps the focused window to a
       // half/maximized region (the keyboard equivalent of an edge/quadrant drag
       // snap). Checked before the move/resize branch below because it shares the
@@ -1733,7 +1772,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
     return () => {
       window.removeEventListener("keydown", onKey);
     };
-  }, [setWins, rect, cancelConnectRef, snapRef]);
+  }, [setWins, rect, cancelConnectRef, snapRef, isLayoutLocked]);
 }
 
 interface UseFitMaximizedArgs {
@@ -2044,6 +2083,12 @@ export function useWorkspace(
     selectedWindowIds: [],
   });
   const [snapPrev, setSnapPrev] = useState<SnapPrev | null>(null);
+  const clearLayoutInteraction = useCallback((): void => {
+    setSelection((current) => ({ ...current, selectedWindowIds: [] }));
+    setSnapPrev(null);
+  }, []);
+  const { layoutLocked, isLayoutLocked, toggleLayoutLock } =
+    useWorkspaceLayoutLock(clearLayoutInteraction);
   const [palOpen, setPalOpen] = useState(false);
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
@@ -2220,6 +2265,8 @@ export function useWorkspace(
   const snapChordRef = useRef<SnapChordActions | null>(null);
 
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
+    layoutLocked,
+    isLayoutLocked,
     wsRef,
     view,
     cameraSmoothness,
@@ -2284,7 +2331,7 @@ export function useWorkspace(
     });
   }, [conns, wins]);
 
-  useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef });
+  useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef, isLayoutLocked });
   useFitMaximized({ wsRef, viewRef, setWins });
 
   // Issue #1580 — the WorkspaceApi object and all of its action closures are the
@@ -2349,10 +2396,13 @@ export function useWorkspace(
   const activateLayoutOwner = useCallback(
     (ownerId: string | null): void => {
       if (ownerId === null || worldVP() === null) return;
-      setSelection({ focusedWindowId: ownerId, selectedWindowIds: [ownerId] });
+      setSelection({
+        focusedWindowId: ownerId,
+        selectedWindowIds: isLayoutLocked() ? [] : [ownerId],
+      });
       mutations.focus(ownerId);
     },
-    [mutations, setSelection, worldVP],
+    [isLayoutLocked, mutations, setSelection, worldVP],
   );
   const addWithActivation = useCallback<WorkspaceApi["add"]>(
     (type, cfg) => {
@@ -2763,56 +2813,63 @@ export function useWorkspace(
   // React.memo on WindowFrame/ConnectionsLayer collapse the per-frame re-render
   // storm from O(N windows) to O(windows that actually changed).
   const api = useMemo<WorkspaceApi>(
-    () => ({
-      add: addWithActivation,
-      openEditorFile: mutations.openEditorFile,
-      toggleTool: toggleToolWithActivation,
-      activateWindow,
-      focus: focusWindow,
-      currentWindowStack,
-      currentSelection,
-      replaceSelection,
-      toggleWindowSelection,
-      clearSelection,
-      moveSelectedWindowsBy,
-      copySelectedWindows,
-      cutSelectedWindows,
-      pasteCopiedWindows,
-      close: closeWithTeardown,
-      minimize: mutations.minimize,
-      restore: mutations.restore,
-      maximize: mutations.maximize,
-      update: mutations.update,
-      setSnap: snap.setSnap,
-      commitSnap: snap.commitSnap,
-      tileAll: tileAllWithActivation,
-      splitFront: splitFrontWithActivation,
-      cascade: cascadeWithActivation,
-      startConnect: connectActions.startConnect,
-      confirmConnect: connectActions.confirmConnect,
-      cancelConnect: connectActions.cancelConnect,
-      removeConn: connectActions.removeConn,
-      updateConnBoundScope,
-      updateConnGitChangeScope,
-      connect: connectActions.connect,
-      linkedFilesRoot: connectActions.linkedFilesRoot,
-      linkedFilesContext: connectActions.linkedFilesContext,
-      linkedAllFilesRoots: connectActions.linkedAllFilesRoots,
-      linkedConnectorCapsuleIds: connectActions.linkedConnectorCapsuleIds,
-      linkedConnectorCapsuleSetIds: connectActions.linkedConnectorCapsuleSetIds,
-      linkedFigmaSnapshotRunIds: connectActions.linkedFigmaSnapshotRunIds,
-      linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
-      linkedImageSources: connectActions.linkedImageSources,
-      linkedGitChangeComparisons: connectActions.linkedGitChangeComparisons,
-      currentFilesContext: connectActions.currentFilesContext,
-      zoomTo,
-      fitView,
-      resetView,
-      panBy,
-      rect,
-      currentView,
-    }),
+    () =>
+      protectWorkspaceLayout(
+        {
+          toggleLayoutLock,
+          add: addWithActivation,
+          openEditorFile: mutations.openEditorFile,
+          toggleTool: toggleToolWithActivation,
+          activateWindow,
+          focus: focusWindow,
+          currentWindowStack,
+          currentSelection,
+          replaceSelection,
+          toggleWindowSelection,
+          clearSelection,
+          moveSelectedWindowsBy,
+          copySelectedWindows,
+          cutSelectedWindows,
+          pasteCopiedWindows,
+          close: closeWithTeardown,
+          minimize: mutations.minimize,
+          restore: mutations.restore,
+          maximize: mutations.maximize,
+          update: mutations.update,
+          setSnap: snap.setSnap,
+          commitSnap: snap.commitSnap,
+          tileAll: tileAllWithActivation,
+          splitFront: splitFrontWithActivation,
+          cascade: cascadeWithActivation,
+          startConnect: connectActions.startConnect,
+          confirmConnect: connectActions.confirmConnect,
+          cancelConnect: connectActions.cancelConnect,
+          removeConn: connectActions.removeConn,
+          updateConnBoundScope,
+          updateConnGitChangeScope,
+          connect: connectActions.connect,
+          linkedFilesRoot: connectActions.linkedFilesRoot,
+          linkedFilesContext: connectActions.linkedFilesContext,
+          linkedAllFilesRoots: connectActions.linkedAllFilesRoots,
+          linkedConnectorCapsuleIds: connectActions.linkedConnectorCapsuleIds,
+          linkedConnectorCapsuleSetIds: connectActions.linkedConnectorCapsuleSetIds,
+          linkedFigmaSnapshotRunIds: connectActions.linkedFigmaSnapshotRunIds,
+          linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
+          linkedImageSources: connectActions.linkedImageSources,
+          linkedGitChangeComparisons: connectActions.linkedGitChangeComparisons,
+          currentFilesContext: connectActions.currentFilesContext,
+          zoomTo,
+          fitView,
+          resetView,
+          panBy,
+          rect,
+          currentView,
+        },
+        isLayoutLocked,
+      ),
     [
+      isLayoutLocked,
+      toggleLayoutLock,
       mutations,
       snap,
       addWithActivation,
@@ -2845,6 +2902,7 @@ export function useWorkspace(
   );
 
   return {
+    layoutLocked,
     wins,
     winsById,
     snapPrev,

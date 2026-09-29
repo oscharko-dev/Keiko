@@ -383,6 +383,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "format-removed",
   "cursor-collision",
   "workspace-scroll-ready",
+  "workspace-layout-locked",
+  "workspace-layout-unlocked",
   "literal-input-preserved",
   "draft-resynchronized",
   "equivalent-edit-ignored",

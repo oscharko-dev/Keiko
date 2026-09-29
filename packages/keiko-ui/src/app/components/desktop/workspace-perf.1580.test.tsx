@@ -66,6 +66,7 @@ function makeApi(view: View): WorkspaceApi {
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
+    toggleLayoutLock: vi.fn(),
     currentView: () => view,
   };
 }
@@ -80,6 +81,7 @@ function workspace(api: WorkspaceApi, partial: Partial<UseWorkspaceResult>): Use
     wins,
     winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
+    layoutLocked: false,
     palOpen: false,
     setPalOpen: vi.fn(),
     conns: [],
