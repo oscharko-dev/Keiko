@@ -1066,7 +1066,7 @@ function deltaContent(chunk: unknown): string {
   return textFromContent(firstDelta(chunk)?.content);
 }
 
-async function readProviderJson(response: Response): Promise<unknown> {
+function readProviderJson(response: Response): Promise<unknown> {
   return readJsonCapped(response, MAX_PROVIDER_RESPONSE_BYTES);
 }
 

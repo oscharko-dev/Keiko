@@ -259,13 +259,13 @@ async function persistStreamedTurn(
   };
 }
 
-async function resolveMemory(
+function resolveMemory(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
 ): Promise<ConversationMemoryResultWire> {
   return memoryContext === undefined
-    ? emptyMemoryResult(false)
+    ? Promise.resolve(emptyMemoryResult(false))
     : buildMemoryResult(request, deps, memoryContext);
 }
 

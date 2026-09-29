@@ -2500,23 +2500,24 @@ interface ComposerCoreProps {
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — attachment intake: adds each dropped or
 // picked file via the session API and reports only the first rejection encountered, matching the
 // original loop's behavior (later rejections in the same batch don't overwrite the first).
-async function collectFirstAttachmentRejection(
+function collectFirstAttachmentRejection(
   files: readonly File[],
   addPendingAttachment: ChatSessionComposerApi["addPendingAttachment"],
 ): Promise<{
   readonly reason: AttachmentRejectionReason | undefined;
   readonly mime: string | undefined;
 }> {
-  let reason: AttachmentRejectionReason | undefined;
-  let mime: string | undefined;
-  for (const file of files) {
+  const initial: { reason: AttachmentRejectionReason | undefined; mime: string | undefined } = {
+    reason: undefined,
+    mime: undefined,
+  };
+  return files.reduce<Promise<typeof initial>>(async (previous, file) => {
+    const first = await previous;
     const result = await addPendingAttachment(file);
-    if (!result.ok && reason === undefined) {
-      reason = result.reason;
-      mime = file.type;
-    }
-  }
-  return { reason, mime };
+    return !result.ok && first.reason === undefined
+      ? { reason: result.reason, mime: file.type }
+      : first;
+  }, Promise.resolve(initial));
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the realtime voice session's chat context

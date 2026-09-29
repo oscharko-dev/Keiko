@@ -5208,13 +5208,14 @@ function teardownFaultDescription(error: unknown): RuntimeShutdownCleanup {
 // `disposeRuntimeServicesRecorded` records the fault and every failed step (owner review).
 async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]): Promise<void> {
   const failures: unknown[] = [];
-  for (const step of steps) {
+  await steps.reduce<Promise<void>>(async (previous, step) => {
+    await previous;
     try {
       await step();
     } catch (error) {
       failures.push(error);
     }
-  }
+  }, Promise.resolve());
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new TeardownFaults(failures, "runtime-teardown-faulted");
 }

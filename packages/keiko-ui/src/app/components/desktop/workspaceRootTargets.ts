@@ -87,14 +87,16 @@ async function runRootRequestWorker<T>(
   request: (target: WorkspaceRootTarget) => Promise<T>,
 ): Promise<readonly IndexedRootOutcome<T>[]> {
   const completed: IndexedRootOutcome<T>[] = [];
-  let next = takeNext();
-  while (next !== undefined) {
+  async function requestNext(): Promise<void> {
+    const next = takeNext();
+    if (next === undefined) return;
     completed.push({
       index: next.index,
       outcome: await requestWorkspaceRoot(next.target, request),
     });
-    next = takeNext();
+    await requestNext();
   }
+  await requestNext();
   return completed;
 }
 

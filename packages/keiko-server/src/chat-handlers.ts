@@ -1625,13 +1625,28 @@ async function captureActionFromOutcome(
   }
 }
 
-async function captureMemoryActions(
+function captureActionsFromOutcomes(
+  outcomes: readonly CaptureOutcome[],
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: ConversationMemoryCaptureSurfaceWire,
+  canonicalCapture: boolean,
+): Promise<ConversationMemoryActionWire[]> {
+  return outcomes.reduce<Promise<ConversationMemoryActionWire[]>>(async (previous, outcome) => {
+    const actions = await previous;
+    const action = await captureActionFromOutcome(outcome, deps, mode, surface, canonicalCapture);
+    if (action !== null) actions.push(action);
+    return actions;
+  }, Promise.resolve([]));
+}
+
+function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
-    return [];
+    return Promise.resolve([]);
   }
   const outcomes = extractCandidatesFromUserText(
     request.content,
@@ -1642,20 +1657,15 @@ async function captureMemoryActions(
       }),
     },
   );
-  const actions: ConversationMemoryActionWire[] = [];
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
-  for (const outcome of outcomes) {
-    const action = await captureActionFromOutcome(
-      outcome,
-      deps,
-      mode,
-      surface,
-      request.clientTurnId !== undefined,
-    );
-    if (action !== null) actions.push(action);
-  }
-  return actions;
+  return captureActionsFromOutcomes(
+    outcomes,
+    deps,
+    mode,
+    surface,
+    request.clientTurnId !== undefined,
+  );
 }
 
 export async function collectMemoryActions(
@@ -2193,7 +2203,7 @@ export async function prepareDesktopChatPrompt(
     signal,
     correlationId,
     redact: (value) => String(deps.redactor(value)),
-    call: async (summaryRequest, summarySignal) => {
+    call: (summaryRequest, summarySignal) => {
       const model = bufferedModelAtProviderBoundary(
         deps,
         modelId,
@@ -3672,42 +3682,46 @@ function canonicalTurnAsSendRequest(
   };
 }
 
-async function collectCanonicalTurnLocalMemoryActions(
+function collectCanonicalTurnLocalMemoryActions(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (context === undefined || request.memory?.enabled !== true) {
-    return [];
+    return Promise.resolve([]);
   }
-  if (deps.memoryVault === undefined) {
-    return [];
+  const vault = deps.memoryVault;
+  if (vault === undefined) {
+    return Promise.resolve([]);
   }
-  const actions: ConversationMemoryActionWire[] = [];
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
-  for (const [messageOrdinal, message] of request.messages.entries()) {
-    if (message.role !== "user") continue;
-    const outcomes = extractCandidatesFromUserText(
-      message.content,
-      buildCaptureContext(context, request.clientTurnId, messageOrdinal),
-      {
-        ...memoryCapturePolicyForDeps(deps, {
-          resolver: createMemoryTargetResolver(deps.memoryVault),
-        }),
-      },
-    );
-    for (const outcome of outcomes) {
-      const action = await captureActionFromOutcome(
-        outcome,
-        deps,
-        mode,
-        request.memory.surface ?? "desktop",
-        request.clientTurnId !== undefined,
+  const surface = request.memory.surface ?? "desktop";
+  return request.messages.reduce<Promise<ConversationMemoryActionWire[]>>(
+    async (previous, message, messageOrdinal) => {
+      const actions = await previous;
+      if (message.role !== "user") return actions;
+      const outcomes = extractCandidatesFromUserText(
+        message.content,
+        buildCaptureContext(context, request.clientTurnId, messageOrdinal),
+        {
+          ...memoryCapturePolicyForDeps(deps, {
+            resolver: createMemoryTargetResolver(vault),
+          }),
+        },
       );
-      if (action !== null) actions.push(action);
-    }
-  }
-  return actions;
+      actions.push(
+        ...(await captureActionsFromOutcomes(
+          outcomes,
+          deps,
+          mode,
+          surface,
+          request.clientTurnId !== undefined,
+        )),
+      );
+      return actions;
+    },
+    Promise.resolve([]),
+  );
 }
 
 interface CanonicalTurnSaliencePair {

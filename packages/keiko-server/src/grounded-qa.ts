@@ -2074,7 +2074,7 @@ function compactGroundedCurrentPrompt(
     signal: prepared.signal,
     correlationId: prepared.correlationId,
     redact: (value) => redactedString(deps.redactor, value),
-    call: async (request, signal) => {
+    call: (request, signal) => {
       const model = resolveGroundedAnswerModel(deps, modelId, groundedReadinessAdmission(prepared));
       if (isRouteResult(model))
         throw new ProviderError("The prompt compaction model is unavailable.", model.status);

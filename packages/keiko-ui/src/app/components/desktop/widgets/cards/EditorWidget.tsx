@@ -1129,19 +1129,21 @@ export function EditorWidget({
   }, []);
 
   const closeOpenFile = useCallback(
-    async (paneId: string, path: string): Promise<boolean> =>
-      requestDirtyClose({
-        paneId,
-        files: [path],
-        reason: "tab-close",
-        apply: () => {
-          markDirty(paneId, path, false);
-          pushClosedTab(paneId, path);
-          commitLayout(
-            editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
-          );
-        },
-      }),
+    (paneId: string, path: string): Promise<boolean> =>
+      Promise.resolve(
+        requestDirtyClose({
+          paneId,
+          files: [path],
+          reason: "tab-close",
+          apply: () => {
+            markDirty(paneId, path, false);
+            pushClosedTab(paneId, path);
+            commitLayout(
+              editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
+            );
+          },
+        }),
+      ),
     [commitLayout, markDirty, pushClosedTab, requestDirtyClose],
   );
 

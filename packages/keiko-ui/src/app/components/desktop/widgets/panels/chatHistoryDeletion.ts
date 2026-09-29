@@ -77,6 +77,22 @@ async function deleteBatch(
   return { requestedCount: chats.length, failedIds, detail };
 }
 
+async function deleteBatches(
+  chats: readonly Chat[],
+  correlationId: string,
+  failedIds: string[],
+  offset: number,
+  detail: string | undefined,
+): Promise<string | undefined> {
+  const result = await deleteBatch(chats.slice(offset, offset + DELETE_CONCURRENCY), correlationId);
+  failedIds.push(...result.failedIds);
+  const settledDetail = result.detail ?? detail;
+  const nextOffset = offset + DELETE_CONCURRENCY;
+  return nextOffset < chats.length
+    ? deleteBatches(chats, correlationId, failedIds, nextOffset, settledDetail)
+    : settledDetail;
+}
+
 /** Reuses the scoped, confirmed purge API with bounded concurrency and per-chat settlement. */
 export async function deleteHistoryChats(
   chats: readonly Chat[],
@@ -86,20 +102,12 @@ export async function deleteHistoryChats(
   const ordinal = ++nextDeletionOrdinal;
   const startedAt = performance.now();
   const failedIds: string[] = [];
-  let detail: string | undefined;
   reportDeletion(correlationId, ordinal, {
     requestedCount: chats.length,
     deletedCount: 0,
     failedCount: 0,
   });
-  for (let offset = 0; offset < chats.length; offset += DELETE_CONCURRENCY) {
-    const result = await deleteBatch(
-      chats.slice(offset, offset + DELETE_CONCURRENCY),
-      correlationId,
-    );
-    failedIds.push(...result.failedIds);
-    detail = result.detail ?? detail;
-  }
+  const detail = await deleteBatches(chats, correlationId, failedIds, 0, undefined);
   reportDeletion(
     correlationId,
     ordinal,
