@@ -64,6 +64,52 @@ function profile(tokens: number): ReturnType<typeof deriveContextProfile> {
 }
 
 describe("paged conversation continuity", () => {
+  it.each([32_000, 128_000])(
+    "re-expands a grounded checkpoint to the full %i-token verbatim tail even when history still overflows",
+    (window) => {
+      const { store, chatId, add } = fixture();
+      for (let index = 0; index < 240; index += 1) {
+        add("user", `Question ${String(index)}: ${"Long conversation reference. ".repeat(100)}`);
+        add("assistant", `Answer ${String(index)}: ${"Detailed reference response. ".repeat(100)}`);
+      }
+      const current = add("user", "Continue with the complete conversation.");
+      const plainProfile = profile(window);
+      const plain = captureChatHistory(store, chatId, current.id, plainProfile, []);
+      expect(plain.earlierCompaction).toBeDefined();
+      const grounded = captureChatHistory(
+        store,
+        chatId,
+        current.id,
+        profile(8000),
+        [],
+        plain.earlierCompaction,
+      );
+      expect(grounded.earlierCompaction?.conversationCoverage?.contextWindowTokens).toBe(8000);
+      expect(grounded.history.length).toBeLessThan(plain.history.length);
+      const restored = captureChatHistory(
+        store,
+        chatId,
+        current.id,
+        plainProfile,
+        [],
+        grounded.earlierCompaction,
+      );
+      expect(restored.history.map((message) => message.id)).toEqual(
+        plain.history.map((message) => message.id),
+      );
+      const repeated = captureChatHistory(
+        store,
+        chatId,
+        current.id,
+        plainProfile,
+        [],
+        restored.earlierCompaction,
+      );
+      expect(repeated.history.map((message) => message.id)).toEqual(
+        plain.history.map((message) => message.id),
+      );
+    },
+  );
   it.each(["user", "assistant"] as const)(
     "retains the current user unit when the checkpoint boundary is its %s",
     (boundaryRole) => {

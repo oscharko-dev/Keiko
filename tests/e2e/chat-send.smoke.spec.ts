@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
-import { editorModifier } from "./support/editor-chord.js";
+import { editorModifier, selectAllInEditor } from "./support/editor-chord.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -143,6 +143,13 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await expect(reopened.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30_000 });
 });
 
+async function clearFixtureComposer(page: Page): Promise<void> {
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  await composer.press("ControlOrMeta+A");
+  await composer.press("Backspace");
+  await expect(composer).toHaveText("");
+}
+
 async function openFixtureComposer(
   page: Page,
   request: APIRequestContext,
@@ -182,14 +189,30 @@ async function copyComposerText(
   await composer.press("Shift+Enter");
   const code = composer.locator(".monaco-editor");
   await expect(code).toBeVisible({ timeout: 30000 });
-  await code.locator(".view-lines").click();
-  await page.keyboard.insertText(source);
   const input = code.getByRole("textbox", { name: "Code input" });
-  await input.press(`${await editorModifier(page)}+A`);
+  await input.focus();
+  for (const [index, line] of source.split("\n").entries()) {
+    if (index > 0) await input.press("Enter");
+    await page.keyboard.insertText(line);
+  }
+  await selectAllNativeComposerCode(page, composer);
   await input.press(`${await editorModifier(page)}+C`);
   await page.getByRole("button", { name: "Continue below ↵" }).click();
-  await composer.press("ControlOrMeta+A");
-  await composer.press("Backspace");
+  await clearFixtureComposer(page);
+}
+
+async function selectAllNativeComposerCode(
+  page: Page,
+  composer: ReturnType<Page["getByRole"]>,
+): Promise<void> {
+  const modifier = await editorModifier(page);
+  if (modifier !== "Meta") {
+    await selectAllInEditor(page, composer);
+    return;
+  }
+  // Native macOS profiles bind Monaco's model bounds to arrows, rather than Home/End.
+  await page.keyboard.press(`${modifier}+ArrowUp`);
+  await page.keyboard.press(`${modifier}+Shift+ArrowDown`);
 }
 
 test("removes heading formatting after deleting its last character @smoke", async ({
@@ -226,7 +249,7 @@ test.describe("native Composer clipboard", () => {
       .toBe("solid");
     const source = '@src/__tests__/file.ts\nC:\\temp\\[report]\\file.ts\n  run("* _ [value]");';
     await copyComposerText(page, composer, source);
-    await composer.press(`${await editorModifier(page)}+V`);
+    await composer.press("ControlOrMeta+V");
     await expect.poll(() => composer.innerText()).toBe(source);
     await page.getByRole("button", { name: "Send message" }).click();
     const params = new URLSearchParams({ chatId: chat.id, projectPath });

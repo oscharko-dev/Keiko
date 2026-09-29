@@ -73,6 +73,12 @@ projection only when no complete-summary candidate fits. Per-turn omissions are 
 text and body-free assembly diagnostics. A later roomy turn can render the full checkpoint again.
 Source messages remain stored; canonical digest and rehydration bounds still apply.
 
+A checkpoint stamped with a smaller context window must not stop a larger-window history scan,
+even when the complete conversation still exceeds the larger input budget. The visitor rebuilds
+that window's full bounded verbatim tail from canonical messages before folding older units.
+The overflow-based restoration fallback applies only to legacy checkpoints without a window stamp.
+This also prevents one bounded grounded turn from permanently shrinking subsequent plain-chat turns.
+
 ### D3 — Resurfacing surfaces invalidation; it does not evaluate it
 
 This is the explicit boundary against ADR-0053.

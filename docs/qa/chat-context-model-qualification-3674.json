@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "issue": 3674,
-  "qualifiedProductionRevision": "6680ee5567efedd7b111779df9d8f06ba3b38b25",
-  "recordedAt": "2026-09-29T05:40:06.455134+00:00",
+  "qualifiedProductionRevision": "746b4ad8efd10cb80885bffb6b48476d177cc502",
+  "recordedAt": "2026-09-29T09:58:10.098928+00:00",
   "dataPolicy": "Synthetic conversations only; no prompt, answer, endpoint, credential or customer body is recorded.",
   "profiles": "Configured Keiko/Gateway admission windows, enforced on the complete request. Provider deployments may support larger physical windows.",
   "largeCurrentPrompt": [
@@ -20,10 +20,10 @@
       "finishReason": "stop",
       "compactionCalls": 3,
       "inputChars": 106557,
-      "compactedChars": 3104,
-      "promptTokens": 858,
+      "compactedChars": 3385,
+      "promptTokens": 930,
       "completionTokens": 30,
-      "latencyMs": 7895
+      "latencyMs": 10849
     },
     {
       "route": "litellm",
@@ -39,29 +39,19 @@
       "finishReason": "stop",
       "compactionCalls": 3,
       "inputChars": 106557,
-      "compactedChars": 3104,
-      "promptTokens": 932,
+      "compactedChars": 2908,
+      "promptTokens": 880,
       "completionTokens": 58,
-      "latencyMs": 26295
+      "latencyMs": 87865
     },
     {
       "route": "litellm",
       "model": "gpt-oss-120b",
-      "pass": true,
-      "criteria": {
-        "budget": true,
-        "deadline": true,
-        "owner": true,
-        "symbol": true
-      },
-      "jsonEnvelope": "bare",
-      "finishReason": "stop",
-      "compactionCalls": 3,
-      "inputChars": 106557,
-      "compactedChars": 3432,
-      "promptTokens": 1029,
-      "completionTokens": 121,
-      "latencyMs": 9014
+      "pass": false,
+      "errorClass": "ProviderError",
+      "errorCode": "GATEWAY_PROVIDER_ERROR",
+      "compactionCalls": 2,
+      "latencyMs": 35004
     },
     {
       "route": "azure-direct",
@@ -77,10 +67,10 @@
       "finishReason": "stop",
       "compactionCalls": 3,
       "inputChars": 106557,
-      "compactedChars": 3388,
-      "promptTokens": 915,
+      "compactedChars": 3130,
+      "promptTokens": 856,
       "completionTokens": 30,
-      "latencyMs": 23965
+      "latencyMs": 8511
     },
     {
       "route": "azure-direct",
@@ -96,10 +86,10 @@
       "finishReason": "stop",
       "compactionCalls": 3,
       "inputChars": 106557,
-      "compactedChars": 3378,
-      "promptTokens": 1028,
+      "compactedChars": 3156,
+      "promptTokens": 955,
       "completionTokens": 58,
-      "latencyMs": 53704
+      "latencyMs": 26601
     }
   ],
   "repeatedCompactionAndModelSwitch": [
@@ -119,9 +109,9 @@
       "compactedMessages": 195,
       "checkpointRestored": true,
       "retainedMessages": 32,
-      "promptTokens": 1843,
+      "promptTokens": 1852,
       "completionTokens": 21,
-      "latencyMs": 1859,
+      "latencyMs": 1514,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -134,8 +124,8 @@
         "imageReserveTokens": 0,
         "localPromptTokens": 2936,
         "fallbackPromptTokens": 2936,
-        "reportedPromptTokens": 2537,
-        "providerPromptTokens": 2537,
+        "reportedPromptTokens": 2545,
+        "providerPromptTokens": 2545,
         "promptTokens": 2936,
         "inputBudget": 2944,
         "outputBudget": 1024,
@@ -158,9 +148,9 @@
       "compactedMessages": 195,
       "checkpointRestored": true,
       "retainedMessages": 71,
-      "promptTokens": 6096,
+      "promptTokens": 6101,
       "completionTokens": 40,
-      "latencyMs": 991,
+      "latencyMs": 5261,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -173,8 +163,8 @@
         "imageReserveTokens": 0,
         "localPromptTokens": 8399,
         "fallbackPromptTokens": 8399,
-        "reportedPromptTokens": 7466,
-        "providerPromptTokens": 7466,
+        "reportedPromptTokens": 7474,
+        "providerPromptTokens": 7474,
         "promptTokens": 8399,
         "inputBudget": 11776,
         "outputBudget": 4096,
@@ -197,9 +187,9 @@
       "compactedMessages": 327,
       "checkpointRestored": true,
       "retainedMessages": 34,
-      "promptTokens": 1909,
-      "completionTokens": 77,
-      "latencyMs": 1052,
+      "promptTokens": 1905,
+      "completionTokens": 109,
+      "latencyMs": 1380,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -212,8 +202,8 @@
         "imageReserveTokens": 0,
         "localPromptTokens": 2869,
         "fallbackPromptTokens": 2869,
-        "reportedPromptTokens": 2390,
-        "providerPromptTokens": 2390,
+        "reportedPromptTokens": 2385,
+        "providerPromptTokens": 2385,
         "promptTokens": 2869,
         "inputBudget": 2944,
         "outputBudget": 1024,
@@ -236,9 +226,9 @@
       "compactedMessages": 195,
       "checkpointRestored": true,
       "retainedMessages": 32,
-      "promptTokens": 2174,
+      "promptTokens": 2176,
       "completionTokens": 46,
-      "latencyMs": 1674,
+      "latencyMs": 14210,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -275,9 +265,9 @@
       "compactedMessages": 195,
       "checkpointRestored": true,
       "retainedMessages": 71,
-      "promptTokens": 5533,
-      "completionTokens": 92,
-      "latencyMs": 1354,
+      "promptTokens": 5532,
+      "completionTokens": 167,
+      "latencyMs": 1683,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -314,9 +304,9 @@
       "compactedMessages": 327,
       "checkpointRestored": true,
       "retainedMessages": 34,
-      "promptTokens": 1793,
+      "promptTokens": 1804,
       "completionTokens": 21,
-      "latencyMs": 852,
+      "latencyMs": 1241,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -329,8 +319,8 @@
         "imageReserveTokens": 0,
         "localPromptTokens": 2831,
         "fallbackPromptTokens": 2831,
-        "reportedPromptTokens": 2339,
-        "providerPromptTokens": 2339,
+        "reportedPromptTokens": 2351,
+        "providerPromptTokens": 2351,
         "promptTokens": 2831,
         "inputBudget": 2944,
         "outputBudget": 1024,
@@ -353,9 +343,9 @@
       "compactedMessages": 195,
       "checkpointRestored": true,
       "retainedMessages": 32,
-      "promptTokens": 1910,
-      "completionTokens": 210,
-      "latencyMs": 1486,
+      "promptTokens": 1906,
+      "completionTokens": 121,
+      "latencyMs": 1909,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -368,8 +358,8 @@
         "imageReserveTokens": 0,
         "localPromptTokens": 2936,
         "fallbackPromptTokens": 2936,
-        "reportedPromptTokens": 2541,
-        "providerPromptTokens": 2541,
+        "reportedPromptTokens": 2537,
+        "providerPromptTokens": 2537,
         "promptTokens": 2936,
         "inputBudget": 2944,
         "outputBudget": 1024,
@@ -392,9 +382,9 @@
       "compactedMessages": 195,
       "checkpointRestored": true,
       "retainedMessages": 71,
-      "promptTokens": 5460,
-      "completionTokens": 21,
-      "latencyMs": 1266,
+      "promptTokens": 5463,
+      "completionTokens": 24,
+      "latencyMs": 1317,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -405,11 +395,11 @@
         "imageCount": 0,
         "imageAccounting": "none",
         "imageReserveTokens": 0,
-        "localPromptTokens": 8405,
-        "fallbackPromptTokens": 8405,
-        "reportedPromptTokens": 7480,
-        "providerPromptTokens": 7480,
-        "promptTokens": 8405,
+        "localPromptTokens": 8409,
+        "fallbackPromptTokens": 8409,
+        "reportedPromptTokens": 7483,
+        "providerPromptTokens": 7483,
+        "promptTokens": 8409,
         "inputBudget": 11776,
         "outputBudget": 4096,
         "contextWindow": 16384
@@ -431,9 +421,9 @@
       "compactedMessages": 327,
       "checkpointRestored": true,
       "retainedMessages": 34,
-      "promptTokens": 2188,
-      "completionTokens": 40,
-      "latencyMs": 868,
+      "promptTokens": 2198,
+      "completionTokens": 46,
+      "latencyMs": 1661,
       "admission": {
         "completeness": "complete",
         "loss": "none",
@@ -444,11 +434,11 @@
         "imageCount": 0,
         "imageAccounting": "none",
         "imageReserveTokens": 0,
-        "localPromptTokens": 2849,
-        "fallbackPromptTokens": 2849,
-        "reportedPromptTokens": 2375,
-        "providerPromptTokens": 2375,
-        "promptTokens": 2849,
+        "localPromptTokens": 2869,
+        "fallbackPromptTokens": 2869,
+        "reportedPromptTokens": 2397,
+        "providerPromptTokens": 2397,
+        "promptTokens": 2869,
         "inputBudget": 2944,
         "outputBudget": 1024,
         "contextWindow": 4096
@@ -459,7 +449,8 @@
     "Qwen deployment unavailable: only synthetic alias/admission regression coverage.",
     "The reported all-model customer failure is not reproduced by available local v1.1.12 or recovery calls.",
     "Semantic summaries are not lossless; original messages remain canonical and available for bounded rehydration.",
-    "Provider rate limits and preparation time limits can reject a bounded request explicitly."
+    "Provider rate limits and preparation time limits can reject a bounded request explicitly.",
+    "The exact causes of the two recorded GPT-OSS provider failures were not captured. Successful unchanged replays do not establish their causes or erase the failed attempts."
   ],
   "repairedQualificationFailures": [
     "Mistral descriptive summaries caused another summarization instead of executing the JSON task: preserve executable task framing and original boundary instructions.",
@@ -469,9 +460,9 @@
     "A later matching JSON output key displaced a pasted correction amount: preserve the short correction paragraph and use offsets in the original Unicode text."
   ],
   "qualifiedRevisions": {
-    "largeCurrentPrompt": "0e21cf7b2",
-    "repeatedCompactionAndModelSwitch": "6680ee5567efedd7b111779df9d8f06ba3b38b25",
-    "pastedPromptFollowUp": "6680ee5567efedd7b111779df9d8f06ba3b38b25"
+    "largeCurrentPrompt": "746b4ad8efd10cb80885bffb6b48476d177cc502",
+    "repeatedCompactionAndModelSwitch": "746b4ad8efd10cb80885bffb6b48476d177cc502",
+    "pastedPromptFollowUp": "746b4ad8efd10cb80885bffb6b48476d177cc502"
   },
   "pastedPromptFollowUp": [
     {
@@ -488,5 +479,96 @@
       "exactOwner": true,
       "oldBudget": false
     }
-  ]
+  ],
+  "retainedProviderFailures": [
+    {
+      "suite": "repeatedCompactionAndModelSwitch",
+      "productionRevision": "8fe644e4b",
+      "model": "gpt-oss-120b",
+      "round": 0,
+      "criteria": {},
+      "pass": false,
+      "errorClass": "ProviderError",
+      "errorCode": "GATEWAY_PROVIDER_ERROR",
+      "latencyMs": 174367
+    },
+    {
+      "suite": "largeCurrentPrompt",
+      "productionRevision": "746b4ad8efd10cb80885bffb6b48476d177cc502",
+      "route": "litellm",
+      "model": "gpt-oss-120b",
+      "pass": false,
+      "errorClass": "ProviderError",
+      "errorCode": "GATEWAY_PROVIDER_ERROR",
+      "compactionCalls": 2,
+      "latencyMs": 35004
+    }
+  ],
+  "unchangedProviderReplays": [
+    {
+      "suite": "largeCurrentPrompt",
+      "productionRevision": "746b4ad8efd10cb80885bffb6b48476d177cc502",
+      "inputAndRuntimeUnchanged": true,
+      "route": "litellm",
+      "model": "gpt-oss-120b",
+      "pass": true,
+      "criteria": {
+        "budget": true,
+        "deadline": true,
+        "owner": true,
+        "symbol": true
+      },
+      "jsonEnvelope": "bare",
+      "finishReason": "stop",
+      "compactionCalls": 3,
+      "inputChars": 106557,
+      "compactedChars": 3418,
+      "promptTokens": 986,
+      "completionTokens": 237,
+      "latencyMs": 28261
+    },
+    {
+      "suite": "repeatedCompactionAndModelSwitch",
+      "productionRevision": "8fe644e4b",
+      "inputAndRuntimeUnchanged": true,
+      "startingModel": "gpt-oss-120b",
+      "selectedModel": "gpt-oss-120b",
+      "window": 4096,
+      "round": 0,
+      "criteria": {
+        "project": true,
+        "budget": true,
+        "deadline": true,
+        "noOldBudget": true
+      },
+      "pass": true,
+      "finishReason": "stop",
+      "compactedMessages": 195,
+      "checkpointRestored": true,
+      "retainedMessages": 32,
+      "promptTokens": 1901,
+      "completionTokens": 230,
+      "latencyMs": 2741,
+      "admission": {
+        "completeness": "complete",
+        "loss": "none",
+        "state": "admitted",
+        "counterSource": "fallback-estimated",
+        "counterStatus": "available",
+        "tokenizer": "openai",
+        "imageCount": 0,
+        "imageAccounting": "none",
+        "imageReserveTokens": 0,
+        "localPromptTokens": 2936,
+        "fallbackPromptTokens": 2936,
+        "reportedPromptTokens": 2531,
+        "providerPromptTokens": 2531,
+        "promptTokens": 2936,
+        "inputBudget": 2944,
+        "outputBudget": 1024,
+        "contextWindow": 4096
+      }
+    }
+  ],
+  "qualificationDisposition": "Incomplete provider reliability evidence: the latest repeated-history and follow-up matrices passed, but a large-prompt provider failure remains recorded alongside its successful unchanged replay."
 }

@@ -240,10 +240,8 @@ function shouldRestoreCheckpoint(
   profile: ContextProfile,
 ): boolean {
   const originalWindow = record.conversationCoverage?.contextWindowTokens;
-  return (
-    (originalWindow !== undefined && profile.maxInputTokens <= originalWindow) ||
-    state.tokens + record.tokensBefore > profile.effectiveInputBudget
-  );
+  if (originalWindow !== undefined) return profile.maxInputTokens <= originalWindow;
+  return state.tokens + record.tokensBefore > profile.effectiveInputBudget;
 }
 
 function emptyHistoryAccumulator(): HistoryAccumulator {
