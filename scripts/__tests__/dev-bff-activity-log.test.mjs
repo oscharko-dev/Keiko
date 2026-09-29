@@ -126,11 +126,6 @@ function persistedLines(stateDir) {
   return { names, lines };
 }
 
-function lastLineOf(stateDir, name) {
-  const text = readFileSync(join(stateDir, "logs", name), "utf8").trim();
-  return JSON.parse(text.slice(text.lastIndexOf("\n") + 1));
-}
-
 describe("dev BFF Activity Log lifecycle", () => {
   it("checks readiness at startup and seals its segment on every restart", async () => {
     // The UI store refuses a symlinked path; macOS tmpdir() sits behind /var -> /private/var.
@@ -145,11 +140,12 @@ describe("dev BFF Activity Log lifecycle", () => {
     expect(first.lines.filter((line) => line.op === "activity-log.readiness")).toEqual([
       expect.objectContaining({ trigger: "startup", readiness: "ready" }),
     ]);
-    expect(first.names).toHaveLength(1);
-    expect(lastLineOf(stateDir, first.names[0])).toMatchObject({
-      op: "activity-log.segment.sealed",
-      sealReason: "close",
-    });
+    // A readiness failure may pin its evidence and seal an earlier segment on demand.
+    // Every segment must still be sealed, with exactly one final close seal.
+    expect(first.names.length).toBeGreaterThan(0);
+    const seals = first.lines.filter((line) => line.op === "activity-log.segment.sealed");
+    expect(seals).toHaveLength(first.names.length);
+    expect(seals.filter((line) => line.sealReason === "close")).toHaveLength(1);
 
     // A restart on the same directory finds nothing to recover: its predecessor sealed itself.
     expect(await startAndStop(stateDir, projectDir)).toBe(0);

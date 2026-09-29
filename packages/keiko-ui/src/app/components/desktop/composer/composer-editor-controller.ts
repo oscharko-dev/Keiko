@@ -17,6 +17,8 @@ import styles from "./MarkdownComposer.module.css";
 export class ComposerEditorController implements ComposerInputHandle {
   readonly view: EditorView;
   private value: string;
+  private equivalentEditReported = false;
+  private staleAcknowledgmentReported = false;
   private readonly trackKeyboardFocus = (event: KeyboardEvent): void => {
     if (event.key === "Tab") this.view.dom.dataset.keyboardFocus = "true";
   };
@@ -39,7 +41,7 @@ export class ComposerEditorController implements ComposerInputHandle {
       handleDOMEvents: {
         keydown: (_view, event): boolean => {
           if (event.isComposing) return false;
-          this.props.onKeyDown(event);
+          this.props.onKeyDown(event, this.value);
           return event.defaultPrevented;
         },
       },
@@ -110,12 +112,14 @@ export class ComposerEditorController implements ComposerInputHandle {
     const before = this.view.state;
     const next = before.apply(tr);
     this.view.updateState(next);
-    if (!before.doc.eq(next.doc)) {
-      this.value = serializeComposerMarkdown(next.doc);
+    const value = before.doc.eq(next.doc) ? this.value : serializeComposerMarkdown(next.doc);
+    if (value !== this.value) {
+      this.value = value;
       this.onNotice("");
       this.props.onChange(this.value, this.mentionCursor());
     } else {
-      if (before.doc !== next.doc) {
+      if (before.doc !== next.doc && !this.equivalentEditReported) {
+        this.equivalentEditReported = true;
         reportClientDiagnostic("Keiko composer equivalent document update ignored.", {
           composerActivity: "equivalent-edit-ignored",
         });
@@ -126,10 +130,16 @@ export class ComposerEditorController implements ComposerInputHandle {
     }
   }
 
-  update(props: MarkdownComposerProps): void {
-    this.props = props;
-    this.view.setProps({ attributes: this.attributes() });
-    if (props.value === this.value) return;
+  update(props: MarkdownComposerProps, applyValue = true): void {
+    // Updating attributes can synchronously flush native edits. An unchanged React snapshot
+    // must not overwrite those edits with the value it held before that flush.
+    const valueUnchanged = props.value === this.value;
+    this.updateAttributes(props);
+    if (!applyValue) {
+      this.reportStaleAcknowledgment(props.value);
+      return;
+    }
+    if (valueUnchanged || props.value === this.value) return;
     if (!props.value) {
       this.value = "";
       this.view.updateState(this.createState(""));
@@ -146,6 +156,24 @@ export class ComposerEditorController implements ComposerInputHandle {
     this.view.updateState(this.view.state.apply(tr));
     this.value = serializeComposerMarkdown(this.view.state.doc);
     if (this.value !== props.value) this.props.onChange(this.value, this.mentionCursor());
+  }
+
+  private updateAttributes(props: MarkdownComposerProps): void {
+    const attributesChanged =
+      props.ariaLabel !== this.props.ariaLabel ||
+      props.ariaControls !== this.props.ariaControls ||
+      props.labels.hint !== this.props.labels.hint ||
+      props.placeholder !== this.props.placeholder;
+    this.props = props;
+    if (attributesChanged) this.view.setProps({ attributes: this.attributes() });
+  }
+
+  private reportStaleAcknowledgment(value: string): void {
+    if (value === this.value || this.staleAcknowledgmentReported) return;
+    this.staleAcknowledgmentReported = true;
+    reportClientDiagnostic("Keiko composer stale draft acknowledgment ignored.", {
+      composerActivity: "stale-draft-echo-ignored",
+    });
   }
 
   private externalDraftTransaction(value: string): Transaction {
@@ -180,6 +208,9 @@ export class ComposerEditorController implements ComposerInputHandle {
 
   focus(): void {
     this.view.focus();
+  }
+  get currentMarkdown(): string {
+    return this.value;
   }
   get selectionStart(): number {
     return markdownCursor(this.view.state);

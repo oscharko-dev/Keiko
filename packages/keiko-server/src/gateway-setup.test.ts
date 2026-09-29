@@ -21,7 +21,7 @@ import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runt
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
-import { buildUiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -62,7 +62,7 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
-import { runGatewayReadiness } from "./gateway-readiness.js";
+import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
 import {
@@ -71,6 +71,15 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 
 const tmpDirs: string[] = [];
+const handlerDeps: UiHandlerDeps[] = [];
+
+function buildUiHandlerDeps(
+  options: Parameters<typeof createUiHandlerDeps>[0],
+): ReturnType<typeof createUiHandlerDeps> {
+  const deps = createUiHandlerDeps(options);
+  handlerDeps.push(deps);
+  return deps;
+}
 
 // Issue #1320: pin both local vaults (provider credentials + Figma PAT) to the explicit env-key tier
 // so tests never touch the real macOS keychain — deterministic, side-effect-free, and identical on
@@ -100,7 +109,8 @@ const INVALID_VOICE_STRING_CASES = VOICE_STRING_SETUP_FIELDS.flatMap((field) =>
   INVALID_VOICE_STRING_VALUES.map((value) => ({ field, value })),
 );
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(handlerDeps.splice(0).map(stopConfiguredConversationReadiness));
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -179,6 +179,26 @@ test("preserves typed SQL, globs, arithmetic and inline code in the persisted pr
     .toBe(source);
 });
 
+test("submits the live Composer text with Enter and clears the draft @smoke", async ({
+  page,
+  request,
+}): Promise<void> => {
+  const { chat, projectPath } = await openFixtureComposer(page, request);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  const source = "Immediate Enter send preserves every character.";
+  await composer.fill(source);
+  await composer.press("Enter");
+  const params = new URLSearchParams({ chatId: chat.id, projectPath });
+  await expect
+    .poll(async () => {
+      const response = await request.get(`/api/chats/messages?${params.toString()}`);
+      const body = (await response.json()) as { messages: { role: string; content: string }[] };
+      return body.messages.find((message) => message.role === "user")?.content;
+    })
+    .toBe(source);
+  await expect(composer).toBeEmpty();
+});
+
 async function clearFixtureComposer(page: Page): Promise<void> {
   const composer = page.getByRole("textbox", { name: "Chat message" });
   await composer.press("ControlOrMeta+A");

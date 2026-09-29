@@ -795,6 +795,21 @@ describe("SupportIncident candidates", () => {
       expect(ops).toEqual([FAILURE_OP, "activity-log.pin.created", "support.incident.created"]);
     });
 
+    it("flushes a queued failure candidate before sealing the final log segment", () => {
+      setSupportIncidentTriggerForTests(true);
+      createFileServerLogSink(stateDir).write(failureEvent());
+
+      closeFileServerLogSinks();
+
+      expect(listSupportIncidents(stateDir)).toHaveLength(1);
+      expect(lines("support.incident.created")).toHaveLength(1);
+      expect(
+        readdirSync(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME)).filter((name) =>
+          name.endsWith(".active.jsonl"),
+        ),
+      ).toEqual([]);
+    });
+
     it("releases the trigger's own pin when the deferred step finds a duplicate", async () => {
       setSupportIncidentTriggerForTests(true);
       const sink = createFileServerLogSink(stateDir);

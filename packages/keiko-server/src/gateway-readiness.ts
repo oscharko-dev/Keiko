@@ -2283,8 +2283,8 @@ function cancellableConversationProbeDeps(deps: UiHandlerDeps, signal: AbortSign
   };
 }
 
-/** Stop graph-owned timers and abort active provider requests before runtime teardown. */
-export function stopConfiguredConversationReadiness(deps: UiHandlerDeps): void {
+/** Stop graph-owned probes and wait for their final evidence before the Activity Log is sealed. */
+export async function stopConfiguredConversationReadiness(deps: UiHandlerDeps): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined) return;
   const queue = conversationQueue(holder);
@@ -2293,6 +2293,8 @@ export function stopConfiguredConversationReadiness(deps: UiHandlerDeps): void {
   for (const timer of queue.retries.values()) clearTimeout(timer);
   queue.retries.clear();
   drainConversationQueue(queue);
+  // Each probe reports its own failure; this barrier keeps those reports ahead of shutdown sealing.
+  await Promise.allSettled([...readinessProbesFor(holder).values()].map((probe) => probe.promise));
 }
 
 function initializationDeps(

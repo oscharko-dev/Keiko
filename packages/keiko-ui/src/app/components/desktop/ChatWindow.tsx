@@ -14,6 +14,7 @@
  */
 
 import Image from "next/image";
+import { flushSync } from "react-dom";
 import {
   memo,
   useCallback,
@@ -34,6 +35,7 @@ import {
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
@@ -2487,6 +2489,7 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
 interface ComposerCoreProps {
   readonly ready: boolean;
   readonly placeholder: string;
+  readonly inputRef: RefObject<ComposerInputHandle | null>;
   readonly suspended?: boolean;
   readonly minimal?: boolean;
   readonly compact?: boolean;
@@ -3010,6 +3013,7 @@ function ComposerVoiceOverlay({
 function ComposerCoreImpl({
   ready,
   placeholder,
+  inputRef,
   suspended = false,
   minimal = false,
   compact = false,
@@ -3043,7 +3047,7 @@ function ComposerCoreImpl({
     activeProject,
     replaceChat,
   } = session;
-  const taRef = useRef<ComposerInputHandle>(null);
+  const taRef = inputRef;
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -3096,7 +3100,7 @@ function ComposerCoreImpl({
       setDraft(draft.trim().length === 0 ? text : `${draft.trimEnd()} ${text}`);
       taRef.current?.focus();
     },
-    [draft, setDraft],
+    [draft, setDraft, taRef],
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
@@ -3497,7 +3501,7 @@ function ComposerCoreImpl({
         setRepositoryPickingPath(null);
       }
     },
-    [activeChat, draft, replaceChat, repositoryMention, setDraft, t],
+    [activeChat, draft, replaceChat, repositoryMention, setDraft, t, taRef],
   );
 
   const removeRepositoryReference = useCallback(
@@ -3510,7 +3514,7 @@ function ComposerCoreImpl({
         taRef.current?.focus();
       });
     },
-    [draft, repositoryReferences, setDraft],
+    [draft, repositoryReferences, setDraft, taRef],
   );
 
   const handleDraftChange = useCallback(
@@ -3532,7 +3536,7 @@ function ComposerCoreImpl({
   );
 
   const handleDraftKeyDown = useCallback(
-    (event: ComposerKeyEvent): void => {
+    (event: ComposerKeyEvent, value: string): void => {
       if (repositoryPickerOpen) {
         const handled = handleRepositoryPickerKeyDown(event, {
           results: repositorySearch.results,
@@ -3545,7 +3549,9 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      if (composerEnterSubmits(event)) void sendMessage();
+      if (composerEnterSubmits(event)) {
+        void sendMessage({ text: value, clearDraftOnAdmission: true });
+      }
     },
     [
       insertRepositoryFileReference,
@@ -5507,7 +5513,8 @@ function ChatWindowComposerFooter({
   effectiveBarCompact,
   ready,
   loading,
-  sendMessage,
+  onSubmit,
+  inputRef,
   error,
   clearError,
   notice,
@@ -5525,7 +5532,8 @@ function ChatWindowComposerFooter({
   readonly effectiveBarCompact: boolean;
   readonly ready: boolean;
   readonly loading: boolean;
-  readonly sendMessage: () => Promise<void>;
+  readonly onSubmit: () => void;
+  readonly inputRef: RefObject<ComposerInputHandle | null>;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
   readonly notice: string | undefined;
@@ -5543,12 +5551,13 @@ function ChatWindowComposerFooter({
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {
               event.preventDefault();
-              void sendMessage();
+              onSubmit();
             }}
           >
             <ComposerCore
               ready={ready}
               placeholder={composerPlaceholder(visible.length, loading, t)}
+              inputRef={inputRef}
               suspended={suspended}
               minimal={effectiveMinimal}
               compact={effectiveCompact}
@@ -5601,6 +5610,7 @@ export function ChatWindow({
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
+  const composerInputRef = useRef<ComposerInputHandle>(null);
   const optionalT = useOptionalWidgetTranslate();
   const {
     messages,
@@ -5634,6 +5644,20 @@ export function ChatWindow({
     rejectMemoryCandidate,
     forgetMemoryAction,
   } = session;
+  const submitComposer = (): void => {
+    const live = composerInputRef.current?.currentMarkdown;
+    if (live === undefined) {
+      void sendMessage();
+      return;
+    }
+    if (live !== draft) {
+      flushSync(() => session.setDraft(live));
+      reportClientDiagnostic("Keiko composer submitted the current editor draft.", {
+        composerActivity: "literal-input-preserved",
+      });
+    }
+    void sendMessage({ text: live, clearDraftOnAdmission: true });
+  };
   const displayedError = presentChatSessionError(error, optionalT);
   const activeProjectRoot = activeProject?.path;
   const activeChatRoot = activeChat?.projectPath;
@@ -5860,7 +5884,8 @@ export function ChatWindow({
         effectiveBarCompact={effectiveBarCompact}
         ready={ready}
         loading={loading}
-        sendMessage={sendMessage}
+        onSubmit={submitComposer}
+        inputRef={composerInputRef}
         error={displayedError}
         clearError={session.clearError}
         notice={notice}

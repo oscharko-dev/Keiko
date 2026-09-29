@@ -4524,7 +4524,7 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
     ...deps,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
-      stopConfiguredConversationReadiness(deps);
+      await stopConfiguredConversationReadiness(deps);
       await deps.dispose?.();
     },
   };

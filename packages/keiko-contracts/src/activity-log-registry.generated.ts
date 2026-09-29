@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "08e0798c8aa3e2cc6d47b03f3d626826dcfabd25ffd84069d89879dc16d2d26b" as const;
+  "1d5080542e47fd621d140f8641f2873bb2c1736ef70b91874d31b47cefbe6651" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2575,6 +2575,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "literal-input-preserved",
           "draft-resynchronized",
           "equivalent-edit-ignored",
+          "stale-draft-echo-ignored",
           "non-text-paste-ignored",
           "text-copied",
         ],

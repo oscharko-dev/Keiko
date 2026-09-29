@@ -388,6 +388,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "literal-input-preserved",
   "draft-resynchronized",
   "equivalent-edit-ignored",
+  "stale-draft-echo-ignored",
   "non-text-paste-ignored",
   "text-copied",
 ] as const;

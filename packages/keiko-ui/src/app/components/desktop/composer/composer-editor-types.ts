@@ -2,6 +2,7 @@ import type { RefObject } from "react";
 
 export interface ComposerInputHandle {
   focus(): void;
+  readonly currentMarkdown: string;
   readonly selectionStart: number;
   setSelectionRange(start: number, end: number): void;
 }
@@ -36,5 +37,5 @@ export interface MarkdownComposerProps {
   readonly labels: ComposerEditorLabels;
   readonly onChange: (value: string, cursor: number) => void;
   readonly onSelect: (value: string, cursor: number) => void;
-  readonly onKeyDown: (event: ComposerKeyEvent) => void;
+  readonly onKeyDown: (event: ComposerKeyEvent, value: string) => void;
 }

@@ -2587,6 +2587,16 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     expect(result.current.draft).toBe("stale draft");
   });
 
+  it("submits live typed text and clears an older React draft after admission", async () => {
+    const { result } = await setupUngroundedSession();
+    act(() => result.current.setDraft("older draft"));
+    await act(async () => {
+      await result.current.sendMessage({ text: "Immediate send", clearDraftOnAdmission: true });
+    });
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("Immediate send");
+    expect(result.current.draft).toBe("");
+  });
+
   it("ignores a whitespace-only explicit text (committed-only invariant)", async () => {
     const { result } = await setupUngroundedSession();
 
