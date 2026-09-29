@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1b7aadb0f9366608efcf6c23053e9f61a9c0e63cc4c3dc0430d87a823870ba42",
+    "catalogDigest": "a7b148a2a84eb8c1514197509ef85a721b51692615bfcdb83470b4fccec158e9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1180,7 +1180,7 @@
         "proofIds": ["chat.continuity.capture.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:25",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:133"]
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:134"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1204,9 +1204,14 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["budget-exceeded"]
+            "values": ["budget-exceeded", "summary-trimmed"]
           },
           "inputBudget": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "omittedSummaryCategories": {
             "type": "integer",
             "dataClass": "count",
             "required": true
@@ -1219,7 +1224,7 @@
         "proofIds": ["chat.continuity.degraded.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:102",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:167"]
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:169"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1284,7 +1289,7 @@
         "proofIds": ["chat.continuity.rehydration.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-continuity-log.ts:72",
-        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:146"]
+        "emitterSites": ["packages/keiko-server/src/chat-continuity-log.ts:147"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2691,7 +2696,11 @@
               "code-ready",
               "format-removed",
               "cursor-collision",
-              "workspace-scroll-ready"
+              "workspace-scroll-ready",
+              "literal-input-preserved",
+              "draft-resynchronized",
+              "non-text-paste-ignored",
+              "text-copied"
             ]
           }
         },
@@ -41728,6 +41737,12 @@
                   "required": true
                 },
                 {
+                  "name": "omittedSummaryCategories",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "reason",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -75485,7 +75500,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 55,
+    "dynamicCount": 56,
     "unknownCategoryCount": 66,
     "authoritative": false
   },
@@ -77179,6 +77194,13 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:843",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
       "site": "packages/keiko-server/src/chat-handlers.ts:1678",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
@@ -77499,14 +77521,14 @@
     {
       "op": "chat.compaction.summary",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:842",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:259",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2014",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2034",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

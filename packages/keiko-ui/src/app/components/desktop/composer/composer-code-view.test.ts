@@ -7,6 +7,7 @@ import { EditorState, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { ComposerCodeView } from "./composer-code-view";
 import { parseComposerMarkdown } from "./composer-markdown";
+import { CLIENT_COMPOSER_CODE_STAGES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ComposerCodeEditor, ComposerCodePort } from "./composer-code-runtime";
 import styles from "./MarkdownComposer.module.css";
 
@@ -67,6 +68,9 @@ describe("composer code runtime lifecycle", () => {
       const notice = view.dom.querySelector<HTMLElement>(`.${styles.cmpNotice}`)!;
       await vi.waitFor(() => expect(notice.hidden).toBe(true));
       expect(getComputedStyle(notice).display).toBe("none");
+      expect(diagnostics.report).toHaveBeenCalledWith("Keiko composer code editor ready.", {
+        composerActivity: "code-ready",
+      });
     } finally {
       stylesheet.remove();
     }
@@ -121,6 +125,27 @@ describe("composer code runtime lifecycle", () => {
     expect(JSON.stringify(diagnostics.report.mock.calls)).not.toContain("customer code");
     expect(diagnostics.report).toHaveBeenCalled();
   });
+
+  it.each(CLIENT_COMPOSER_CODE_STAGES)(
+    "preserves the actual %s failure stage at the producer",
+    async (stage) => {
+      runtime.mount.mockImplementation((_host: HTMLElement, port: ComposerCodePort) => {
+        port.onStage(stage);
+        return Promise.reject(new Error("private code must not appear"));
+      });
+      const view = setup();
+      await vi.waitFor(() => expect(view.dom.textContent).toContain("Unavailable"));
+      expect(diagnostics.report).toHaveBeenCalledWith(
+        expect.stringContaining(`(${stage})`),
+        expect.objectContaining({
+          kind: "other",
+          composerCodeStage: stage,
+          errorEvidence: expect.any(Object),
+        }),
+      );
+      expect(JSON.stringify(diagnostics.report.mock.calls)).not.toContain("private code");
+    },
+  );
 
   it("synchronizes Monaco edits and selections with the Markdown document", async () => {
     runtime.mount.mockResolvedValue(editorAdapter());

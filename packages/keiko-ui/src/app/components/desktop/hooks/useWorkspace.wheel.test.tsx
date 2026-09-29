@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
 
+const diagnostics = vi.hoisted(() => ({ report: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostics.report }));
+afterEach(() => diagnostics.report.mockClear());
+
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
@@ -122,6 +126,14 @@ describe("useWorkspace wheel zoom routing", () => {
     cleanup();
     window.localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it("reports scroll readiness through the routine activity producer", () => {
+    render(<Harness />);
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "[keiko] workspace native and virtual scroll routing ready.",
+      { composerActivity: "workspace-scroll-ready" },
+    );
   });
 
   it("lets the active Monaco editor handle wheel events despite its virtual scroll surface", async () => {

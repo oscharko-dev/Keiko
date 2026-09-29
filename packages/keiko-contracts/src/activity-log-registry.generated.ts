@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1b7aadb0f9366608efcf6c23053e9f61a9c0e63cc4c3dc0430d87a823870ba42" as const;
+  "a7b148a2a84eb8c1514197509ef85a721b51692615bfcdb83470b4fccec158e9" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1150,9 +1150,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["budget-exceeded"],
+        values: ["budget-exceeded", "summary-trimmed"],
       },
       inputBudget: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      omittedSummaryCategories: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -2564,6 +2569,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "format-removed",
           "cursor-collision",
           "workspace-scroll-ready",
+          "literal-input-preserved",
+          "draft-resynchronized",
+          "non-text-paste-ignored",
+          "text-copied",
         ],
       },
     },
@@ -31311,6 +31320,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           safeContextFields: [
             {
               name: "inputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "omittedSummaryCategories",
               type: "integer",
               dataClass: "count",
               required: true,

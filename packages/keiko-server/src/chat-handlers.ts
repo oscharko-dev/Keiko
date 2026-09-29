@@ -1760,6 +1760,26 @@ export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly Ch
   );
 }
 
+export function captureAdmittedSnapshot(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admitted: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId?: string,
+): GatewayTurnSnapshot {
+  try {
+    return captureGatewayTurnSnapshot(
+      deps,
+      { ...prepared.request, modelId: prepared.modelId },
+      admitted.userMessage,
+      correlationId,
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    throw error;
+  }
+}
+
 export function captureGatewayTurnSnapshot(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -2408,13 +2428,12 @@ async function executeBufferedModelTurn(
   startedAt: number,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { request, modelId } = prepared;
+  const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
   const { admitted, executionAdmission } = outcome;
   const { userMessage } = admitted;
-  const snapshotRequest = { ...request, modelId };
-  const snapshot = captureGatewayTurnSnapshot(deps, snapshotRequest, userMessage, correlationId);
+  const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
   const assembly = await prepareBufferedGatewayAssembly(

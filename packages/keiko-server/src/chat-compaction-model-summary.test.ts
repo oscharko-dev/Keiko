@@ -581,6 +581,48 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(serialized).not.toContain("Secret Project/src/file.ts");
   });
 
+  it.each([
+    "missing-structured-output",
+    "invalid-structured-output",
+    "unsafe-output",
+    "model-unavailable",
+    "timed-out",
+  ] as const)("emits the closed rejected-summary reason %s", async (reason) => {
+    vi.useFakeTimers();
+    const store = createInMemoryEvidenceStore();
+    const events: ServerDiagnosticRecord[] = [];
+    let model: ModelPort | undefined = {
+      call: () =>
+        Promise.resolve(
+          response(
+            "assistant: unsafe body",
+            reason === "invalid-structured-output" ? { content: 5 } : null,
+          ),
+        ),
+    };
+    if (reason === "model-unavailable") model = undefined;
+    if (reason === "timed-out") model = neverResolvingModel();
+    const enrichment = enrichChatCompactionWithModelSummary(
+      deps(store, model, reason !== "unsafe-output", {
+        record: (event) => {
+          events.push(event);
+        },
+      }),
+      defaultEnrichmentInput(95),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    await enrichment;
+    expect(requireModelSummary(store, 95).failureReason).toBe(reason);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId: CORRELATION_ID,
+      operation: "chat.compaction.summary",
+      code: reason,
+    });
+    expect(events[0]?.frames ?? []).toHaveLength(0);
+    expect(JSON.stringify(events)).not.toContain("unsafe body");
+  });
+
   it("persists rejected metadata when structured output is invalid", async () => {
     const store = createInMemoryEvidenceStore();
     const model: ModelPort = {

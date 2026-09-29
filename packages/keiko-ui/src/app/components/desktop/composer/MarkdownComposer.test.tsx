@@ -1,17 +1,20 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TextSelection } from "prosemirror-state";
+import { NodeSelection, TextSelection } from "prosemirror-state";
 import { undo, redo } from "prosemirror-history";
 import { ComposerEditorController } from "./composer-editor-controller";
 import { MarkdownComposer } from "./MarkdownComposer";
-import { parseComposerMarkdown } from "./composer-markdown";
+import { parseComposerMarkdown, serializeComposerMarkdown } from "./composer-markdown";
 import { composerEnterSubmits } from "./ComposerShell";
 import type { ComposerInputHandle, MarkdownComposerProps } from "./composer-editor-types";
 
 vi.mock("./composer-code-runtime", () => ({
   mountComposerCode: (): Promise<never> => new Promise(() => undefined),
 }));
+
+const diagnostics = vi.hoisted(() => ({ report: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostics.report }));
 
 const labels = {
   code: "Code",
@@ -40,6 +43,7 @@ function props(value = ""): MarkdownComposerProps {
 const editors: ComposerEditorController[] = [];
 afterEach(() => {
   for (const editor of editors.splice(0)) editor.destroy();
+  diagnostics.report.mockClear();
 });
 
 function setup(
@@ -110,15 +114,139 @@ describe("Markdown composer editing", () => {
     expect(editor.view.dom.querySelector("strong")).toBeNull();
   });
 
-  it("keeps typed literal punctuation in the outgoing prompt and repository mention offsets", () => {
-    const value = "@src/__tests__/file.ts C:\\temp\\[1] *literal*";
+  it.each([
+    "SELECT * FROM t WHERE a * b > 3",
+    "2 * 3 * 4",
+    "rm -rf **/node_modules and **/dist",
+    "x ** 2 + y ** 2",
+    "delete all *.js and *.ts files",
+    "SELECT COUNT(*) FROM t WHERE x * 2 > y",
+    "`a * b * c`",
+    "`*literal*`",
+  ])("keeps literal punctuation through the actual typing rules: %s", (value) => {
     const { editor, config } = setup();
-    editor.view.dispatch(editor.view.state.tr.insertText(value));
+    type(editor, value);
+    expect(serializeComposerMarkdown(editor.view.state.doc)).toBe(value);
+    expect(vi.mocked(config.onChange).mock.lastCall?.[0]).toBe(value);
+  });
+
+  it("keeps typed literal repository paths and mention offsets", () => {
+    const value = "@src/__tests__/file.ts C:\\temp\\[1] 2 * 3 * 4";
+    const { editor, config } = setup();
+    type(editor, value);
     expect(config.onChange).toHaveBeenLastCalledWith(value, value.length);
     for (let offset = 0; offset <= value.length; offset += 1) {
       editor.setSelectionRange(offset, offset);
       expect(editor.selectionStart).toBe(offset);
     }
+  });
+
+  it.each([
+    ["```ts\ncode\n```", "```ts\ncode\n``` explain this"],
+    ["**bold @sr**", "**bold @src/a.ts **"],
+    ["* first @src/a.ts\n* second  item", "* first\n* second item"],
+  ])(
+    "keeps external edits to formatted drafts equal to the submitted value: %s",
+    (initial, value) => {
+      const { editor, config } = setup(initial);
+      for (let render = 0; render < 3; render += 1) {
+        editor.update({ ...config, value });
+        expect(serializeComposerMarkdown(editor.view.state.doc)).toBe(value);
+      }
+      editor.setSelectionRange(value.length, value.length);
+      type(editor, "!");
+      expect(vi.mocked(config.onChange).mock.lastCall?.[0]).toBe(value + "!");
+    },
+  );
+
+  it("keeps displayed link destinations outside the editable content", () => {
+    const value = '[the docs](https://example.com/x "visible title")';
+    const { editor } = setup(value);
+    const destination = editor.view.dom.querySelector("[data-markdown-destination]");
+    expect(destination?.getAttribute("contenteditable")).toBe("false");
+    expect(destination?.textContent).toContain('https://example.com/x "visible title"');
+    editor.view.dispatch(editor.view.state.tr.delete(1, 9));
+    expect(serializeComposerMarkdown(editor.view.state.doc)).toBe("");
+    expect(editor.view.dom.querySelector("[data-markdown-destination]")).toBeNull();
+  });
+
+  it.each(["image/png", "application/pdf"])(
+    "leaves selected text intact for a %s-only paste",
+    (mime) => {
+      const { editor, config } = setup("keep this text");
+      editor.view.dispatch(
+        editor.view.state.tr.setSelection(TextSelection.create(editor.view.state.doc, 6, 10)),
+      );
+      fireEvent.paste(editor.view.dom, {
+        clipboardData: {
+          types: [mime],
+          getData: () => "",
+          files: [new File(["fixture"], "file", { type: mime })],
+        },
+      });
+      expect(serializeComposerMarkdown(editor.view.state.doc)).toBe("keep this text");
+      expect(config.onChange).not.toHaveBeenCalled();
+      expect(diagnostics.report).toHaveBeenCalledWith(
+        "Keiko composer non-text clipboard left unchanged.",
+        { composerActivity: "non-text-paste-ignored" },
+      );
+    },
+  );
+
+  it.each([
+    ["# Hello world", "ello"],
+    ["* item", "ite"],
+    ["> quote", "uote"],
+  ])("copies a partial block without unselected wrappers: %s", (source, selected) => {
+    const { editor } = setup(source);
+    let from = 0;
+    editor.view.state.doc.descendants((node, position) => {
+      if (node.isText && node.text?.includes(selected))
+        from = position + node.text.indexOf(selected);
+    });
+    editor.view.dispatch(
+      editor.view.state.tr.setSelection(
+        TextSelection.create(editor.view.state.doc, from, from + selected.length),
+      ),
+    );
+    const setData = vi.fn();
+    fireEvent.copy(editor.view.dom, { clipboardData: { clearData: vi.fn(), setData } });
+    expect(setData).toHaveBeenCalledWith("text/plain", selected);
+    expect(diagnostics.report).toHaveBeenCalledWith("Keiko composer selection copied.", {
+      composerActivity: "text-copied",
+    });
+  });
+
+  it("copies a fully selected block with its Markdown syntax", () => {
+    const { editor } = setup("# Hello world");
+    editor.view.dispatch(
+      editor.view.state.tr.setSelection(NodeSelection.create(editor.view.state.doc, 0)),
+    );
+    const setData = vi.fn();
+    fireEvent.copy(editor.view.dom, { clipboardData: { clearData: vi.fn(), setData } });
+    expect(setData).toHaveBeenCalledWith("text/plain", "# Hello world");
+  });
+
+  it("reports preserved punctuation and resynchronized drafts as routine activity", () => {
+    const { editor } = setup();
+    type(editor, "2 * 3 * 4");
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "Keiko composer literal punctuation preserved.",
+      { composerActivity: "literal-input-preserved" },
+    );
+    const formatted = setup("```ts\ncode\n```");
+    formatted.editor.update({ ...formatted.config, value: "```ts\ncode\n``` explain this" });
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "Keiko composer external draft resynchronized.",
+      { composerActivity: "draft-resynchronized" },
+    );
+  });
+
+  it("reports initialization through the routine activity producer", () => {
+    setup();
+    expect(diagnostics.report).toHaveBeenCalledWith("Keiko Markdown composer initialized.", {
+      composerActivity: "initialized",
+    });
   });
 
   it.each(["> ```typescript\n> const x = 1;\n> ```", "* ```typescript\n  const x = 1;\n  ```"])(
@@ -156,6 +284,9 @@ describe("Markdown composer editing", () => {
       editor.view.dispatch(editor.view.state.tr.delete($from.start(), $from.end()));
       fireEvent.keyDown(editor.view.dom, { key: "Backspace" });
       expect(editor.view.state.doc.firstChild?.type.name).toBe("paragraph");
+      expect(diagnostics.report).toHaveBeenCalledWith("Keiko composer block formatting removed.", {
+        composerActivity: "format-removed",
+      });
       type(editor, "Normal");
       expect(editor.view.state.doc.textContent).toBe("Normal");
     },
@@ -190,6 +321,9 @@ describe("Markdown composer editing", () => {
       expect(editor.view.state.doc.firstChild?.type.name).toBe("heading");
       fireEvent.keyDown(editor.view.dom, { key: "Backspace" });
       expect(editor.view.state.doc.firstChild?.type.name).toBe("paragraph");
+      expect(diagnostics.report).toHaveBeenCalledWith("Keiko composer block formatting removed.", {
+        composerActivity: "format-removed",
+      });
       type(editor, "Normal");
       expect(config.onChange).toHaveBeenLastCalledWith("Normal", 6);
     },
@@ -263,6 +397,10 @@ describe("Markdown composer editing", () => {
     editor.view.dispatch(editor.view.state.tr.insertText("too long", 1, 1));
     expect(editor.view.state.doc.textContent).toBe("safe");
     expect(notice).toHaveBeenCalledWith("Message too long");
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "Keiko Markdown composer input limit reached.",
+      { composerActivity: "input-limit" },
+    );
   });
 
   it("pastes plain Markdown with literal HTML and no remote images", () => {

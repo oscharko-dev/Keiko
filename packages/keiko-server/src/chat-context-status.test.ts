@@ -1,3 +1,8 @@
+import {
+  buildGatewayAssembly,
+  captureGatewayTurnSnapshot,
+  emptyMemoryResult,
+} from "./chat-handlers.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
@@ -37,7 +42,7 @@ afterEach(() => {
 function fixture(
   pairs = 40,
   note = "We review the documentation together. ".repeat(25),
-): { deps: UiHandlerDeps; chatId: string } {
+): { deps: UiHandlerDeps; chatId: string; projectPath: string } {
   const store = createInMemoryUiStore();
   stores.push(store);
   const path = mkdtempSync(join(tmpdir(), "keiko-context-status-"));
@@ -76,7 +81,7 @@ function fixture(
       throw new Error("Manual compaction must not call a provider");
     },
   };
-  return { deps, chatId };
+  return { deps, chatId, projectPath: path };
 }
 
 function currentMessage(deps: UiHandlerDeps, chatId: string, content: string): ChatMessage {
@@ -91,6 +96,14 @@ function currentMessage(deps: UiHandlerDeps, chatId: string, content: string): C
     shortResult: undefined,
     taskType: undefined,
   });
+}
+
+function projectionNotes(): string {
+  return Array.from({ length: 16 }, (_, index) =>
+    ["Fact", "Decision", "Constraint"]
+      .map((kind) => `${kind}: Requirement ${String(index)} ${"durable information ".repeat(10)}`)
+      .join("\n"),
+  ).join("\n");
 }
 
 describe("composer context status and manual maintenance", () => {
@@ -171,6 +184,75 @@ describe("composer context status and manual maintenance", () => {
       "Previous user question for referent resolution:",
     );
   });
+  it("emits positive projection omissions on the complete plain assembly path", () => {
+    const { deps, chatId, projectPath } = fixture(4, projectionNotes());
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 2600,
+        reservedOutputTokens: 0,
+        safetyMarginTokens: 0,
+      }),
+    };
+    const user = currentMessage(deps, chatId, "Which requirements still apply?");
+    const request = {
+      chatId,
+      projectPath,
+      content: user.content,
+      modelId: "fixture",
+      documentContext: [],
+      attachments: [],
+      memory: undefined,
+      discussionMode: undefined,
+    };
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const snapshot = captureGatewayTurnSnapshot(modelDeps, request, user, "corr-plain-projection");
+    buildGatewayAssembly(
+      modelDeps,
+      request,
+      emptyMemoryResult(false),
+      "fixture",
+      snapshot,
+      "corr-plain-projection",
+    );
+    const event = sink.events.find((entry) => entry.op === "chat.context.selected");
+    expect(event?.extra?.omittedSummaryCategories).toBeGreaterThan(0);
+    expect(event?.correlationId).toBe("corr-plain-projection");
+    expect(JSON.stringify(sink.events)).not.toContain("durable information");
+  });
+
+  it("emits positive projection omissions for grounded continuity", () => {
+    const { deps, chatId } = fixture(4, projectionNotes());
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 8192,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    };
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const continuity = groundedConversationContinuity(
+      modelDeps,
+      currentMessage(deps, chatId, "Which requirements still apply?"),
+      "fixture",
+      "corr-grounded-projection",
+    );
+    expect(continuity.answerContext).not.toBe("");
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.degraded");
+    expect(event).toMatchObject({
+      correlationId: "corr-grounded-projection",
+      extra: { reason: "summary-trimmed" },
+    });
+    expect(event?.extra?.omittedSummaryCategories).toBeGreaterThan(0);
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.continuity.degraded.line", line);
+    expect(analyzeLogText(line).sufficiency.status).toBe("complete");
+    expect(JSON.stringify(sink.events)).not.toContain("durable information");
+  });
+
   it("omits optional grounded continuity that cannot fit without failing the current ask", () => {
     const seeded = fixture(40, "Dokumentation Freigabe. " + "A ".repeat(170));
     const deps = {

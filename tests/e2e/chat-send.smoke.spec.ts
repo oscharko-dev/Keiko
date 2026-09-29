@@ -143,6 +143,26 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await expect(reopened.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30_000 });
 });
 
+test("preserves typed SQL, globs, arithmetic and inline code in the persisted prompt @smoke", async ({
+  page,
+  request,
+}) => {
+  const { chat, projectPath } = await openFixtureComposer(page, request);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  const source =
+    "SELECT * FROM t WHERE a * b > 3; 2 * 3 * 4; rm -rf **/node_modules and **/dist; delete *.js and *.ts; `a * b * c`; `*literal*`";
+  await composer.pressSequentially(source);
+  await page.getByRole("button", { name: "Send message" }).click();
+  const params = new URLSearchParams({ chatId: chat.id, projectPath });
+  await expect
+    .poll(async () => {
+      const response = await request.get(`/api/chats/messages?${params.toString()}`);
+      const body = (await response.json()) as { messages: { role: string; content: string }[] };
+      return body.messages.find((message) => message.role === "user")?.content;
+    })
+    .toBe(source);
+});
+
 async function clearFixtureComposer(page: Page): Promise<void> {
   const composer = page.getByRole("textbox", { name: "Chat message" });
   await composer.press("ControlOrMeta+A");

@@ -794,6 +794,52 @@ describe("desktop chat SSE streaming handler", () => {
     },
   );
 
+  it.each([
+    ["buffered", false],
+    ["streamed", false],
+    ["buffered", true],
+    ["streamed", true],
+  ] as const)("settles %s history capture failure (canonical=%s)", async (mode, canonical) => {
+    const chatId = seedChat();
+    const original = store.findChatById(chatId);
+    const clientTurnId = "history-capture-failure";
+    const content = "Current question";
+    const scan = vi.spyOn(store, "visitGatewayMessageUnits").mockImplementationOnce(() => {
+      throw new Error("SQLITE_BUSY private content must not appear");
+    });
+    const { model } = streamingModel("Recovered answer");
+    const call = vi.spyOn(model, mode === "buffered" ? "call" : "callStream");
+    const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+    const body = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content,
+      ...(canonical ? { clientTurnId } : {}),
+    };
+    try {
+      await expect(
+        handler(routeContext(makeReq(body), captureRes().res), deps(model)),
+      ).rejects.toThrow("SQLITE_BUSY");
+      expect(scan).toHaveBeenCalledOnce();
+      expect(call).not.toHaveBeenCalled();
+      if (canonical) {
+        expect(
+          store.inspectChatTurn(chatId, clientTurnId, canonicalPlainTurnIdentity(chatId, content))
+            .kind,
+        ).toBe("retryable");
+      } else {
+        expect(store.listMessages(chatId)).toHaveLength(0);
+        expect(store.findChatById(chatId)?.updatedAt).toBe(original?.updatedAt);
+      }
+      await handler(routeContext(makeReq(body), captureRes().res), deps(model));
+      expect(call).toHaveBeenCalledOnce();
+      expect(store.listMessages(chatId)).toHaveLength(2);
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
   it.each(["buffered", "streamed"] as const)(
     "settles a legacy %s turn rejected during prompt preparation",
     async (mode) => {

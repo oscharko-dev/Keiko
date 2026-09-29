@@ -40,7 +40,7 @@ import {
   buildMemoryResult,
   captureDesktopChatExecutionAdmission,
   desktopChatProviderBoundaryRejectionReason,
-  captureGatewayTurnSnapshot,
+  captureAdmittedSnapshot,
   collectMemoryActions,
   completeDesktopChatTurn,
   createAssistantMessage,
@@ -769,20 +769,6 @@ function captureStreamExecutionAdmission(
   );
 }
 
-function streamTurnSnapshot(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  prepared: PreparedDesktopChatSend,
-  admission: AdmittedTurnHandle,
-): GatewayTurnSnapshot {
-  return captureGatewayTurnSnapshot(
-    deps,
-    { ...prepared.request, modelId: prepared.modelId },
-    admission.userMessage,
-    ctx.correlationId,
-  );
-}
-
 async function runAdmittedDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -811,7 +797,9 @@ async function runAdmittedDesktopChatStream(
     ctx.correlationId,
   );
   if ("status" in provider) return provider;
-  const gatewayTurn = streamTurnSnapshot(ctx, deps, prepared, admission);
+  const { signal } = controller;
+  const { correlationId } = ctx;
+  const gatewayTurn = captureAdmittedSnapshot(deps, prepared, admission, signal, correlationId);
   return executeAdmittedDesktopChatStream(
     ctx,
     deps,

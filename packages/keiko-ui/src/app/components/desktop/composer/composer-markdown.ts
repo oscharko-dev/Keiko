@@ -27,7 +27,7 @@ export const composerSchema = new Schema({
       ["span", {}, 0],
       [
         "span",
-        { "data-markdown-destination": "" },
+        { "data-markdown-destination": "", contenteditable: "false" },
         ` (${String(mark.attrs.href ?? "")}${visibleTitle(mark.attrs.title)})`,
       ],
     ],

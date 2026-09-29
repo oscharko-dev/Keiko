@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState, TextSelection } from "prosemirror-state";
 import {
   composerSchema,
@@ -10,7 +10,19 @@ import {
 } from "./composer-markdown";
 import { openComposerCodeBlock } from "./composer-input-rules";
 
+const diagnostics = vi.hoisted(() => ({ report: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostics.report }));
+afterEach(() => diagnostics.report.mockClear());
+
 describe("composer Markdown", () => {
+  it("reports an actual cursor collision through the routine activity producer", () => {
+    const doc = parseComposerText("\uE000\uE001");
+    markdownCursor(EditorState.create({ doc }));
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "Keiko composer cursor marker collision avoided.",
+      { composerActivity: "cursor-collision" },
+    );
+  });
   it("shows the complete inert link and image destinations and titles, including empty image alt", () => {
     const destination = "https://example.com/private-reference";
     const image = composerSchema.nodes.image!;
@@ -146,7 +158,11 @@ describe("composer Markdown", () => {
       "span",
       { "data-markdown-link": "" },
       ["span", {}, 0],
-      ["span", { "data-markdown-destination": "" }, " (javascript:alert(1))"],
+      [
+        "span",
+        { "data-markdown-destination": "", contenteditable: "false" },
+        " (javascript:alert(1))",
+      ],
     ]);
   });
 });

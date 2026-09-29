@@ -6,6 +6,7 @@ import { createComposerState, pasteComposerMarkdown } from "./composer-editor-st
 import {
   markdownCursor,
   parseComposerText,
+  parseComposerDraft,
   selectionFromMarkdown,
   serializeComposerMarkdown,
 } from "./composer-markdown";
@@ -50,12 +51,20 @@ export class ComposerEditorController implements ComposerInputHandle {
               }),
             ])
           : null,
-      clipboardTextSerializer: (slice): string =>
-        serializeComposerMarkdown(this.view.state.schema.node("doc", null, slice.content)),
+      clipboardTextSerializer: (slice): string => this.clipboardText(slice),
     });
     reportClientDiagnostic("Keiko Markdown composer initialized.", {
       composerActivity: "initialized",
     });
+  }
+
+  private clipboardText(slice: Slice): string {
+    const text =
+      slice.openStart > 0 || slice.openEnd > 0
+        ? slice.content.textBetween(0, slice.content.size, "\n", "\n")
+        : serializeComposerMarkdown(this.view.state.schema.node("doc", null, slice.content));
+    reportClientDiagnostic("Keiko composer selection copied.", { composerActivity: "text-copied" });
+    return text;
   }
 
   private createState(value: string): ReturnType<typeof createComposerState> {
@@ -109,9 +118,17 @@ export class ComposerEditorController implements ComposerInputHandle {
       this.view.updateState(this.createState(""));
       return;
     }
-    const tr = this.externalDraftTransaction(props.value);
+    let tr = this.externalDraftTransaction(props.value);
+    if (serializeComposerMarkdown(tr.doc) !== props.value) {
+      const state = this.view.state;
+      tr = state.tr.replaceWith(0, state.doc.content.size, parseComposerDraft(props.value).content);
+      reportClientDiagnostic("Keiko composer external draft resynchronized.", {
+        composerActivity: "draft-resynchronized",
+      });
+    }
     this.view.updateState(this.view.state.apply(tr));
     this.value = serializeComposerMarkdown(this.view.state.doc);
+    if (this.value !== props.value) this.props.onChange(this.value, this.mentionCursor());
   }
 
   private externalDraftTransaction(value: string): Transaction {

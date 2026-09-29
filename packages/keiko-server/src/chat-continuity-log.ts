@@ -111,9 +111,10 @@ const CHAT_CONTINUITY_DEGRADED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["budget-exceeded"],
+      values: ["budget-exceeded", "summary-trimmed"],
     },
     inputBudget: { type: "integer", dataClass: "count", required: true },
+    omittedSummaryCategories: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -162,12 +163,19 @@ export function logChatRehydration(
 export function logGroundedContinuityDegradation(
   inputBudget: number,
   correlationId?: string,
+  omittedSummaryCategories = 0,
 ): void {
   getServerLogger().warn(
     activityLogEvent(
       CHAT_CONTINUITY_DEGRADED,
       { correlationId: correlationIdOrUnknown(correlationId) },
-      { reason: "budget-exceeded", inputBudget, completeness: "complete", loss: "none" },
+      {
+        reason: omittedSummaryCategories > 0 ? "summary-trimmed" : "budget-exceeded",
+        inputBudget,
+        omittedSummaryCategories,
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }

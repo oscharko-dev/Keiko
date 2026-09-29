@@ -12,6 +12,7 @@ import {
   splitBlock,
 } from "prosemirror-commands";
 import { splitListItem } from "prosemirror-schema-list";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { composerSchema } from "./composer-markdown";
 
 function inlineRule(pattern: RegExp, name: "strong" | "em" | "code"): InputRule {
@@ -19,11 +20,27 @@ function inlineRule(pattern: RegExp, name: "strong" | "em" | "code"): InputRule 
     const content = match[1];
     const mark = composerSchema.marks[name];
     if (!content || !mark) return null;
+    const prefix = state.doc.textBetween(state.selection.$from.start(), start);
+    if (name !== "code" && (content.trim() !== content || hasOpenCodeDelimiter(prefix))) {
+      reportClientDiagnostic("Keiko composer literal punctuation preserved.", {
+        composerActivity: "literal-input-preserved",
+      });
+      return null;
+    }
     return state.tr
       .insertText(content, start, end)
       .addMark(start, start + content.length, mark.create())
       .removeStoredMark(mark);
   });
+}
+
+function hasOpenCodeDelimiter(prefix: string): boolean {
+  let open = 0;
+  for (const match of prefix.matchAll(/`+/g)) {
+    if (open === 0) open = match[0].length;
+    else if (open === match[0].length) open = 0;
+  }
+  return open > 0;
 }
 
 export function composerInputRules(): Plugin {

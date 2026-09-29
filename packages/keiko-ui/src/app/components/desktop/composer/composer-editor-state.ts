@@ -1,3 +1,4 @@
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { Slice } from "prosemirror-model";
 import { baseKeymap, chainCommands, toggleMark } from "prosemirror-commands";
 import { history, redo, undo } from "prosemirror-history";
@@ -67,12 +68,17 @@ export function pasteComposerMarkdown(view: EditorView, event: ClipboardEvent): 
   const markdown = event.clipboardData?.types?.includes("text/markdown")
     ? event.clipboardData.getData("text/markdown")
     : undefined;
+  if (!text && !markdown) {
+    reportClientDiagnostic("Keiko composer non-text clipboard left unchanged.", {
+      composerActivity: "non-text-paste-ignored",
+    });
+    return false;
+  }
   view.dispatch(
     view.state.tr
       .replaceSelection(
         Slice.maxOpen(
-          (markdown === undefined ? parseComposerText(text) : parseComposerMarkdown(markdown))
-            .content,
+          (markdown ? parseComposerMarkdown(markdown) : parseComposerText(text)).content,
         ),
       )
       .scrollIntoView(),

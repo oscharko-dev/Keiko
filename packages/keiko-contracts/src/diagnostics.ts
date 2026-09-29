@@ -372,6 +372,10 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "format-removed",
   "cursor-collision",
   "workspace-scroll-ready",
+  "literal-input-preserved",
+  "draft-resynchronized",
+  "non-text-paste-ignored",
+  "text-copied",
 ] as const;
 export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
 export const CLIENT_COMPOSER_CODE_STAGES = [

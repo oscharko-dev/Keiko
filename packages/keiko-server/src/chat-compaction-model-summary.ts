@@ -252,16 +252,16 @@ function logRejectedSummary(
   summary: ContextCompactionModelSummary | undefined,
   modelUnavailable: boolean,
 ): void {
-  if (summary?.status === "invalid" || summary?.status === "timed-out" || modelUnavailable) {
-    const unavailable = new Error("Running summary refresh was unavailable.");
-    const timeout =
-      summary?.status === "timed-out"
-        ? new TimeoutError("Running summary refresh timed out.")
-        : unavailable;
-    const error =
-      summary?.status === "invalid" ? new TypeError("Running summary validation failed.") : timeout;
-    logSummaryFailure(deps, correlationIdOrUnknown(correlationId), error);
-  }
+  if (summary?.status !== "invalid" && summary?.status !== "timed-out" && !modelUnavailable) return;
+  emitServerDiagnostic(deps.diagnostics, {
+    timestamp: new Date().toISOString(),
+    correlationId: correlationIdOrUnknown(correlationId),
+    operation: "chat.compaction.summary",
+    source: "chat.compaction.model-summary",
+    errorClass: "SummaryRejected",
+    message: "server-operation-failed",
+    code: summary?.failureReason ?? "model-unavailable",
+  });
 }
 
 function currentSummaryTarget(
@@ -372,7 +372,7 @@ function modelSummaryFromCallFailure(
   if (result.kind === "timed-out") {
     return failureModelSummary(record, modelId, "timed-out", "timed-out");
   }
-  logSummaryFailure(deps, correlationId, result.error);
+  logSummaryFailure(deps, correlationId, result.error, "model-unavailable");
   return failureModelSummary(record, modelId, "unavailable", "model-unavailable");
 }
 
@@ -832,19 +832,24 @@ function failureModelSummary(
 
 // Replaces a bare `console.warn` (ADR-0173 D5 g25): a best-effort background enrichment failure
 // (send unaffected — the compaction record itself already persisted) is still an operator-visible
-// event, not a silent one. `correlationId` is the chat id (see `buildModelSummary` above): this
-// Background work retains the initiating request correlation or the explicit unknown sentinel.
-function logSummaryFailure(deps: UiHandlerDeps, correlationId: string, error: unknown): void {
-  emitServerDiagnostic(
-    deps.diagnostics,
-    serverDiagnosticFromError({
+// event, not a silent one. Background work retains the initiating request correlation or the
+// explicit unknown sentinel.
+function logSummaryFailure(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  error: unknown,
+  failureReason?: ModelSummaryFailureReason,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
       correlationId,
       operation: "chat.compaction.summary",
       source: "chat.compaction.model-summary",
       error,
       redact: (message) => String(deps.redactor(message)),
     }),
-  );
+    ...(failureReason === undefined ? {} : { code: failureReason }),
+  });
 }
 
 function compactionSourceMessages(
