@@ -1212,6 +1212,17 @@ export function settleRejectedDesktopChatTurn(
   );
 }
 
+export function settlePromptPreparationRejection(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  admitted: AdmittedTurnHandle,
+  error: unknown,
+): boolean {
+  if (!(error instanceof ChatPromptPreparationRejection)) return false;
+  settleRejectedDesktopChatTurn(deps, prepared, admitted);
+  return true;
+}
+
 export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -1738,6 +1749,7 @@ export function captureGatewayTurnSnapshot(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   userMessage: ChatMessage,
+  correlationId?: string,
 ): GatewayTurnSnapshot {
   const snapshot = captureChatHistory(
     deps.store,
@@ -1749,6 +1761,7 @@ export function captureGatewayTurnSnapshot(
       deps.evidenceStore,
       request.chatId,
       deps.store.chatHistoryRevision(request.chatId),
+      correlationId,
     ),
   );
   return snapshot.earlierCompaction === undefined
@@ -1813,6 +1826,7 @@ export function buildGatewayAssembly(
       deps.evidenceStore,
       request.chatId,
       snapshot.historyRevision,
+      correlationId,
     ),
     continuityContextText: snapshot.rehydratedContext,
     earlierCompaction: snapshot.earlierCompaction,
@@ -1992,7 +2006,12 @@ function buildRegenerateGatewayAssembly(
   const user = [...historyBeforeAssistant].reverse().find((message) => message.role === "user");
   if (user === undefined)
     throw new UiStoreError("INTERNAL", "Regeneration user turn is missing.", 500);
-  const snapshot = captureGatewayTurnSnapshot(deps, { ...request, modelId }, user);
+  const snapshot = captureGatewayTurnSnapshot(
+    deps,
+    { ...request, content: user.content, modelId },
+    user,
+    correlationId,
+  );
   const currentIndex = snapshot.history.findIndex((message) => message.id === user.id);
   return buildGatewayAssembly(
     deps,
@@ -2305,12 +2324,16 @@ async function prepareBufferedGatewayAssembly(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
   memory: ConversationMemoryResultWire,
-  executionAdmission: DesktopChatExecutionAdmission,
+  admission: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
   gatewayTurn: GatewayTurnSnapshot,
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<GatewayPromptAssembly> {
   const { request, modelId } = prepared;
+  const { admitted, executionAdmission } = admission;
   const executionRequest = await prepareDesktopChatPrompt(
     deps,
     request,
@@ -2318,7 +2341,10 @@ async function prepareBufferedGatewayAssembly(
     executionAdmission,
     signal,
     correlationId,
-  );
+  ).catch((error: unknown) => {
+    settlePromptPreparationRejection(deps, prepared, admitted, error);
+    throw error;
+  });
   return buildBufferedGatewayAssembly(
     deps,
     executionRequest,
@@ -2361,14 +2387,14 @@ async function executeBufferedModelTurn(
   if (isRouteResult(outcome)) return outcome;
   const { admitted, executionAdmission } = outcome;
   const { userMessage } = admitted;
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
+  const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage, correlationId);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
   const assembly = await prepareBufferedGatewayAssembly(
     deps,
     prepared,
     memory,
-    executionAdmission,
+    outcome,
     gatewayTurn,
     abortSignal,
     correlationId,
@@ -2591,7 +2617,12 @@ async function generateAdmittedGitChangeTurn(
   signal: AbortSignal,
   correlationId: string,
 ): Promise<Awaited<ReturnType<typeof generateGitChangeChatDescription>>> {
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  const gatewayTurn = captureGatewayTurnSnapshot(
+    deps,
+    prepared.request,
+    admission.userMessage,
+    correlationId,
+  );
   return generateGitChangeChatDescription({
     deps,
     projectPath: prepared.chat.projectPath,

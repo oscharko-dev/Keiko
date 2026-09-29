@@ -1260,6 +1260,8 @@ interface AskWorkerCtx {
 }
 
 interface PreparedGroundedAsk {
+  readonly messageCountBeforeTurn?: number;
+  readonly continuityStartedAt?: number;
   readonly continuity?: GroundedConversationContinuity | undefined;
   readonly chat: Chat;
   readonly input: AskInput;
@@ -1983,6 +1985,7 @@ function admitGroundedUser(
   deps: UiHandlerDeps,
 ): PreparedGroundedAsk | RouteResult {
   if (prepared.userMessage !== undefined) return prepared;
+  const messageCountBeforeTurn = deps.store.countMessages(prepared.chat.id);
   const newUserMessage = {
     chatId: prepared.chat.id,
     role: "user",
@@ -1999,7 +2002,12 @@ function admitGroundedUser(
     identityContent: frozenGroundedTurnIdentity(prepared),
   });
   if (admission.kind === "admitted") {
-    return { ...prepared, commitTurnId, userMessage: admission.userMessage };
+    return {
+      ...prepared,
+      commitTurnId,
+      userMessage: admission.userMessage,
+      messageCountBeforeTurn,
+    };
   }
   if (admission.kind === "replay") {
     return admission.assistantMessage.groundedAnswer === undefined
@@ -2083,15 +2091,19 @@ async function withGroundedContinuity(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
 ): Promise<PreparedGroundedAsk> {
+  const continuityStartedAt = Date.now();
   const content = await compactGroundedCurrentPrompt(prepared, deps);
   const continuity = groundedConversationContinuity(
     deps,
     { ...admittedGroundedUser(prepared), content },
     groundedModelId(prepared),
+    prepared.correlationId,
+    admittedGroundedUser(prepared).content,
   );
   return {
     ...prepared,
     continuity,
+    continuityStartedAt,
     input: {
       ...prepared.input,
       content,
@@ -2106,13 +2118,15 @@ function persistGroundedContinuity(
   deps: UiHandlerDeps,
   result: RouteResult,
 ): void {
-  if (result.status !== 200) return;
+  if (result.status !== 200 || prepared.continuity?.compaction === undefined) return;
+  if (prepared.messageCountBeforeTurn === undefined || prepared.continuityStartedAt === undefined)
+    throw new Error("Grounded continuity evidence was not admitted.");
   persistChatCompactionEvidence(deps, {
-    compaction: prepared.continuity?.compaction,
+    compaction: prepared.continuity.compaction,
     chatId: prepared.chat.id,
     modelId: groundedModelId(prepared),
-    messageCount: deps.store.countMessages(prepared.chat.id),
-    startedAt: Date.now(),
+    messageCount: prepared.messageCountBeforeTurn,
+    startedAt: prepared.continuityStartedAt,
     finishedAt: Date.now(),
   });
 }

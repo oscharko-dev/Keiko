@@ -60,6 +60,8 @@ import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestra
 import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import {
   CancelledError,
   ContextOverflowError,
@@ -665,6 +667,69 @@ async function runHandler(
 ): Promise<RouteResult> {
   return handleGroundedAsk(ctx(body), deps(), customRunner);
 }
+
+describe("grounded continuity evidence lifecycle", () => {
+  it("pins grounded continuity evidence before admission and measures its actual duration", async () => {
+    const { chatId, projectPath } = await setupChatWithoutScope();
+    connectTestScope(chatId);
+    for (let index = 0; index < 80; index += 1) {
+      store.createMessage({
+        chatId,
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: "Review documentation. ".repeat(40),
+        timestamp: NOW - 100 + index,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    const evidenceStore = createInMemoryEvidenceStore();
+    const handlerDeps = deps(
+      undefined,
+      {},
+      {
+        evidenceStore,
+        contextProfile: deriveContextProfile({
+          maxInputTokens: 128_000,
+          reservedOutputTokens: 8_000,
+          safetyMarginTokens: 4_000,
+        }),
+      },
+    );
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, projectPath, content: "Explain MyClass" })),
+        handlerDeps,
+        (input) => {
+          clock.mockReturnValue(NOW + 1000);
+          return runner(emptyPack())(input);
+        },
+      );
+      expect(result.status).toBe(200);
+      const id = evidenceStore.list().find((entry) => entry.startsWith("chat-"));
+      expect(id).toBeDefined();
+      if (id === undefined) throw new TypeError("Missing continuity evidence");
+      expect(id).toMatch(/-t80$/u);
+      const first = loadEvidence(evidenceStore, id);
+      expect(first?.run).toMatchObject({ startedAt: NOW, finishedAt: NOW + 1000 });
+      persistChatCompactionEvidence(handlerDeps, {
+        compaction: first?.compaction?.[0],
+        chatId,
+        modelId: CHAT_MODEL,
+        messageCount: store.countMessages(chatId),
+        startedAt: NOW + 2000,
+        finishedAt: NOW + 3000,
+      });
+      expect(evidenceStore.list().filter((entry) => entry.startsWith("chat-"))).toHaveLength(2);
+      expect(loadEvidence(evidenceStore, id)).toEqual(first);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
 
 describe("mappedWorkspaceError", () => {
   it("maps an unavailable workspace root without exposing its path", () => {

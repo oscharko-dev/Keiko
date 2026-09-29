@@ -1440,7 +1440,7 @@ export function handleChatContextStatus(ctx: RouteContext, deps: UiHandlerDeps):
     if (!chatBelongsToProject(deps, projectPath, chatId)) return notFoundResult("Chat not found.");
     const modelId = requireQuery(ctx, "modelId");
     assertChatModelId(deps, modelId);
-    const status = readChatContextStatus(deps, chatId, modelId);
+    const status = readChatContextStatus(deps, chatId, modelId, ctx.correlationId);
     logChatContextManagement("inspected", status, 0, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
     return { status: 200, body: status };
   });

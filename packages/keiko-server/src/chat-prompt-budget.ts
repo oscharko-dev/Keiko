@@ -43,6 +43,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 export type { GatewayConversationMessage } from "./conversation-gateway.js";
 
 export interface GatewayPromptAssembly {
+  readonly maxOutputTokens?: number;
   readonly messages: import("./conversation-gateway.js").GatewayConversationMessage[];
   readonly compaction: ConversationCompactionOutcome["compaction"];
   readonly diagnostics: import("@oscharko-dev/keiko-contracts").ContextAssemblyDiagnostics;
@@ -541,8 +542,14 @@ export function buildChatCompactionContextText(
   evidenceStore: EvidenceStore,
   chatId: string,
   historyRevision?: number,
+  correlationId?: string,
 ): string | undefined {
-  return buildChatCompactionResurfacingContext(evidenceStore, chatId, historyRevision);
+  return buildChatCompactionResurfacingContext(
+    evidenceStore,
+    chatId,
+    historyRevision,
+    correlationId,
+  );
 }
 
 export function selectGatewayPromptAssembly(
@@ -551,7 +558,11 @@ export function selectGatewayPromptAssembly(
   },
 ): GatewayPromptAssembly | undefined {
   const adjusted = adjustLatestPromptOutputBudget(input);
-  const candidate = assembleSelectedGatewayPrompt(adjusted);
+  const selected = assembleSelectedGatewayPrompt(adjusted);
+  const candidate =
+    selected === undefined
+      ? undefined
+      : withAdaptiveOutputAllocation(selected, input.profile, adjusted.profile);
   if (candidate === undefined || input.proactiveCompaction !== true) return candidate;
   const before = countGatewayPromptTokens(
     { messages: candidate.messages },
@@ -570,6 +581,7 @@ export function selectGatewayPromptAssembly(
   if (compacted.messages.at(-1)?.content !== candidate.messages.at(-1)?.content) return candidate;
   return {
     ...compacted,
+    ...gatewayAssemblyOutputAllocation(candidate),
     diagnostics: withDeploymentContextProfile(compacted.diagnostics, adjusted.profile),
   };
 }
@@ -596,7 +608,9 @@ function adjustLatestPromptOutputBudget<
     contextWindow: input.profile.maxInputTokens,
   });
   const available = input.profile.maxInputTokens - input.profile.safetyMarginTokens - required;
-  if (required <= input.profile.effectiveInputBudget || available < 1) return input;
+  const minimumAnswerBudget = Math.min(input.profile.reservedOutputTokens, 1024);
+  if (required <= input.profile.effectiveInputBudget || available < minimumAnswerBudget)
+    return input;
   return {
     ...input,
     profile: {
@@ -609,6 +623,17 @@ function adjustLatestPromptOutputBudget<
 export function gatewayAssemblyOutputAllocation(assembly: GatewayPromptAssembly): {
   readonly maxOutputTokens?: number;
 } {
-  const maxOutputTokens = assembly.diagnostics.profile.reservedOutputTokens;
-  return maxOutputTokens > 0 ? { maxOutputTokens } : {};
+  return assembly.maxOutputTokens === undefined
+    ? {}
+    : { maxOutputTokens: assembly.maxOutputTokens };
+}
+
+function withAdaptiveOutputAllocation(
+  assembly: GatewayPromptAssembly,
+  original: ContextProfile,
+  adjusted: ContextProfile,
+): GatewayPromptAssembly {
+  return adjusted.reservedOutputTokens < original.reservedOutputTokens
+    ? { ...assembly, maxOutputTokens: adjusted.reservedOutputTokens }
+    : assembly;
 }

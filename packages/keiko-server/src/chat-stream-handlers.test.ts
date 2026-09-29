@@ -70,6 +70,8 @@ import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import { currentContextProfileForModel } from "./deps.js";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { compactChatContext } from "./chat-context-status.js";
 import { CancelledError, TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   expectActivityLogProof,
@@ -639,6 +641,153 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it("rehydrates regeneration from the original large prompt instead of preparation boilerplate", async () => {
+    const chatId = seedChat();
+    for (let index = 0; index < 60; index += 1) {
+      seedMessage(
+        chatId,
+        "user",
+        index === 20
+          ? "Leuchtturmvertrag Zahlungsziel: 63721 EUR."
+          : `General documentation ${String(index)}. ${"Housekeeping notes. ".repeat(45)}`,
+      );
+      seedMessage(chatId, "assistant", "Understood.");
+    }
+    const recorded: GatewayCallRequest[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        recorded.push(request);
+        return Promise.resolve(normalizedResponse("Work on the requested contract."));
+      },
+    };
+    const handlerDeps = deps(model, {
+      evidenceStore: createInMemoryEvidenceStore(),
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    });
+    compactChatContext(handlerDeps, chatId, CHAT_MODEL, "corr-seed-checkpoint");
+    seedMessage(
+      chatId,
+      "user",
+      "Leuchtturmvertrag Zahlungsziel klären.\n" +
+        "Unrelated redundant documentation. ".repeat(900),
+    );
+    seedMessage(chatId, "assistant", "Original answer.");
+    const result = await handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          assistantMessageId: store.listMessages(chatId).at(-1)?.id,
+        }),
+        captureRes().res,
+      ),
+      handlerDeps,
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(JSON.stringify(recorded.at(-1)?.messages)).toContain("63721 EUR");
+  });
+  it.each(["buffered", "streamed", "regenerated"] as const)(
+    "leaves normal %s answers uncapped without qualification spending",
+    async (mode) => {
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "Original question");
+      seedMessage(chatId, "assistant", "Original answer");
+      const recorded: GatewayCallRequest[] = [];
+      const model: ModelPort = {
+        call: (request) => {
+          recorded.push(request);
+          return Promise.resolve(normalizedResponse("Complete answer"));
+        },
+        async *callStream(request): AsyncGenerator<GatewayStreamChunk> {
+          recorded.push(request);
+          yield await Promise.resolve({
+            type: "done" as const,
+            response: normalizedResponse("Complete answer"),
+          });
+        },
+      };
+      const handlers = {
+        buffered: handleSendDesktopChat,
+        streamed: handleSendDesktopChatStream,
+        regenerated: handleRegenerateDesktopChat,
+      };
+      await handlers[mode](
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "Write a complete document",
+            assistantMessageId: store.listMessages(chatId).at(-1)?.id,
+          }),
+          captureRes().res,
+        ),
+        deps(model, {
+          contextProfile: deriveContextProfile({
+            maxInputTokens: 128_000,
+            reservedOutputTokens: 8_000,
+            safetyMarginTokens: 4_000,
+          }),
+        }),
+      );
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).not.toHaveProperty("maxOutputTokens");
+    },
+  );
+
+  it.each(["buffered", "streamed"] as const)(
+    "settles a legacy %s turn rejected during prompt preparation",
+    async (mode) => {
+      const chatId = seedChat();
+      const original = store.findChatById(chatId);
+      const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+      let summaryCalls = 0;
+      let answerCalls = 0;
+      const model: ModelPort = {
+        call: () => {
+          summaryCalls += 1;
+          replaceWithReadyRuntimeConfig(holder);
+          return Promise.resolve(normalizedResponse("Preserve the current task."));
+        },
+        async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+          answerCalls += 1;
+          yield await Promise.resolve({
+            type: "done" as const,
+            response: normalizedResponse("Must not run"),
+          });
+        },
+      };
+      const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+      await handler(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "Original task documentation. ".repeat(1200),
+          }),
+          captureRes().res,
+        ),
+        deps(model, {
+          gatewayConfig: holder,
+          contextProfile: deriveContextProfile({
+            maxInputTokens: 4096,
+            reservedOutputTokens: 1024,
+            safetyMarginTokens: 128,
+          }),
+        }),
+      );
+      expect(summaryCalls).toBe(1);
+      expect(answerCalls).toBe(0);
+      expect(store.listMessages(chatId)).toHaveLength(0);
+      expect(store.findChatById(chatId)?.updatedAt).toBe(original?.updatedAt);
+    },
+  );
   it.each([
     ["buffered", "timeout"],
     ["streamed", "timeout"],

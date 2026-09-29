@@ -8,6 +8,7 @@ import {
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { callChatCompactionModel } from "./chat-compaction-model-call.js";
 import { logChatContextManagement } from "./chat-context-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 const MAX_COMPACTION_CALLS = 32;
 const MAX_COMPACTION_ROUNDS = 3;
@@ -219,6 +220,6 @@ function logPromptCompaction(
       inputBudgetTokens: input.profile.effectiveInputBudget,
     },
     Math.max(0, before - after),
-    input.correlationId ?? "unknown",
+    correlationIdOrUnknown(input.correlationId),
   );
 }

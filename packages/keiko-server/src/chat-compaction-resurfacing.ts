@@ -16,7 +16,8 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 export const CHAT_COMPACTION_CONTEXT_HEADER = "# Persisted compaction context";
 
@@ -60,9 +61,10 @@ export function buildChatCompactionResurfacingContext(
   store: EvidenceStore,
   chatId: string,
   historyRevision?: number,
+  correlationId?: string,
 ): string | undefined {
   try {
-    const records = loadChatCompactionRecords(store, chatId);
+    const records = loadChatCompactionRecords(store, chatId, correlationId);
     return renderRecords(
       historyRevision === undefined
         ? records
@@ -73,7 +75,7 @@ export function buildChatCompactionResurfacingContext(
             .slice(-1),
     );
   } catch (error) {
-    recordReadFailure(error, sha256Hex(chatId));
+    recordReadFailure(error, correlationId);
     return undefined;
   }
 }
@@ -82,27 +84,31 @@ export function loadChatContinuityCheckpoint(
   store: EvidenceStore,
   chatId: string,
   historyRevision: number,
+  correlationId?: string,
 ): ContextCompactionRecord | undefined {
   try {
-    return [...loadChatCompactionRecords(store, chatId)]
+    return [...loadChatCompactionRecords(store, chatId, correlationId)]
       .reverse()
       .find(({ record }) => record.conversationCoverage?.historyRevision === historyRevision)
       ?.record;
   } catch (error) {
-    recordReadFailure(error, sha256Hex(chatId));
+    recordReadFailure(error, correlationId);
     return undefined;
   }
 }
 
-function recordReadFailure(error: unknown, correlationId: string): void {
-  emitServerDiagnostic(undefined, {
-    correlationId,
-    timestamp: new Date().toISOString(),
-    operation: "chat.compaction.read",
-    source: "chat-compaction-resurfacing",
-    errorClass: contentFreeErrorClass(error),
-    message: "Audit or evidence persistence failed.",
-  });
+function recordReadFailure(error: unknown, correlationId: string | undefined): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "chat.compaction.read",
+      source: "chat-compaction-resurfacing",
+      error,
+      summary: "Audit or evidence persistence failed.",
+      redact: (value) => value,
+    }),
+  );
 }
 
 // Feature-detect the node adapter's prefix-scoped listing (GEN-PERF-CHAT-005). When present it filters
@@ -117,11 +123,15 @@ function listByPrefix(store: EvidenceStore, prefix: string): readonly string[] {
   return store.list().filter((runId) => runId.startsWith(prefix));
 }
 
-function loadChatCompactionRecords(store: EvidenceStore, chatId: string): readonly TimedRecord[] {
+function loadChatCompactionRecords(
+  store: EvidenceStore,
+  chatId: string,
+  correlationId: string | undefined,
+): readonly TimedRecord[] {
   const prefix = `chat-${sha256Hex(chatId).slice(0, 16)}-t`;
   const records: TimedRecord[] = [];
   for (const runId of newestRunIds(listByPrefix(store, prefix), prefix)) {
-    const manifest = safeLoad(store, runId);
+    const manifest = safeLoad(store, runId, correlationId);
     if (manifest === undefined) {
       continue;
     }
@@ -184,11 +194,15 @@ function recordForResurfacing(
   return validateContextCompactionRecord(withoutModelSummary).ok ? withoutModelSummary : undefined;
 }
 
-function safeLoad(store: EvidenceStore, runId: string): EvidenceManifest | undefined {
+function safeLoad(
+  store: EvidenceStore,
+  runId: string,
+  correlationId: string | undefined,
+): EvidenceManifest | undefined {
   try {
     return loadEvidence(store, runId);
   } catch (error) {
-    recordReadFailure(error, runId);
+    recordReadFailure(error, correlationId);
     return undefined;
   }
 }

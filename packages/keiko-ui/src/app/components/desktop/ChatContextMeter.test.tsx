@@ -1,9 +1,41 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ChatContextMeter } from "./ChatContextMeter";
+import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
+import { ApiError } from "@/lib/api-shared-primitives";
+
+const contextApi = vi.hoisted(() => ({ fetch: vi.fn(), compact: vi.fn(), report: vi.fn() }));
+vi.mock("@/lib/api", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/api")>("@/lib/api")),
+  fetchChatContextStatus: contextApi.fetch,
+  compactChatContext: contextApi.compact,
+}));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: contextApi.report }));
+
+function contextSession(): Parameters<typeof ChatContextMeterContainer>[0]["session"] {
+  return {
+    activeChat: {
+      id: "chat-private-canary",
+      projectPath: "/private/path-canary",
+      title: "Private title canary",
+      selectedModel: "fixture",
+      branchLabel: undefined,
+      status: "open",
+      connectedScope: undefined,
+      localKnowledgeScope: undefined,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    selectedModel: "fixture",
+    messages: [],
+    sending: false,
+    regeneratingMessageId: undefined,
+    loading: false,
+  };
+}
 
 function status(used: number): ChatContextStatusWire {
   return {
@@ -121,5 +153,59 @@ describe("Chat context meter", () => {
     expect(await axe(document.body)).toHaveNoViolations();
     fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
     expect(await axe(document.body)).toHaveNoViolations();
+  });
+});
+
+describe("Chat context request diagnostics", () => {
+  beforeEach(() => {
+    contextApi.fetch.mockReset().mockResolvedValue(status(8_000));
+    contextApi.compact.mockReset().mockResolvedValue(status(1_000));
+    contextApi.report.mockClear();
+  });
+
+  it("reports a correlated status failure without its response body or chat identity", async () => {
+    const error = new ApiError("INTERNAL", "Private response body canary", 503);
+    error.correlationId = "corr-context-status-failure";
+    contextApi.fetch.mockRejectedValue(error);
+    render(<ChatContextMeterContainer session={contextSession()} />);
+    await waitFor(() => expect(contextApi.report).toHaveBeenCalledOnce());
+    expect(contextApi.report).toHaveBeenCalledWith(
+      "Keiko context status request failed.",
+      expect.objectContaining({
+        correlationId: "corr-context-status-failure",
+        errorKind: "unavailable",
+        errorEvidence: expect.objectContaining({ errorClass: "ApiError" }),
+      }),
+    );
+    expect(JSON.stringify(contextApi.report.mock.calls)).not.toContain("canary");
+  });
+
+  it("reports a manual maintenance transport failure", async () => {
+    contextApi.compact.mockRejectedValue(new TypeError("Private network canary"));
+    render(<ChatContextMeterContainer session={contextSession()} />);
+    const ring = await screen.findByRole("button", { name: /Conversation context:/ });
+    fireEvent.click(ring);
+    fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
+    await waitFor(() => expect(contextApi.report).toHaveBeenCalledOnce());
+    expect(contextApi.report).toHaveBeenCalledWith(
+      "Keiko manual context compaction request failed.",
+      expect.objectContaining({ errorKind: "unavailable" }),
+    );
+    expect(JSON.stringify(contextApi.report.mock.calls)).not.toContain("canary");
+  });
+
+  it("does not report a superseded or unmounted request as a failure", async () => {
+    let reject: ((error: Error) => void) | undefined;
+    contextApi.fetch.mockImplementation(
+      () =>
+        new Promise((_, rejectRequest) => {
+          reject = rejectRequest;
+        }),
+    );
+    const view = render(<ChatContextMeterContainer session={contextSession()} />);
+    view.unmount();
+    reject?.(new Error("Private aborted request canary"));
+    await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledOnce());
+    expect(contextApi.report).not.toHaveBeenCalled();
   });
 });

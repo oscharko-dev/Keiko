@@ -23,11 +23,13 @@ function checkpointForProfile(
   deps: UiHandlerDeps,
   chatId: string,
   profile: ContextProfile,
+  correlationId?: string,
 ): ContextCompactionRecord | undefined {
   const checkpoint = loadChatContinuityCheckpoint(
     deps.evidenceStore,
     chatId,
     deps.store.chatHistoryRevision(chatId),
+    correlationId,
   );
   if (checkpoint?.conversationCoverage?.contextWindowTokens === undefined) return undefined;
   return profile.maxInputTokens <= checkpoint.conversationCoverage.contextWindowTokens
@@ -81,9 +83,10 @@ export function readChatContextStatus(
   deps: UiHandlerDeps,
   chatId: string,
   modelId: string,
+  correlationId?: string,
 ): ChatContextStatusWire {
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
-  const checkpoint = checkpointForProfile(deps, chatId, profile);
+  const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
   const counted = countHistory(deps, chatId, profile, checkpoint);
   return {
     modelId,
@@ -92,7 +95,7 @@ export function readChatContextStatus(
     reservedOutputTokens: profile.reservedOutputTokens,
     safetyMarginTokens: profile.safetyMarginTokens,
     estimatedInputTokens: counted.tokens,
-    canCompact: counted.messages >= 4,
+    canCompact: counted.messages >= 2,
     ...(checkpoint === undefined || !counted.checkpointUsed
       ? {}
       : {
@@ -111,6 +114,7 @@ function manualCompactionCandidate(
   chatId: string,
   modelId: string,
   status: ChatContextStatusWire,
+  correlationId: string,
 ): ContextCompactionRecord | undefined {
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   const snapshot = captureChatHistory(
@@ -119,7 +123,7 @@ function manualCompactionCandidate(
     "",
     profile,
     currentRedactionSecrets(deps),
-    checkpointForProfile(deps, chatId, profile),
+    checkpointForProfile(deps, chatId, profile, correlationId),
   );
   const budget = Math.floor(
     Math.min(profile.effectiveInputBudget, status.estimatedInputTokens) * 0.7,
@@ -150,8 +154,8 @@ export function compactChatContext(
   correlationId: string,
 ): ChatContextStatusWire {
   const startedAt = Date.now();
-  const before = readChatContextStatus(deps, chatId, modelId);
-  const compaction = manualCompactionCandidate(deps, chatId, modelId, before);
+  const before = readChatContextStatus(deps, chatId, modelId, correlationId);
+  const compaction = manualCompactionCandidate(deps, chatId, modelId, before, correlationId);
   if (compaction === undefined) {
     logChatContextManagement("unchanged", before, 0, correlationId);
     return { ...before, canCompact: false };
@@ -164,7 +168,7 @@ export function compactChatContext(
     startedAt,
     finishedAt: Date.now(),
   });
-  const after = readChatContextStatus(deps, chatId, modelId);
+  const after = readChatContextStatus(deps, chatId, modelId, correlationId);
   if (after.compaction?.messagesCompacted !== compaction.itemsBefore) {
     logChatContextManagement("failed", before, 0, correlationId);
     throw new UiStoreError("INTERNAL", "Context compaction could not be saved.", 500);

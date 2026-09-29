@@ -65,11 +65,13 @@ interface CompactionSelection {
   readonly dropCount: number;
   readonly summaryContent: string;
   readonly digest: CompactionDigest;
+  readonly modelSummary: ContextCompactionRecord["modelSummary"];
 }
 
 interface StructuredSummary {
   readonly content: string;
   readonly digest: CompactionDigest;
+  readonly modelSummary: ContextCompactionRecord["modelSummary"];
 }
 
 // Deterministic, offline, predicate-gated wrapper over conversationForGateway. On the fast path
@@ -86,16 +88,7 @@ export function conversationForGatewayWithCompaction(
   const effectiveInputBudget = opts.effectiveInputBudget ?? activeProfile.effectiveInputBudget;
   const tokenAccounting = activeProfile.tokenAccounting;
   const earlier = opts.earlierCompaction;
-  const fullVerbatimMessages =
-    earlier === undefined
-      ? buildVerbatimMessages(systemMessage, filtered)
-      : buildCompactedMessages(
-          systemMessage,
-          renderStructuredSummaryLines(earlier.itemsBefore, earlier, earlier.modelSummary).join(
-            "\n",
-          ),
-          filtered,
-        );
+  const fullVerbatimMessages = buildInitialMessages(systemMessage, filtered, earlier);
   const fullVerbatimTokens = countGatewayPromptTokens(
     { messages: fullVerbatimMessages },
     tokenAccounting,
@@ -105,6 +98,16 @@ export function conversationForGatewayWithCompaction(
   }
 
   const prepared = prepareDroppedTurns(filtered, tokenAccounting);
+  if (earlier !== undefined) {
+    const refitted = refitEarlierCheckpoint(
+      prepared,
+      systemMessage,
+      earlier,
+      effectiveInputBudget,
+      tokenAccounting,
+    );
+    if (refitted !== undefined) return refitted;
+  }
   const selection = selectCompaction(
     prepared,
     systemMessage,
@@ -120,6 +123,20 @@ export function conversationForGatewayWithCompaction(
     );
   }
   return buildCompactedOutcome(prepared, systemMessage, selection, tokenAccounting, earlier);
+}
+
+function buildInitialMessages(
+  systemMessage: GatewayConversationMessage | undefined,
+  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  earlier: ContextCompactionRecord | undefined,
+): GatewayConversationMessage[] {
+  if (earlier === undefined) return buildVerbatimMessages(systemMessage, filtered);
+  const summary = renderStructuredSummaryLines(
+    earlier.itemsBefore,
+    earlier,
+    earlier.modelSummary,
+  ).join("\n");
+  return buildCompactedMessages(systemMessage, summary, filtered);
 }
 
 function buildVerbatimMessages(
@@ -247,7 +264,12 @@ function selectCompactionCandidate(
     retainedMessageTokens +
     countSystemSummaryTokens(systemContent, summary.content, tokenAccounting);
   return candidateTokens <= effectiveInputBudget
-    ? { dropCount, summaryContent: summary.content, digest: summary.digest }
+    ? {
+        dropCount,
+        summaryContent: summary.content,
+        digest: summary.digest,
+        modelSummary: summary.modelSummary,
+      }
     : undefined;
 }
 
@@ -309,17 +331,14 @@ function buildSummaryContent(
     redactionSecrets,
   });
   const digest = earlier === undefined ? newDigest : mergeHistoryDigests(earlier, newDigest);
-  const content = fitSummaryLines(
-    renderStructuredSummaryLines(
-      dropped.length + (earlier?.itemsBefore ?? 0),
-      digest,
-      earlier?.modelSummary,
-    ),
+  return fitStructuredSummary(
+    digest,
+    earlier?.modelSummary,
+    dropped.length + (earlier?.itemsBefore ?? 0),
     summaryTokenBudget,
     tokenAccounting,
     systemContent,
   );
-  return content === undefined ? undefined : { content, digest };
 }
 
 export function renderStructuredSummaryLines(
@@ -356,6 +375,7 @@ export function renderStructuredSummaryLines(
   addSection(lines, "Decisions", digest.decisions);
   addSection(lines, "Open questions", digest.openQuestions);
   addSection(lines, "Files", digest.filesInspected);
+  addSection(lines, "Changed files", digest.filesChanged);
   addSection(
     lines,
     "Commands",
@@ -413,18 +433,97 @@ function countSystemSummaryTokens(
   );
 }
 
-function fitSummaryLines(
-  lines: readonly string[],
-  summaryTokenBudget: number,
-  tokenAccounting: ContextTokenAccounting | undefined,
+const SIGNAL_DROP_ORDER = [
+  "assumptions",
+  "commandOutcomes",
+  "failingTests",
+  "filesChanged",
+  "filesInspected",
+  "openQuestions",
+  "decisions",
+  "preservedFacts",
+  "userConstraints",
+] as const;
+
+function markDigestLoss(digest: CompactionDigest, category: string): CompactionDigest {
+  return {
+    ...digest,
+    droppedCategories: [...new Set([...(digest.droppedCategories ?? []), category])],
+  };
+}
+
+function dropLowestPrioritySignal(digest: CompactionDigest): CompactionDigest | undefined {
+  for (const field of SIGNAL_DROP_ORDER) {
+    const values = digest[field];
+    if (values === undefined || values.length === 0) continue;
+    if (field === "preservedFacts") {
+      const facts = digest.preservedFacts ?? [];
+      const index = Math.max(
+        0,
+        facts.findIndex((fact) => fact.inferred === true),
+      );
+      return markDigestLoss(
+        { ...digest, preservedFacts: facts.filter((_, position) => position !== index) },
+        "preservedFacts-requires-rehydration",
+      );
+    }
+    return markDigestLoss({ ...digest, [field]: values.slice(1) }, `${field}-requires-rehydration`);
+  }
+  return undefined;
+}
+
+function fitStructuredSummary(
+  input: CompactionDigest,
+  inputModelSummary: ContextCompactionRecord["modelSummary"],
+  droppedCount: number,
+  budget: number,
+  accounting: ContextTokenAccounting | undefined,
   systemContent: string | undefined,
-): string | undefined {
-  // Evidence must never claim to retain facts that were truncated out of the actual prompt.
-  const summary = lines.join("\n");
-  return summary.length > 0 &&
-    countSystemSummaryTokens(systemContent, summary, tokenAccounting) <= summaryTokenBudget
-    ? summary
-    : undefined;
+): StructuredSummary | undefined {
+  let digest: CompactionDigest | undefined = input;
+  let modelSummary = inputModelSummary;
+  while (digest !== undefined) {
+    const content = renderStructuredSummaryLines(droppedCount, digest, modelSummary).join("\n");
+    if (countSystemSummaryTokens(systemContent, content, accounting) <= budget)
+      return { content, digest, modelSummary };
+    if (modelSummary !== undefined) {
+      modelSummary = undefined;
+      digest = markDigestLoss(digest, "model-written-continuity-requires-rehydration");
+    } else {
+      digest = dropLowestPrioritySignal(digest);
+    }
+  }
+  return undefined;
+}
+
+function refitEarlierCheckpoint(
+  retained: readonly DroppedTurn[],
+  system: GatewayConversationMessage | undefined,
+  earlier: ContextCompactionRecord,
+  budget: number,
+  accounting: ContextTokenAccounting | undefined,
+): ConversationCompactionOutcome | undefined {
+  const remaining = budget - retained.reduce((sum, turn) => sum + turn.gatewayTokens, 0);
+  const summary = fitStructuredSummary(
+    earlier,
+    earlier.modelSummary,
+    earlier.itemsBefore,
+    remaining,
+    accounting,
+    system?.content,
+  );
+  if (summary === undefined) return undefined;
+  const messages = buildCompactedMessages(system, summary.content, retained);
+  if (countGatewayPromptTokens({ messages }, accounting) > budget) return undefined;
+  return {
+    messages,
+    compaction: {
+      ...earlier,
+      ...summary.digest,
+      modelSummary: summary.modelSummary,
+      tokensAfter: summaryContributionTokens(system, summary.content, accounting),
+    },
+  };
 }
 
 function buildRecord(
@@ -462,7 +561,7 @@ function buildRecord(
       historyRevision: 0,
     },
     ...selection.digest,
-    ...modelContinuityFields(earlier),
+    modelSummary: selection.modelSummary,
   };
   const validation = validateContextCompactionRecord(record);
   if (!validation.ok) {
@@ -471,12 +570,6 @@ function buildRecord(
     );
   }
   return record;
-}
-
-function modelContinuityFields(
-  record: ContextCompactionRecord | undefined,
-): Pick<ContextCompactionRecord, "modelSummary"> {
-  return record?.modelSummary === undefined ? {} : { modelSummary: record.modelSummary };
 }
 
 function summaryContributionTokens(

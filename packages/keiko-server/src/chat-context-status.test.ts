@@ -16,6 +16,8 @@ import { compactChatContext, readChatContextStatus } from "./chat-context-status
 import { captureChatHistory } from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { groundedConversationContinuity } from "./grounded-conversation-continuity.js";
+import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 
 const stores: UiStore[] = [];
 const paths: string[] = [];
@@ -25,19 +27,22 @@ afterEach(() => {
   for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function fixture(): { deps: UiHandlerDeps; chatId: string } {
+function fixture(
+  pairs = 40,
+  note = "We review the documentation together. ".repeat(25),
+): { deps: UiHandlerDeps; chatId: string } {
   const store = createInMemoryUiStore();
   stores.push(store);
   const path = mkdtempSync(join(tmpdir(), "keiko-context-status-"));
   paths.push(path);
   store.createProject(path, "Context fixture");
   const chatId = store.createChat(path, "Context fixture", "fixture").id;
-  for (let index = 0; index < 40; index += 1) {
+  for (let index = 0; index < pairs; index += 1) {
     for (const role of ["user", "assistant"] as const) {
       store.createMessage({
         chatId,
         role,
-        content: `Note ${String(index)}. ${"We review the documentation together. ".repeat(25)}`,
+        content: `Note ${String(index)}. ${note}`,
         timestamp: 1_700_000_000_000 + index * 2 + (role === "user" ? 0 : 1),
         runId: undefined,
         workflowId: undefined,
@@ -68,6 +73,128 @@ function fixture(): { deps: UiHandlerDeps; chatId: string } {
 }
 
 describe("composer context status and manual maintenance", () => {
+  it("rehydrates grounded continuity with the original query while keeping prepared retrieval bounded", () => {
+    const { deps, chatId } = fixture(0);
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    };
+    for (let index = 0; index < 120; index += 1) {
+      deps.store.createMessage({
+        chatId,
+        role: index % 2 === 0 ? "user" : "assistant",
+        content:
+          index === 40
+            ? "Leuchtturmvertrag Zahlungsziel: 63721 EUR."
+            : "General housekeeping documentation. ".repeat(25),
+        timestamp: 1_700_000_000_000 + index,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    compactChatContext(modelDeps, chatId, "fixture", "corr-grounded-checkpoint");
+    const original = "Leuchtturmvertrag Zahlungsziel klären. " + "Documentation. ".repeat(2000);
+    const current = deps.store.createMessage({
+      chatId,
+      role: "user",
+      content: original,
+      timestamp: 1_700_000_000_200,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const executionContent =
+      "Carry out the current user task with its constraints and required output format. Summarized contract request.";
+    const continuity = groundedConversationContinuity(
+      modelDeps,
+      { ...current, content: executionContent },
+      "fixture",
+      "corr-grounded-rehydration",
+      original,
+    );
+    expect(continuity.answerContext).toContain("63721 EUR");
+    expect(continuity.retrievalContent).toBe(executionContent);
+  });
+  it("does not restore an 8k grounded checkpoint into a larger plain chat window", () => {
+    const { deps, chatId } = fixture();
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        safetyMarginTokens: 4_000,
+      }),
+    };
+    const current = deps.store.createMessage({
+      chatId,
+      role: "user",
+      content: "What does this mean?",
+      timestamp: 1_700_000_000_100,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const continuity = groundedConversationContinuity(modelDeps, current, "fixture");
+    expect(continuity.compaction).toBeDefined();
+    expect(continuity.compaction?.conversationCoverage?.contextWindowTokens).toBeLessThanOrEqual(
+      8_000,
+    );
+    persistChatCompactionEvidence(modelDeps, {
+      compaction: continuity.compaction,
+      chatId,
+      modelId: "fixture",
+      messageCount: 80,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    const checkpoint = loadChatContinuityCheckpoint(
+      deps.evidenceStore,
+      chatId,
+      deps.store.chatHistoryRevision(chatId),
+    );
+    const snapshot = captureChatHistory(
+      deps.store,
+      chatId,
+      current.id,
+      modelDeps.contextProfile,
+      [],
+      checkpoint,
+    );
+    expect(snapshot.history).toHaveLength(81);
+    expect(snapshot.earlierCompaction).toBeUndefined();
+    expect(readChatContextStatus(modelDeps, chatId, "fixture").compaction).toBeUndefined();
+  });
+  it("enables quiet maintenance after the first oversized original prompt and answer", () => {
+    const seeded = fixture(1, "We review the documentation together. ".repeat(1200));
+    const { chatId } = seeded;
+    const deps = {
+      ...seeded.deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    };
+    const original = deps.store.listMessages(chatId);
+    const before = readChatContextStatus(deps, chatId, "fixture");
+    expect(before.estimatedInputTokens).toBeGreaterThan(before.inputBudgetTokens);
+    expect(before.canCompact).toBe(true);
+    const after = compactChatContext(deps, chatId, "fixture", "corr-first-pair-maintenance");
+    expect(after.estimatedInputTokens).toBeLessThan(before.estimatedInputTokens);
+    expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(deps.store.listMessages(chatId)).toEqual(original);
+  });
   it("saves a checkpoint without deleting or changing original messages", () => {
     const { deps, chatId } = fixture();
     const original = deps.store.listMessages(chatId, 500);

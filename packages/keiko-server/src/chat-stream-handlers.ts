@@ -48,6 +48,7 @@ import {
   emptyMemoryResult,
   failDesktopChatTurn,
   settleRejectedDesktopChatTurn,
+  settlePromptPreparationRejection,
   type AdmittedTurnHandle,
   gatewayHistoryPrefix,
   admitDesktopChatTurn,
@@ -585,6 +586,7 @@ function resolveDesktopChatStreamCall(
 }
 
 interface AdmittedDesktopChatStream {
+  readonly admitted: AdmittedTurnHandle;
   readonly prepared: PreparedDesktopChatSend;
   readonly callStream: StreamCall;
   readonly executionAdmission: DesktopChatExecutionAdmission;
@@ -597,12 +599,13 @@ interface AdmittedDesktopChatStream {
 function writeStreamFailure(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  request: SendDesktopChatRequest,
+  turn: AdmittedDesktopChatStream,
   controller: AbortController,
   error: unknown,
 ): void {
   const cancelled = requestIsAborted(controller.signal);
-  failDesktopChatTurn(deps, request, cancelled ? "cancelled" : "failed");
+  if (!settlePromptPreparationRejection(deps, turn.prepared, turn.admitted, error))
+    failDesktopChatTurn(deps, turn.prepared.request, cancelled ? "cancelled" : "failed");
   const event: DesktopChatStreamEvent = cancelled
     ? { event: "cancelled", data: {} }
     : { event: "error", data: errorEvent(error, deps, ctx.correlationId) };
@@ -631,7 +634,7 @@ async function executeAdmittedDesktopChatStream(
     });
     await streamAndPersist(ctx, deps, turn, controller);
   } catch (error) {
-    writeStreamFailure(ctx, deps, turn.prepared.request, controller, error);
+    writeStreamFailure(ctx, deps, turn, controller, error);
   } finally {
     stopHeartbeat?.();
     ctx.res.end();
@@ -745,6 +748,35 @@ function resolveStreamedChatPreflight(
   return { prepared, preflight };
 }
 
+function captureStreamExecutionAdmission(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  resolved: StreamedChatPreflight,
+): DesktopChatExecutionAdmission | RouteResult {
+  const { prepared, preflight } = resolved;
+  return (
+    preflight.legacyExecutionAdmission ??
+    captureDesktopChatExecutionAdmission(prepared.request, prepared.chat, prepared.modelId, deps, {
+      operation: "chat.send.rejected",
+      correlationId: ctx.correlationId,
+    })
+  );
+}
+
+function streamTurnSnapshot(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admission: AdmittedTurnHandle,
+): GatewayTurnSnapshot {
+  return captureGatewayTurnSnapshot(
+    deps,
+    prepared.request,
+    admission.userMessage,
+    ctx.correlationId,
+  );
+}
+
 async function runAdmittedDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -758,12 +790,7 @@ async function runAdmittedDesktopChatStream(
   const messageCountBeforeTurn = deps.store.countMessages(prepared.request.chatId);
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind !== "admitted") return nonAdmittedStreamOutcome(ctx, admission);
-  const executionAdmission =
-    preflight.legacyExecutionAdmission ??
-    captureDesktopChatExecutionAdmission(prepared.request, prepared.chat, prepared.modelId, deps, {
-      operation: "chat.send.rejected",
-      correlationId: ctx.correlationId,
-    });
+  const executionAdmission = captureStreamExecutionAdmission(ctx, deps, resolved);
   if ("status" in executionAdmission) {
     settleRejectedDesktopChatTurn(deps, prepared, admission);
     return executionAdmission;
@@ -778,11 +805,12 @@ async function runAdmittedDesktopChatStream(
     ctx.correlationId,
   );
   if ("status" in provider) return provider;
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  const gatewayTurn = streamTurnSnapshot(ctx, deps, prepared, admission);
   return executeAdmittedDesktopChatStream(
     ctx,
     deps,
     {
+      admitted: admission,
       prepared,
       callStream: provider.callStream,
       executionAdmission,

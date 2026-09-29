@@ -211,7 +211,7 @@ export async function enrichChatCompactionWithModelSummary(
       });
     }
   } catch (error) {
-    logSummaryFailure(deps, input.chatId, error);
+    logSummaryFailure(deps, correlationIdOrUnknown(input.correlationId), error);
   }
 }
 
@@ -231,7 +231,12 @@ function currentSummaryTarget(
   const coverage = record.conversationCoverage;
   if (coverage === undefined) return true;
   const revision = deps.store.chatHistoryRevision(input.chatId);
-  const latest = loadChatContinuityCheckpoint(deps.evidenceStore, input.chatId, revision);
+  const latest = loadChatContinuityCheckpoint(
+    deps.evidenceStore,
+    input.chatId,
+    revision,
+    input.correlationId,
+  );
   if (
     revision === coverage.historyRevision &&
     (latest === undefined ||
@@ -241,9 +246,9 @@ function currentSummaryTarget(
     return true;
   logChatContextManagement(
     "summary-discarded",
-    readChatContextStatus(deps, input.chatId, input.modelId),
+    readChatContextStatus(deps, input.chatId, input.modelId, input.correlationId),
     0,
-    input.correlationId ?? input.chatId,
+    correlationIdOrUnknown(input.correlationId),
   );
   return false;
 }
@@ -256,9 +261,7 @@ async function buildModelSummary(
   prompt: string,
   responseMode: ModelSummaryResponseMode,
 ): Promise<ContextCompactionModelSummary | undefined> {
-  // Background best-effort summarization has no live request correlation id in scope; the chat's
-  // own id is the stable job key an operator greps by, mirroring the `jobId`-as-correlationId
-  // convention background jobs elsewhere in the BFF already use (ADR-0173 D5).
+  // Detached work retains the originating request correlation when one was supplied.
   const result = await callModelWithTimeout(
     model,
     input.modelId,

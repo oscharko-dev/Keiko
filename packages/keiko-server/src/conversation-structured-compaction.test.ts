@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+  DEFAULT_CONTEXT_PROFILE,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
 import type { ChatMessage } from "./store/index.js";
 
@@ -71,7 +76,68 @@ function requiredSystemContent(
   return message.content;
 }
 
+function oversizedDigestHistory(): ChatMessage[] {
+  const fields = Array.from({ length: 16 }, (_, index) =>
+    ["Fact", "Decision", "Constraint"]
+      .map((kind) => `${kind}: Requirement ${String(index)} ${"durable information ".repeat(10)}`)
+      .join("\n"),
+  ).join("\n");
+  return [
+    msg(
+      "user",
+      `${fields}\nConstraint: Latest budget is 60000 EUR.\n${"Historical discussion. ".repeat(1500)}`,
+      0,
+    ),
+    msg("assistant", "Understood.", 1),
+    msg("user", "What budget applies now?", 2),
+  ];
+}
+
 describe("conversationForGatewayWithCompaction — structured continuity summaries", () => {
+  it("fits an oversized digest honestly while retaining the newest constraints", () => {
+    const outcome = conversationForGatewayWithCompaction(oversizedDigestHistory(), {
+      effectiveInputBudget: 900,
+    });
+    const record = requiredCompaction(outcome);
+    expect(countGatewayPromptTokens({ messages: outcome.messages })).toBeLessThanOrEqual(900);
+    expect(requiredSystemContent(outcome)).toContain("60000 EUR");
+    expect(record.droppedCategories?.length).toBeGreaterThan(0);
+    expect(validateContextCompactionRecord(record).ok).toBe(true);
+    for (const fact of record.preservedFacts ?? [])
+      expect(requiredSystemContent(outcome)).toContain(fact.statement);
+    for (const constraint of record.userConstraints ?? [])
+      expect(requiredSystemContent(outcome)).toContain(constraint.statement);
+    expect(record.sourceSpans).toContainEqual({ kind: "message", stableId: "m0" });
+  });
+
+  it("refits an earlier checkpoint even when no new historical turns exist", () => {
+    const record = requiredCompaction(
+      conversationForGatewayWithCompaction(oversizedDigestHistory(), {
+        effectiveInputBudget: 6000,
+      }),
+    );
+    const earlier = {
+      ...record,
+      modelSummary: {
+        promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+        modelId: "fixture",
+        content: "Older generated continuity. ".repeat(100),
+      },
+    };
+    const outcome = conversationForGatewayWithCompaction([], {
+      earlierCompaction: earlier,
+      effectiveInputBudget: 900,
+    });
+    expect(countGatewayPromptTokens({ messages: outcome.messages })).toBeLessThanOrEqual(900);
+    expect(requiredSystemContent(outcome)).toContain("60000 EUR");
+    expect(requiredCompaction(outcome).itemsBefore).toBe(record.itemsBefore);
+    expect(requiredCompaction(outcome).conversationCoverage).toEqual(record.conversationCoverage);
+    expect(requiredCompaction(outcome).modelSummary).toBeUndefined();
+    expect(requiredCompaction(outcome).droppedCategories).toContain(
+      "model-written-continuity-requires-rehydration",
+    );
+    expect(validateContextCompactionRecord(requiredCompaction(outcome)).ok).toBe(true);
+  });
   it("preserves unlabelled German requirements with durable message provenance", () => {
     const history = [
       msg(

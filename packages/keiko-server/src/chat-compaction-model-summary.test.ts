@@ -1,6 +1,8 @@
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ContextCompactionModelSummary,
@@ -30,7 +32,8 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import type { ChatMessage } from "./store/index.js";
+import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
 
 const CHAT_ID = "chat-model-summary-1";
@@ -237,6 +240,41 @@ function defaultEnrichmentInput(
     correlationId: CORRELATION_ID,
   };
 }
+
+it("joins a discarded background summary to the shared absent-correlation marker", async () => {
+  const history = createInMemoryUiStore();
+  const path = mkdtempSync(join(tmpdir(), "keiko-summary-correlation-"));
+  history.createProject(path, "Summary fixture");
+  const chatId = history.createChat(path, "Summary fixture", MODEL_ID).id;
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  try {
+    await enrichChatCompactionWithModelSummary(
+      { ...deps(createInMemoryEvidenceStore(), undefined), store: history },
+      {
+        ...defaultEnrichmentInput(),
+        chatId,
+        correlationId: undefined,
+        compaction: {
+          ...compactionRecord(),
+          conversationCoverage: {
+            version: 1,
+            throughMessageId: "m0",
+            historyRevision: 1,
+            contextWindowTokens: 4096,
+          },
+        },
+      },
+    );
+    const event = sink.events.find((entry) => entry.op === "chat.context.management");
+    expect(event?.extra?.outcome).toBe("summary-discarded");
+    expect(event?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(JSON.stringify(sink.events)).not.toContain(chatId);
+  } finally {
+    history.close();
+    rmSync(path, { recursive: true, force: true });
+  }
+});
 
 function expectStructuredSummaryRequest(request: GatewayRequest, prompt: string): void {
   expect(request.responseFormat?.type).toBe("json_schema");

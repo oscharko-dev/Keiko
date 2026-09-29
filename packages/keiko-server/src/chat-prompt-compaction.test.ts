@@ -1,4 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+
+afterEach(resetServerLogger);
 import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -47,6 +53,16 @@ function fixture(content: string): CurrentPromptCompactionInput {
 }
 
 describe("current prompt semantic compaction", () => {
+  it("uses the shared absent-correlation marker for internal prompt preparation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    await compactCurrentChatPrompt({
+      ...fixture("Project notes. ".repeat(1600)),
+      correlationId: undefined,
+    });
+    const event = sink.events.find((entry) => entry.op === "chat.context.management");
+    expect(event?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
   it("preserves original boundary instructions when a summary omits exact output constraints", async () => {
     const opening = "Return JSON with owner and symbol. Keep identifiers exactly.";
     const closing = "Correction: owner Mara Linke. No prose; use only the JSON object.";

@@ -11,6 +11,10 @@ import {
 } from "react";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { compactChatContext, fetchChatContextStatus } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
 import { ChatContextMeter } from "./ChatContextMeter";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 
@@ -53,6 +57,7 @@ function useChatContext(session: ContextSession): {
         request,
         key,
         setState,
+        compact,
       );
     },
     [chatId, projectPath, modelId, key],
@@ -99,14 +104,25 @@ function settleContextRequest(
   request: AbortController,
   key: string,
   setState: Dispatch<SetStateAction<ContextState>>,
+  compact: boolean,
 ): void {
   void promise
     .then((status) => {
       if (!request.signal.aborted) setState({ key, status, compacting: false, error: false });
     })
-    .catch(() => {
-      if (!request.signal.aborted)
-        setState((previous) => ({ ...previous, compacting: false, error: true }));
+    .catch((error: unknown) => {
+      if (request.signal.aborted) return;
+      reportClientDiagnostic(
+        compact
+          ? "Keiko manual context compaction request failed."
+          : "Keiko context status request failed.",
+        {
+          correlationId: correlationIdOf(error),
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        },
+      );
+      setState((previous) => ({ ...previous, compacting: false, error: true }));
     });
 }
 

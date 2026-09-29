@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { editorModifier } from "./support/editor-chord.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -149,6 +150,16 @@ async function openFixtureComposer(page: Page, request: APIRequestContext): Prom
   await expect(page.getByRole("textbox", { name: "Chat message" })).toBeVisible();
 }
 
+async function copyComposerText(
+  composer: ReturnType<Page["getByRole"]>,
+  source: string,
+): Promise<void> {
+  await composer.fill(source);
+  await composer.press("ControlOrMeta+A");
+  await composer.press("ControlOrMeta+C");
+  await composer.press("Backspace");
+}
+
 test("removes heading formatting after deleting its last character @smoke", async ({
   page,
   request,
@@ -163,51 +174,66 @@ test("removes heading formatting after deleting its last character @smoke", asyn
   await expect(composer.locator("p")).toHaveText("Normal");
 });
 
-test("loads local highlighting, pastes and scrolls code inside the Composer @smoke", async ({
-  page,
-  request,
-  context,
-}) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await openFixtureComposer(page, request);
-  const composer = page.getByRole("textbox", { name: "Chat message" });
-  await composer.pressSequentially("```typescript");
-  await composer.press("Shift+Enter");
-  const code = composer.locator(".monaco-editor");
-  await expect(code).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("Loading syntax highlighting…", { exact: true })).toBeHidden();
-  const source = Array.from(
-    { length: 80 },
-    (_, index) => `const value${String(index)} = ${String(index)};`,
-  ).join("\n");
-  const input = code.getByRole("textbox", { name: "Code input" });
-  await code.locator(".view-lines").click();
-  // Native clipboard paste follows the OS, independent of Monaco's user-agent command bindings.
-  await page.evaluate((content) => navigator.clipboard.writeText(content), source);
-  await input.press("ControlOrMeta+V");
-  await code.hover();
-  await expect
-    .poll(() =>
-      code
-        .locator(".view-line span")
-        .evaluateAll((nodes) => new Set(nodes.map((node) => getComputedStyle(node).color)).size),
-    )
-    .toBeGreaterThan(1);
-  const slider = code.locator(
-    ".overflow-guard > .monaco-scrollable-element > .scrollbar.vertical > .slider",
-  );
-  const before = await slider.boundingBox();
-  expect(before).not.toBeNull();
-  await code.hover();
-  await page.mouse.wheel(0, -400);
-  await expect.poll(async () => (await slider.boundingBox())?.y ?? 0).toBeLessThan(before?.y ?? 0);
-  await page.mouse.wheel(0, 400);
-  await expect
-    .poll(async () => (await slider.boundingBox())?.y ?? 0)
-    .toBeCloseTo(before?.y ?? 0, 0);
-  await page.getByRole("button", { name: "Continue below ↵" }).click();
-  await composer.pressSequentially("Explain the code.");
-  await expect(composer.locator("p").last()).toHaveText("Explain the code.");
+test.describe("native Composer clipboard", () => {
+  // Native clipboard shortcuts and Monaco must observe the same actual browser platform.
+  // Desktop device presets force a Windows user agent even on a macOS browser process.
+  test.use({
+    userAgent: async ({ browser }, use) => {
+      const probe = await browser.newPage();
+      try {
+        const userAgent = await probe.evaluate(() => navigator.userAgent);
+        await use(userAgent);
+      } finally {
+        await probe.close();
+      }
+    },
+  });
+
+  test("loads local highlighting, pastes and scrolls code inside the Composer @smoke", async ({
+    page,
+    request,
+  }) => {
+    await openFixtureComposer(page, request);
+    const composer = page.getByRole("textbox", { name: "Chat message" });
+    const source = Array.from(
+      { length: 80 },
+      (_, index) => `const value${String(index)} = ${String(index)};`,
+    ).join("\n");
+    await copyComposerText(composer, source);
+    await composer.pressSequentially("```typescript");
+    await composer.press("Shift+Enter");
+    const code = composer.locator(".monaco-editor");
+    await expect(code).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Loading syntax highlighting…", { exact: true })).toBeHidden();
+    const input = code.getByRole("textbox", { name: "Code input" });
+    await code.locator(".view-lines").click();
+    await input.press(`${await editorModifier(page)}+V`);
+    await code.hover();
+    await expect
+      .poll(() =>
+        code
+          .locator(".view-line span")
+          .evaluateAll((nodes) => new Set(nodes.map((node) => getComputedStyle(node).color)).size),
+      )
+      .toBeGreaterThan(1);
+    const slider = code.locator(
+      ".overflow-guard > .monaco-scrollable-element > .scrollbar.vertical > .slider",
+    );
+    const before = await slider.boundingBox();
+    expect(before).not.toBeNull();
+    await code.hover();
+    await page.mouse.wheel(0, -400);
+    await expect
+      .poll(async () => (await slider.boundingBox())?.y ?? 0)
+      .toBeLessThan(before?.y ?? 0);
+    await page.mouse.wheel(0, 400);
+    await expect
+      .poll(async () => (await slider.boundingBox())?.y ?? 0)
+      .toBeCloseTo(before?.y ?? 0, 0);
+    await page.getByRole("button", { name: "Continue below ↵" }).click();
+    await composer.pressSequentially("Explain the code.");
+    await expect(composer.locator("p").last()).toHaveText("Explain the code.");
+  });
 });
 
 test("keeps model selection and context disclosure inside a short viewport @smoke", async ({

@@ -11,7 +11,10 @@ import {
   type GatewayTurnSnapshot,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
-import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
+import {
+  gatewayAssemblyOutputAllocation,
+  selectGatewayPromptAssembly,
+} from "./chat-prompt-budget.js";
 import { Gateway, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
@@ -903,6 +906,47 @@ it("keeps a large current prompt by reducing the default answer reserve", () => 
       assembly.diagnostics.profile.reservedOutputTokens +
       profile.safetyMarginTokens,
   ).toBeLessThanOrEqual(profile.maxInputTokens);
+});
+
+it("does not convert a normal conversation reserve into a provider output cap", () => {
+  const assembly = selectGatewayPromptAssembly({
+    historyPrefix: [],
+    historyTurnCount: 0,
+    request: { content: "Write the complete implementation.", discussionMode: undefined },
+    profile: deriveContextProfile({
+      maxInputTokens: 128_000,
+      reservedOutputTokens: 8_000,
+      safetyMarginTokens: 4_000,
+    }),
+    memoryEntries: [],
+    documentContext: [],
+    redactionSecrets: [],
+  });
+  expect(assembly).toBeDefined();
+  if (assembly === undefined) throw new TypeError("Missing assembly");
+  expect(gatewayAssemblyOutputAllocation(assembly)).toEqual({});
+});
+
+it("reduces optional document context before sacrificing a usable answer budget", () => {
+  const profile = deriveContextProfile({
+    maxInputTokens: 4096,
+    reservedOutputTokens: 1024,
+    safetyMarginTokens: 128,
+  });
+  const content = "x".repeat(6_000);
+  const assembly = selectGatewayPromptAssembly({
+    historyPrefix: [],
+    historyTurnCount: 0,
+    request: { content, discussionMode: undefined },
+    profile,
+    memoryEntries: [],
+    documentContext: [makeDocument("large-attachment", "reference.txt", "y".repeat(4_800))],
+    redactionSecrets: [],
+  });
+  expect(assembly).toBeDefined();
+  if (assembly === undefined) throw new TypeError("Missing assembly");
+  expect(assembly.diagnostics.profile.reservedOutputTokens).toBeGreaterThanOrEqual(1024);
+  expect(assembly.messages.at(-1)?.content).toContain(content);
 });
 
 it("prepares a compact execution prompt without replacing the persisted original", async () => {
