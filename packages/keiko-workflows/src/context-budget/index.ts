@@ -30,6 +30,9 @@ export type {
 } from "./rehydration.js";
 export {
   rehydrateProvenanceRef,
+  rehydrateMessage,
   rehydrateHandle,
   rehydrateToolResultHandle,
 } from "./rehydration.js";
+
+export { mergeHistoryDigests } from "./structured-digest.js";

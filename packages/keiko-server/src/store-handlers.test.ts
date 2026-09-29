@@ -47,11 +47,14 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ChatGitChangeScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,
   handleDeleteChat,
   handleUpdateChat,
+  handleCompactChatContext,
 } from "./store-handlers.js";
 import { MAX_CHAT_TITLE_LEN } from "./store/chats.js";
 import {
@@ -345,6 +348,150 @@ afterEach(async () => {
   store.close();
   rmSync(tmp, { recursive: true, force: true });
   rmSync(staticRoot, { recursive: true, force: true });
+});
+
+function contextRouteBody(): { chatId: string; projectPath: string; modelId: string } {
+  store.createProject(projDir);
+  const chat = store.createChat(projDir, "Context maintenance", CHAT_MODEL);
+  return { chatId: chat.id, projectPath: projDir, modelId: CHAT_MODEL };
+}
+
+function seedContextRouteHistory(chatId: string): void {
+  for (let index = 0; index < 80; index += 1) {
+    store.createMessage({
+      chatId,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Note ${String(index)}. ${"We review the documentation together. ".repeat(25)}`,
+      timestamp: 1_700_000_000_000 + index,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+  }
+}
+
+describe("context maintenance HTTP routes", () => {
+  it("compacts through the HTTP boundary and reports the persisted checkpoint without changing source messages", async () => {
+    const body = contextRouteBody();
+    seedContextRouteHistory(body.chatId);
+    const original = store.listMessages(body.chatId, 500);
+    const evidenceStore = createInMemoryEvidenceStore();
+    const modelPortFactory = vi.fn(() => {
+      throw new Error("Maintenance must not invoke a provider");
+    });
+    await restartWithDeps({ evidenceStore, modelPortFactory });
+    const query = new URLSearchParams(body).toString();
+    const beforeResponse = await fetch(url(`/api/chats/context?${query}`));
+    expect(beforeResponse.status).toBe(200);
+    const before = (await beforeResponse.json()) as ChatContextStatusWire;
+    const response = await fetch(url("/api/chats/context/compact"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(200);
+    const after = (await response.json()) as ChatContextStatusWire;
+    expect(after.estimatedInputTokens).toBeLessThan(before.estimatedInputTokens);
+    expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(after.contextWindowTokens).toBe(64_000);
+    expect(store.listMessages(body.chatId, 500)).toEqual(original);
+    expect(await (await fetch(url(`/api/chats/context?${query}`))).json()).toEqual(after);
+    expect(modelPortFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ chatId: "unknown-chat" }, 404],
+    [{ projectPath: "different-project" }, 404],
+    [{ modelId: "unconfigured-model" }, 400],
+    [{ modelId: "" }, 400],
+  ] as const)("validates context inspection inputs: %j", async (patch, status) => {
+    const body = { ...contextRouteBody(), ...patch };
+    const response = await fetch(url(`/api/chats/context?${new URLSearchParams(body).toString()}`));
+    expect(response.status).toBe(status);
+    const result = (await response.json()) as { error: { code: string } };
+    expect(typeof result.error.code).toBe("string");
+  });
+
+  it.each([
+    [{ projectPath: "different-project" }, 404],
+    [{ modelId: "unconfigured-model" }, 400],
+    [{ chatId: "" }, 400],
+    [{ chatId: "unknown-chat" }, 404],
+    [{ modelId: "" }, 400],
+  ] as const)("validates context compaction inputs before writing: %j", async (patch, status) => {
+    const body = { ...contextRouteBody(), ...patch };
+    const evidenceStore = createInMemoryEvidenceStore();
+    await restartWithDeps({ evidenceStore });
+    const response = await fetch(url("/api/chats/context/compact"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(status);
+    expect(evidenceStore.list()).toEqual([]);
+  });
+
+  it("requires the mutation CSRF header for context compaction", async () => {
+    const body = contextRouteBody();
+    const response = await fetch(url("/api/chats/context/compact"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects a hostile Origin before context maintenance reaches the store", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    await restartWithDeps({ evidenceStore });
+    const response = await fetch(url("/api/chats/context/compact"), {
+      method: "POST",
+      headers: { ...POST_HEADERS, Origin: "https://untrusted.example" },
+      body: JSON.stringify(contextRouteBody()),
+    });
+    expect(response.status).toBe(403);
+    expect(evidenceStore.list()).toEqual([]);
+  });
+
+  it.each(["aborted", "close"] as const)(
+    "cancels queued maintenance on %s and removes connection listeners",
+    async (event) => {
+      const body = contextRouteBody();
+      const serializer = createChatTurnSerializer();
+      const started = deferred<undefined>();
+      const release = deferred<undefined>();
+      const predecessor = serializer.runExclusive(
+        body.chatId,
+        new AbortController().signal,
+        async () => {
+          started.resolve(undefined);
+          await release.promise;
+        },
+      );
+      await started.promise;
+      const observed = deferred<AbortSignal>();
+      const fixture = directRouteContext("/api/chats/context/compact", JSON.stringify(body));
+      const evidenceStore = createInMemoryEvidenceStore();
+      const outcome = handleCompactChatContext(
+        fixture.ctx,
+        deps({
+          evidenceStore,
+          chatTurnSerializer: observeSerializedSignal(serializer, observed),
+        }),
+      );
+      const signal = await observed.promise;
+      (event === "aborted" ? fixture.req : fixture.res).emit(event);
+      release.resolve(undefined);
+      await predecessor;
+      expect(signal.aborted).toBe(true);
+      expect((await outcome).status).toBe(499);
+      expect(evidenceStore.list()).toEqual([]);
+      expect(fixture.req.listenerCount("aborted")).toBe(0);
+      expect(fixture.res.listenerCount("close")).toBe(0);
+    },
+  );
 });
 
 // ─── Route 13: GET /api/projects ────────────────────────────────────────────

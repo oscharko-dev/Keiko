@@ -168,7 +168,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
   await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
-  await expect(composer).toHaveValue("plain typed message");
+  await expect(composer).toHaveText("plain typed message");
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
   await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveCount(0);
 }
@@ -211,7 +211,7 @@ async function realtimeConnectFlow(page: Page): Promise<void> {
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("typing while connected");
-  await expect(composer).toHaveValue("typing while connected");
+  await expect(composer).toHaveText("typing while connected");
 }
 
 async function deniedPermissionFlow(page: Page): Promise<void> {
@@ -227,7 +227,7 @@ async function deniedPermissionFlow(page: Page): Promise<void> {
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("still typing fine");
-  await expect(composer).toHaveValue("still typing fine");
+  await expect(composer).toHaveText("still typing fine");
 }
 
 test("realtime voice @smoke — no-voice composer has no realtime affordance (AC1/AC3)", async ({

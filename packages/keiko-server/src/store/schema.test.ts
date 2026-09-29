@@ -46,6 +46,27 @@ function applyMigrationsUpTo(db: DatabaseSync, uptoVersion: number): void {
   db.exec("COMMIT");
 }
 
+it("migrates existing chats to v39 and invalidates their history after an edit", () => {
+  const db = openWithForeignKeys();
+  applyMigrationsUpTo(db, 38);
+  db.exec(`
+    INSERT INTO projects (path, name, created_at, last_opened_at) VALUES ('/p','p',1,1);
+    INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at)
+      VALUES ('c1','/p','t','m',1,1);
+    INSERT INTO chat_messages (id, chat_id, role, content, timestamp)
+      VALUES ('m1','c1','user','Original',1);
+  `);
+  runMigrations(db);
+  expect(db.prepare("SELECT history_revision FROM chats WHERE id = 'c1'").get()).toEqual({
+    history_revision: 0,
+  });
+  db.exec("UPDATE chat_messages SET content = 'Correction' WHERE id = 'm1'");
+  expect(db.prepare("SELECT history_revision FROM chats WHERE id = 'c1'").get()).toEqual({
+    history_revision: 1,
+  });
+  db.close();
+});
+
 describe("v28 migration — relationships CHECK widening (Issue #3400)", () => {
   it("denies a git-change row at v27 and admits one after v28 (failing-before/passing-after)", () => {
     const db = openWithForeignKeys();

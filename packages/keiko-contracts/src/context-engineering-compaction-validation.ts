@@ -34,6 +34,12 @@ const PROVENANCE_REF_KINDS: ReadonlySet<string> = new Set([
 const ASSUMPTION_CONFIDENCES: ReadonlySet<string> = new Set(["low", "medium", "high"]);
 
 const COMMAND_OUTCOME_SUMMARY_MAX_CHARS = 200;
+const CONVERSATION_COVERAGE_FIELDS: ReadonlySet<string> = new Set([
+  "version",
+  "throughMessageId",
+  "historyRevision",
+  "contextWindowTokens",
+]);
 
 // ─── Shared primitives (local; contracts is a leaf, no shared-util import) ──────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -338,6 +344,14 @@ function collectModelSummary(value: unknown, prefix: string): string[] {
   pushIf(reasons, !isNonEmptyTrimmed(value.modelId), `${prefix}.modelSummary.modelId invalid`);
   pushIf(
     reasons,
+    value.coveredItems !== undefined &&
+      (typeof value.coveredItems !== "number" ||
+        !Number.isSafeInteger(value.coveredItems) ||
+        value.coveredItems < 1),
+    `${prefix}.modelSummary.coveredItems invalid`,
+  );
+  pushIf(
+    reasons,
     typeof value.content !== "string" ||
       modelSummaryStringUnsafe(value.content, CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS),
     `${prefix}.modelSummary.content invalid`,
@@ -570,6 +584,7 @@ function collectTypedArray(
 
 function collectRecordOptionals(value: Record<string, unknown>, prefix: string): string[] {
   const reasons: string[] = [];
+  collectConversationCoverage(value.conversationCoverage, reasons, prefix);
   pushIf(
     reasons,
     value.orderedAt !== undefined && !isFiniteNumber(value.orderedAt),
@@ -605,4 +620,40 @@ export function validateContextCompactionRecord(value: unknown): ContextValidati
     ...collectRecordRequired(value, "compactionRecord"),
     ...collectRecordOptionals(value, "compactionRecord"),
   ]);
+}
+
+function collectConversationCoverage(coverage: unknown, reasons: string[], prefix: string): void {
+  if (coverage === undefined) return;
+  if (!isRecord(coverage)) {
+    reasons.push(`${prefix}.conversationCoverage invalid`);
+    return;
+  }
+  pushIf(
+    reasons,
+    Object.keys(coverage).some((key) => !CONVERSATION_COVERAGE_FIELDS.has(key)),
+    `${prefix}.conversationCoverage unknown field`,
+  );
+  pushIf(
+    reasons,
+    coverage.version !== 1 ||
+      typeof coverage.throughMessageId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/u.test(coverage.throughMessageId),
+    `${prefix}.conversationCoverage identity invalid`,
+  );
+  pushIf(
+    reasons,
+    !nonNegativeInteger(coverage.historyRevision),
+    `${prefix}.conversationCoverage.historyRevision invalid`,
+  );
+  if (coverage.contextWindowTokens !== undefined) {
+    pushIf(
+      reasons,
+      !nonNegativeInteger(coverage.contextWindowTokens) || coverage.contextWindowTokens === 0,
+      `${prefix}.conversationCoverage.contextWindowTokens invalid`,
+    );
+  }
+}
+
+function nonNegativeInteger(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }

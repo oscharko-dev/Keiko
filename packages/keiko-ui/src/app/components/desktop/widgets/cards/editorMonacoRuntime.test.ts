@@ -10,6 +10,11 @@ interface MonacoLanguageSummary {
 
 const getLanguages = vi.fn<() => MonacoLanguageSummary[]>(() => []);
 const registerLanguage = vi.fn();
+interface CreatingEditor {
+  getDomNode(): HTMLElement | null;
+  getContainerDomNode(): HTMLElement;
+}
+const onDidCreateEditor = vi.fn<(listener: (editor: CreatingEditor) => void) => void>();
 
 // Side-effect-only basic-languages contributions register the language id + Monarch grammar for
 // css/scss/less/html (ADR-0068 D5). The bootstrap module must import all four; each factory records
@@ -32,7 +37,7 @@ function trackOptionalLanguageImport(languageId: string): Record<string, never> 
 
 vi.mock("@monaco-editor/react", () => ({ loader: { config } }));
 vi.mock("monaco-editor/editor/editor.api.js", () => ({
-  editor: {},
+  editor: { onDidCreateEditor },
   languages: {
     getLanguages,
     register: registerLanguage,
@@ -98,6 +103,7 @@ beforeEach(() => {
   getLanguages.mockClear();
   getLanguages.mockReturnValue([]);
   registerLanguage.mockClear();
+  onDidCreateEditor.mockClear();
   delete scope.Worker;
   delete scope.MonacoEnvironment;
 });
@@ -108,6 +114,18 @@ afterEach(() => {
 });
 
 describe("ensureMonacoRuntime", () => {
+  it("registers virtual scroll ownership once for every embedded editor", async () => {
+    scope.Worker = class {};
+    const { ensureMonacoRuntime } = await import("./editorMonacoRuntime");
+    ensureMonacoRuntime();
+    ensureMonacoRuntime();
+    expect(onDidCreateEditor).toHaveBeenCalledOnce();
+    const listener = onDidCreateEditor.mock.lastCall?.[0];
+    const element = document.createElement("div");
+    listener?.({ getDomNode: () => null, getContainerDomNode: () => element });
+    expect(element).toHaveAttribute("data-workspace-scroll-owner", "virtual");
+  });
+
   it("reports an unsupported runtime and configures nothing when Web Workers are unavailable", async () => {
     // jsdom has no Worker constructor by default — the real unsupported path.
     const { ensureMonacoRuntime } = await import("./editorMonacoRuntime");

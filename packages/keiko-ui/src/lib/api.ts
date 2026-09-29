@@ -192,6 +192,7 @@ import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
+  type ChatContextStatusWire,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
   type ConversationAttachmentUploadResponseWire,
@@ -4117,4 +4118,30 @@ export async function applyGitChangeChatDescription(
     adapter.validateGitChangeApplyDescriptionResponse,
     correlationId,
   );
+}
+
+export function fetchChatContextStatus(
+  chatId: string,
+  projectPath: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<ChatContextStatusWire> {
+  const params = new URLSearchParams({ chatId, projectPath, modelId });
+  return fetchJson(
+    `/api/chats/context?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+  );
+}
+
+export function compactChatContext(
+  chatId: string,
+  projectPath: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<ChatContextStatusWire> {
+  return fetchJson("/api/chats/context/compact", {
+    method: "POST",
+    body: JSON.stringify({ chatId, projectPath, modelId }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }

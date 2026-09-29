@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
 
+const diagnostics = vi.hoisted(() => ({ report: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostics.report }));
+afterEach(() => diagnostics.report.mockClear());
+
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
@@ -43,6 +47,17 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
         <div data-testid="window-target" />
         <div data-testid="scroll-target" style={{ overflowY: "auto", width: 100, height: 80 }}>
           <div style={{ width: 100, height: 300 }} />
+        </div>
+        <div className="monaco-editor" data-workspace-scroll-owner="virtual">
+          <div className="monaco-scrollable-element" style={{ overflow: "hidden" }}>
+            <div
+              data-testid="code-scroll-target"
+              className="view-lines"
+              role="textbox"
+              aria-label="Synthetic code input"
+              tabIndex={0}
+            />
+          </div>
         </div>
       </section>
       <output data-testid="files-zoom">{files?.zoom ?? "missing"}</output>
@@ -111,6 +126,44 @@ describe("useWorkspace wheel zoom routing", () => {
     cleanup();
     window.localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it("reports scroll readiness through the routine activity producer", () => {
+    render(<Harness />);
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "[keiko] workspace native and virtual scroll routing ready.",
+      { composerActivity: "workspace-scroll-ready" },
+    );
+  });
+
+  it("lets the active Monaco editor handle wheel events despite its virtual scroll surface", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+    for (const deltaY of [-120, 120]) {
+      const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY });
+      screen.getByTestId("code-scroll-target").dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
+  });
+
+  it("keeps wheel input in a focused code editor before the window is selected", () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    const target = screen.getByTestId("code-scroll-target");
+    target.focus();
+    expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("");
+    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 });
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
   });
 
   it("routes Ctrl/Command wheel over a window to workspace zoom", async () => {

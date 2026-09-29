@@ -365,6 +365,46 @@ export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownL
   );
 }
 
+export const CLIENT_COMPOSER_ACTIVITIES = [
+  "initialized",
+  "input-limit",
+  "code-ready",
+  "format-removed",
+  "cursor-collision",
+  "workspace-scroll-ready",
+  "literal-input-preserved",
+  "draft-resynchronized",
+  "non-text-paste-ignored",
+  "text-copied",
+] as const;
+export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
+export const CLIENT_COMPOSER_CODE_STAGES = [
+  "module-load",
+  "runtime",
+  "language",
+  "theme",
+  "theme-tokens",
+  "theme-register",
+  "editor-mount",
+  "editor-wiring",
+] as const;
+export type ClientComposerCodeStage = (typeof CLIENT_COMPOSER_CODE_STAGES)[number];
+const COMPOSER_ACTIVITIES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_ACTIVITIES);
+const COMPOSER_CODE_STAGES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_CODE_STAGES);
+
+function hasValidComposerContext(value: Record<string, unknown>): boolean {
+  if (!isOptional(value.composerCodeStage, (stage) => COMPOSER_CODE_STAGES.has(stage)))
+    return false;
+  if (value.composerActivity === undefined) return true;
+  return (
+    COMPOSER_ACTIVITIES.has(value.composerActivity) &&
+    value.kind === undefined &&
+    value.errorKind === undefined &&
+    value.errorEvidence === undefined &&
+    value.composerCodeStage === undefined
+  );
+}
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
@@ -385,6 +425,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -564,17 +606,27 @@ function hasValidGitContext(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason) &&
+    isOptional(value.voiceCaptureError, isClientVoiceCaptureError)
+  );
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { errorKind, loss, parentCorrelationId } = value;
   if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
-  if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
-  if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
+  if (!hasValidVoiceCaptureContext(value)) return false;
   if (!hasValidGitContext(value)) return false;
   if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
-  return hasValidCodingContext(value) && hasValidClientLoss(value.kind, loss);
+  return (
+    hasValidComposerContext(value) &&
+    hasValidCodingContext(value) &&
+    hasValidClientLoss(value.kind, loss)
+  );
 }
 
 function hasValidClientLoss(kind: unknown, loss: unknown): boolean {

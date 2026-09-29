@@ -615,6 +615,7 @@ interface RetrievalOutcome {
 }
 
 export interface MultiSourceAskInput {
+  readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly scopes: readonly ChatConnectedScope[];
   readonly content: string;
@@ -1037,7 +1038,7 @@ function recordMultiSourceAnswer(
 }
 
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
-  const query = buildQuery(ctx.content, () => Date.now());
+  const query = buildQuery(ctx.retrievalContent ?? ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
   const perScopeBudgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, ctx.scopes, query);
   let outcome: RetrievalOutcome | RouteResult;

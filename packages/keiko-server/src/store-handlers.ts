@@ -1,3 +1,5 @@
+import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
+import { logChatContextManagement } from "./chat-context-log.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
@@ -1430,3 +1432,55 @@ export async function handleUpdateMessage(
 
 // barrel-level NOT_FOUND helper used by future delete-missing paths
 export { notFoundResult };
+
+export function handleChatContextStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  return runHandlerSync(() => {
+    const chatId = requireQuery(ctx, "chatId");
+    const projectPath = requireQuery(ctx, "projectPath");
+    if (!chatBelongsToProject(deps, projectPath, chatId)) return notFoundResult("Chat not found.");
+    const modelId = requireQuery(ctx, "modelId");
+    assertChatModelId(deps, modelId);
+    const status = readChatContextStatus(deps, chatId, modelId, ctx.correlationId);
+    logChatContextManagement("inspected", status, 0, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+    return { status: 200, body: status };
+  });
+}
+
+export async function handleCompactChatContext(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const cancellation = createRequestCancellation(ctx, "context compaction cancelled");
+  try {
+    return await runHandler(async () => {
+      const body = await readJsonObject(ctx.req);
+      const chatId = requireString(body, "chatId");
+      const projectPath = requireString(body, "projectPath");
+      const modelId = requireString(body, "modelId");
+      const result = await runSerializedChatTurn(
+        deps,
+        chatId,
+        cancellation.signal,
+        (): RouteResult => {
+          if (!chatBelongsToProject(deps, projectPath, chatId))
+            return notFoundResult("Chat not found.");
+          assertChatModelId(deps, modelId);
+          return {
+            status: 200,
+            body: compactChatContext(
+              deps,
+              chatId,
+              modelId,
+              ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+            ),
+          };
+        },
+      );
+      return result === CHAT_TURN_WAIT_CANCELLED
+        ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+        : result;
+    });
+  } finally {
+    cancellation.dispose();
+  }
+}

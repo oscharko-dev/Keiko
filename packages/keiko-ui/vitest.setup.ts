@@ -188,3 +188,27 @@ if (typeof window !== "undefined" && typeof HTMLCanvasElement !== "undefined") {
     },
   });
 }
+
+// ProseMirror asks for caret geometry; jsdom has no layout engine. Browser smoke owns geometry.
+if (typeof Range.prototype.getClientRects !== "function") {
+  Range.prototype.getClientRects = (): DOMRectList => ({
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: function* (): Generator<DOMRect> {},
+  });
+  Range.prototype.getBoundingClientRect = (): DOMRect => new DOMRect(0, 0, 0, 0);
+}
+if (typeof document.elementFromPoint !== "function") {
+  document.elementFromPoint = (): Element | null => null;
+}
+
+// jsdom omits this inherited editing-state property, which native shortcut guards rely on.
+if (!("isContentEditable" in HTMLElement.prototype)) {
+  Object.defineProperty(HTMLElement.prototype, "isContentEditable", {
+    configurable: true,
+    get(): boolean {
+      const value = this.closest("[contenteditable]")?.getAttribute("contenteditable");
+      return value === "true" || value === "" || value === "plaintext-only";
+    },
+  });
+}

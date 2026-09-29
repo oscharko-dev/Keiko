@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryUiStore, type UiStore } from "./index.js";
 
 let root: string;
@@ -114,6 +114,10 @@ describe("Coding History on the existing conversation store", () => {
     expect(history.detail(task.id, "a".repeat(64))?.messages).toHaveLength(2);
     expect(store.listMessages(task.id)).toEqual([]);
     expect(store.findChatById(task.id)).toBeUndefined();
+    const visit = vi.fn();
+    store.visitGatewayMessageUnits(task.id, "", visit);
+    expect(visit).not.toHaveBeenCalled();
+    expect(() => store.chatHistoryRevision(task.id)).toThrow("Chat");
     expect(history.update(task.id, { status: "completed" }).status).toBe("completed");
     expect(history.update(task.id, { status: "active" }).status).toBe("active");
     expect(history.detail(task.id, "a".repeat(64))?.messages[1]?.content).toBe(

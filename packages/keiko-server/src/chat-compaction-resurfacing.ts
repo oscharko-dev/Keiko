@@ -16,6 +16,8 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 export const CHAT_COMPACTION_CONTEXT_HEADER = "# Persisted compaction context";
 
@@ -58,12 +60,61 @@ const MAX_LINE_CHARS = 220;
 export function buildChatCompactionResurfacingContext(
   store: EvidenceStore,
   chatId: string,
+  historyRevision?: number,
+  correlationId?: string,
 ): string | undefined {
   try {
-    return renderRecords(loadChatCompactionRecords(store, chatId));
-  } catch {
+    const records = loadChatCompactionRecords(store, chatId, correlationId);
+    return renderRecords(
+      historyRevision === undefined
+        ? records
+        : records
+            .filter(
+              ({ record }) => record.conversationCoverage?.historyRevision === historyRevision,
+            )
+            .slice(-1),
+    );
+  } catch (error) {
+    recordReadFailure(error, correlationId);
     return undefined;
   }
+}
+
+export function loadChatContinuityCheckpoint(
+  store: EvidenceStore,
+  chatId: string,
+  historyRevision: number,
+  correlationId?: string,
+  onDisposition?: (disposition: "none" | "revision-mismatch" | "available") => void,
+): ContextCompactionRecord | undefined {
+  try {
+    const records = loadChatCompactionRecords(store, chatId, correlationId);
+    const checkpoint = [...records]
+      .reverse()
+      .find(
+        ({ record }) => record.conversationCoverage?.historyRevision === historyRevision,
+      )?.record;
+    const missingDisposition = records.length === 0 ? "none" : "revision-mismatch";
+    onDisposition?.(checkpoint === undefined ? missingDisposition : "available");
+    return checkpoint;
+  } catch (error) {
+    recordReadFailure(error, correlationId);
+    return undefined;
+  }
+}
+
+function recordReadFailure(error: unknown, correlationId: string | undefined): void {
+  emitServerDiagnostic(
+    undefined,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "chat.compaction.read",
+      source: "chat-compaction-resurfacing",
+      error,
+      summary: "Audit or evidence persistence failed.",
+      redact: (value) => value,
+    }),
+  );
 }
 
 // Feature-detect the node adapter's prefix-scoped listing (GEN-PERF-CHAT-005). When present it filters
@@ -78,11 +129,15 @@ function listByPrefix(store: EvidenceStore, prefix: string): readonly string[] {
   return store.list().filter((runId) => runId.startsWith(prefix));
 }
 
-function loadChatCompactionRecords(store: EvidenceStore, chatId: string): readonly TimedRecord[] {
+function loadChatCompactionRecords(
+  store: EvidenceStore,
+  chatId: string,
+  correlationId: string | undefined,
+): readonly TimedRecord[] {
   const prefix = `chat-${sha256Hex(chatId).slice(0, 16)}-t`;
   const records: TimedRecord[] = [];
   for (const runId of newestRunIds(listByPrefix(store, prefix), prefix)) {
-    const manifest = safeLoad(store, runId);
+    const manifest = safeLoad(store, runId, correlationId);
     if (manifest === undefined) {
       continue;
     }
@@ -145,10 +200,15 @@ function recordForResurfacing(
   return validateContextCompactionRecord(withoutModelSummary).ok ? withoutModelSummary : undefined;
 }
 
-function safeLoad(store: EvidenceStore, runId: string): EvidenceManifest | undefined {
+function safeLoad(
+  store: EvidenceStore,
+  runId: string,
+  correlationId: string | undefined,
+): EvidenceManifest | undefined {
   try {
     return loadEvidence(store, runId);
-  } catch {
+  } catch (error) {
+    recordReadFailure(error, correlationId);
     return undefined;
   }
 }
@@ -304,6 +364,8 @@ function formatHandle(handle: ContextRehydrationHandle | undefined): string | un
 }
 
 function formatRef(ref: ContextProvenanceRef): string | undefined {
+  if (ref.kind === "message")
+    return `Original chat message ${ref.stableId} is available for bounded rehydration.`;
   if (ref.notPersistedReason !== undefined) {
     return `${ref.stableId} is not directly rehydratable: ${ref.notPersistedReason}`;
   }

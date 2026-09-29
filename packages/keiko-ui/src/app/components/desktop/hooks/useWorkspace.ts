@@ -336,6 +336,17 @@ function overflowCanScroll(value: string): boolean {
   return value === "auto" || value === "scroll" || value === "overlay";
 }
 
+function installWorkspaceWheelListener(
+  element: HTMLElement,
+  onWheel: (event: WheelEvent) => void,
+): () => void {
+  element.addEventListener("wheel", onWheel, { passive: false, capture: true });
+  reportClientDiagnostic("[keiko] workspace native and virtual scroll routing ready.", {
+    composerActivity: "workspace-scroll-ready",
+  });
+  return (): void => element.removeEventListener("wheel", onWheel, { capture: true });
+}
+
 function canScrollVertically(element: HTMLElement, deltaY: number): boolean {
   if (deltaY === 0) return false;
   const style = window.getComputedStyle(element);
@@ -363,6 +374,9 @@ function scrollTargetCanConsumeWheel(
   if (!(target instanceof Element)) return false;
   const windowElement = target.closest(".window[data-window-id]");
   if (windowElement === null) return false;
+  // Virtual editors scroll a surface with overflow:hidden. Cancelling the event in this
+  // capture handler prevents its own wheel handler from running, even with scrollable code.
+  if (target.closest('[data-workspace-scroll-owner="virtual"]') !== null) return true;
   let current: Element | null = target;
   while (current !== null && current !== windowElement) {
     if (
@@ -374,6 +388,14 @@ function scrollTargetCanConsumeWheel(
     current = current.parentElement;
   }
   return false;
+}
+
+function focusedEditorOwnsWheelTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editor = target.closest(
+    '[data-workspace-scroll-owner="virtual"], [contenteditable="true"], textarea',
+  );
+  return editor !== null && editor.contains(document.activeElement);
 }
 
 function activeSelectedWindowId(selection: WorkspaceUiSelectionState): string | null {
@@ -753,6 +775,7 @@ function usePanZoom({
         return;
       }
       const delta = normalizeWheelDelta(e);
+      if (focusedEditorOwnsWheelTarget(e.target)) return;
       if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
         if (scrollTargetCanConsumeWheel(e.target, delta)) return;
         e.preventDefault();
@@ -764,10 +787,7 @@ function usePanZoom({
         smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       });
     };
-    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
-    return () => {
-      el.removeEventListener("wheel", onWheel, { capture: true });
-    };
+    return installWorkspaceWheelListener(el, onWheel);
   }, [wsRef, queueView, selectionRef]);
 
   const rect = useCallback(

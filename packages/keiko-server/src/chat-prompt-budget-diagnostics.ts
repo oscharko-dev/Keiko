@@ -26,6 +26,29 @@ function pressureForTokens(tokens: number, budgetTokens: number): ContextBudgetP
   return "low";
 }
 
+export function withDeploymentContextProfile(
+  diagnostics: ContextAssemblyDiagnostics,
+  profile: ContextProfile,
+): ContextAssemblyDiagnostics {
+  return {
+    ...diagnostics,
+    profile,
+    budgetPressure: pressureForTokens(
+      diagnostics.totalEstimatedTokens,
+      profile.effectiveInputBudget,
+    ),
+    lanes: diagnostics.lanes.map((lane) => ({
+      ...lane,
+      budgetPressure: pressureForTokens(
+        lane.estimatedTokens,
+        lane.laneId === "verification-evidence"
+          ? profile.maxInputTokens
+          : profile.effectiveInputBudget,
+      ),
+    })),
+  };
+}
+
 function laneDiagnostics(input: {
   readonly laneId: ContextLaneDiagnostics["laneId"];
   readonly estimatedTokens: number;
@@ -130,7 +153,9 @@ function buildHistorySummaryLane(input: {
   readonly inputBudget: number;
 }): ContextLaneDiagnostics {
   const droppedHistoryTurns = input.historyOutcome.compaction?.itemsBefore ?? 0;
-  const retainedHistoryTurns = input.historyTurnCount - droppedHistoryTurns;
+  const retainedHistoryTurns = input.historyOutcome.messages.filter(
+    (message) => message.role === "user" || message.role === "assistant",
+  ).length;
   return laneDiagnostics({
     laneId: "history-summary",
     estimatedTokens: input.historyTokens,
@@ -147,6 +172,7 @@ function buildHistorySummaryLane(input: {
           provenanceCounts: {
             droppedTurns: droppedHistoryTurns,
             retainedTurns: retainedHistoryTurns,
+            omittedSummaryCategories: input.historyOutcome.omittedSummaryCategories?.length ?? 0,
           },
         }),
   });

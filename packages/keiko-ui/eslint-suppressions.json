@@ -25,7 +25,7 @@
       "count": 1
     },
     "max-lines-per-function": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/components/desktop/ChatWindow.tsx": {
@@ -37,11 +37,6 @@
     },
     "max-lines-per-function": {
       "count": 23
-    }
-  },
-  "src/app/components/desktop/ComposerEmptyState.test.tsx": {
-    "complexity": {
-      "count": 1
     }
   },
   "src/app/components/desktop/ConnectedScopePill.tsx": {
@@ -391,7 +386,7 @@
   },
   "src/app/components/desktop/hooks/useWorkspace.ts": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 11
+      "count": 10
     },
     "complexity": {
       "count": 4

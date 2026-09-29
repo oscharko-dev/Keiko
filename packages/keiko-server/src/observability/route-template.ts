@@ -109,6 +109,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "coding-workbench",
   "commands",
   "commit",
+  "compact",
   "completion",
   "completions",
   "config",

@@ -1,0 +1,121 @@
+.cmpRoot {
+  position: relative;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.cmpRoot[data-tone="warning"] {
+  color: var(--feedback-warning);
+}
+.cmpRoot[data-tone="critical"] {
+  color: var(--feedback-danger);
+}
+.cmpRoot[data-tone="unknown"] {
+  color: var(--fg-muted);
+}
+.cmpTrigger {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm, 6px);
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.cmpTrigger:hover {
+  background: var(--surface-accent-subtle);
+}
+.cmpTrigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpTrack {
+  stroke: currentColor;
+  opacity: 0.2;
+}
+.cmpFill {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 200ms ease;
+}
+.cmpPanel {
+  position: fixed;
+  z-index: 100100;
+  box-sizing: border-box;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  color: var(--fg);
+  background: var(--surface-overlay);
+  box-shadow: 0 8px 30px #0003;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cmpPanel h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.cmpMetrics {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.cmpMetrics > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cmpMetrics dt {
+  color: var(--fg-muted);
+}
+.cmpMetrics dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.cmpHelp {
+  color: var(--fg-muted);
+  margin: 10px 0;
+}
+.cmpSavings {
+  color: var(--accent-text);
+}
+.cmpCompact {
+  width: 100%;
+  padding: 7px 10px;
+  color: var(--button-primary-text);
+  background: var(--button-primary-surface);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cmpCompact:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.cmpCompact:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpSpinning {
+  animation: context-spin 1.2s linear infinite;
+}
+@keyframes context-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpFill {
+    transition: none;
+  }
+  .cmpSpinning {
+    animation: none;
+  }
+}

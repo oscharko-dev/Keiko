@@ -23,7 +23,12 @@ import {
   type AttachmentRejectionReason,
   type PendingAttachment,
 } from "./hooks/useChatSession";
-import { AttachRejectionAlert, buildAcceptString, rejectionMessage } from "./AttachmentStrip";
+import {
+  AttachButton,
+  AttachRejectionAlert,
+  buildAcceptString,
+  rejectionMessage,
+} from "./AttachmentStrip";
 import * as api from "@/lib/api";
 import type { Chat, ModelCapability } from "@/lib/types";
 
@@ -181,15 +186,15 @@ describe("AC #1 — text-only model blocks image upload", () => {
     expect(screen.getByText("photo.png")).toBeInTheDocument();
   });
 
-  it("attach button is aria-disabled when model has no image OR document support", () => {
+  it("hides the attachment picker when the selected model supports no attachments", () => {
     const session = makeSession({
       models: [makeModelCapability({ supportsImageInput: false, supportsDocumentInput: false })],
     });
 
     renderWindow(session);
 
-    const attachBtn = screen.getByRole("button", { name: "Attach file" });
-    expect(attachBtn).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("button", { name: "Attach file" })).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).not.toBeInTheDocument();
   });
 
   it("attach button is NOT aria-disabled when model supports images", () => {
@@ -593,16 +598,29 @@ describe("Accessibility", () => {
     expect(document.querySelector(".attach-drop-zone")).toBeNull();
   });
 
-  it("attach button stays focusable (not HTML-disabled) when model has no attachment support", () => {
-    const session = makeSession({
-      models: [makeModelCapability({ supportsImageInput: false, supportsDocumentInput: false })],
-    });
-    renderWindow(session);
-
-    const btn = screen.getByRole("button", { name: "Attach file" });
-    // aria-disabled=true, but NOT the HTML disabled attribute (so focus is retained).
-    expect(btn).toHaveAttribute("aria-disabled", "true");
-    expect(btn).not.toBeDisabled();
+  it("updates the attachment picker when the selected model changes", () => {
+    const onFiles = vi.fn();
+    const { rerender } = render(<AttachButton model={undefined} onFiles={onFiles} />);
+    expect(screen.queryByRole("button", { name: "Attach file" })).not.toBeInTheDocument();
+    for (const support of [
+      { supportsImageInput: true, supportsDocumentInput: false },
+      { supportsImageInput: false, supportsDocumentInput: true },
+    ]) {
+      rerender(<AttachButton model={makeModelCapability(support)} onFiles={onFiles} />);
+      expect(screen.getByRole("button", { name: "Attach file" })).toBeEnabled();
+    }
+    rerender(
+      <AttachButton
+        model={makeModelCapability({
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+        })}
+        onFiles={onFiles}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Attach file" })).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).not.toBeInTheDocument();
+    expect(onFiles).not.toHaveBeenCalled();
   });
 });
 

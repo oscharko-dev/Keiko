@@ -1,7 +1,7 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-27 for PR #3662 after repository-operation
-correlation changed the shared UI API module. No updater behavior changed. All eight Chromium
+The current repair evidence was regenerated on 2026-09-29 for PR #3675 after Chat context management
+changed the shared UI API module. No updater behavior changed. All eight Chromium
 checks passed on the supported Node 26 runtime, including the real-BFF outage journey, and refreshed
 the tracked updater artifacts. The tests prove the startup notice yields only while a visible, foreground **ready**
 Update window owns the same critical context and actions; the notice returns when that window is

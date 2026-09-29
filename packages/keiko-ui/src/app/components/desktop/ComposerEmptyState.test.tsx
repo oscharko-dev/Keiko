@@ -385,7 +385,7 @@ describe("Deliverable — empty state (no messages, active chat set)", () => {
 // ── AC #4 — keyboard and screen-reader preservation ──────────────────────────
 
 describe("AC #4 — keyboard and screen-reader preservation", () => {
-  it("tab order visits textarea, model select, then send button in the footer composer", async () => {
+  it("tab order visits the Markdown textbox, model select, then send button in the footer composer", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -420,12 +420,15 @@ describe("AC #4 — keyboard and screen-reader preservation", () => {
     // when no scope is bound. Skip past any pre-composer elements until we
     // reach the composer textarea — that is the element this AC pins.
     let pre = 0;
-    while (document.activeElement?.tagName.toLowerCase() !== "textarea" && pre < 20) {
+    while (
+      document.activeElement !== screen.getByRole("textbox", { name: "Chat message" }) &&
+      pre < 20
+    ) {
       await user.tab();
       pre++;
     }
     const focused = document.activeElement;
-    expect(focused?.tagName.toLowerCase()).toBe("textarea");
+    expect(focused).toBe(screen.getByRole("textbox", { name: "Chat message" }));
 
     await user.tab();
     // Next is a button (attach), then mode button, then model picker.

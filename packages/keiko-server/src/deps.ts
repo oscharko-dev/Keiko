@@ -1611,7 +1611,8 @@ export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
 }
 
 export function currentContextProfileForModel(
-  deps: Pick<UiHandlerDeps, "contextProfile" | "contextProfileForModel">,
+  deps: Pick<UiHandlerDeps, "contextProfile" | "contextProfileForModel"> &
+    Partial<Pick<UiHandlerDeps, "config" | "gatewayConfig">>,
   modelId: string | undefined,
 ): ContextProfile | undefined {
   if (modelId !== undefined) {
@@ -1620,7 +1621,11 @@ export function currentContextProfileForModel(
       return profile;
     }
   }
-  return deps.contextProfile;
+  if (deps.contextProfile !== undefined) return deps.contextProfile;
+  const config = deps.gatewayConfig?.current() ?? deps.config;
+  return config === undefined || modelId === undefined
+    ? undefined
+    : configuredChatContextProfile(config, modelId);
 }
 
 export function currentGatewayEgressConfig(

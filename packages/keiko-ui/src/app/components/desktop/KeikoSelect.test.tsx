@@ -20,6 +20,53 @@ function captureDiagnostics(): CapturedDiagnostic[] {
 }
 
 describe("KeikoSelect menu geometry", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+  it("keeps a long composer model list inside a small viewport with every option reachable", async () => {
+    const user = userEvent.setup();
+    const commit = vi.fn();
+    vi.stubGlobal("innerWidth", 420);
+    vi.stubGlobal("innerHeight", 360);
+    render(
+      <KeikoSelect
+        ariaLabel="Models"
+        menuTitle="Models"
+        attached={false}
+        menuPlacement="up"
+        menuPopoverMinWidth={300}
+        searchPlaceholder="Search models"
+        value="model-20"
+        onValueChange={commit}
+        sections={[
+          {
+            options: Array.from({ length: 20 }, (_, i) => ({
+              value: `model-${i + 1}`,
+              label: `Customer model ${i + 1}`,
+            })),
+          },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Models" });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(280, 300, 110, 36));
+    await user.click(trigger);
+    const menu = document.querySelector(".ksel-menu");
+    expect(menu).toHaveClass("ksel-menu-open-up");
+    expect(menu).toHaveStyle({ left: "104px", top: "16px", width: "300px" });
+    expect(screen.getAllByRole("option")).toHaveLength(20);
+    await user.keyboard("{ArrowDown}{End}");
+    expect(screen.getByRole("option", { name: "Customer model 20" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(commit).toHaveBeenCalledWith("model-20");
+    await user.click(trigger);
+    await user.type(screen.getByRole("searchbox"), "model 19");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    await user.keyboard("{Enter}");
+    expect(commit).toHaveBeenLastCalledWith("model-19");
+  });
+
   it("matches the trigger width and exposes trigger-height option sizing", async () => {
     const user = userEvent.setup();
     render(

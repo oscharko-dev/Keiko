@@ -17,6 +17,10 @@ import { createPortal } from "react-dom";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useTranslate } from "@/lib/i18n";
 import styles from "./KeikoSelect.module.css";
+import { Icons } from "./Icons";
+
+const SearchIcon = Icons.search;
+import { viewportOverlayPosition } from "./viewport-overlay";
 
 type EscapeFocusLocation = "trigger" | "search" | "option";
 
@@ -62,7 +66,7 @@ export interface KeikoSelectProps {
   readonly menuPopoverMinWidth?: number;
   readonly menuPopoverMaxHeight?: number;
   readonly menuPlacement?: "auto" | "up";
-  readonly searchPlaceholder?: string;
+  readonly searchPlaceholder?: string | undefined;
   /** The line a search shows when nothing matches, in the caller's own copy. */
   readonly searchEmptyLabel?: string;
   readonly attached?: boolean;
@@ -190,26 +194,6 @@ function menuWidth(rect: DOMRect, sizing: MenuSizing): number {
   );
 }
 
-function menuOpensUp(rect: DOMRect, placement: "auto" | "up"): boolean {
-  const spaceBelow = window.innerHeight - rect.bottom - MENU_VIEWPORT_PADDING;
-  const spaceAbove = rect.top - MENU_VIEWPORT_PADDING;
-  const minUsableHeight = Math.max(96, rect.height * 2);
-  return placement === "up" || (spaceBelow < minUsableHeight && spaceAbove > spaceBelow);
-}
-
-function menuMaxHeight(rect: DOMRect, openUp: boolean, sizing: MenuSizing): number {
-  const availableHeight = openUp
-    ? rect.top - MENU_VIEWPORT_PADDING
-    : window.innerHeight - rect.bottom - MENU_VIEWPORT_PADDING;
-  return Math.max(
-    rect.height,
-    Math.min(
-      Math.max(rect.height, availableHeight - sizing.chromeReserve),
-      sizing.menuPopoverMaxHeight ?? 380,
-    ),
-  );
-}
-
 // The options a search shows, exact and leading matches first.
 function searchSections(
   sections: readonly KeikoSelectSection[],
@@ -251,7 +235,7 @@ function buildTriggerClasses(params: {
       : "",
     params.disabled ? "ksel-trigger-disabled" : "",
   ]
-    .filter((token) => token.length > 0)
+    .filter((token) => token !== undefined && token.length > 0)
     .join(" ");
 }
 
@@ -445,17 +429,20 @@ function KeikoSelectSearchField({
   if (search === undefined) return null;
   return (
     <div className={styles.cmpMenuSearch}>
-      <input
-        ref={search.inputRef}
-        type="search"
-        aria-label={search.placeholder}
-        placeholder={search.placeholder}
-        value={search.query}
-        onChange={(event): void => {
-          search.onChange(event.currentTarget.value);
-        }}
-        onKeyDown={search.onKeyDown}
-      />
+      <div className={`c-combo-input ${styles.cmpSearchControl}`}>
+        <SearchIcon size={15} />
+        <input
+          ref={search.inputRef}
+          type="search"
+          aria-label={search.placeholder}
+          placeholder={search.placeholder}
+          value={search.query}
+          onChange={(event): void => {
+            search.onChange(event.currentTarget.value);
+          }}
+          onKeyDown={search.onKeyDown}
+        />
+      </div>
     </div>
   );
 }
@@ -515,11 +502,12 @@ function KeikoSelectMenu({
       ref={menuRef}
       className={[
         "ksel-menu",
+        styles.cmpViewportMenu,
         position.attached ? "ksel-menu-attached" : "",
         position.openUp ? "ksel-menu-open-up" : "ksel-menu-open-down",
         menuClassName ?? "",
       ]
-        .filter((token) => token.length > 0)
+        .filter((token) => token !== undefined && token.length > 0)
         .join(" ")}
       style={{
         left: `${position.left.toString()}px`,
@@ -531,6 +519,7 @@ function KeikoSelectMenu({
         fontWeight: position.fontWeight,
         letterSpacing: position.letterSpacing,
         lineHeight: position.lineHeight,
+        maxHeight: Math.max(0, window.innerHeight - position.top - MENU_VIEWPORT_PADDING),
       }}
     >
       {showMenuHeader ? (
@@ -543,7 +532,7 @@ function KeikoSelectMenu({
       ) : null}
       <KeikoSelectSearchField search={search} />
       <div
-        className="ksel-menu-scroll"
+        className={`ksel-menu-scroll ${styles.cmpViewportMenuScroll}`}
         role="listbox"
         id={menuId}
         aria-label={menuLabel}
@@ -695,28 +684,28 @@ export default function KeikoSelect({
       const trigger = triggerRef.current;
       if (trigger === null) return;
       const rect = trigger.getBoundingClientRect();
-      const viewportPadding = MENU_VIEWPORT_PADDING;
       const width = menuWidth(rect, sizing);
       const menuAttached = attached && Math.abs(width - rect.width) < 1;
       const menuGap = menuAttached ? -1 : 6;
-      const openUp = menuOpensUp(rect, menuPlacement);
-      setOpenUp(openUp);
-      const maxHeight = menuMaxHeight(rect, openUp, sizing);
-      const totalMenuHeight = maxHeight + sizing.chromeReserve;
-      const computed = window.getComputedStyle(trigger);
-      const left = Math.min(
-        Math.max(viewportPadding, rect.left),
-        window.innerWidth - width - viewportPadding,
-      );
-      setPosition({
-        left,
+      const geometry = viewportOverlayPosition({
+        anchor: rect,
         width,
-        top: openUp
-          ? Math.max(viewportPadding, rect.top - totalMenuHeight - menuGap)
-          : Math.min(rect.bottom + menuGap, window.innerHeight - viewportPadding - totalMenuHeight),
+        height: (sizing.menuPopoverMaxHeight ?? 380) + sizing.chromeReserve,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        gap: menuGap,
+        preferUp: menuPlacement === "up",
+      });
+      setOpenUp(geometry.openUp);
+      const maxHeight = Math.max(0, geometry.maxHeight - sizing.chromeReserve);
+      const computed = window.getComputedStyle(trigger);
+      setPosition({
+        left: geometry.left,
+        width,
+        top: geometry.top,
         optionHeight: Math.max(28, Math.min(rect.height, 30)),
         maxHeight,
-        openUp,
+        openUp: geometry.openUp,
         attached: menuAttached,
         fontFamily: computed.fontFamily,
         fontSize: computed.fontSize,
@@ -761,20 +750,21 @@ export default function KeikoSelect({
     const nextTop = Math.max(viewportPadding, triggerRect.top - menuRect.height - menuGap);
     if (Math.abs(nextTop - position.top) < 0.5) return;
     setPosition((current) => (current === null ? current : { ...current, top: nextTop }));
-  }, [open, position]);
+  }, [open, position, flatOptions.length]);
 
+  const menuReady = open && position !== null;
   useEffect(() => {
-    if (!open) return;
+    if (!menuReady) return;
     if (searchPlaceholder !== undefined) searchRef.current?.focus();
-  }, [open, searchPlaceholder]);
+  }, [menuReady, searchPlaceholder]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!menuReady) return;
     if (activeIndex < 0) return;
     if (searchPlaceholder !== undefined && document.activeElement === searchRef.current) return;
     optionRefs.current[activeIndex]?.focus();
     optionRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
-  }, [open, activeIndex, searchPlaceholder]);
+  }, [menuReady, activeIndex, searchPlaceholder]);
 
   function commit(next: FlatOption): void {
     if (next.disabled) return;
@@ -865,7 +855,9 @@ export default function KeikoSelect({
       consumeEscape("search", event);
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
-      optionRefs.current[firstEnabledIndex(flatOptions)]?.focus();
+      const firstIndex = firstEnabledIndex(flatOptions);
+      setActiveIndex(firstIndex);
+      optionRefs.current[firstIndex]?.focus();
     } else if (event.key === "Enter") {
       event.preventDefault();
       const first = flatOptions[firstEnabledIndex(flatOptions)];

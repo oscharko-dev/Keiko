@@ -54,6 +54,8 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type ClientComposerActivity,
+  type ClientComposerCodeStage,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -116,6 +118,8 @@ export interface ClientDiagnosticGitRetryAttemptReport {
 }
 
 export interface ClientDiagnosticMeta {
+  readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;

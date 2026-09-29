@@ -159,6 +159,28 @@ without requiring knowledge of specific path patterns.
 
 ### D3 — Wire the discarded chat-compaction record to persistCompactionEvidence
 
+**Current chat behavior (#3674):** The original user message remains in the canonical store.
+Buffered sends, streamed sends, and regeneration share the same prompt assembly and output
+allocation. Source-chat routes resolve the selected configured model capability when an explicit
+context-profile dependency is absent; the optional path-free summary can therefore be present
+without a singleton profile. The pure legacy projection still omits it when no effective profile
+or context-budget diagnostics exist. A large current prompt can reduce the default answer reservation to the actual
+remaining capacity; the complete final request still undergoes gateway token admission.
+When the current prompt itself exceeds 90% of the effective input budget, foreground semantic
+compaction processes every source character in ordered, individually budgeted model requests.
+The execution projection uses explicit user-task framing and the semantic summary, with bounded, redacted original opening/closing fragments preserving boundary instructions. The complete projection is counted before admission; the saved user message retains the original.
+This preserves the non-evictable user-task lane; it does not silently truncate that lane.
+
+Foreground and background summaries share one cancellation and timeout helper. Foreground work
+has a maximum of 32 calls, three reduction rounds, 60 seconds per call, and 90 seconds overall.
+The gateway retains its configured provider timeout; foreground preparation does not impose the
+shorter background-maintenance timeout.
+Each call revalidates the accepted gateway generation and readiness; final dispatch checks the
+same boundary again. Empty, incomplete, or non-reducing summaries fail explicitly. Counts and
+outcomes use the existing Activity Log operation, without prompt or summary bodies. Semantic
+summaries can omit detail and are not claimed to be lossless; the original remains available.
+
+
 **The problem**: `buildGatewayMessages` (chat-handlers.ts:924) calls
 `conversationForGatewayWithCompaction` and returns only `messages`. The `compaction?:
 ContextCompactionRecord` from `ConversationCompactionOutcome` is silently dropped. Both call sites
@@ -317,7 +339,10 @@ Prerequisite: a workspace is open and at least one grounded question has been an
 - `globals.css` gains new `.ctx-*` classes. They must use existing design tokens (no new raw
   values) to satisfy ADR-0050 gate 4.
 
-## What PR6 does NOT do
+## What the original PR6 did not do
+
+These exclusions describe the original grounded panel delivery. The current behavior described
+in D3 above extends the shared conversation paths and Composer in #3674.
 
 - Does not change composer history controls.
 - Does not add a new `EvidenceTaskType` (consistent with PR5 D1).

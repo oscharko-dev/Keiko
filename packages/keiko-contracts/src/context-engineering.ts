@@ -317,6 +317,8 @@ export type ContextCompactionModelSummaryFailureReason =
 // Optional model-written continuity summary. This is an enrichment, not the authoritative raw
 // source: structured fields, sourceSpans, and rehydration handles remain the auditable basis.
 export interface ContextCompactionModelSummary {
+  /** Number of eligible prefix messages incorporated in this running summary. */
+  readonly coveredItems?: number | undefined;
   readonly promptVersion: typeof CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION;
   readonly modelId: string;
   readonly status?: ContextCompactionModelSummaryStatus | undefined;
@@ -334,6 +336,15 @@ export interface ContextCompactionModelSummary {
 
 // ─── Compaction record (PR1 stub extended additively) ─────────────────────── [PR2, additive]
 export interface ContextCompactionRecord {
+  /** Versioned checkpoint covering every eligible message through the recorded stable id. */
+  readonly conversationCoverage?:
+    | {
+        readonly version: 1;
+        readonly throughMessageId: string;
+        readonly historyRevision: number;
+        readonly contextWindowTokens?: number | undefined;
+      }
+    | undefined;
   // ── PR1 fields (unchanged) ───────────────────────────────
   readonly schemaVersion: typeof CONTEXT_ENGINEERING_SCHEMA_VERSION;
   readonly laneId: ContextLaneId;

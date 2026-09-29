@@ -412,7 +412,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       expect(span.kind).toBe("message");
       expect(span.stableId.length).toBeGreaterThan(0);
     }
-    expect(outcome.compaction?.sourceSpans?.[0]?.stableId).toBe("history-msg-0");
+    expect(outcome.compaction?.sourceSpans?.[0]?.stableId).toBe("m0");
   });
 
   it("fewOversizedTurnsCompact: the final assembled token count stays within the effective budget", () => {

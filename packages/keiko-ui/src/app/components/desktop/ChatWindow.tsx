@@ -25,7 +25,6 @@ import {
   type ChangeEvent,
   type CSSProperties,
   type Dispatch,
-  type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
   type Ref,
@@ -43,6 +42,7 @@ import {
 } from "./context/ChatSessionContext";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
+import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
@@ -142,7 +142,9 @@ import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
-import { ComposerShell, composerEnterSubmits, useComposerAutoGrow } from "./composer/ComposerShell";
+import { ComposerShell, composerEnterSubmits } from "./composer/ComposerShell";
+import { MarkdownComposer } from "./composer/MarkdownComposer";
+import type { ComposerInputHandle, ComposerKeyEvent } from "./composer/composer-editor-types";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import {
@@ -2093,6 +2095,13 @@ function composerModelOptions(
   return modelList(models).map((model) => ({ value: model.id, label: model.id }));
 }
 
+function composerModelSearch(
+  models: readonly ModelCapability[],
+  t: I18nTranslate,
+): string | undefined {
+  return models.length >= 10 ? t("chat.model.search") : undefined;
+}
+
 function ComposerContextControls({
   session,
   selectedModelCapability,
@@ -2107,13 +2116,7 @@ function ComposerContextControls({
 
   return (
     <div className="cmp-bar-model">
-      <AttachButton
-        model={selectedModelCapability}
-        onFiles={onAttachFiles}
-        anyModelSupportsAttachments={models.some(
-          (m) => m.supportsImageInput || m.supportsDocumentInput,
-        )}
-      />
+      <AttachButton model={selectedModelCapability} onFiles={onAttachFiles} />
       <div
         className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
         data-tip={controlsNarrow ? compactModelTip : undefined}
@@ -2129,6 +2132,11 @@ function ComposerContextControls({
             <CubeIcon size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
           }
           menuTitle={t("chat.model.menuTitle")}
+          menuPlacement="up"
+          attached={false}
+          menuPopoverMinWidth={300}
+          searchPlaceholder={composerModelSearch(models, t)}
+          searchEmptyLabel={t("chat.model.searchEmpty")}
           menuClassName="cmp-model-menu"
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
@@ -2146,6 +2154,7 @@ function ComposerContextControls({
           }}
         />
       </div>
+      <ChatContextMeterContainer session={session} />
     </div>
   );
 }
@@ -2545,7 +2554,7 @@ function syncVoiceDialogLayerFocus(params: {
 // the highlighted (or first) result. Returns true when the key was handled so the caller skips
 // the default composer key-down flow, matching the original if-chain's fall-through behavior.
 function handleRepositoryPickerKeyDown(
-  event: KeyboardEvent<HTMLTextAreaElement>,
+  event: ComposerKeyEvent,
   params: {
     readonly results: readonly FilesSearchResult[];
     readonly highlightedIndex: number;
@@ -3035,11 +3044,7 @@ function ComposerCoreImpl({
     activeProject,
     replaceChat,
   } = session;
-  // uiux-fix F009 C089 — auto-grow with the content (shared ComposerShell behaviour). Clearing
-  // the draft after a send collapses the textarea back to its rows={2} minimum. The mini composer
-  // (MiniChat) has its own textarea without this effect and stays height:100%.
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  useComposerAutoGrow(taRef, draft);
+  const taRef = useRef<ComposerInputHandle>(null);
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -3510,28 +3515,25 @@ function ComposerCoreImpl({
   );
 
   const handleDraftChange = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>): void => {
-      const next = event.target.value;
+    (next: string, cursor: number): void => {
       setDraft(next);
-      updateRepositoryMentionFromTextarea(next, event.target.selectionStart ?? next.length);
+      if (cursor < 0) setRepositoryMention(null);
+      else updateRepositoryMentionFromTextarea(next, cursor);
     },
     [setDraft, updateRepositoryMentionFromTextarea],
   );
 
   const handleDraftSelect = useCallback(
-    (event: SyntheticEvent<HTMLTextAreaElement>): void => {
+    (value: string, cursor: number): void => {
       if (repositoryMention === null) return;
-      const target = event.currentTarget;
-      updateRepositoryMentionFromTextarea(
-        target.value,
-        target.selectionStart ?? target.value.length,
-      );
+      if (cursor < 0) setRepositoryMention(null);
+      else updateRepositoryMentionFromTextarea(value, cursor);
     },
     [repositoryMention, updateRepositoryMentionFromTextarea],
   );
 
   const handleDraftKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    (event: ComposerKeyEvent): void => {
       if (repositoryPickerOpen) {
         const handled = handleRepositoryPickerKeyDown(event, {
           results: repositorySearch.results,
@@ -3598,25 +3600,31 @@ function ComposerCoreImpl({
         <ComposerShell
           value={draft}
           placeholder={placeholder}
-          textareaRef={taRef}
-          ariaLabel={t("chat.messageLabel")}
-          // KEIKO-0608: client-side parity with the voice admission path's size guard (enforced
-          // authoritatively by the server either way — see resolveSendMessageAdmission in
-          // useChatSession.ts and chat-handlers.ts). maxLength is a character count, consistent
-          // with MAX_DESKTOP_CHAT_INPUT_CHARS.
-          maxLength={MAX_DESKTOP_CHAT_INPUT_CHARS}
-          // The textarea remains a native textbox. When repository suggestions exist,
-          // aria-controls points to their visible semantic list; the adjacent polite status
-          // announces result-count changes. Arrow keys update the visible highlight and Enter
-          // activates it without claiming a listbox/combobox relationship that is not present.
-          ariaControls={repositoryResultsId}
-          onChange={handleDraftChange}
-          onSelect={handleDraftSelect}
-          onKeyDown={handleDraftKeyDown}
-          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays fully
-          // editable while a send is in flight so the next message can be pre-typed during
-          // streaming. Re-submit stays blocked by the isInFlight guard in useChatSession, and the
-          // primary button is "Cancel" meanwhile.
+          input={
+            <MarkdownComposer
+              value={draft}
+              placeholder={placeholder}
+              inputRef={taRef}
+              documentKey={activeChat?.id ?? "new-chat"}
+              ariaLabel={t("chat.messageLabel")}
+              ariaControls={repositoryResultsId}
+              maxLength={MAX_DESKTOP_CHAT_INPUT_CHARS}
+              onChange={handleDraftChange}
+              onSelect={handleDraftSelect}
+              onKeyDown={handleDraftKeyDown}
+              labels={{
+                code: t("chat.composer.code"),
+                plainText: t("chat.composer.plainText"),
+                language: t("chat.composer.codeLanguage"),
+                continueText: t("chat.composer.continueText"),
+                loading: t("chat.composer.codeLoading"),
+                unavailable: t("chat.composer.codeUnavailable"),
+                limit: t("chat.composer.inputLimit"),
+                hint: t("chat.composer.markdownHint"),
+              }}
+            />
+          }
+          // Keep editing the next draft while the preceding answer streams.
           aboveInput={<AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />}
           belowInput={
             <>

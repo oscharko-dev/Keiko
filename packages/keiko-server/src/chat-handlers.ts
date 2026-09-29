@@ -1,8 +1,17 @@
+import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 // Desktop chat BFF routes for the Keiko canvas UI. These routes intentionally keep the model call
 // behind the existing ModelPort/Gateway boundary: the browser sends only chat content and a registry
 // model id, while provider endpoints and keys remain resolved from the local gateway config/.env.
 
 import type { IncomingMessage } from "node:http";
+import {
+  captureChatHistory,
+  stampHistoryRevision,
+  type GatewayHistorySnapshot,
+} from "./chat-history-snapshot.js";
+import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import {
@@ -214,6 +223,7 @@ import { userFacingProjects } from "./workspace-root-membership.js";
 import {
   buildChatCompactionContextText,
   selectGatewayPromptAssembly,
+  gatewayAssemblyOutputAllocation,
   type GatewayPromptAssembly,
 } from "./chat-prompt-budget.js";
 import {
@@ -451,12 +461,19 @@ function gatewayErrorResult(
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 
+class ChatPromptPreparationRejection extends Error {
+  constructor(readonly result: RouteResult) {
+    super("Desktop chat prompt preparation was rejected.");
+  }
+}
+
 export function desktopChatErrorResult(
   error: unknown,
   deps: UiHandlerDeps,
   correlationId?: string,
   emitDiagnostic = true,
 ): RouteResult {
+  if (error instanceof ChatPromptPreparationRejection) return error.result;
   if (error instanceof ConversationAttachmentStoreError) {
     return {
       status: 409,
@@ -1196,6 +1213,31 @@ export function settleRejectedDesktopChatTurn(
   );
 }
 
+export function settleFailedChatPromptPreparation(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  admitted: AdmittedTurnHandle,
+  error: unknown,
+  signal: AbortSignal,
+): void {
+  const cancelled =
+    signal.aborted ||
+    error instanceof CancelledError ||
+    (error instanceof Error && error.name === "AbortError");
+  settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
+}
+
+export function settlePromptPreparationRejection(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  admitted: AdmittedTurnHandle,
+  error: unknown,
+): boolean {
+  if (!(error instanceof ChatPromptPreparationRejection)) return false;
+  settleRejectedDesktopChatTurn(deps, prepared, admitted);
+  return true;
+}
+
 export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -1710,10 +1752,7 @@ export function commitChatAfterTurn(
 // #152 — assemble the exact gateway prompt from the history snapshot captured synchronously after
 // admission. Both buffered and streaming callers exclude the admitted user by stable message id and
 // append the request exactly once, so concurrent non-turn writers cannot mutate the in-flight prompt.
-export interface GatewayTurnSnapshot {
-  readonly history: readonly ChatMessage[];
-  readonly currentUserMessageId: string;
-}
+export type GatewayTurnSnapshot = GatewayHistorySnapshot;
 
 export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly ChatMessage[] {
   return snapshot.history.filter(
@@ -1721,19 +1760,65 @@ export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly Ch
   );
 }
 
+export function captureAdmittedSnapshot(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admitted: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId?: string,
+): GatewayTurnSnapshot {
+  try {
+    return captureGatewayTurnSnapshot(
+      deps,
+      { ...prepared.request, modelId: prepared.modelId },
+      admitted.userMessage,
+      correlationId,
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    throw error;
+  }
+}
+
 export function captureGatewayTurnSnapshot(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   userMessage: ChatMessage,
+  correlationId?: string,
+  rehydrate = true,
 ): GatewayTurnSnapshot {
-  return {
-    history: deps.store.listGatewayMessages(
-      request.chatId,
-      userMessage.id,
-      CHAT_HISTORY_READ_LIMIT,
-    ),
-    currentUserMessageId: userMessage.id,
-  };
+  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
+  const checkpoint = loadChatContinuityCheckpoint(
+    deps.evidenceStore,
+    request.chatId,
+    deps.store.chatHistoryRevision(request.chatId),
+    correlationId,
+    (disposition) => {
+      checkpointDisposition = disposition;
+    },
+  );
+  const snapshot = captureChatHistory(
+    deps.store,
+    request.chatId,
+    userMessage.id,
+    currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    currentRedactionSecrets(deps),
+    checkpoint,
+    { correlationId, checkpointDisposition },
+  );
+  return snapshot.earlierCompaction === undefined || !rehydrate
+    ? snapshot
+    : {
+        ...snapshot,
+        rehydratedContext: rehydrateChatHistory(
+          deps.store,
+          request.chatId,
+          request.content,
+          new Set(snapshot.history.map((message) => message.id)),
+          currentRedactionSecrets(deps),
+          correlationId,
+        ),
+      };
 }
 
 function finalizeGatewayAssembly(
@@ -1762,14 +1847,15 @@ export function buildGatewayAssembly(
   snapshot: GatewayTurnSnapshot,
   correlationId?: string,
 ): GatewayPromptAssembly {
-  const currentUserIndex = snapshot.history.findIndex(
+  const hasCurrentUser = snapshot.history.some(
     (message) => message.id === snapshot.currentUserMessageId,
   );
-  if (currentUserIndex < 0) {
+  if (!hasCurrentUser) {
     throw new UiStoreError("INTERNAL", "Admitted chat turn is missing from its history.", 500);
   }
   const historyPrefix = gatewayHistoryPrefix(snapshot);
   const selected = selectGatewayPromptAssembly({
+    proactiveCompaction: true,
     historyPrefix,
     historyTurnCount: usableGatewayMessages(historyPrefix).length,
     request: {
@@ -1779,11 +1865,39 @@ export function buildGatewayAssembly(
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
-    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
+    compactionContextText: buildChatCompactionContextText(
+      deps.evidenceStore,
+      request.chatId,
+      snapshot.historyRevision,
+      correlationId,
+    ),
+    continuityContextText: snapshot.rehydratedContext,
+    earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
   });
-  return finalizeGatewayAssembly(selected, request, correlationId);
+  return finalizeGatewayAssembly(
+    stampGatewayCompaction(selected, deps, modelId, snapshot),
+    request,
+    correlationId,
+  );
+}
+
+function stampGatewayCompaction(
+  selected: GatewayPromptAssembly | undefined,
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+  snapshot: GatewayTurnSnapshot,
+): GatewayPromptAssembly | undefined {
+  if (selected === undefined) return undefined;
+  return {
+    ...selected,
+    compaction: stampHistoryRevision(
+      selected.compaction,
+      snapshot.historyRevision ?? 0,
+      (currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE).maxInputTokens,
+    ),
+  };
 }
 
 // ADR-0173 D5 g9 — the INPUT shape of a chat turn, never its content: how many messages the
@@ -1873,6 +1987,7 @@ export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTu
     messageCount: turn.messageCount,
     startedAt: turn.startedAt,
     finishedAt: Date.now(),
+    correlationId: turn.correlationId,
   } satisfies ChatCompactionEvidenceInput;
   persistChatCompactionEvidence(deps, input);
   scheduleCompactionModelSummary(deps, input, turn.historyPrefix, turn.correlationId);
@@ -1932,30 +2047,27 @@ function buildRegenerateGatewayAssembly(
   historyBeforeAssistant: readonly ChatMessage[],
   correlationId: string | undefined,
 ): GatewayPromptAssembly {
-  let latestUserIndex = -1;
-  for (let index = historyBeforeAssistant.length - 1; index >= 0; index -= 1) {
-    if (historyBeforeAssistant[index]?.role === "user") {
-      latestUserIndex = index;
-      break;
-    }
-  }
-  const historyPrefix =
-    latestUserIndex < 0 ? historyBeforeAssistant : historyBeforeAssistant.slice(0, latestUserIndex);
-  const selected = selectGatewayPromptAssembly({
-    historyPrefix,
-    historyTurnCount: usableGatewayMessages(historyPrefix).length,
-    request: {
-      content: request.content,
-      discussionMode: request.discussionMode,
-      imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
+  const user = [...historyBeforeAssistant].reverse().find((message) => message.role === "user");
+  if (user === undefined)
+    throw new UiStoreError("INTERNAL", "Regeneration user turn is missing.", 500);
+  const snapshot = captureGatewayTurnSnapshot(
+    deps,
+    { ...request, content: user.content, modelId },
+    user,
+    correlationId,
+  );
+  const currentIndex = snapshot.history.findIndex((message) => message.id === user.id);
+  return buildGatewayAssembly(
+    deps,
+    request,
+    memory,
+    modelId,
+    {
+      ...snapshot,
+      history: snapshot.history.slice(0, currentIndex + 1),
     },
-    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    memoryEntries: memory.context.memories,
-    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
-    documentContext: request.documentContext,
-    redactionSecrets: currentRedactionSecrets(deps),
-  });
-  return finalizeGatewayAssembly(selected, request, correlationId);
+    correlationId,
+  );
 }
 
 function latestRegenerableTurn(
@@ -2063,6 +2175,50 @@ function bufferedModelAtProviderBoundary(
       body: errorBody("NO_MODEL", "No model provider is configured."),
     }
   );
+}
+
+export async function prepareDesktopChatPrompt(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  modelId: string,
+  admission: DesktopChatExecutionAdmission,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+  operation: "chat.send.rejected" | "chat.regeneration.rejected" = "chat.send.rejected",
+): Promise<SendDesktopChatRequest> {
+  const content = await compactCurrentChatPrompt({
+    content: request.content,
+    modelId,
+    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    signal,
+    correlationId,
+    redact: (value) => String(deps.redactor(value)),
+    call: async (summaryRequest, summarySignal) => {
+      const model = bufferedModelAtProviderBoundary(
+        deps,
+        modelId,
+        admission,
+        correlationId,
+        operation,
+      );
+      if (isRouteResult(model)) throw new ChatPromptPreparationRejection(model);
+      return model.call(summaryRequest, summarySignal);
+    },
+  });
+  signal.throwIfAborted();
+  const invalid = validateDesktopChatProviderBoundary(modelId, admission, deps);
+  if (invalid !== undefined) {
+    logChatRejection(
+      operation,
+      correlationId,
+      modelId,
+      deps,
+      invalid.status,
+      desktopChatProviderBoundaryRejectionReason(modelId, admission, deps),
+    );
+    throw new ChatPromptPreparationRejection(invalid);
+  }
+  return content === request.content ? request : { ...request, content };
 }
 
 function bufferedTurnCancellationResult(
@@ -2208,6 +2364,62 @@ function buildBufferedGatewayAssembly(
   return assemblyWithConversationImages(deps, request, modelId, baseAssembly);
 }
 
+async function prepareBufferedGatewayAssembly(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  memory: ConversationMemoryResultWire,
+  admission: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
+  gatewayTurn: GatewayTurnSnapshot,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<GatewayPromptAssembly> {
+  const { request, modelId } = prepared;
+  const { admitted, executionAdmission } = admission;
+  try {
+    const executionRequest = await prepareDesktopChatPrompt(
+      deps,
+      request,
+      modelId,
+      executionAdmission,
+      signal,
+      correlationId,
+    );
+    return buildBufferedGatewayAssembly(
+      deps,
+      executionRequest,
+      memory,
+      modelId,
+      gatewayTurn,
+      correlationId,
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    throw error;
+  }
+}
+
+function callPreparedAssembly(
+  model: BufferedModelPort,
+  modelId: string,
+  assembly: GatewayPromptAssembly,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<NormalizedResponse> {
+  return model.call(
+    {
+      modelId,
+      messages: assembly.messages,
+      ...gatewayAssemblyOutputAllocation(assembly),
+      stream: false,
+      logContext: { correlationId },
+    },
+    signal,
+  );
+}
+
 async function executeBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2216,20 +2428,21 @@ async function executeBufferedModelTurn(
   startedAt: number,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { request, modelId } = prepared;
+  const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
   const { admitted, executionAdmission } = outcome;
   const { userMessage } = admitted;
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
+  const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
-  const assembly = buildBufferedGatewayAssembly(
+  const assembly = await prepareBufferedGatewayAssembly(
     deps,
-    request,
+    prepared,
     memory,
-    modelId,
-    gatewayTurn,
+    outcome,
+    snapshot,
+    abortSignal,
     correlationId,
   );
   const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
@@ -2237,10 +2450,7 @@ async function executeBufferedModelTurn(
     settleRejectedDesktopChatTurn(deps, prepared, admitted);
     return model;
   }
-  const response = await model.call(
-    { modelId, messages: assembly.messages, stream: false, logContext: { correlationId } },
-    abortSignal,
-  );
+  const response = await callPreparedAssembly(model, modelId, assembly, abortSignal, correlationId);
   const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
   if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
@@ -2253,7 +2463,7 @@ async function executeBufferedModelTurn(
       assembly,
       messageCount: messageCountBeforeTurn,
       startedAt,
-      historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+      historyPrefix: gatewayHistoryPrefix(snapshot),
       correlationId,
     },
   );
@@ -2453,7 +2663,13 @@ async function generateAdmittedGitChangeTurn(
   signal: AbortSignal,
   correlationId: string,
 ): Promise<Awaited<ReturnType<typeof generateGitChangeChatDescription>>> {
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  const gatewayTurn = captureGatewayTurnSnapshot(
+    deps,
+    { ...prepared.request, modelId: prepared.modelId },
+    admission.userMessage,
+    correlationId,
+    false,
+  );
   return generateGitChangeChatDescription({
     deps,
     projectPath: prepared.chat.projectPath,
@@ -3757,24 +3973,35 @@ async function buildRegenerateContext(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   correlationId: string | undefined,
+  signal: AbortSignal,
 ): Promise<{
   readonly memory: ConversationMemoryResultWire;
   readonly messages: readonly GatewayConversationMessage[];
+  readonly maxOutputTokens?: number;
 }> {
   const { modelId, turn, memoryRequest, memoryContext } = prepared;
   const memory =
     memoryContext === undefined
       ? emptyMemoryResult(false)
       : await buildMemoryResult(memoryRequest, deps, memoryContext);
-  const assembly = buildRegenerateGatewayAssembly(
+  const executionRequest = await prepareDesktopChatPrompt(
     deps,
     memoryRequest,
+    modelId,
+    prepared.executionAdmission,
+    signal,
+    correlationId,
+    "chat.regeneration.rejected",
+  );
+  const assembly = buildRegenerateGatewayAssembly(
+    deps,
+    executionRequest,
     memory,
     modelId,
     turn.beforeAssistant,
     correlationId,
   );
-  return { memory, messages: assembly.messages };
+  return { memory, messages: assembly.messages, ...gatewayAssemblyOutputAllocation(assembly) };
 }
 
 function validateRegenerateCommit(
@@ -3801,15 +4028,48 @@ function validateRegenerateCommit(
   return current.assistant;
 }
 
+function commitRegeneratedChatTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
+  response: NormalizedResponse,
+): RouteResult {
+  const { chat, modelId, memoryRequest } = prepared;
+  const redactedContent = deps.redactor(response.content) as string;
+  assertUsableAssistantContent(redactedContent, modelId);
+  const currentAssistant = validateRegenerateCommit(deps, prepared);
+  if (isRouteResult(currentAssistant)) return currentAssistant;
+  const assistantMessage = deps.store.createAssistantResponseVersion(
+    currentAssistant.id,
+    redactedContent,
+    Date.now(),
+  );
+  const updatedChat = commitChatAfterTurn(deps, chat, memoryRequest, modelId);
+  return {
+    status: 200,
+    body: {
+      chat: updatedChat,
+      messages: [assistantMessage],
+      usage: response.usage,
+      memory: { ...memory, actions: [] },
+    },
+  };
+}
+
 async function persistRegeneratedChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { chat, modelId, memoryRequest, executionAdmission } = prepared;
+  const { modelId, executionAdmission } = prepared;
   try {
-    const { memory, messages } = await buildRegenerateContext(deps, prepared, correlationId);
+    const { memory, messages, maxOutputTokens } = await buildRegenerateContext(
+      deps,
+      prepared,
+      correlationId,
+      signal,
+    );
     if (requestSignalAborted(signal)) return requestCancelledResult();
     const model = bufferedModelAtProviderBoundary(
       deps,
@@ -3820,29 +4080,17 @@ async function persistRegeneratedChatTurn(
     );
     if (isRouteResult(model)) return model;
     const response = await model.call(
-      { modelId, messages, stream: false, logContext: { correlationId } },
+      {
+        modelId,
+        messages,
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+        stream: false,
+        logContext: { correlationId },
+      },
       signal,
     );
     if (requestSignalAborted(signal)) return requestCancelledResult();
-    const redactedContent = deps.redactor(response.content) as string;
-    assertUsableAssistantContent(redactedContent, modelId);
-    const currentAssistant = validateRegenerateCommit(deps, prepared);
-    if (isRouteResult(currentAssistant)) return currentAssistant;
-    const assistantMessage = deps.store.createAssistantResponseVersion(
-      currentAssistant.id,
-      redactedContent,
-      Date.now(),
-    );
-    const updatedChat = commitChatAfterTurn(deps, chat, memoryRequest, modelId);
-    return {
-      status: 200,
-      body: {
-        chat: updatedChat,
-        messages: [assistantMessage],
-        usage: response.usage,
-        memory: { ...memory, actions: [] },
-      },
-    };
+    return commitRegeneratedChatTurn(deps, prepared, memory, response);
   } catch (error) {
     return signal.aborted
       ? requestCancelledResult()

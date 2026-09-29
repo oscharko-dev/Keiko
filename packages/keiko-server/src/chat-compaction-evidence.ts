@@ -27,6 +27,7 @@ export interface ChatCompactionEvidenceInput {
   readonly messageCount: number;
   readonly startedAt: number;
   readonly finishedAt: number;
+  readonly correlationId?: string | undefined;
 }
 
 // runId = chat-<sha256Hex(chatId)[:16]>-t<messageCount>. Hex-only + the fixed prefix/suffix are all
@@ -75,7 +76,12 @@ export function persistChatCompactionEvidence(
     // Best-effort stays best-effort — the send is unaffected — but the failure is no longer a
     // `console.warn` carrying the raw error object on a channel production never overrode. It goes to
     // the server's single redacted diagnostic sink so a compaction-evidence gap is observable.
-    const correlationId = runId !== undefined && isValidCorrelationId(runId) ? runId : randomUUID();
+    const runCorrelationId =
+      runId !== undefined && isValidCorrelationId(runId) ? runId : randomUUID();
+    const correlationId =
+      input.correlationId !== undefined && isValidCorrelationId(input.correlationId)
+        ? input.correlationId
+        : runCorrelationId;
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({

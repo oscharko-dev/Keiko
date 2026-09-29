@@ -1,4 +1,25 @@
 export const EN_MESSAGES = {
+  "chat.context.title": "Conversation context",
+  "chat.context.label": "Conversation context: approximately {percent}% used",
+  "chat.context.used": "Estimated tokens used",
+  "chat.context.inputBudget": "Usable input tokens",
+  "chat.context.window": "Full context window",
+  "chat.context.outputReserve": "Reserved for the answer",
+  "chat.context.safetyMargin": "Safety margin",
+  "chat.context.saved": "{tokens} tokens saved across {count} summarized messages.",
+  "chat.context.unavailable": "Context estimate unavailable",
+  "chat.context.estimate":
+    "Estimated conversation history. Drafts, attachments and retrieved sources add context when you send.",
+  "chat.context.automatic":
+    "Keiko compacts automatically at 90% of usable input capacity before sending the next request.",
+  "chat.context.retained":
+    "Compaction summarizes earlier messages. The full conversation stays saved; summaries can omit details.",
+  "chat.context.error": "Context could not be updated.",
+  "chat.context.retry": "Retry",
+  "chat.context.compact": "Compact context now",
+  "chat.context.compacting": "Compacting context…",
+  "chat.context.wait": "Available after the current response finishes.",
+
   "app.skipToContent": "Skip to content",
   "app.workspaceHeading": "Keiko workspace",
   "header.tileAll": "Tile all windows",
@@ -638,8 +659,18 @@ export const EN_MESSAGES = {
   "chat.hero.placeholder": "Describe a task, paste a link, or ask anything...",
   "chat.workLocally": "Work locally",
   "chat.composer.placeholder": "Ask Keiko...",
+  "chat.composer.code": "Code input",
+  "chat.composer.plainText": "Plain text",
+  "chat.composer.codeLanguage": "Code language",
+  "chat.composer.continueText": "Continue below ↵",
+  "chat.composer.codeLoading": "Loading syntax highlighting…",
+  "chat.composer.codeUnavailable": "Syntax highlighting unavailable. You can keep editing here.",
+  "chat.composer.inputLimit": "The message is too long. Shorten it before adding more content.",
+  "chat.composer.markdownHint": "Markdown · ``` + Shift+Enter for code · Enter to send",
   "chat.composer.loading": "Loading...",
   "chat.model.menuTitle": "Models",
+  "chat.model.search": "Search models...",
+  "chat.model.searchEmpty": "No matching models.",
   "chat.model.title": "Model",
   "chat.model.loading": "Loading models...",
   "chat.model.noEligible": "No conversation-eligible model",
@@ -1066,10 +1097,6 @@ export const EN_MESSAGES = {
   "attachment.notice.imageUndeliverable":
     '"{name}" won\'t be sent — the model does not receive image attachments in this conversation. Describe what matters about it in your message instead.',
   "attachment.drop": "Drop files here to attach",
-  "attachment.disabledDifferentModel":
-    "The selected model does not support image or document input. Choose a different model to attach files.",
-  "attachment.disabledNoModel":
-    "The selected model does not support image or document input. No configured model currently supports attachments.",
   "attachment.attachFile": "Attach file",
   "attachment.notSupported": "Attachments not supported",
   "attachment.docsContext": "Documents included as context",

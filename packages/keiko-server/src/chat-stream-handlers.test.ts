@@ -1,3 +1,5 @@
+import * as promptBudget from "./chat-prompt-budget.js";
+import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -25,7 +27,12 @@ import {
   MAX_ACTIVE_CHAT_STREAMS_ENV,
   _resetActiveChatStreamsForTests,
 } from "./chat-stream-handlers.js";
-import { handleRegenerateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  handleRegenerateDesktopChat,
+  handleSendDesktopChat,
+  buildGatewayAssembly,
+  captureGatewayTurnSnapshot,
+} from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
   canonicalChatTurnIdentityContent,
@@ -65,7 +72,14 @@ import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import { currentContextProfileForModel } from "./deps.js";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
-import { CancelledError, TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { compactChatContext } from "./chat-context-status.js";
+import {
+  CancelledError,
+  TimeoutError,
+  ProviderError,
+  ContextOverflowError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -533,7 +547,7 @@ function contextSelectionFixture(
   regenerate: boolean,
 ): {
   request: Record<string, unknown>;
-  expected: NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>;
+  expected: () => NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>;
 } {
   const chatId = seedChat();
   for (let index = 0; index < 30; index += 1) {
@@ -541,23 +555,39 @@ function contextSelectionFixture(
   }
   const profile = currentContextProfileForModel(dependencies, CHAT_MODEL);
   if (profile === undefined) throw new Error("Missing fixture profile");
-  const historyPrefix = store.listMessages(chatId);
-  const expected = selectGatewayPromptAssembly({
-    historyPrefix,
-    historyTurnCount: historyPrefix.length,
-    request: { content: "private-current-prompt", discussionMode: undefined },
-    profile,
-    memoryEntries: [],
-    documentContext: [],
-    redactionSecrets: [],
-  });
-  if (expected?.compaction === undefined) throw new Error("Expected compacted fixture");
   if (regenerate) {
     seedMessage(chatId, "user", "private-current-prompt");
     seedMessage(chatId, "assistant", "original-answer");
   }
   return {
-    expected,
+    expected: (): NonNullable<ReturnType<typeof selectGatewayPromptAssembly>> => {
+      const current = [...store.listMessages(chatId)]
+        .reverse()
+        .find((message) => message.role === "user" && message.content === "private-current-prompt");
+      if (current === undefined) throw new Error("Missing admitted fixture turn");
+      const request = {
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: current.content,
+        attachments: [],
+        documentContext: [],
+        memory: undefined,
+        discussionMode: undefined,
+      };
+      const snapshot = captureGatewayTurnSnapshot(dependencies, request, current);
+      const currentIndex = snapshot.history.findIndex((message) => message.id === current.id);
+      return buildGatewayAssembly(
+        dependencies,
+        request,
+        {
+          context: { enabled: false, text: "", memories: [], budget: { tokens: 0, used: 0 } },
+          actions: [],
+        },
+        CHAT_MODEL,
+        { ...snapshot, history: snapshot.history.slice(0, currentIndex + 1) },
+      );
+    },
     request: {
       chatId,
       projectPath: projectDir,
@@ -618,6 +648,351 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it("regenerates the latest answer after manual compaction crosses its user boundary", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "Older notes. ".repeat(1000));
+    seedMessage(chatId, "assistant", "Earlier answer.");
+    const question = "Explain the latest decision. " + "Current source notes. ".repeat(800);
+    seedMessage(chatId, "user", question);
+    seedMessage(chatId, "assistant", "Original latest answer.");
+    const recorded: GatewayCallRequest[] = [];
+    const handlerDeps = deps(
+      {
+        call: (request) => {
+          recorded.push(request);
+          return Promise.resolve(normalizedResponse("Regenerated latest answer."));
+        },
+      },
+      {
+        evidenceStore: createInMemoryEvidenceStore(),
+        contextProfile: deriveContextProfile({
+          maxInputTokens: 4096,
+          reservedOutputTokens: 1024,
+          safetyMarginTokens: 128,
+        }),
+      },
+    );
+    const before = store.listMessages(chatId);
+    expect(
+      compactChatContext(handlerDeps, chatId, CHAT_MODEL, "corr-manual-before-regenerate")
+        .compaction,
+    ).toBeDefined();
+    const result = await handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          assistantMessageId: before.at(-1)?.id,
+        }),
+        captureRes().res,
+      ),
+      handlerDeps,
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(recorded.at(-1)?.messages.at(-1)?.content).toContain("Explain the latest decision");
+    expect(store.listMessages(chatId).filter((message) => message.role === "user")).toEqual(
+      before.filter((message) => message.role === "user"),
+    );
+  });
+  it("rehydrates regeneration from the original large prompt instead of preparation boilerplate", async () => {
+    const chatId = seedChat();
+    for (let index = 0; index < 60; index += 1) {
+      seedMessage(
+        chatId,
+        "user",
+        index === 20
+          ? "Leuchtturmvertrag Zahlungsziel: 63721 EUR."
+          : `General documentation ${String(index)}. ${"Housekeeping notes. ".repeat(45)}`,
+      );
+      seedMessage(chatId, "assistant", "Understood.");
+    }
+    const recorded: GatewayCallRequest[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        recorded.push(request);
+        return Promise.resolve(normalizedResponse("Work on the requested contract."));
+      },
+    };
+    const handlerDeps = deps(model, {
+      evidenceStore: createInMemoryEvidenceStore(),
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    });
+    compactChatContext(handlerDeps, chatId, CHAT_MODEL, "corr-seed-checkpoint");
+    seedMessage(
+      chatId,
+      "user",
+      "Leuchtturmvertrag Zahlungsziel klären.\n" +
+        "Unrelated redundant documentation. ".repeat(900),
+    );
+    seedMessage(chatId, "assistant", "Original answer.");
+    const result = await handleRegenerateDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          assistantMessageId: store.listMessages(chatId).at(-1)?.id,
+        }),
+        captureRes().res,
+      ),
+      handlerDeps,
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(JSON.stringify(recorded.at(-1)?.messages)).toContain("63721 EUR");
+  });
+  it.each(["buffered", "streamed", "regenerated"] as const)(
+    "leaves normal %s answers uncapped without qualification spending",
+    async (mode) => {
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "Original question");
+      seedMessage(chatId, "assistant", "Original answer");
+      const recorded: GatewayCallRequest[] = [];
+      const model: ModelPort = {
+        call: (request) => {
+          recorded.push(request);
+          return Promise.resolve(normalizedResponse("Complete answer"));
+        },
+        async *callStream(request): AsyncGenerator<GatewayStreamChunk> {
+          recorded.push(request);
+          yield await Promise.resolve({
+            type: "done" as const,
+            response: normalizedResponse("Complete answer"),
+          });
+        },
+      };
+      const handlers = {
+        buffered: handleSendDesktopChat,
+        streamed: handleSendDesktopChatStream,
+        regenerated: handleRegenerateDesktopChat,
+      };
+      await handlers[mode](
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "Write a complete document",
+            assistantMessageId: store.listMessages(chatId).at(-1)?.id,
+          }),
+          captureRes().res,
+        ),
+        deps(model, {
+          contextProfile: deriveContextProfile({
+            maxInputTokens: 128_000,
+            reservedOutputTokens: 8_000,
+            safetyMarginTokens: 4_000,
+          }),
+        }),
+      );
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).not.toHaveProperty("maxOutputTokens");
+    },
+  );
+
+  it.each([
+    ["buffered", false],
+    ["streamed", false],
+    ["buffered", true],
+    ["streamed", true],
+  ] as const)("settles %s history capture failure (canonical=%s)", async (mode, canonical) => {
+    const chatId = seedChat();
+    const original = store.findChatById(chatId);
+    const clientTurnId = "history-capture-failure";
+    const content = "Current question";
+    const scan = vi.spyOn(store, "visitGatewayMessageUnits").mockImplementationOnce(() => {
+      throw new Error("SQLITE_BUSY private content must not appear");
+    });
+    const { model } = streamingModel("Recovered answer");
+    const call = vi.spyOn(model, mode === "buffered" ? "call" : "callStream");
+    const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+    const body = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content,
+      ...(canonical ? { clientTurnId } : {}),
+    };
+    try {
+      await expect(
+        handler(routeContext(makeReq(body), captureRes().res), deps(model)),
+      ).rejects.toThrow("SQLITE_BUSY");
+      expect(scan).toHaveBeenCalledOnce();
+      expect(call).not.toHaveBeenCalled();
+      if (canonical) {
+        expect(
+          store.inspectChatTurn(chatId, clientTurnId, canonicalPlainTurnIdentity(chatId, content))
+            .kind,
+        ).toBe("retryable");
+      } else {
+        expect(store.listMessages(chatId)).toHaveLength(0);
+        expect(store.findChatById(chatId)?.updatedAt).toBe(original?.updatedAt);
+      }
+      await handler(routeContext(makeReq(body), captureRes().res), deps(model));
+      expect(call).toHaveBeenCalledOnce();
+      expect(store.listMessages(chatId)).toHaveLength(2);
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
+  it.each(["buffered", "streamed"] as const)(
+    "settles a legacy %s turn rejected during prompt preparation",
+    async (mode) => {
+      const chatId = seedChat();
+      const original = store.findChatById(chatId);
+      const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+      let summaryCalls = 0;
+      let answerCalls = 0;
+      const model: ModelPort = {
+        call: () => {
+          summaryCalls += 1;
+          replaceWithReadyRuntimeConfig(holder);
+          return Promise.resolve(normalizedResponse("Preserve the current task."));
+        },
+        async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+          answerCalls += 1;
+          yield await Promise.resolve({
+            type: "done" as const,
+            response: normalizedResponse("Must not run"),
+          });
+        },
+      };
+      const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+      await handler(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "Original task documentation. ".repeat(1200),
+          }),
+          captureRes().res,
+        ),
+        deps(model, {
+          gatewayConfig: holder,
+          contextProfile: deriveContextProfile({
+            maxInputTokens: 4096,
+            reservedOutputTokens: 1024,
+            safetyMarginTokens: 128,
+          }),
+        }),
+      );
+      expect(summaryCalls).toBe(1);
+      expect(answerCalls).toBe(0);
+      expect(store.listMessages(chatId)).toHaveLength(0);
+      expect(store.findChatById(chatId)?.updatedAt).toBe(original?.updatedAt);
+    },
+  );
+  it.each(["buffered", "streamed"] as const)(
+    "settles a legacy %s turn when final assembly cannot fit",
+    async (mode) => {
+      const chatId = seedChat();
+      const original = store.findChatById(chatId);
+      const calls: GatewayRequest[] = [];
+      const model: ModelPort = {
+        call: (request) => {
+          calls.push(request);
+          return Promise.resolve(normalizedResponse("Must not run"));
+        },
+        async *callStream(request): AsyncGenerator<GatewayStreamChunk> {
+          calls.push(request);
+          yield await Promise.resolve({
+            type: "done",
+            response: normalizedResponse("Must not run"),
+          });
+        },
+      };
+      const selection = vi
+        .spyOn(promptBudget, "selectGatewayPromptAssembly")
+        .mockReturnValue(undefined);
+      try {
+        const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+        await handler(
+          routeContext(
+            makeReq({
+              chatId,
+              projectPath: projectDir,
+              modelId: CHAT_MODEL,
+              content: "Current question",
+            }),
+            captureRes().res,
+          ),
+          deps(model),
+        );
+        expect(selection).toHaveBeenCalled();
+        expect(calls).toHaveLength(0);
+        expect(store.listMessages(chatId)).toHaveLength(0);
+        expect(store.findChatById(chatId)?.updatedAt).toBe(original?.updatedAt);
+      } finally {
+        selection.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    ["buffered", "timeout"],
+    ["streamed", "timeout"],
+    ["buffered", "provider"],
+    ["streamed", "provider"],
+    ["buffered", "overflow"],
+    ["streamed", "overflow"],
+    ["buffered", "cancelled"],
+    ["streamed", "cancelled"],
+  ] as const)("settles every legacy %s preparation failure: %s", async (mode, failure) => {
+    const chatId = seedChat();
+    const original = store.findChatById(chatId);
+    const req = makeReq({
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "Original task documentation. ".repeat(1200),
+    });
+    let preparationCalls = 0;
+    let answerCalls = 0;
+    const model: ModelPort = {
+      call: (): Promise<NormalizedResponse> => {
+        preparationCalls += 1;
+        if (failure === "cancelled") {
+          req.emit("aborted");
+          return Promise.reject(new CancelledError("Preparation cancelled"));
+        }
+        if (failure === "provider")
+          return Promise.reject(new ProviderError("Preparation unavailable", 503));
+        if (failure === "overflow")
+          return Promise.reject(new ContextOverflowError("Preparation overflow"));
+        return Promise.reject(new TimeoutError("Preparation timed out"));
+      },
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        answerCalls += 1;
+        yield await Promise.resolve({ type: "done", response: normalizedResponse("Must not run") });
+      },
+    };
+    const response = captureRes();
+    const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+    await handler(
+      routeContext(req, response.res),
+      deps(model, {
+        contextProfile: deriveContextProfile({
+          maxInputTokens: 4096,
+          reservedOutputTokens: 1024,
+          safetyMarginTokens: 128,
+        }),
+      }),
+    );
+    expect(preparationCalls).toBe(1);
+    expect(answerCalls).toBe(0);
+    // The cancelled HTTP result can precede rollback; the next turn must see settled state.
+    await runSerializedChatTurn({ store }, chatId, new AbortController().signal, () => {
+      expect(store.listMessages(chatId)).toHaveLength(0);
+      expect(store.findChatById(chatId)?.updatedAt).toBe(original?.updatedAt);
+    });
+  });
+
   it.each([
     ["buffered", "timeout"],
     ["streamed", "timeout"],
@@ -661,7 +1036,7 @@ describe("desktop chat SSE streaming handler", () => {
     await handlers[mode](ctx, dependencies);
     expect(atProvider).toHaveLength(1);
     expect(sink.events.filter((event) => event.op === "chat.context.selected")).toEqual(atProvider);
-    assertContextSelectionEvidence(atProvider[0], fixture.expected);
+    assertContextSelectionEvidence(atProvider[0], fixture.expected());
   });
 
   it("rejects a tokenless plain stream on a grounded chat before admission or SSE", async () => {

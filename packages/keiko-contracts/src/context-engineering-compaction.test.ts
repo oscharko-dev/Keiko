@@ -107,6 +107,52 @@ function minimalHandle(): ContextRehydrationHandle {
   };
 }
 
+it("rejects unregistered conversation coverage fields without echoing their content", () => {
+  const result = validateContextCompactionRecord({
+    ...minimalRecord(),
+    conversationCoverage: {
+      version: 1,
+      throughMessageId: "message-fixture",
+      historyRevision: 0,
+      privateBodyCanary: "private-body-canary",
+    },
+  });
+  expectInvalidWithReason(result, "conversationCoverage");
+  expect(JSON.stringify(result)).not.toContain("privateBodyCanary");
+  expect(JSON.stringify(result)).not.toContain("private-body-canary");
+});
+
+describe("conversation coverage schema", () => {
+  const coverage = { version: 1, throughMessageId: "message-fixture", historyRevision: 0 };
+  it.each([coverage, { ...coverage, contextWindowTokens: 4096 }])(
+    "accepts registered checkpoint metadata: %j",
+    (conversationCoverage) => {
+      expect(validateContextCompactionRecord({ ...minimalRecord(), conversationCoverage }).ok).toBe(
+        true,
+      );
+    },
+  );
+  it.each([
+    null,
+    [],
+    { ...coverage, version: 2 },
+    { ...coverage, throughMessageId: "../private-path" },
+    { ...coverage, throughMessageId: 3 },
+    { ...coverage, throughMessageId: "" },
+    { ...coverage, historyRevision: -1 },
+    { ...coverage, historyRevision: 0.5 },
+    { ...coverage, historyRevision: Number.MAX_SAFE_INTEGER + 1 },
+    { ...coverage, contextWindowTokens: 0 },
+    { ...coverage, contextWindowTokens: -1 },
+    { ...coverage, contextWindowTokens: "4096" },
+  ])("rejects malformed checkpoint metadata: %j", (conversationCoverage) => {
+    expectInvalidWithReason(
+      validateContextCompactionRecord({ ...minimalRecord(), conversationCoverage }),
+      "conversationCoverage",
+    );
+  });
+});
+
 function richRecord(): ContextCompactionRecord {
   return {
     ...minimalRecord(),

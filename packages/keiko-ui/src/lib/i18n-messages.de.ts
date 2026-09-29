@@ -1,6 +1,26 @@
 import type { MessageCatalog } from "./i18n-messages.en";
 
 export const DE_MESSAGES = {
+  "chat.context.title": "Gesprächskontext",
+  "chat.context.label": "Gesprächskontext: ungefähr {percent}% belegt",
+  "chat.context.used": "Geschätzt belegte Tokens",
+  "chat.context.inputBudget": "Nutzbare Eingabe-Tokens",
+  "chat.context.window": "Gesamtes Kontextfenster",
+  "chat.context.outputReserve": "Für die Antwort reserviert",
+  "chat.context.safetyMargin": "Sicherheitsreserve",
+  "chat.context.saved": "{tokens} Tokens bei {count} zusammengefassten Nachrichten eingespart.",
+  "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
+  "chat.context.estimate":
+    "Geschätzter Gesprächsverlauf. Entwurf, Anhänge und abgerufene Quellen kommen beim Senden hinzu.",
+  "chat.context.automatic":
+    "Keiko kompaktiert ab 90% der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
+  "chat.context.retained":
+    "Kompaktierung fasst frühere Nachrichten zusammen. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
+  "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
+  "chat.context.retry": "Erneut versuchen",
+  "chat.context.compact": "Kontext jetzt kompaktieren",
+  "chat.context.compacting": "Kontext wird kompaktiert…",
+  "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
@@ -656,8 +676,20 @@ export const DE_MESSAGES = {
   "chat.hero.placeholder": "Beschreibe eine Aufgabe, füge einen Link ein oder frag etwas…",
   "chat.workLocally": "Lokal arbeiten",
   "chat.composer.placeholder": "Frag Keiko…",
+  "chat.composer.code": "Codeeingabe",
+  "chat.composer.plainText": "Klartext",
+  "chat.composer.codeLanguage": "Codesprache",
+  "chat.composer.continueText": "Darunter weiterschreiben ↵",
+  "chat.composer.codeLoading": "Syntaxhervorhebung wird geladen…",
+  "chat.composer.codeUnavailable":
+    "Syntaxhervorhebung nicht verfügbar. Du kannst hier weiterschreiben.",
+  "chat.composer.inputLimit":
+    "Die Nachricht ist zu lang. Kürze sie, bevor du weiteren Inhalt einfügst.",
+  "chat.composer.markdownHint": "Markdown · ``` + Umschalt+Enter für Code · Enter zum Senden",
   "chat.composer.loading": "Lädt…",
   "chat.model.menuTitle": "Modelle",
+  "chat.model.search": "Modelle suchen...",
+  "chat.model.searchEmpty": "Keine passenden Modelle.",
   "chat.model.title": "Modell",
   "chat.model.loading": "Modelle werden geladen…",
   "chat.model.noEligible": "Kein dialogfähiges Modell",
@@ -1092,10 +1124,6 @@ export const DE_MESSAGES = {
   "attachment.notice.imageUndeliverable":
     "„{name}“ wird nicht gesendet — das Modell erhält in dieser Unterhaltung keine Bildanhänge. Beschreibe stattdessen in deiner Nachricht, worauf es ankommt.",
   "attachment.drop": "Dateien hier ablegen, um sie anzufügen",
-  "attachment.disabledDifferentModel":
-    "Das ausgewählte Modell unterstützt keine Bild- oder Dokumenteingabe. Wähle ein anderes Modell, um Dateien anzufügen.",
-  "attachment.disabledNoModel":
-    "Das ausgewählte Modell unterstützt keine Bild- oder Dokumenteingabe. Kein konfiguriertes Modell unterstützt aktuell Anhänge.",
   "attachment.attachFile": "Datei anfügen",
   "attachment.notSupported": "Anhänge nicht unterstützt",
   "attachment.docsContext": "Dokumente als Kontext einbezogen",
