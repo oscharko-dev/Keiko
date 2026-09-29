@@ -165,11 +165,13 @@ allocation. A large current prompt can reduce the default answer reservation to 
 remaining capacity; the complete final request still undergoes gateway token admission.
 When the current prompt itself exceeds 90% of the effective input budget, foreground semantic
 compaction processes every source character in ordered, individually budgeted model requests.
-The execution projection may use the summary, while the saved user message retains the original.
+The execution projection uses explicit user-task framing and the semantic summary, with bounded, redacted original opening/closing fragments preserving boundary instructions. The complete projection is counted before admission; the saved user message retains the original.
 This preserves the non-evictable user-task lane; it does not silently truncate that lane.
 
 Foreground and background summaries share one cancellation and timeout helper. Foreground work
-has a maximum of 32 calls, three reduction rounds, 60 seconds per call, and 90 seconds overall. The gateway retains its configured provider timeout; foreground preparation does not impose the shorter background-maintenance timeout.
+has a maximum of 32 calls, three reduction rounds, 60 seconds per call, and 90 seconds overall.
+The gateway retains its configured provider timeout; foreground preparation does not impose the
+shorter background-maintenance timeout.
 Each call revalidates the accepted gateway generation and readiness; final dispatch checks the
 same boundary again. Empty, incomplete, or non-reducing summaries fail explicitly. Counts and
 outcomes use the existing Activity Log operation, without prompt or summary bodies. Semantic
@@ -334,7 +336,10 @@ Prerequisite: a workspace is open and at least one grounded question has been an
 - `globals.css` gains new `.ctx-*` classes. They must use existing design tokens (no new raw
   values) to satisfy ADR-0050 gate 4.
 
-## What PR6 does NOT do
+## What the original PR6 did not do
+
+These exclusions describe the original grounded panel delivery. The current behavior described
+in D3 above extends the shared conversation paths and Composer in #3674.
 
 - Does not change composer history controls.
 - Does not add a new `EvidenceTaskType` (consistent with PR5 D1).

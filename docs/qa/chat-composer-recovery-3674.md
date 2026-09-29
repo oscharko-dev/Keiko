@@ -2,7 +2,7 @@
 
 The v1.1.12 release included the merged gateway admission repairs, but omitted the uncommitted Composer and conversation-continuity work. This change recovers that complete work on current `dev`. No release or deployment is part of this delivery.
 
-The original checkout remains unchanged. All 108 changed and untracked paths were captured in signed commit `9dc5868be677ff0af6d95a71b1e3739030ed58ba` before integration. Current reviewed gateway implementations take precedence over older overlapping patches. This inventory accounts for every original path; it does not claim that every gate has passed.
+The original checkout remains unchanged. All 108 changed and untracked paths were captured in signed commit `9dc5868be677ff0af6d95a71b1e3739030ed58ba` before integration. Current reviewed gateway implementations take precedence over older overlapping patches. This inventory accounts for every original path. Local verification is recorded below; required exact-head CI and review settlement remain merge prerequisites.
 
 ## Acceptance and verification
 
@@ -14,6 +14,22 @@ The original checkout remains unchanged. All 108 changed and untracked paths wer
 - Permit a large current prompt to use available input capacity by adapting output allocation; qualify semantic compaction of oversized current prompts without losing the persisted original.
 - Diagnose the reported all-model customer context rejection. The supplied screenshots show the generic error; the customer installation state is unavailable. Local real v1.1.12 requests currently succeed for GPT-5.4, Mistral-Large-3, and GPT-OSS-120B both with empty history and twelve-message history. This is a limitation of reproduction, not a customer resolution claim.
 - Run local applicable gates and required current-head CI, address every review conversation, and merge only after verified green checks. Do not publish a new release.
+
+## Verified behavior and limits
+
+All five real Chromium journeys in `tests/e2e/chat-send.smoke.spec.ts` pass: a persisted chat send; six Backspaces removing an empty heading; local Monaco highlighting with native system-clipboard paste and wheel scrolling; overlay containment in a short viewport; and twelve-model scrolling/filtering with unsupported attachment controls hidden. Clipboard input uses the actual operating-system paste chord rather than a Monaco command or a fabricated paste event.
+
+The complete UI coverage run passes 478 files and 8,846 tests, with one existing skipped test. The shared Composer Monaco adapter has 100% statement, branch, function and line coverage in lifecycle tests. Production assembly and editor bundle checks pass; the first-load editor/Monaco byte budget remains zero. Architecture, negative architecture fixtures, dependency currency, activity-log reconstruction, error observability, retrieval/grounded-faithfulness and context quality checks pass locally. Type-checking, ESLint and formatting are separate passing checks. Full package/script coverage is still in progress at this checkpoint; no full-matrix or customer-resolution claim is made.
+
+The [body-free actual-model qualification report](chat-context-model-qualification-3674.json) records five large-current-prompt tests and nine repeated-compaction/model-switch tests. Large prompts contain 106,557 German characters; all source characters are processed in ordered, individually admitted requests. The final answers preserve corrected amounts/deadlines, exact identifiers and JSON output on GPT-5.4, Mistral-Large-3 and GPT-OSS-120B through LiteLLM, and GPT-5.4/Mistral-Large-3 directly through Azure. The repeated-history matrix tests configured 4,096/16,384/4,096-token admission windows, persistent checkpoints and later corrections across three rounds. These are configured Keiko admission windows; the underlying deployed model can have a larger physical window.
+
+Qualification exposed real defects before repair: an overly short foreground timeout, descriptive summaries being treated as another summarization task, loss of an exact identifier, and duplicate follow-ups displacing a historical correction. The final execution projection now retains bounded, redacted original opening/closing fragments alongside the semantic summary. It counts that complete projection before admission, preserves Unicode boundaries and keeps the canonical original unchanged. Regression tests fail before the corresponding fixes. The literal fragments are bounded hints, not a guarantee that arbitrary semantic compression is lossless.
+
+Real Qwen qualification remains unavailable; Qwen aliases and admission geometries have synthetic regression coverage. The supplied customer screenshots and available local logs do not identify the cause of the reported all-model rejection. Available local v1.1.12 and recovery requests succeed, so this task does not claim that customer incident has been resolved. Provider throttling and bounded preparation timeouts still surface explicitly. No release, version change or deployment is authorized.
+
+## Future update impact
+
+This is release-impacting UI/context work with additive SQLite chat-history revision metadata. The future release should describe Markdown/code composition, context visibility/manual compaction, usable model selection and long-conversation/current-prompt continuity. Migration tests preserve existing chat messages and revision invalidation. No manual data conversion is required; the future installed version needs the normal restart. No target version is approved for this feature PR, so insertion into the append-only release-impact catalog belongs to the separately authorized release cut. Published v1.1.12 metadata remains unchanged.
 
 ## Original path disposition
 
