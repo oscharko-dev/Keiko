@@ -97,7 +97,7 @@ internal module layout kept split-ready.
 
 ### D2 — Browser-tier dependency direction and monorepo-gate integration
 
-The chat composer also embeds code editors (2026-09-28, PR #3664). Its CommonMark document,
+The chat composer also embeds code editors (2026-09-28, PR #3675). Its CommonMark document,
 selection and undo history are owned by ProseMirror in `keiko-ui`; the existing chat session still
 owns the draft as Markdown text. A code node lazily imports the same local Monaco runtime,
 language registration and token-derived Keiko themes as the file editor. The composer does not
