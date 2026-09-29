@@ -131,6 +131,7 @@ describe("POST /api/diagnostics/client", () => {
             message: "PRIVATE_PROMPT_CANARY",
             clientTs: CLIENT_TS,
             composerActivity: "initialized",
+            composerFocusIndicator: "keyboard",
           }),
         ),
       );
@@ -146,7 +147,10 @@ describe("POST /api/diagnostics/client", () => {
       ),
     );
     const routine = sink.events.find((event) => event.op === "client.composer.activity");
-    expect(routine).toMatchObject({ level: "info", extra: { activity: "initialized" } });
+    expect(routine).toMatchObject({
+      level: "info",
+      extra: { activity: "initialized", focusIndicator: "keyboard" },
+    });
     expect(routine?.errorKind).toBeUndefined();
     expectActivityLogProof(
       "client.composer.activity.line",
@@ -161,6 +165,9 @@ describe("POST /api/diagnostics/client", () => {
   it.each([
     { composerActivity: "unsafe-content" },
     { composerActivity: "initialized", kind: "other" },
+    { composerActivity: "initialized", composerFocusIndicator: "hostile" },
+    { composerActivity: "text-copied", composerFocusIndicator: "keyboard" },
+    { composerFocusIndicator: "keyboard" },
     { composerCodeStage: "unsafe-content" },
   ])("rejects hostile or failure-masking Composer metadata: %j", async (metadata) => {
     const sink = captureServerLog();
@@ -169,6 +176,37 @@ describe("POST /api/diagnostics/client", () => {
     );
     expect(result.status).toBe(400);
     expect(sink.events.some((event) => event.op === "client.composer.activity")).toBe(false);
+  });
+
+  it("keeps routine voice stages out of the failure admission budget", async () => {
+    const sink = captureServerLog();
+    for (let index = 0; index < 30; index += 1) {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "PRIVATE_VOICE_CANARY",
+            clientTs: CLIENT_TS,
+            kind: "voice-dialogue",
+            voiceDialogueStage: "turn-submitted",
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+    }
+    const failure = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_FAILURE_CANARY",
+          clientTs: CLIENT_TS,
+          kind: "voice-dialogue",
+          voiceDialogueStage: "delivery-failed",
+        }),
+      ),
+    );
+    expect(failure.status).toBe(204);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(1);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_VOICE_CANARY");
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_FAILURE_CANARY");
   });
 
   // The FATAL-FLAW FIX (all three design-panel judges independently flagged it): the field is

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a7b148a2a84eb8c1514197509ef85a721b51692615bfcdb83470b4fccec158e9" as const;
+  "fa5b0003ec321c1956c64ae40aedd50e50a449b48a1f3e0c21212120b0fb4d54" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2566,6 +2566,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "initialized",
           "input-limit",
           "code-ready",
+          "code-language-detected",
           "format-removed",
           "cursor-collision",
           "workspace-scroll-ready",
@@ -2574,6 +2575,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "non-text-paste-ignored",
           "text-copied",
         ],
+      },
+      focusIndicator: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["keyboard"],
       },
     },
     causal: "correlation",
@@ -32510,6 +32517,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "focusIndicator",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],

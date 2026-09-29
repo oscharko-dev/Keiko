@@ -43,6 +43,7 @@ import {
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
+  CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   type ClientBindingIngestRequest,
   type ClientBindingOutcome,
   type ClientDiagnosticIngestRequest,
@@ -68,11 +69,13 @@ import {
 import { ApiError } from "./api-shared-primitives";
 import { bffFetchJson } from "./http";
 
-function writeToBrowserConsole(message: string): void {
+function writeToBrowserConsole(message: string, meta?: ClientDiagnosticMeta): void {
   // The single sanctioned console access in keiko-ui production code. Everything above this line is
   // why it is here — in the transport, not in the sink — rather than at each call site.
+  if (typeof console === "undefined") return;
+  const level = postBudget(meta) === "routine" ? "debug" : "warn";
   // eslint-disable-next-line no-console
-  if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(message);
+  console[level]?.(message);
 }
 
 // Fixed, bounded, and content-free by construction: it never repeats the original diagnostic
@@ -270,6 +273,7 @@ function clientMessagePostBody(
     gitClientOperation: meta.gitClientOperation,
     selectDismissal: meta.selectDismissal,
     composerActivity: meta.composerActivity,
+    composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
     codingHistoryScope: meta.codingHistoryScope,
     codingIssueOutcome: meta.codingIssueOutcome,
@@ -351,7 +355,7 @@ function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPos
   if (meta === undefined) return "failure";
   if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
   if (meta.selectDismissal !== undefined) return "routine";
-  if (meta.composerActivity !== undefined) return "routine";
+  if (routineComposerOrVoiceEvidence(meta)) return "routine";
   if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
   if (meta.sessionRepairReport !== undefined) {
     return repairPostBudget(meta.sessionRepairReport.outcome);
@@ -360,6 +364,17 @@ function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPos
     return gitClientOperationPostBudget(meta.gitClientOperation.outcome);
   }
   return "failure";
+}
+
+function routineComposerOrVoiceEvidence(meta: ClientDiagnosticMeta): boolean {
+  if (meta.errorKind !== undefined || meta.errorEvidence !== undefined) return false;
+  if (meta.composerActivity !== undefined) return true;
+  if (meta.kind === "markdown-layout" && meta.markdownLayout !== undefined) return true;
+  return (
+    meta.kind === "voice-dialogue" &&
+    meta.voiceDialogueStage !== undefined &&
+    !CLIENT_VOICE_DIALOGUE_FAILURE_STAGES.has(meta.voiceDialogueStage)
+  );
 }
 
 function admittedByClientPostRateLimit(window: PostWindow, limit: number, nowMs: number): boolean {
@@ -470,10 +485,10 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 }
 
 // The fan-out composite: every diagnostic reaches both transports. Console first, so a developer
-// watching devtools sees it even when the POST below is throttled or fails. `meta` only ever
-// affects the POST body — the console transport stays the plain, undecorated message it always was.
+// watching devtools sees it even when the POST below is throttled or fails. Routine evidence uses
+// debug; failures and delivery loss remain warnings. Both retain the original body-free text.
 function fanOutClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
-  writeToBrowserConsole(message);
+  writeToBrowserConsole(message, meta);
   postClientDiagnosticToServer(message, meta);
 }
 

@@ -26,6 +26,7 @@ export interface ComposerCodePort {
 
 export interface ComposerCodeEditor {
   update(value: string): void;
+  setLanguage(language: string): Promise<void>;
   select(anchor: number, head: number): void;
   focus(): void;
   dispose(): void;
@@ -75,10 +76,20 @@ function codeAdapter(
   instance: editor.IStandaloneCodeEditor,
   observer: MutationObserver,
 ): ComposerCodeEditor {
+  let selectedLanguage = "";
   return {
     update(value): void {
       const model = instance.getModel();
       if (model && model.getValue() !== value) model.setValue(value);
+    },
+    async setLanguage(language): Promise<void> {
+      selectedLanguage = language;
+      const monacoLanguage = language === "json" ? "javascript" : language;
+      await ensureMonacoLanguage(monacoLanguage);
+      const model = instance.getModel();
+      if (selectedLanguage === language && model && !model.isDisposed()) {
+        getMonacoNamespace().editor.setModelLanguage(model, monacoLanguage);
+      }
     },
     select(anchor, head): void {
       const model = instance.getModel();

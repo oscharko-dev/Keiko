@@ -110,7 +110,7 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   // Relocated pin (0.3.12, tri-state readiness — the customer restart incident): a model this
   // process never probed is UNKNOWN, not blocked, so the very first send needs NO manual
   // Settings readiness check and no reload. The send button is usable immediately; the send
-  // below succeeds because the SERVER verifies the model on demand at admission — this journey
+  // below succeeds because configuration initialization verifies the model before admission — this journey
   // now proves the whole self-service path in a real browser.
   await expect(sendButton).toBeEnabled();
 
@@ -264,10 +264,13 @@ test.describe("native Composer clipboard", () => {
     const composer = page.getByRole("textbox", { name: "Chat message" });
     await expect(composer).toBeVisible();
     await composer.click();
+    const scope = page.locator("[data-markdown-composer-scope]");
+    await expect
+      .poll(() => scope.evaluate((element) => getComputedStyle(element).outlineStyle))
+      .toBe("none");
     await composer.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect(composer).toBeFocused();
-    const scope = page.locator("[data-markdown-composer-scope]");
     await expect
       .poll(() => scope.evaluate((element) => getComputedStyle(element).outlineStyle))
       .toBe("solid");
@@ -358,6 +361,63 @@ test.describe("native Composer clipboard", () => {
       `\`\`\`typescript\n${source}\n\`\`\`\n\nExplain the code.`,
     );
     await expect(page.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30000 });
+  });
+
+  test("detects pasted code, preserves the sent code block and compacts the conversation @smoke", async ({
+    page,
+    request,
+  }) => {
+    const fixture = await openFixtureComposer(page, request);
+    const composer = page.getByRole("textbox", { name: "Chat message" });
+    const source = [
+      "export interface Probe { readonly count: number; }",
+      ...Array.from(
+        { length: 60 },
+        (_, index) => `export const count${String(index)}: number = ${String(index)};`,
+      ),
+    ].join("\n");
+    await copyComposerText(page, composer, source);
+    await composer.pressSequentially("```");
+    await composer.press("Shift+Enter");
+    const code = composer.locator(".monaco-editor");
+    await expect(code).toBeVisible({ timeout: 30000 });
+    await code.locator(".view-lines").click();
+    await code
+      .getByRole("textbox", { name: "Code input" })
+      .press(`${await editorModifier(page)}+V`);
+    await expect(page.getByRole("combobox", { name: "Code language" })).toHaveValue("typescript");
+    await expect(code.getByRole("textbox", { name: "Code input" })).toBeFocused();
+    await page.getByRole("button", { name: "Continue below ↵" }).click();
+    await composer.pressSequentially("Explain the code.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expectStoredPrompt(
+      request,
+      fixture,
+      `\`\`\`typescript\n${source}\n\`\`\`\n\nExplain the code.`,
+    );
+    const prompt = page.locator('article[data-role="user"]');
+    await expect
+      .poll(() =>
+        prompt.evaluate((element) => {
+          const bubble = element.querySelector(".chat-msg-bubble");
+          return (
+            (bubble?.getBoundingClientRect().width ?? 0) / element.getBoundingClientRect().width
+          );
+        }),
+      )
+      .toBeGreaterThanOrEqual(0.49);
+    await expect(prompt.locator(".sm-code-block-frame")).toBeVisible();
+    await expect(prompt.getByRole("button", { name: "Apply in editor" })).toHaveCount(0);
+    await expect(page.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30000 });
+    await page.getByRole("button", { name: /Conversation context:/ }).click();
+    await page.getByRole("button", { name: "Compact context now" }).click();
+    await expect(page.getByText(/tokens saved across/)).toBeVisible();
+    await expect(page.getByText("The context could not be refreshed.")).toHaveCount(0);
+    await expectStoredPrompt(
+      request,
+      fixture,
+      `\`\`\`typescript\n${source}\n\`\`\`\n\nExplain the code.`,
+    );
   });
 });
 

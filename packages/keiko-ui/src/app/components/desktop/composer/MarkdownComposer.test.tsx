@@ -79,6 +79,30 @@ function type(editor: ComposerEditorController, value: string): void {
 }
 
 describe("Markdown composer editing", () => {
+  it("retains the code input and focus when detecting or changing its language", () => {
+    const { editor } = setup("```\n\n```");
+    const input = screen.getByRole("textbox", { name: "Code" });
+    input.focus();
+    fireEvent.input(input, { target: { value: "export interface Probe { count: number; }" } });
+    expect(screen.getByRole("textbox", { name: "Code" })).toBe(input);
+    expect(input).toHaveFocus();
+    fireEvent.change(screen.getByRole("combobox", { name: "Code language" }), {
+      target: { value: "plaintext" },
+    });
+    expect(screen.getByRole("textbox", { name: "Code" })).toBe(input);
+  });
+  it("detects unlabelled TypeScript and preserves a manual plain-text choice", () => {
+    const { editor } = setup("```\nexport interface Probe { readonly count: number; }\n```");
+    const language = screen.getByRole("combobox", { name: "Code language" });
+    expect(language).toHaveValue("typescript");
+    fireEvent.change(language, { target: { value: "plaintext" } });
+    expect(screen.getByRole("combobox", { name: "Code language" })).toHaveValue("plaintext");
+    expect(serializeComposerMarkdown(editor.view.state.doc)).toContain("```plaintext");
+  });
+  it("describes keyboard help without adding a permanent instruction row to the input", () => {
+    const { editor } = setup();
+    expect(editor.view.dom).toHaveAttribute("aria-description", labels.hint);
+  });
   it("preserves unfenced plain clipboard text and every newline without Markdown rewriting", () => {
     const value =
       'C:\\temp\\[report]\\__tests__\\file.ts\nconst amount = 42;\n  run(amount);\n\n{"path":"C:\\\\temp","items":["*", "_"]}\n';
@@ -246,6 +270,7 @@ describe("Markdown composer editing", () => {
     setup();
     expect(diagnostics.report).toHaveBeenCalledWith("Keiko Markdown composer initialized.", {
       composerActivity: "initialized",
+      composerFocusIndicator: "keyboard",
     });
   });
 

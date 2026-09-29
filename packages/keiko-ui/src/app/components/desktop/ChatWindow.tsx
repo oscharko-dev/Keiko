@@ -615,8 +615,8 @@ function useRegisterPdfCitationPreviewTarget(
   ]);
 }
 
-// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text
-// for the user, otherwise safe markdown, plus the streaming caret. A streaming
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — both message roles use safe markdown
+// so sent Composer formatting remains visible, with assistant-only apply actions. A streaming
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
 function ChatBubbleContentArea({
@@ -649,11 +649,7 @@ function ChatBubbleContentArea({
       data-collapsed={!isUser && collapsed ? "true" : "false"}
       data-collapsible={canCollapse ? "true" : "false"}
     >
-      {isUser ? (
-        message.content
-      ) : (
-        // AC #1 / #2: assistant responses render as safe markdown.
-        // User messages remain plain text — no markdown interpretation.
+      {
         // Streaming assistant turns use the same safe renderer as persisted
         // answers; parser failures fall back to plain-text raw source for this bubble.
         // SM-1: wrapped in a per-message boundary so a parser/render defect
@@ -665,13 +661,13 @@ function ChatBubbleContentArea({
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
-          onApplyCodeBlock={onApplyCodeBlock}
+          onApplyCodeBlock={isUser ? undefined : onApplyCodeBlock}
           streaming={streaming}
           trailing={
             streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined
           }
         />
-      )}
+      }
     </div>
   );
 }
@@ -930,12 +926,12 @@ function ChatBubbleImpl({
   return (
     <article
       ref={bubbleRef}
-      className="chat-msg"
+      className={isUser ? `chat-msg ${styles.userMessage}` : "chat-msg"}
       data-role={message.role}
       data-layout={layout}
       tabIndex={isUser ? undefined : -1}
     >
-      <div className="chat-msg-bubble">
+      <div className={isUser ? `chat-msg-bubble ${styles.userMessageBubble}` : "chat-msg-bubble"}>
         {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
         {terminalTurnLabel === undefined ? null : (
           <output className={styles.turnEndState} style={NATIVE_BLOCK_STYLE}>

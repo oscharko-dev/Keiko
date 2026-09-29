@@ -41,6 +41,7 @@ function useChatContext(session: ContextSession): {
   const modelId = session.selectedModel;
   const key = JSON.stringify([chatId, projectPath, modelId]);
   const busy = session.sending || session.regeneratingMessageId !== undefined;
+  const historyKey = JSON.stringify(session.messages.map((message) => message.id));
   const [state, setState] = useState<ContextState>({ key, compacting: false, error: false });
   const [revision, setRevision] = useState(0);
   const controller = useRef<AbortController | null>(null);
@@ -63,11 +64,16 @@ function useChatContext(session: ContextSession): {
     [chatId, projectPath, modelId, key],
   );
   useEffect(() => {
-    if (!busy && !session.loading) refresh(false);
+    if (session.loading) return;
+    refresh(false);
+    // The persisted user row may arrive after the optimistic UI row. Refresh local estimates
+    // while the provider is pending; stream deltas never start additional status requests.
+    const timer = busy ? setInterval(() => refresh(false), 1_000) : undefined;
     return (): void => {
+      clearInterval(timer);
       controller.current?.abort();
     };
-  }, [refresh, busy, session.loading, session.messages, revision]);
+  }, [refresh, busy, session.loading, historyKey, revision]);
   return {
     state: state.key === key ? state : { key, compacting: false, error: false },
     busy,

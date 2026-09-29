@@ -34,7 +34,13 @@ afterEach(() => {
 });
 
 function editorAdapter(): ComposerCodeEditor {
-  return { update: vi.fn(), select: vi.fn(), focus: vi.fn(), dispose: vi.fn() };
+  return {
+    update: vi.fn(),
+    setLanguage: vi.fn().mockResolvedValue(undefined),
+    select: vi.fn(),
+    focus: vi.fn(),
+    dispose: vi.fn(),
+  };
 }
 
 function setup(): EditorView {

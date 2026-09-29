@@ -119,6 +119,7 @@ export interface ClientDiagnosticGitRetryAttemptReport {
 
 export interface ClientDiagnosticMeta {
   readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;

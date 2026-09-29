@@ -173,7 +173,7 @@ import {
 } from "./grounded-citation-projection.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
-import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import {
   captureConversationReadinessAdmission,
   mappedConversationReadinessError,
@@ -2044,7 +2044,7 @@ async function admitGroundedModel(
   // demand exactly like the create/send paths; injected deterministic answer ports skip the
   // probe as they skip the wire.
   if (!allowInjectedModelSeam) {
-    await ensureOnDemandConversationReadiness(deps, modelId, prepared.correlationId);
+    await awaitInitializedConversationReadiness(deps, modelId, prepared.correlationId);
   }
   const readinessAdmission = captureConversationReadinessAdmission(deps, modelId);
   return "status" in readinessAdmission

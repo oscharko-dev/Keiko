@@ -76,6 +76,13 @@ function fixture(
 }
 
 describe("Chat context meter", () => {
+  it("shows a nonzero fractional estimate for a small occupied context", () => {
+    fixture(44);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Conversation context: approximately 0.4% used" }),
+    );
+    expect(screen.getByRole("heading", { name: "Conversation context 0.4 %" })).toBeInTheDocument();
+  });
   it("renders the expanded panel outside the clipping chat canvas", () => {
     const { container } = fixture(8_000);
     fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
@@ -161,6 +168,36 @@ describe("Chat context request diagnostics", () => {
     contextApi.fetch.mockReset().mockResolvedValue(status(8_000));
     contextApi.compact.mockReset().mockResolvedValue(status(1_000));
     contextApi.report.mockClear();
+  });
+
+  it("refreshes a newly persisted user turn while the answer is pending without per-token requests", async () => {
+    const session = contextSession();
+    const view = render(<ChatContextMeterContainer session={session} />);
+    await screen.findByRole("button", { name: /approximately 80% used/ });
+    contextApi.fetch.mockResolvedValue(status(9_000));
+    const message = {
+      id: "persisted-user",
+      chatId: "chat-private-canary",
+      role: "user" as const,
+      content: "A long code question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+    view.rerender(
+      <ChatContextMeterContainer session={{ ...session, sending: true, messages: [message] }} />,
+    );
+    await screen.findByRole("button", { name: /approximately 90% used/ });
+    const requests = contextApi.fetch.mock.calls.length;
+    view.rerender(
+      <ChatContextMeterContainer
+        session={{ ...session, sending: true, messages: [{ ...message }] }}
+      />,
+    );
+    expect(contextApi.fetch).toHaveBeenCalledTimes(requests);
   });
 
   it("reports a correlated status failure without its response body or chat identity", async () => {

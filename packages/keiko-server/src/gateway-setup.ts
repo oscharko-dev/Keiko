@@ -6244,6 +6244,14 @@ function finalizeVerifiedCandidate(
     request.correlationId,
   );
   gatewayConfig.set(verified.config, true);
+  for (const modelId of verified.testedModelIds) {
+    gatewayConfig.recordVerifiedCapability(
+      modelId,
+      { conversationReady: true },
+      new Date().toISOString(),
+      gatewayConfig.generation(),
+    );
+  }
   logVoiceSetupResolution(verified.config, request.correlationId);
   recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
   return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds, {

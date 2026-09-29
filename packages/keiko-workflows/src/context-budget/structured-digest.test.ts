@@ -47,6 +47,13 @@ function compactedRecordFor(content: string): ContextCompactionRecord | undefine
 }
 
 describe("buildStructuredCompactionDigest", () => {
+  it("normalizes current-directory references and rejects unsafe workspace paths", () => {
+    const record = compactedRecordFor(
+      "Inspect `./src/probe.ts` and `./tests/probe.test.ts`; ignore `../private/key.ts`.",
+    );
+    expect(record?.filesInspected).toEqual(["src/probe.ts", "tests/probe.test.ts"]);
+    expect(validateContextCompactionRecord(record)).toEqual({ ok: true });
+  });
   it("keeps recent corrections when a classified bucket fills and records bounded loss", () => {
     const digest = buildStructuredCompactionDigest({
       entries: [

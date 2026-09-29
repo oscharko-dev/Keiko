@@ -79,8 +79,8 @@ import {
 } from "./memory-retrieval-signals.js";
 import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
 import {
-  ensureAnyConversationReadyChatModel,
-  ensureOnDemandConversationReadiness,
+  awaitAnyInitializedConversationReadyChatModel,
+  awaitInitializedConversationReadiness,
 } from "./gateway-readiness.js";
 import {
   extractCandidatesFromUserText,
@@ -2824,16 +2824,15 @@ export async function handleCreateDesktopChat(
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
-  // Fresh-install gap: verify a usable model on demand BEFORE the sync readiness guard —
-  // walking past an unsuitable default (e.g. an OCR model first in the list) so a
-  // configured-but-never-probed gateway does not reject the very first chat. The walk runs
-  // only for a DEFAULTED request: for an explicit modelId the admission validates that model
-  // alone, so probing its siblings could never change the outcome — it would only add their
-  // probe latency to an already-decided answer.
+  // Reuse configuration initialization; opening a chat never sends a readiness request.
   const explicitModelId = explicitChatModelId(body);
   await (explicitModelId === undefined
-    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps), ctx.correlationId)
-    : ensureOnDemandConversationReadiness(deps, explicitModelId, ctx.correlationId));
+    ? awaitAnyInitializedConversationReadyChatModel(
+        deps,
+        defaultChatModelId(deps),
+        ctx.correlationId,
+      )
+    : awaitInitializedConversationReadiness(deps, explicitModelId, ctx.correlationId));
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) {
     logChatCreationRejection(
@@ -3590,7 +3589,7 @@ export async function handleSendDesktopChat(
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     if (activeGitChangeScope(prepared.chat) === undefined) {
-      await ensureOnDemandConversationReadiness(deps, prepared.modelId, ctx.correlationId);
+      await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
     }
     const gitChangeDenial = admitGitChangeScopedTurn(
       deps,
@@ -4107,7 +4106,7 @@ export async function handleRegenerateDesktopChat(
     const prepared = await parseDesktopChatRegenerate(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(prepared)) return prepared;
-    await ensureOnDemandConversationReadiness(
+    await awaitInitializedConversationReadiness(
       deps,
       prepared.request.modelId ?? prepared.chat.selectedModel,
       ctx.correlationId,

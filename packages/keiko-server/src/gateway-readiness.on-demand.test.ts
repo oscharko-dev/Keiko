@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CHAT_MODEL_WALK_BUDGET_MS,
+  awaitAnyInitializedConversationReadyChatModel,
+  awaitInitializedConversationReadiness,
   ensureAnyConversationReadyChatModel,
   ensureOnDemandConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
@@ -53,6 +55,12 @@ function holderWith(
 }
 
 describe("ensureOnDemandConversationReadiness guards", () => {
+  it("does not start probes from conversation requests with unknown or expired observations", async () => {
+    const { deps, fetchCalls } = probeableDeps("invalid");
+    await awaitInitializedConversationReadiness(deps, "chat-model");
+    await awaitAnyInitializedConversationReadyChatModel(deps, "chat-model");
+    expect(fetchCalls()).toBe(0);
+  });
   it("returns without probing when no gateway is configured", async () => {
     await expect(
       ensureOnDemandConversationReadiness({} as UiHandlerDeps, "chat-model"),

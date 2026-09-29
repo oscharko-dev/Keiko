@@ -99,6 +99,16 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
 ] as const;
 export type ClientVoiceDialogueStage = (typeof CLIENT_VOICE_DIALOGUE_STAGES)[number];
 
+/** Shared failure classification for browser severity, rate admission and server persistence. */
+export const CLIENT_VOICE_DIALOGUE_FAILURE_STAGES: ReadonlySet<ClientVoiceDialogueStage> = new Set([
+  "preparation-failed",
+  "queue-unavailable",
+  "delivery-failed",
+  "delivery-cancelled",
+  "delivery-rejected",
+  "capture-renewal-failed",
+]);
+
 // Browser-side delivery loss the page counted since its previous accepted report (#3532). Each
 // value is a bounded non-negative count, never content: the pre-transport buffer evicting its
 // oldest record, the client-side POST throttle dropping a report, a POST that failed, and
@@ -369,6 +379,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "initialized",
   "input-limit",
   "code-ready",
+  "code-language-detected",
   "format-removed",
   "cursor-collision",
   "workspace-scroll-ready",
@@ -393,6 +404,11 @@ const COMPOSER_ACTIVITIES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_ACTIVI
 const COMPOSER_CODE_STAGES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_CODE_STAGES);
 
 function hasValidComposerContext(value: Record<string, unknown>): boolean {
+  if (
+    value.composerFocusIndicator !== undefined &&
+    (value.composerFocusIndicator !== "keyboard" || value.composerActivity !== "initialized")
+  )
+    return false;
   if (!isOptional(value.composerCodeStage, (stage) => COMPOSER_CODE_STAGES.has(stage)))
     return false;
   if (value.composerActivity === undefined) return true;
@@ -426,6 +442,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;

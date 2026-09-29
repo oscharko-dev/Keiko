@@ -73,6 +73,7 @@ import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
+  CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
@@ -137,6 +138,12 @@ const CLIENT_COMPOSER_ACTIVITY = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: CLIENT_COMPOSER_ACTIVITIES,
+    },
+    focusIndicator: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["keyboard"],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -1221,15 +1228,6 @@ function clientDiagnosticErrorKind(
   return kind === undefined ? "unknown" : CLIENT_DIAGNOSTIC_ERROR_KINDS[kind];
 }
 
-const VOICE_FAILURE_STAGES = new Set([
-  "preparation-failed",
-  "queue-unavailable",
-  "delivery-failed",
-  "delivery-cancelled",
-  "delivery-rejected",
-  "capture-renewal-failed",
-]);
-
 function clientDiagnosticCorrelation(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -1251,7 +1249,7 @@ function logVoiceDialogueStage(
   correlationId: string,
 ): boolean {
   const stage = request.voiceDialogueStage;
-  if (stage === undefined || VOICE_FAILURE_STAGES.has(stage)) return false;
+  if (stage === undefined || CLIENT_VOICE_DIALOGUE_FAILURE_STAGES.has(stage)) return false;
   const extra: Record<string, unknown> = {
     voiceDialogueStage: stage,
     ...(request.voiceCaptureError === undefined
@@ -1496,7 +1494,14 @@ function logClientComposerActivity(
     activityLogEvent(
       CLIENT_COMPOSER_ACTIVITY,
       clientDiagnosticCorrelation(request, correlationId),
-      { activity: request.composerActivity, completeness: "complete", loss: "none" },
+      {
+        activity: request.composerActivity,
+        ...(request.composerFocusIndicator === undefined
+          ? {}
+          : { focusIndicator: request.composerFocusIndicator }),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
   return true;
@@ -1917,10 +1922,20 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
 // failure, exactly like a binding that resolved or a session repair that recovered (#3625 review) —
 // and a select menu's Escape dismissal, which has no failure variant at all (PR #3625 review,
 // KeikoSelect.tsx finding).
+function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
+  if (report.errorKind !== undefined || report.errorEvidence !== undefined) return false;
+  if (report.kind === "markdown-layout" && report.markdownLayout !== undefined) return true;
+  return (
+    report.kind === "voice-dialogue" &&
+    report.voiceDialogueStage !== undefined &&
+    !CLIENT_VOICE_DIALOGUE_FAILURE_STAGES.has(report.voiceDialogueStage)
+  );
+}
+
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
   if (report.kind === "delivery-loss") return "loss";
   if (report.selectDismissal !== undefined) return "routine";
-  if (report.composerActivity !== undefined) return "routine";
+  if (report.composerActivity !== undefined || isRoutineVoiceReport(report)) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";
   return CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";

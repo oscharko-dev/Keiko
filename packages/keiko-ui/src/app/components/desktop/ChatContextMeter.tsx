@@ -125,15 +125,19 @@ function ContextRing({
 
 export function ChatContextMeter(props: ChatContextMeterProps): ReactNode {
   const t = useTranslate();
+  const locale = useLocale();
   const id = useId();
   const disclosure = useContextDisclosure();
   const ratio =
     props.status === undefined
       ? undefined
       : props.status.estimatedInputTokens / Math.max(1, props.status.inputBudgetTokens);
-  const percent = ratio === undefined ? undefined : Math.floor(ratio * 100);
+  const percent = ratio === undefined ? undefined : ratio * 100;
+  const percentLabel = percent === undefined ? undefined : formatContextPercent(percent, locale);
   const label =
-    percent === undefined ? t("chat.context.unavailable") : t("chat.context.label", { percent });
+    percentLabel === undefined
+      ? t("chat.context.unavailable")
+      : t("chat.context.label", { percent: percentLabel });
   return (
     <div className={styles.cmpRoot} data-tone={contextTone(ratio)} aria-busy={props.compacting}>
       <button
@@ -158,7 +162,7 @@ export function ChatContextMeter(props: ChatContextMeterProps): ReactNode {
               aria-label={t("chat.context.title")}
             >
               <h3>
-                {t("chat.context.title")} {percent === undefined ? "" : `${String(percent)} %`}
+                {t("chat.context.title")} {percentLabel === undefined ? "" : `${percentLabel} %`}
               </h3>
               <ContextDetails {...props} />
             </section>,
@@ -167,4 +171,9 @@ export function ChatContextMeter(props: ChatContextMeterProps): ReactNode {
         : null}
     </div>
   );
+}
+
+function formatContextPercent(percent: number, locale: string): string {
+  if (percent > 0 && percent < 0.1) return `<${(0.1).toLocaleString(locale)}`;
+  return percent.toLocaleString(locale, { maximumFractionDigits: 1 });
 }

@@ -3,20 +3,19 @@
   border-radius: 8px;
 }
 
-.cmpRoot:has(:focus-visible) {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 2px var(--bg);
+.cmpRoot:has([data-keyboard-focus="true"]:focus-visible) {
+  outline: 1px solid var(--fg-muted);
+  outline-offset: 4px;
 }
 
 @media (forced-colors: active) {
-  .cmpRoot:has(:focus-visible) {
+  .cmpRoot:has([data-keyboard-focus="true"]:focus-visible) {
     outline-color: Highlight;
   }
 }
 
 .cmpEditor {
-  min-height: 76px;
+  min-height: 56px;
   max-height: min(420px, 45dvh);
   overflow: auto;
   overscroll-behavior: contain;
@@ -25,7 +24,7 @@
   overflow-wrap: anywhere;
   font: 400 14px/1.62 var(--font-ui);
   color: var(--fg);
-  padding: 4px 2px 10px;
+  padding: 8px 10px;
   cursor: text;
 }
 
@@ -169,9 +168,4 @@
 }
 .cmpNotice:not([hidden]) {
   display: block;
-}
-.cmpHint {
-  color: var(--fg-dim);
-  font: 400 10px/1.5 var(--font-ui);
-  padding-top: 3px;
 }

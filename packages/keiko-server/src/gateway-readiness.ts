@@ -1789,8 +1789,28 @@ function recordFailedReadinessObservation(
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
 ): void {
+  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration)) return;
   if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
   deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+}
+
+function preserveUnexecutedCapabilityObservation(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+): boolean {
+  if (executedCategoricalFeatureProbe(report.probes)) return false;
+  const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
+  if (previous === undefined || previous.generation !== observedGeneration) return false;
+  // A basic-chat outage does not contradict separately observed features. Keep their original
+  // timestamp and fail conversation admission explicitly, without widening any capability.
+  deps.gatewayConfig?.recordVerifiedCapability(
+    report.modelId,
+    { ...previous.fields, conversationReady: false },
+    previous.checkedAt,
+    observedGeneration,
+  );
+  return true;
 }
 
 function preserveVerifiedToolCallingObservation(
@@ -2152,7 +2172,70 @@ interface OnDemandReadinessProbe {
   readonly correlationId: string;
 }
 
-const onDemandReadinessProbes = new Map<string, OnDemandReadinessProbe>();
+const readinessProbesByConfig = new WeakMap<
+  NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  Map<string, OnDemandReadinessProbe>
+>();
+
+function readinessProbesFor(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+): Map<string, OnDemandReadinessProbe> {
+  let probes = readinessProbesByConfig.get(holder);
+  if (probes === undefined) {
+    probes = new Map();
+    readinessProbesByConfig.set(holder, probes);
+  }
+  return probes;
+}
+
+/** Begin basic-chat verification at configuration load, never from a chat request. */
+export function initializeConfiguredConversationReadiness(
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): void {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined || deps.gatewayConfig === undefined) return;
+  for (const model of listConfiguredCapabilities(config)) {
+    if (model.kind !== "chat") continue;
+    const probeCorrelationId =
+      correlationId ?? deps.gatewayConfig.initializationCorrelationId ?? newCorrelationId();
+    void ensureOnDemandConversationReadiness(deps, model.id, probeCorrelationId).catch(
+      (error: unknown) => {
+        emitServerDiagnostic(
+          deps.diagnostics,
+          serverDiagnosticFromError({
+            correlationId: probeCorrelationId,
+            operation: "gateway.readiness",
+            source: "gateway-readiness.initialization",
+            error,
+            summary: "A gateway readiness probe could not be completed.",
+            redact: (message): string => String(deps.redactor(message)),
+          }),
+        );
+      },
+    );
+  }
+}
+
+/** Join an existing initialization, with no permission to initiate a provider probe. */
+export async function awaitInitializedConversationReadiness(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId?: string,
+): Promise<void> {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined || currentConversationReady(deps, modelId)) return;
+  const probe = readinessProbesFor(holder).get(`${String(holder.generation())}:${modelId}`);
+  if (probe === undefined) return;
+  logAutomaticReadinessJoined(
+    deps,
+    modelId,
+    correlationId ?? newCorrelationId(),
+    probe.correlationId,
+    holder.generation(),
+  );
+  await settledWithinBudget(probe.promise, CHAT_MODEL_WALK_BUDGET_MS);
+}
 
 // A failed probe must not pin the model for the whole configuration generation: a transient
 // gateway outage would brick every chat surface until a manual re-probe or restart (the
@@ -2193,6 +2276,7 @@ export async function ensureOnDemandConversationReadiness(
   // The in-flight key carries the generation: a config replaced mid-probe must not hand the
   // NEW generation's caller the OLD generation's discarded report.
   const key = `${String(holder.generation())}:${modelId}`;
+  const onDemandReadinessProbes = readinessProbesFor(holder);
   const inFlight = onDemandReadinessProbes.get(key);
   if (inFlight !== undefined) {
     logAutomaticReadinessJoined(
@@ -2336,17 +2420,44 @@ export async function ensureAnyConversationReadyChatModel(
   requestedModelId: string,
   correlationId?: string,
 ): Promise<void> {
+  await awaitConversationReadyCandidate(
+    deps,
+    requestedModelId,
+    ensureOnDemandConversationReadiness,
+    correlationId,
+  );
+}
+
+export async function awaitAnyInitializedConversationReadyChatModel(
+  deps: UiHandlerDeps,
+  requestedModelId: string,
+  correlationId?: string,
+): Promise<void> {
+  await awaitConversationReadyCandidate(
+    deps,
+    requestedModelId,
+    awaitInitializedConversationReadiness,
+    correlationId,
+  );
+}
+
+async function awaitConversationReadyCandidate(
+  deps: UiHandlerDeps,
+  requestedModelId: string,
+  awaitReadiness: typeof awaitInitializedConversationReadiness,
+  correlationId?: string,
+): Promise<void> {
   // The budget covers the REQUESTED model's probe too (review finding on the first cut):
   // computed after it, a hanging gateway burned the full provider timeout before the budget
   // even started. The interactive create never waits longer than the budget, full stop.
   const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
-  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId, correlationId);
+  const firstProbe = awaitReadiness(deps, requestedModelId, correlationId);
   if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
   if (currentConversationReady(deps, requestedModelId)) return;
   for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) return;
-    const probe = ensureOnDemandConversationReadiness(deps, capability.id, correlationId);
+    const probe = awaitReadiness(deps, capability.id, correlationId);
     if (!(await settledWithinBudget(probe, remainingMs))) return;
     if (currentConversationReady(deps, capability.id)) return;
   }

@@ -27,6 +27,7 @@ import {
   parseExpectedGroundingScopeIdentity,
 } from "./chat-handlers.js";
 import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
 // Final-audit F5 (#3400): the production-composition proof for the Chat apply path reuses the
 // SAME real fixture and route handlers prDescriptionRoutes.test.ts already proves a full
 // preview -> approve -> apply round trip against (a real git repo, a real GitHub-shaped body-only
@@ -330,7 +331,25 @@ describe("desktop chat production gateway reuse", () => {
     }
   });
 
-  it("keeps user content off the provider while probing an unready model on demand", async () => {
+  it("does not launch a readiness probe from a chat request with an unknown model observation", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      const result = await handleCreateDesktopChat(
+        requestContext({ modelId: "breaker-chat", projectPath: fixture.projectPath }),
+        fixture.deps,
+      );
+      expect(result.status).toBe(400);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("keeps user content off the provider while initializing an unready model before chat admission", async () => {
     const fixture = await createGatewayBreakerFixture();
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -338,6 +357,13 @@ describe("desktop chat production gateway reuse", () => {
       fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
+
+      await ensureOnDemandConversationReadiness(
+        fixture.deps,
+        "breaker-chat",
+        "corr-initialize-unready",
+      );
+      const initializationCalls = fetchSpy.mock.calls.length;
 
       const createRejected = await handleCreateDesktopChat(
         requestContext(
@@ -385,6 +411,7 @@ describe("desktop chat production gateway reuse", () => {
       // once; the send attempt hits the recorded not-ready observation without re-probing.
       expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(4);
+      expect(fetchSpy).toHaveBeenCalledTimes(initializationCalls);
       for (const call of fetchSpy.mock.calls) {
         const init = call[1] as { body?: unknown } | undefined;
         const body = typeof init?.body === "string" ? init.body : "";

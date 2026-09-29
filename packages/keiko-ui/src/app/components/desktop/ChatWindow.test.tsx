@@ -3155,6 +3155,35 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
 
 // uiux-fix F042 (C208) — per-bubble copy affordance for assistant messages.
 describe("ChatWindow message copy", () => {
+  it("preserves sent user code formatting without assistant apply actions or active HTML", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "user-code",
+            chatId: "chat-1",
+            role: "user",
+            content:
+              "Explain **this**:\n\n```javascript\nconst answer = 42;\n```\n\n<img src=x onerror=alert(1)>",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    const prompt = document.querySelector('article[data-role="user"]');
+    expect(prompt?.querySelector("strong")).toHaveTextContent("this");
+    expect(prompt?.querySelector("pre")).toHaveTextContent("const answer = 42;");
+    expect(prompt?.querySelector("img")).toBeNull();
+    expect(
+      within(prompt as HTMLElement).queryByRole("button", { name: /apply in editor/i }),
+    ).toBeNull();
+  });
   it("renders the live streaming assistant preview as safe markdown", (): void => {
     renderWindow(
       makeSession({

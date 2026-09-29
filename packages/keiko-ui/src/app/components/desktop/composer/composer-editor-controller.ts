@@ -17,6 +17,12 @@ import styles from "./MarkdownComposer.module.css";
 export class ComposerEditorController implements ComposerInputHandle {
   readonly view: EditorView;
   private value: string;
+  private readonly trackKeyboardFocus = (event: KeyboardEvent): void => {
+    if (event.key === "Tab") this.view.dom.dataset.keyboardFocus = "true";
+  };
+  private readonly trackPointerFocus = (): void => {
+    this.view.dom.dataset.keyboardFocus = "false";
+  };
 
   constructor(
     host: HTMLElement,
@@ -53,8 +59,11 @@ export class ComposerEditorController implements ComposerInputHandle {
           : null,
       clipboardTextSerializer: (slice): string => this.clipboardText(slice),
     });
+    this.view.dom.ownerDocument.addEventListener("keydown", this.trackKeyboardFocus, true);
+    this.view.dom.ownerDocument.addEventListener("pointerdown", this.trackPointerFocus, true);
     reportClientDiagnostic("Keiko Markdown composer initialized.", {
       composerActivity: "initialized",
+      composerFocusIndicator: "keyboard",
     });
   }
 
@@ -88,6 +97,7 @@ export class ComposerEditorController implements ComposerInputHandle {
       role: "textbox",
       "aria-multiline": "true",
       "aria-label": this.props.ariaLabel,
+      "aria-description": this.props.labels.hint,
       ...(this.props.ariaControls ? { "aria-controls": this.props.ariaControls } : {}),
       tabindex: "0",
       "data-shell-chord-bypass": "",
@@ -173,6 +183,8 @@ export class ComposerEditorController implements ComposerInputHandle {
     );
   }
   destroy(): void {
+    this.view.dom.ownerDocument.removeEventListener("keydown", this.trackKeyboardFocus, true);
+    this.view.dom.ownerDocument.removeEventListener("pointerdown", this.trackPointerFocus, true);
     this.view.destroy();
   }
 }

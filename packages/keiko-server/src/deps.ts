@@ -1,4 +1,5 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import { initializeConfiguredConversationReadiness } from "./gateway-readiness.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
 // only the static-serving + CSP + port fields; the JSON/SSE handlers additionally need the resolved
 // gateway config (for the config inspector and for building a ModelPort), an evidence store, a live
@@ -503,6 +504,7 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 ) => QualityIntelligenceReviewPrincipal;
 
 export interface RuntimeGatewayConfig {
+  readonly subscribe?: (listener: () => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
@@ -1398,6 +1400,24 @@ function resolveConfiguredEgress(
   }
 }
 
+function gatewayConfigListeners(): {
+  subscribe: (listener: () => void) => () => void;
+  notify: () => void;
+} {
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener): () => void {
+      listeners.add(listener);
+      return (): void => {
+        listeners.delete(listener);
+      };
+    },
+    notify(): void {
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
 function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
@@ -1416,6 +1436,7 @@ function createRuntimeGatewayConfig(
   // stale generation is dropped, so a slow probe of the PREVIOUS config can never stamp the
   // replacement config with an outcome nobody measured against it (#2847 review).
   let generation = 0;
+  const listeners = gatewayConfigListeners();
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
@@ -1428,7 +1449,9 @@ function createRuntimeGatewayConfig(
       verification = UNVERIFIED_GATEWAY;
       verifiedCapabilities.clear();
       generation += 1;
+      listeners.notify();
     },
+    subscribe: listeners.subscribe,
     generation: (): number => generation,
     verification: (): GatewayVerificationState => verification,
     recordVerification(state: GatewayVerificationState, observedGeneration?: number): void {
@@ -1498,7 +1521,7 @@ export function currentConversationReady(
  * "unknown" into "not ready" told the UI after every restart that no model was usable until a
  * manual probe plus reload (customer field incident, 0.3.11). Admission guards keep using the
  * strict boolean `currentConversationReady` — unknown never admits, it only defers to the
- * on-demand probe at the conversation entry points.
+ * configuration-initialization probe already running before conversation admission.
  */
 export function currentConversationReadinessObservation(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
@@ -4457,7 +4480,19 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
+  installConversationReadinessInitialization(deps);
   return deps;
+}
+
+function installConversationReadinessInitialization(deps: UiHandlerDeps): void {
+  initializeConfiguredConversationReadiness(deps);
+  deps.gatewayConfig?.subscribe?.(() => {
+    // Setup stamps its successful credential checks synchronously after replacement. Reuse
+    // those observations before deciding which models still need startup verification.
+    queueMicrotask(() => {
+      initializeConfiguredConversationReadiness(deps);
+    });
+  });
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {
