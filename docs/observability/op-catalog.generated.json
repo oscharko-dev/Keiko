@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5b07400af7e395dc43f6287db2326dbaab068186e2644b0a33e20104b50bc18b",
+    "catalogDigest": "960d3fd4acd70564d65fb9300d1262dfffdc75dc29f7696be9eb2de475dc4ad2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -924,8 +924,8 @@
         "failureClasses": ["compaction-fact-classification"],
         "proofIds": ["chat.compaction.facts.classified.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/chat-compaction-model-summary.ts:48",
-        "emitterSites": ["packages/keiko-server/src/chat-compaction-model-summary.ts:450"]
+        "registrationSite": "packages/keiko-server/src/chat-compaction-model-summary.ts:50",
+        "emitterSites": ["packages/keiko-server/src/chat-compaction-model-summary.ts:436"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -949,7 +949,15 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["inspected", "compacted", "unchanged", "failed", "summary-discarded"]
+            "values": [
+              "inspected",
+              "compacted",
+              "unchanged",
+              "failed",
+              "summary-discarded",
+              "prompt-compacted",
+              "prompt-failed"
+            ]
           },
           "inputTokens": {
             "type": "integer",
@@ -974,7 +982,7 @@
         "proofIds": ["chat.context.management.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-context-log.ts:8",
-        "emitterSites": ["packages/keiko-server/src/chat-context-log.ts:43"]
+        "emitterSites": ["packages/keiko-server/src/chat-context-log.ts:58"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -76607,7 +76615,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1643",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1652",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76914,7 +76922,7 @@
     {
       "op": "chat.compaction.facts.classified",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:51",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:53",
       "package": "keiko-server"
     },
     {
@@ -76927,14 +76935,14 @@
     {
       "op": "chat.compaction.summary",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:812",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:792",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1959",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1976",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -76959,7 +76967,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1348",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1357",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

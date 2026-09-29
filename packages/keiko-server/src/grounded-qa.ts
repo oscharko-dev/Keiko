@@ -1,3 +1,4 @@
+import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 import { logChatResponseMessage } from "./chat-activity.js";
 import {
   groundedConversationContinuity,
@@ -18,6 +19,7 @@ import {
   CancelledError,
   ContextOverflowError,
   GatewayError,
+  ProviderError,
   findCapability,
   findConfiguredCapability,
   resolveCostClass,
@@ -63,6 +65,7 @@ import {
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
+  DEFAULT_CONTEXT_PROFILE,
   maxUtf8BytesForTokenBudget,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
@@ -2055,13 +2058,35 @@ function groundedTurnConflict(
   };
 }
 
-function withGroundedContinuity(
+function compactGroundedCurrentPrompt(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-): PreparedGroundedAsk {
+): Promise<string> {
+  const modelId = groundedModelId(prepared);
+  return compactCurrentChatPrompt({
+    content: prepared.input.content,
+    modelId,
+    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    signal: prepared.signal,
+    correlationId: prepared.correlationId,
+    redact: (value) => redactedString(deps.redactor, value),
+    call: async (request, signal) => {
+      const model = resolveGroundedAnswerModel(deps, modelId, groundedReadinessAdmission(prepared));
+      if (isRouteResult(model))
+        throw new ProviderError("The prompt compaction model is unavailable.", model.status);
+      return model.call(request, signal);
+    },
+  });
+}
+
+async function withGroundedContinuity(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): Promise<PreparedGroundedAsk> {
+  const content = await compactGroundedCurrentPrompt(prepared, deps);
   const continuity = groundedConversationContinuity(
     deps,
-    admittedGroundedUser(prepared),
+    { ...admittedGroundedUser(prepared), content },
     groundedModelId(prepared),
   );
   return {
@@ -2069,10 +2094,9 @@ function withGroundedContinuity(
     continuity,
     input: {
       ...prepared.input,
+      content,
       retrievalContent: continuity.retrievalContent,
-      answerContent: [continuity.answerContext, prepared.input.content]
-        .filter(Boolean)
-        .join("\n\n"),
+      answerContent: [continuity.answerContext, content].filter(Boolean).join("\n\n"),
     },
   };
 }
@@ -2209,7 +2233,7 @@ async function runAdmittedGroundedAsk(
   let stagedAssistantId: string | undefined;
   try {
     const memoryPrepared = await prepareGroundedMemory(
-      withGroundedContinuity(admitted, deps),
+      await withGroundedContinuity(admitted, deps),
       deps,
     );
     ensureNotCancelled(admitted.signal);

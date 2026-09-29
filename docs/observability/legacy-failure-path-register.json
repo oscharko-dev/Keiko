@@ -2324,18 +2324,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/chat-compaction-resurfacing.ts",
-      "owner": "buildChatCompactionResurfacingContext",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/chat-compaction-resurfacing.ts",
-      "owner": "safeLoad",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/chat-handlers.ts",
       "owner": "normalizeDesktopProjectPath",
       "kind": "unregistered-catch",

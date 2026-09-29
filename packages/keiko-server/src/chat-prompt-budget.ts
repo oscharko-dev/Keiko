@@ -6,6 +6,7 @@ import type {
   DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,
@@ -548,7 +549,8 @@ export function selectGatewayPromptAssembly(
     readonly proactiveCompaction?: boolean;
   },
 ): GatewayPromptAssembly | undefined {
-  const candidate = assembleSelectedGatewayPrompt(input);
+  const adjusted = adjustLatestPromptOutputBudget(input);
+  const candidate = assembleSelectedGatewayPrompt(adjusted);
   if (candidate === undefined || input.proactiveCompaction !== true) return candidate;
   const before = countGatewayPromptTokens(
     { messages: candidate.messages },
@@ -556,10 +558,10 @@ export function selectGatewayPromptAssembly(
   );
   if (before < input.profile.effectiveInputBudget * 0.9) return candidate;
   const compacted = assembleSelectedGatewayPrompt({
-    ...input,
+    ...adjusted,
     profile: {
-      ...input.profile,
-      effectiveInputBudget: Math.floor(input.profile.effectiveInputBudget * 0.7),
+      ...adjusted.profile,
+      effectiveInputBudget: Math.floor(adjusted.profile.effectiveInputBudget * 0.7),
     },
   });
   if (compacted?.compaction === undefined) return candidate;
@@ -567,6 +569,45 @@ export function selectGatewayPromptAssembly(
   if (compacted.messages.at(-1)?.content !== candidate.messages.at(-1)?.content) return candidate;
   return {
     ...compacted,
-    diagnostics: withDeploymentContextProfile(compacted.diagnostics, input.profile),
+    diagnostics: withDeploymentContextProfile(compacted.diagnostics, adjusted.profile),
   };
+}
+
+function adjustLatestPromptOutputBudget<
+  T extends Parameters<typeof assembleSelectedGatewayPrompt>[0],
+>(input: T): T {
+  const messages = gatewayConversationImageAccounting(
+    [
+      { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: composeConversationPrompt(
+          input.request.content,
+          input.documentContext,
+          undefined,
+          input.request.discussionMode,
+        ),
+      },
+    ],
+    input.request.imageCount,
+  );
+  const required = countGatewayPromptTokens({ messages }, input.profile.tokenAccounting, {
+    contextWindow: input.profile.maxInputTokens,
+  });
+  const available = input.profile.maxInputTokens - input.profile.safetyMarginTokens - required;
+  if (required <= input.profile.effectiveInputBudget || available < 1) return input;
+  return {
+    ...input,
+    profile: {
+      ...input.profile,
+      ...deriveContextProfile({ ...input.profile, reservedOutputTokens: available }),
+    },
+  };
+}
+
+export function gatewayAssemblyOutputAllocation(assembly: GatewayPromptAssembly): {
+  readonly maxOutputTokens?: number;
+} {
+  const maxOutputTokens = assembly.diagnostics.profile.reservedOutputTokens;
+  return maxOutputTokens > 0 ? { maxOutputTokens } : {};
 }

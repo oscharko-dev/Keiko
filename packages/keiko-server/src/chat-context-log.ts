@@ -17,7 +17,15 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["inspected", "compacted", "unchanged", "failed", "summary-discarded"],
+      values: [
+        "inspected",
+        "compacted",
+        "unchanged",
+        "failed",
+        "summary-discarded",
+        "prompt-compacted",
+        "prompt-failed",
+      ],
     },
     inputTokens: { type: "integer", dataClass: "count", required: true },
     inputBudget: { type: "integer", dataClass: "count", required: true },
@@ -34,8 +42,15 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
 });
 
 export function logChatContextManagement(
-  outcome: "inspected" | "compacted" | "unchanged" | "failed" | "summary-discarded",
-  status: ChatContextStatusWire,
+  outcome:
+    | "inspected"
+    | "compacted"
+    | "unchanged"
+    | "failed"
+    | "summary-discarded"
+    | "prompt-compacted"
+    | "prompt-failed",
+  status: Pick<ChatContextStatusWire, "estimatedInputTokens" | "inputBudgetTokens">,
   tokensSaved: number,
   correlationId: string,
 ): void {

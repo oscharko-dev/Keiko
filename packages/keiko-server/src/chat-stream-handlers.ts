@@ -1,3 +1,4 @@
+import { gatewayAssemblyOutputAllocation } from "./chat-prompt-budget.js";
 import { logChatResponseMessages } from "./chat-activity.js";
 // Desktop chat SSE streaming BFF route (#152). ADDITIVE to the buffered /api/desktop/chat path,
 // which stays byte-identical as the client's fallback. This handler reuses the buffered path's
@@ -33,6 +34,7 @@ import type {
 import {
   commitChatAfterTurn,
   buildGatewayAssembly,
+  prepareDesktopChatPrompt,
   assemblyWithConversationImages,
   conversationImageDeliveries,
   buildMemoryResult,
@@ -328,7 +330,7 @@ async function streamAndPersist(
   admitted: AdmittedDesktopChatStream,
   controller: AbortController,
 ): Promise<void> {
-  const { prepared, callStream, userMessage, gatewayTurn } = admitted;
+  const { prepared, callStream, userMessage } = admitted;
   const { request, modelId, memoryContext } = prepared;
   const startedAt = Date.now();
   const memory = admitted.memory ?? (await resolveMemory(deps, request, memoryContext));
@@ -336,14 +338,20 @@ async function streamAndPersist(
     failCancelledStreamTurn(ctx, deps, request, true);
     return;
   }
-  const assembly = assemblyWithConversationImages(
+  const assembly = await buildPreparedStreamAssembly(
+    ctx,
     deps,
-    request,
-    modelId,
-    buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn, ctx.correlationId),
+    admitted,
+    memory,
+    controller.signal,
   );
   const stream = callStream(
-    { modelId, messages: assembly.messages, logContext: { correlationId: ctx.correlationId } },
+    {
+      modelId,
+      messages: assembly.messages,
+      ...gatewayAssemblyOutputAllocation(assembly),
+      logContext: { correlationId: ctx.correlationId },
+    },
     controller.signal,
   );
   const termination: StreamTermination = { backpressure: false };
@@ -367,6 +375,37 @@ async function streamAndPersist(
     return;
   }
   finalizeStreamedTurn(ctx, deps, payload, assembly.compaction, admitted, startedAt);
+}
+
+async function buildPreparedStreamAssembly(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  turn: AdmittedDesktopChatStream,
+  memory: ConversationMemoryResultWire,
+  signal: AbortSignal,
+): Promise<ReturnType<typeof buildGatewayAssembly>> {
+  const { request, modelId } = turn.prepared;
+  const executionRequest = await prepareDesktopChatPrompt(
+    deps,
+    request,
+    modelId,
+    turn.executionAdmission,
+    signal,
+    ctx.correlationId,
+  );
+  return assemblyWithConversationImages(
+    deps,
+    executionRequest,
+    modelId,
+    buildGatewayAssembly(
+      deps,
+      executionRequest,
+      memory,
+      modelId,
+      turn.gatewayTurn,
+      ctx.correlationId,
+    ),
+  );
 }
 
 // Split out of streamAndPersist to keep it within the line budget: records the compaction evidence
@@ -548,6 +587,7 @@ function resolveDesktopChatStreamCall(
 interface AdmittedDesktopChatStream {
   readonly prepared: PreparedDesktopChatSend;
   readonly callStream: StreamCall;
+  readonly executionAdmission: DesktopChatExecutionAdmission;
   readonly memory: ConversationMemoryResultWire | undefined;
   readonly userMessage: ChatMessage;
   readonly gatewayTurn: GatewayTurnSnapshot;
@@ -745,6 +785,7 @@ async function runAdmittedDesktopChatStream(
     {
       prepared,
       callStream: provider.callStream,
+      executionAdmission,
       memory: provider.memory,
       userMessage: admission.userMessage,
       gatewayTurn,

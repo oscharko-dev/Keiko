@@ -71,6 +71,7 @@ export class ComposerCodeView implements NodeView {
     this.dom.contentEditable = "false";
     this.dom.dataset.composerCode = "";
     this.host.className = styles.cmpCodeHost ?? "";
+    this.host.dataset.workspaceScrollOwner = "virtual";
     this.notice.className = styles.cmpNotice ?? "";
     this.notice.textContent = labels.loading;
     this.setupFallback();

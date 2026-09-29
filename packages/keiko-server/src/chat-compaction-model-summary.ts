@@ -1,3 +1,5 @@
+import { callChatCompactionModel } from "./chat-compaction-model-call.js";
+import { TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   ContextCompactionModelSummary,
   ContextCompactionRecord,
@@ -331,43 +333,27 @@ async function callModelWithTimeout(
   responseMode: ModelSummaryResponseMode,
   correlationId: string,
 ): Promise<ModelSummaryCallResult> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<ModelSummaryCallResult>((resolve) => {
-    timer = setTimeout(() => {
-      controller.abort();
-      resolve({ kind: "timed-out" });
-    }, MODEL_SUMMARY_TIMEOUT_MS);
-    timer.unref();
-  });
   try {
-    const response = await Promise.race([
-      model.call(
-        {
-          modelId,
-          messages: [
-            { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-            { role: "user", content: prompt },
-          ],
-          stream: false,
-          temperature: 0,
-          topP: 1,
-          ...(responseMode === "structured"
-            ? { responseFormat: MODEL_SUMMARY_RESPONSE_FORMAT }
-            : {}),
-          logContext: { correlationId },
-        },
-        controller.signal,
-      ),
-      timeout,
-    ]);
-    return isNormalizedResponse(response) ? { kind: "response", response } : response;
+    const response = await callChatCompactionModel(
+      model.call.bind(model),
+      {
+        modelId,
+        messages: [
+          { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        stream: false,
+        temperature: 0,
+        topP: 1,
+        ...(responseMode === "structured" ? { responseFormat: MODEL_SUMMARY_RESPONSE_FORMAT } : {}),
+        logContext: { correlationId },
+      },
+      new AbortController().signal,
+      MODEL_SUMMARY_TIMEOUT_MS,
+    );
+    return { kind: "response", response };
   } catch (error) {
-    return { kind: "unavailable", error };
-  } finally {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
+    return error instanceof TimeoutError ? { kind: "timed-out" } : { kind: "unavailable", error };
   }
 }
 
@@ -541,12 +527,6 @@ function summaryStringArraySchema(): Record<string, unknown> {
       maxLength: CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
     },
   };
-}
-
-function isNormalizedResponse(
-  value: NormalizedResponse | ModelSummaryCallResult,
-): value is NormalizedResponse {
-  return !("kind" in value);
 }
 
 function parseStructuredSummary(

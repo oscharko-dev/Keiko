@@ -44,9 +44,15 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
         <div data-testid="scroll-target" style={{ overflowY: "auto", width: 100, height: 80 }}>
           <div style={{ width: 100, height: 300 }} />
         </div>
-        <div className="monaco-editor">
+        <div className="monaco-editor" data-workspace-scroll-owner="virtual">
           <div className="monaco-scrollable-element" style={{ overflow: "hidden" }}>
-            <div data-testid="code-scroll-target" className="view-lines" />
+            <div
+              data-testid="code-scroll-target"
+              className="view-lines"
+              role="textbox"
+              aria-label="Synthetic code input"
+              tabIndex={0}
+            />
           </div>
         </div>
       </section>
@@ -133,6 +139,19 @@ describe("useWorkspace wheel zoom routing", () => {
     }
     expect(screen.getByTestId("view-y")).toHaveTextContent("0");
     expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
+  });
+
+  it("keeps wheel input in a focused code editor before the window is selected", () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    const target = screen.getByTestId("code-scroll-target");
+    target.focus();
+    expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("");
+    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 });
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
   });
 
   it("routes Ctrl/Command wheel over a window to workspace zoom", async () => {

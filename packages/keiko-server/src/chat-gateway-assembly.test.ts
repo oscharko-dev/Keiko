@@ -6,6 +6,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
   buildGatewayAssembly,
+  prepareDesktopChatPrompt,
   captureGatewayTurnSnapshot,
   type GatewayTurnSnapshot,
   type SendDesktopChatRequest,
@@ -872,7 +873,7 @@ it("keeps a large current prompt by reducing the default answer reserve", () => 
     contextWindow: 30_000,
     maxOutputTokens: 0,
   });
-  const content = "x".repeat(110_000);
+  const content = "x".repeat(95_000);
   const requiredTokens = countGatewayPromptTokens({
     messages: [
       { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
@@ -902,4 +903,60 @@ it("keeps a large current prompt by reducing the default answer reserve", () => 
       assembly.diagnostics.profile.reservedOutputTokens +
       profile.safetyMarginTokens,
   ).toBeLessThanOrEqual(profile.maxInputTokens);
+});
+
+it("prepares a compact execution prompt without replacing the persisted original", async () => {
+  const { store, chatId } = createStore();
+  const original =
+    "Arbeitsauftrag für Projekt Linden. ".repeat(900) + "Budget korrigiert: 60.000 EUR.";
+  const user = store.createMessage(createMessage(chatId, "user", original, NOW));
+  const deps = createDeps(
+    store,
+    deriveContextProfile({
+      maxInputTokens: 4096,
+      reservedOutputTokens: 1024,
+      safetyMarginTokens: 128,
+    }),
+    {
+      modelPortFactory: (): NonNullable<ReturnType<UiHandlerDeps["modelPortFactory"]>> => ({
+        call: () =>
+          Promise.resolve({
+            modelId: CHAT_MODEL,
+            content: "Auftrag: Projekt Linden. Budget: 60.000 EUR.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "compaction",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          }),
+      }),
+    },
+  );
+  const request = makeRequest(chatId, original);
+  const execution = await prepareDesktopChatPrompt(
+    deps,
+    request,
+    CHAT_MODEL,
+    { gatewayConfigGeneration: undefined },
+    new AbortController().signal,
+    "corr-current-prompt",
+  );
+  expect(execution.content).toContain("60.000 EUR");
+  expect(execution.content.length).toBeLessThan(original.length);
+  expect(store.listMessages(chatId).find((message) => message.id === user.id)?.content).toBe(
+    original,
+  );
+  const assembly = buildGatewayAssembly(
+    deps,
+    execution,
+    makeMemoryResult([]),
+    CHAT_MODEL,
+    captureGatewayTurnSnapshot(deps, request, user),
+  );
+  expect(assembly.messages.at(-1)?.content).toBe(execution.content);
 });

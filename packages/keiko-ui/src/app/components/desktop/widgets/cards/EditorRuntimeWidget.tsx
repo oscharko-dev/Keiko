@@ -6874,7 +6874,7 @@ function EditorRuntimeWidget({
   );
 
   const renderEditorChrome = (): ReactNode => (
-    <div className={`editor ${runtimeStyles.themeTokens}`}>
+    <div className={`editor ${runtimeStyles.themeTokens}`} data-workspace-scroll-owner="virtual">
       <div className="ed-tabs mono">
         {renderOpenDocumentTabs()}
         {renderEditorToolbar()}

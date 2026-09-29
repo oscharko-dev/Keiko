@@ -159,6 +159,23 @@ without requiring knowledge of specific path patterns.
 
 ### D3 — Wire the discarded chat-compaction record to persistCompactionEvidence
 
+**Current chat behavior (#3674):** The original user message remains in the canonical store.
+Buffered sends, streamed sends, and regeneration share the same prompt assembly and output
+allocation. A large current prompt can reduce the default answer reservation to the actual
+remaining capacity; the complete final request still undergoes gateway token admission.
+When the current prompt itself exceeds 90% of the effective input budget, foreground semantic
+compaction processes every source character in ordered, individually budgeted model requests.
+The execution projection may use the summary, while the saved user message retains the original.
+This preserves the non-evictable user-task lane; it does not silently truncate that lane.
+
+Foreground and background summaries share one cancellation and timeout helper. Foreground work
+has a maximum of 32 calls, three reduction rounds, 30 seconds per call, and 90 seconds overall.
+Each call revalidates the accepted gateway generation and readiness; final dispatch checks the
+same boundary again. Empty, incomplete, or non-reducing summaries fail explicitly. Counts and
+outcomes use the existing Activity Log operation, without prompt or summary bodies. Semantic
+summaries can omit detail and are not claimed to be lossless; the original remains available.
+
+
 **The problem**: `buildGatewayMessages` (chat-handlers.ts:924) calls
 `conversationForGatewayWithCompaction` and returns only `messages`. The `compaction?:
 ContextCompactionRecord` from `ConversationCompactionOutcome` is silently dropped. Both call sites

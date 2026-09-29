@@ -374,8 +374,7 @@ function scrollTargetCanConsumeWheel(
   if (windowElement === null) return false;
   // Virtual editors scroll a surface with overflow:hidden. Cancelling the event in this
   // capture handler prevents its own wheel handler from running, even with scrollable code.
-  if (target.closest('.monaco-editor, [data-workspace-scroll-owner="virtual"]') !== null)
-    return true;
+  if (target.closest('[data-workspace-scroll-owner="virtual"]') !== null) return true;
   let current: Element | null = target;
   while (current !== null && current !== windowElement) {
     if (
@@ -387,6 +386,14 @@ function scrollTargetCanConsumeWheel(
     current = current.parentElement;
   }
   return false;
+}
+
+function focusedEditorOwnsWheelTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editor = target.closest(
+    '[data-workspace-scroll-owner="virtual"], [contenteditable="true"], textarea',
+  );
+  return editor !== null && editor.contains(document.activeElement);
 }
 
 function activeSelectedWindowId(selection: WorkspaceUiSelectionState): string | null {
@@ -766,6 +773,7 @@ function usePanZoom({
         return;
       }
       const delta = normalizeWheelDelta(e);
+      if (focusedEditorOwnsWheelTarget(e.target)) return;
       if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
         if (scrollTargetCanConsumeWheel(e.target, delta)) return;
         e.preventDefault();

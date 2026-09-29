@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5b07400af7e395dc43f6287db2326dbaab068186e2644b0a33e20104b50bc18b" as const;
+  "960d3fd4acd70564d65fb9300d1262dfffdc75dc29f7696be9eb2de475dc4ad2" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -903,7 +903,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["inspected", "compacted", "unchanged", "failed", "summary-discarded"],
+        values: [
+          "inspected",
+          "compacted",
+          "unchanged",
+          "failed",
+          "summary-discarded",
+          "prompt-compacted",
+          "prompt-failed",
+        ],
       },
       inputTokens: {
         type: "integer",

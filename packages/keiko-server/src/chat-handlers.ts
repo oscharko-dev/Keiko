@@ -1,3 +1,4 @@
+import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 // Desktop chat BFF routes for the Keiko canvas UI. These routes intentionally keep the model call
 // behind the existing ModelPort/Gateway boundary: the browser sends only chat content and a registry
 // model id, while provider endpoints and keys remain resolved from the local gateway config/.env.
@@ -221,6 +222,7 @@ import { userFacingProjects } from "./workspace-root-membership.js";
 import {
   buildChatCompactionContextText,
   selectGatewayPromptAssembly,
+  gatewayAssemblyOutputAllocation,
   type GatewayPromptAssembly,
 } from "./chat-prompt-budget.js";
 import {
@@ -458,12 +460,19 @@ function gatewayErrorResult(
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 
+class ChatPromptPreparationRejection extends Error {
+  constructor(readonly result: RouteResult) {
+    super("Desktop chat prompt preparation was rejected.");
+  }
+}
+
 export function desktopChatErrorResult(
   error: unknown,
   deps: UiHandlerDeps,
   correlationId?: string,
   emitDiagnostic = true,
 ): RouteResult {
+  if (error instanceof ChatPromptPreparationRejection) return error.result;
   if (error instanceof ConversationAttachmentStoreError) {
     return {
       status: 409,
@@ -2105,6 +2114,50 @@ function bufferedModelAtProviderBoundary(
   );
 }
 
+export async function prepareDesktopChatPrompt(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  modelId: string,
+  admission: DesktopChatExecutionAdmission,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+  operation: "chat.send.rejected" | "chat.regeneration.rejected" = "chat.send.rejected",
+): Promise<SendDesktopChatRequest> {
+  const content = await compactCurrentChatPrompt({
+    content: request.content,
+    modelId,
+    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    signal,
+    correlationId,
+    redact: (value) => String(deps.redactor(value)),
+    call: async (summaryRequest, summarySignal) => {
+      const model = bufferedModelAtProviderBoundary(
+        deps,
+        modelId,
+        admission,
+        correlationId,
+        operation,
+      );
+      if (isRouteResult(model)) throw new ChatPromptPreparationRejection(model);
+      return model.call(summaryRequest, summarySignal);
+    },
+  });
+  signal.throwIfAborted();
+  const invalid = validateDesktopChatProviderBoundary(modelId, admission, deps);
+  if (invalid !== undefined) {
+    logChatRejection(
+      operation,
+      correlationId,
+      modelId,
+      deps,
+      invalid.status,
+      desktopChatProviderBoundaryRejectionReason(modelId, admission, deps),
+    );
+    throw new ChatPromptPreparationRejection(invalid);
+  }
+  return content === request.content ? request : { ...request, content };
+}
+
 function bufferedTurnCancellationResult(
   deps: UiHandlerDeps,
   prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
@@ -2248,6 +2301,53 @@ function buildBufferedGatewayAssembly(
   return assemblyWithConversationImages(deps, request, modelId, baseAssembly);
 }
 
+async function prepareBufferedGatewayAssembly(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  memory: ConversationMemoryResultWire,
+  executionAdmission: DesktopChatExecutionAdmission,
+  gatewayTurn: GatewayTurnSnapshot,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<GatewayPromptAssembly> {
+  const { request, modelId } = prepared;
+  const executionRequest = await prepareDesktopChatPrompt(
+    deps,
+    request,
+    modelId,
+    executionAdmission,
+    signal,
+    correlationId,
+  );
+  return buildBufferedGatewayAssembly(
+    deps,
+    executionRequest,
+    memory,
+    modelId,
+    gatewayTurn,
+    correlationId,
+  );
+}
+
+function callPreparedAssembly(
+  model: BufferedModelPort,
+  modelId: string,
+  assembly: GatewayPromptAssembly,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<NormalizedResponse> {
+  return model.call(
+    {
+      modelId,
+      messages: assembly.messages,
+      ...gatewayAssemblyOutputAllocation(assembly),
+      stream: false,
+      logContext: { correlationId },
+    },
+    signal,
+  );
+}
+
 async function executeBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2264,12 +2364,13 @@ async function executeBufferedModelTurn(
   const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
-  const assembly = buildBufferedGatewayAssembly(
+  const assembly = await prepareBufferedGatewayAssembly(
     deps,
-    request,
+    prepared,
     memory,
-    modelId,
+    executionAdmission,
     gatewayTurn,
+    abortSignal,
     correlationId,
   );
   const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
@@ -2277,10 +2378,7 @@ async function executeBufferedModelTurn(
     settleRejectedDesktopChatTurn(deps, prepared, admitted);
     return model;
   }
-  const response = await model.call(
-    { modelId, messages: assembly.messages, stream: false, logContext: { correlationId } },
-    abortSignal,
-  );
+  const response = await callPreparedAssembly(model, modelId, assembly, abortSignal, correlationId);
   const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
   if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
@@ -3797,24 +3895,35 @@ async function buildRegenerateContext(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   correlationId: string | undefined,
+  signal: AbortSignal,
 ): Promise<{
   readonly memory: ConversationMemoryResultWire;
   readonly messages: readonly GatewayConversationMessage[];
+  readonly maxOutputTokens?: number;
 }> {
   const { modelId, turn, memoryRequest, memoryContext } = prepared;
   const memory =
     memoryContext === undefined
       ? emptyMemoryResult(false)
       : await buildMemoryResult(memoryRequest, deps, memoryContext);
-  const assembly = buildRegenerateGatewayAssembly(
+  const executionRequest = await prepareDesktopChatPrompt(
     deps,
     memoryRequest,
+    modelId,
+    prepared.executionAdmission,
+    signal,
+    correlationId,
+    "chat.regeneration.rejected",
+  );
+  const assembly = buildRegenerateGatewayAssembly(
+    deps,
+    executionRequest,
     memory,
     modelId,
     turn.beforeAssistant,
     correlationId,
   );
-  return { memory, messages: assembly.messages };
+  return { memory, messages: assembly.messages, ...gatewayAssemblyOutputAllocation(assembly) };
 }
 
 function validateRegenerateCommit(
@@ -3841,15 +3950,48 @@ function validateRegenerateCommit(
   return current.assistant;
 }
 
+function commitRegeneratedChatTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
+  response: NormalizedResponse,
+): RouteResult {
+  const { chat, modelId, memoryRequest } = prepared;
+  const redactedContent = deps.redactor(response.content) as string;
+  assertUsableAssistantContent(redactedContent, modelId);
+  const currentAssistant = validateRegenerateCommit(deps, prepared);
+  if (isRouteResult(currentAssistant)) return currentAssistant;
+  const assistantMessage = deps.store.createAssistantResponseVersion(
+    currentAssistant.id,
+    redactedContent,
+    Date.now(),
+  );
+  const updatedChat = commitChatAfterTurn(deps, chat, memoryRequest, modelId);
+  return {
+    status: 200,
+    body: {
+      chat: updatedChat,
+      messages: [assistantMessage],
+      usage: response.usage,
+      memory: { ...memory, actions: [] },
+    },
+  };
+}
+
 async function persistRegeneratedChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { chat, modelId, memoryRequest, executionAdmission } = prepared;
+  const { modelId, executionAdmission } = prepared;
   try {
-    const { memory, messages } = await buildRegenerateContext(deps, prepared, correlationId);
+    const { memory, messages, maxOutputTokens } = await buildRegenerateContext(
+      deps,
+      prepared,
+      correlationId,
+      signal,
+    );
     if (requestSignalAborted(signal)) return requestCancelledResult();
     const model = bufferedModelAtProviderBoundary(
       deps,
@@ -3860,29 +4002,17 @@ async function persistRegeneratedChatTurn(
     );
     if (isRouteResult(model)) return model;
     const response = await model.call(
-      { modelId, messages, stream: false, logContext: { correlationId } },
+      {
+        modelId,
+        messages,
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+        stream: false,
+        logContext: { correlationId },
+      },
       signal,
     );
     if (requestSignalAborted(signal)) return requestCancelledResult();
-    const redactedContent = deps.redactor(response.content) as string;
-    assertUsableAssistantContent(redactedContent, modelId);
-    const currentAssistant = validateRegenerateCommit(deps, prepared);
-    if (isRouteResult(currentAssistant)) return currentAssistant;
-    const assistantMessage = deps.store.createAssistantResponseVersion(
-      currentAssistant.id,
-      redactedContent,
-      Date.now(),
-    );
-    const updatedChat = commitChatAfterTurn(deps, chat, memoryRequest, modelId);
-    return {
-      status: 200,
-      body: {
-        chat: updatedChat,
-        messages: [assistantMessage],
-        usage: response.usage,
-        memory: { ...memory, actions: [] },
-      },
-    };
+    return commitRegeneratedChatTurn(deps, prepared, memory, response);
   } catch (error) {
     return signal.aborted
       ? requestCancelledResult()

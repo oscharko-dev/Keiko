@@ -183,17 +183,23 @@ test("loads local highlighting, pastes and scrolls code inside the Composer @smo
   const input = code.getByRole("textbox", { name: "Code input" });
   await code.locator(".view-lines").click();
   await input.press("ControlOrMeta+V");
-  await input.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
-  await expect(code.locator(".view-lines")).toContainText("const value0");
-  const slider = code.locator(".scrollbar.vertical .slider");
+  await code.hover();
+  await expect
+    .poll(() =>
+      code
+        .locator(".view-line span")
+        .evaluateAll((nodes) => new Set(nodes.map((node) => getComputedStyle(node).color)).size),
+    )
+    .toBeGreaterThan(1);
+  const slider = code.locator(
+    ".overflow-guard > .monaco-scrollable-element > .scrollbar.vertical > .slider",
+  );
   const before = await slider.boundingBox();
   expect(before).not.toBeNull();
   await code.hover();
-  await page.mouse.wheel(0, 400);
-  await expect
-    .poll(async () => (await slider.boundingBox())?.y ?? 0)
-    .toBeGreaterThan(before?.y ?? 0);
   await page.mouse.wheel(0, -400);
+  await expect.poll(async () => (await slider.boundingBox())?.y ?? 0).toBeLessThan(before?.y ?? 0);
+  await page.mouse.wheel(0, 400);
   await expect
     .poll(async () => (await slider.boundingBox())?.y ?? 0)
     .toBeCloseTo(before?.y ?? 0, 0);
