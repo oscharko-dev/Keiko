@@ -25,7 +25,12 @@ import {
   MAX_ACTIVE_CHAT_STREAMS_ENV,
   _resetActiveChatStreamsForTests,
 } from "./chat-stream-handlers.js";
-import { handleRegenerateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  handleRegenerateDesktopChat,
+  handleSendDesktopChat,
+  buildGatewayAssembly,
+  captureGatewayTurnSnapshot,
+} from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
   canonicalChatTurnIdentityContent,
@@ -533,7 +538,7 @@ function contextSelectionFixture(
   regenerate: boolean,
 ): {
   request: Record<string, unknown>;
-  expected: NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>;
+  expected: () => NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>;
 } {
   const chatId = seedChat();
   for (let index = 0; index < 30; index += 1) {
@@ -541,23 +546,39 @@ function contextSelectionFixture(
   }
   const profile = currentContextProfileForModel(dependencies, CHAT_MODEL);
   if (profile === undefined) throw new Error("Missing fixture profile");
-  const historyPrefix = store.listMessages(chatId);
-  const expected = selectGatewayPromptAssembly({
-    historyPrefix,
-    historyTurnCount: historyPrefix.length,
-    request: { content: "private-current-prompt", discussionMode: undefined },
-    profile,
-    memoryEntries: [],
-    documentContext: [],
-    redactionSecrets: [],
-  });
-  if (expected?.compaction === undefined) throw new Error("Expected compacted fixture");
   if (regenerate) {
     seedMessage(chatId, "user", "private-current-prompt");
     seedMessage(chatId, "assistant", "original-answer");
   }
   return {
-    expected,
+    expected: (): NonNullable<ReturnType<typeof selectGatewayPromptAssembly>> => {
+      const current = [...store.listMessages(chatId)]
+        .reverse()
+        .find((message) => message.role === "user" && message.content === "private-current-prompt");
+      if (current === undefined) throw new Error("Missing admitted fixture turn");
+      const request = {
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: current.content,
+        attachments: [],
+        documentContext: [],
+        memory: undefined,
+        discussionMode: undefined,
+      };
+      const snapshot = captureGatewayTurnSnapshot(dependencies, request, current);
+      const currentIndex = snapshot.history.findIndex((message) => message.id === current.id);
+      return buildGatewayAssembly(
+        dependencies,
+        request,
+        {
+          context: { enabled: false, text: "", memories: [], budget: { tokens: 0, used: 0 } },
+          actions: [],
+        },
+        CHAT_MODEL,
+        { ...snapshot, history: snapshot.history.slice(0, currentIndex + 1) },
+      );
+    },
     request: {
       chatId,
       projectPath: projectDir,
@@ -661,7 +682,7 @@ describe("desktop chat SSE streaming handler", () => {
     await handlers[mode](ctx, dependencies);
     expect(atProvider).toHaveLength(1);
     expect(sink.events.filter((event) => event.op === "chat.context.selected")).toEqual(atProvider);
-    assertContextSelectionEvidence(atProvider[0], fixture.expected);
+    assertContextSelectionEvidence(atProvider[0], fixture.expected());
   });
 
   it("rejects a tokenless plain stream on a grounded chat before admission or SSE", async () => {

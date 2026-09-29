@@ -72,6 +72,26 @@ function requiredSystemContent(
 }
 
 describe("conversationForGatewayWithCompaction — structured continuity summaries", () => {
+  it("preserves unlabelled German requirements with durable message provenance", () => {
+    const history = [
+      msg(
+        "user",
+        "Das Budget darf 75000 EUR nicht überschreiten.\nWir speichern Kundendokumente ausschließlich lokal.\n" +
+          "Older general discussion. ".repeat(2000),
+        0,
+      ),
+      msg("assistant", "Die Planung geht weiter.", 1),
+      msg("user", "Welche Budgetgrenze gilt?", 2),
+    ];
+    const outcome = conversationForGatewayWithCompaction(history, { effectiveInputBudget: 2_000 });
+    expect(requiredSystemContent(outcome)).toContain("75000 EUR");
+    expect(requiredSystemContent(outcome)).toContain("ausschließlich lokal");
+    expect(requiredCompaction(outcome).sourceSpans).toContainEqual({
+      kind: "message",
+      stableId: "m0",
+    });
+  });
+
   it("retains durable facts, decisions, constraints, questions, files, symbols, and references", () => {
     const outcome = compactStructuredHistory();
     const summary = requiredSystemContent(outcome);

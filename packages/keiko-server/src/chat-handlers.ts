@@ -3,6 +3,13 @@
 // model id, while provider endpoints and keys remain resolved from the local gateway config/.env.
 
 import type { IncomingMessage } from "node:http";
+import {
+  captureChatHistory,
+  stampHistoryRevision,
+  type GatewayHistorySnapshot,
+} from "./chat-history-snapshot.js";
+import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import {
@@ -1710,10 +1717,7 @@ export function commitChatAfterTurn(
 // #152 — assemble the exact gateway prompt from the history snapshot captured synchronously after
 // admission. Both buffered and streaming callers exclude the admitted user by stable message id and
 // append the request exactly once, so concurrent non-turn writers cannot mutate the in-flight prompt.
-export interface GatewayTurnSnapshot {
-  readonly history: readonly ChatMessage[];
-  readonly currentUserMessageId: string;
-}
+export type GatewayTurnSnapshot = GatewayHistorySnapshot;
 
 export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly ChatMessage[] {
   return snapshot.history.filter(
@@ -1726,14 +1730,30 @@ export function captureGatewayTurnSnapshot(
   request: SendDesktopChatRequest,
   userMessage: ChatMessage,
 ): GatewayTurnSnapshot {
-  return {
-    history: deps.store.listGatewayMessages(
+  const snapshot = captureChatHistory(
+    deps.store,
+    request.chatId,
+    userMessage.id,
+    currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    currentRedactionSecrets(deps),
+    loadChatContinuityCheckpoint(
+      deps.evidenceStore,
       request.chatId,
-      userMessage.id,
-      CHAT_HISTORY_READ_LIMIT,
+      deps.store.chatHistoryRevision(request.chatId),
     ),
-    currentUserMessageId: userMessage.id,
-  };
+  );
+  return snapshot.earlierCompaction === undefined
+    ? snapshot
+    : {
+        ...snapshot,
+        rehydratedContext: rehydrateChatHistory(
+          deps.store,
+          request.chatId,
+          request.content,
+          new Set(snapshot.history.map((message) => message.id)),
+          currentRedactionSecrets(deps),
+        ),
+      };
 }
 
 function finalizeGatewayAssembly(
@@ -1762,14 +1782,15 @@ export function buildGatewayAssembly(
   snapshot: GatewayTurnSnapshot,
   correlationId?: string,
 ): GatewayPromptAssembly {
-  const currentUserIndex = snapshot.history.findIndex(
+  const hasCurrentUser = snapshot.history.some(
     (message) => message.id === snapshot.currentUserMessageId,
   );
-  if (currentUserIndex < 0) {
+  if (!hasCurrentUser) {
     throw new UiStoreError("INTERNAL", "Admitted chat turn is missing from its history.", 500);
   }
   const historyPrefix = gatewayHistoryPrefix(snapshot);
   const selected = selectGatewayPromptAssembly({
+    proactiveCompaction: true,
     historyPrefix,
     historyTurnCount: usableGatewayMessages(historyPrefix).length,
     request: {
@@ -1779,11 +1800,38 @@ export function buildGatewayAssembly(
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
-    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
+    compactionContextText: buildChatCompactionContextText(
+      deps.evidenceStore,
+      request.chatId,
+      snapshot.historyRevision,
+    ),
+    continuityContextText: snapshot.rehydratedContext,
+    earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
   });
-  return finalizeGatewayAssembly(selected, request, correlationId);
+  return finalizeGatewayAssembly(
+    stampGatewayCompaction(selected, deps, modelId, snapshot),
+    request,
+    correlationId,
+  );
+}
+
+function stampGatewayCompaction(
+  selected: GatewayPromptAssembly | undefined,
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+  snapshot: GatewayTurnSnapshot,
+): GatewayPromptAssembly | undefined {
+  if (selected === undefined) return undefined;
+  return {
+    ...selected,
+    compaction: stampHistoryRevision(
+      selected.compaction,
+      snapshot.historyRevision ?? 0,
+      (currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE).maxInputTokens,
+    ),
+  };
 }
 
 // ADR-0173 D5 g9 — the INPUT shape of a chat turn, never its content: how many messages the
@@ -1932,30 +1980,22 @@ function buildRegenerateGatewayAssembly(
   historyBeforeAssistant: readonly ChatMessage[],
   correlationId: string | undefined,
 ): GatewayPromptAssembly {
-  let latestUserIndex = -1;
-  for (let index = historyBeforeAssistant.length - 1; index >= 0; index -= 1) {
-    if (historyBeforeAssistant[index]?.role === "user") {
-      latestUserIndex = index;
-      break;
-    }
-  }
-  const historyPrefix =
-    latestUserIndex < 0 ? historyBeforeAssistant : historyBeforeAssistant.slice(0, latestUserIndex);
-  const selected = selectGatewayPromptAssembly({
-    historyPrefix,
-    historyTurnCount: usableGatewayMessages(historyPrefix).length,
-    request: {
-      content: request.content,
-      discussionMode: request.discussionMode,
-      imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
+  const user = [...historyBeforeAssistant].reverse().find((message) => message.role === "user");
+  if (user === undefined)
+    throw new UiStoreError("INTERNAL", "Regeneration user turn is missing.", 500);
+  const snapshot = captureGatewayTurnSnapshot(deps, { ...request, modelId }, user);
+  const currentIndex = snapshot.history.findIndex((message) => message.id === user.id);
+  return buildGatewayAssembly(
+    deps,
+    request,
+    memory,
+    modelId,
+    {
+      ...snapshot,
+      history: snapshot.history.slice(0, currentIndex + 1),
     },
-    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    memoryEntries: memory.context.memories,
-    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
-    documentContext: request.documentContext,
-    redactionSecrets: currentRedactionSecrets(deps),
-  });
-  return finalizeGatewayAssembly(selected, request, correlationId);
+    correlationId,
+  );
 }
 
 function latestRegenerableTurn(

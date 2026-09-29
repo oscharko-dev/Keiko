@@ -39,24 +39,30 @@ export function gatewayConversationImageAccounting(
 
 function messageForGateway(
   message: ChatMessage,
-): { role: "user" | "assistant"; content: string } | null {
+): { role: "user" | "assistant"; content: string; stableId: string } | null {
   if (isLegacyEmptyAssistantPlaceholder(message)) {
     return null;
   }
   if (message.role !== "user" && message.role !== "assistant") {
     return null;
   }
-  return { role: message.role, content: message.content };
+  return { role: message.role, content: message.content, stableId: message.id };
+}
+
+export function usableGatewayTurns(
+  messages: readonly ChatMessage[],
+): { role: "user" | "assistant"; content: string; stableId: string }[] {
+  return messages
+    .map(messageForGateway)
+    .filter(
+      (message): message is NonNullable<ReturnType<typeof messageForGateway>> => message !== null,
+    );
 }
 
 export function usableGatewayMessages(
   messages: readonly ChatMessage[],
 ): { role: "user" | "assistant"; content: string }[] {
-  return messages
-    .map(messageForGateway)
-    .filter(
-      (message): message is { role: "user" | "assistant"; content: string } => message !== null,
-    );
+  return usableGatewayTurns(messages).map(({ role, content }) => ({ role, content }));
 }
 
 export function conversationForGateway(

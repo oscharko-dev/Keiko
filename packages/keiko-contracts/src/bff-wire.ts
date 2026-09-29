@@ -438,6 +438,25 @@ export interface ChatsResponse {
   readonly chats: readonly Chat[];
 }
 
+/** Body-free projection of the selected model's usable conversation window. */
+export interface ChatContextStatusWire {
+  readonly modelId: string;
+  readonly contextWindowTokens: number;
+  readonly inputBudgetTokens: number;
+  readonly reservedOutputTokens: number;
+  readonly safetyMarginTokens: number;
+  readonly estimatedInputTokens: number;
+  readonly canCompact: boolean;
+  readonly compaction?:
+    | {
+        readonly tokensBefore: number;
+        readonly tokensAfter: number;
+        readonly tokensSaved: number;
+        readonly messagesCompacted: number;
+      }
+    | undefined;
+}
+
 export interface ChatResponse {
   readonly chat: Chat;
 }

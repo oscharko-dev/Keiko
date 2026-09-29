@@ -114,6 +114,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "evidence-retention-log", surface: "runtime-packages" },
   { owner: "keiko-server", emitterPrefix: "gateway-instance-cache", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-readiness", surface: "model-gateway" },
+  { owner: "keiko-server", emitterPrefix: "chat-context-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "gateway-setup", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-discovery-log", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-spend-budget", surface: "model-gateway" },

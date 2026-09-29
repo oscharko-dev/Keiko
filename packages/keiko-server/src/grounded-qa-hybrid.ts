@@ -178,6 +178,7 @@ export type ConnectorRetrieve = (
 export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
 export interface HybridGroundedAskCtx {
+  readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly content: string;
   readonly answerContent?: string | undefined;
@@ -451,7 +452,7 @@ async function rerankHybridSelection(
 ): Promise<HybridRerankedSelection> {
   const result = await rerankSelection({
     deps: ctx.deps,
-    query: ctx.content,
+    query: ctx.retrievalContent ?? ctx.content,
     candidates: preliminary,
     documentFor: (candidate) => candidate.redactedText,
     topN: limits.maxPromptReferences,
@@ -1978,7 +1979,7 @@ async function runHybridWithStore(
   const capped = capSourcesToLimits(ctx, limits);
   const resolved = resolveConnectorScopes(capped.connectorScopes, store);
   if ("status" in resolved) return resolved;
-  const query = buildQuery(ctx.content, () => Date.now());
+  const query = buildQuery(ctx.retrievalContent ?? ctx.content, () => Date.now());
   const [rawFolderResult, connectorResult] = await Promise.all([
     retrieveFolderPacks(
       ctx,

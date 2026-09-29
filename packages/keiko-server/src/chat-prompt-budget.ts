@@ -1,5 +1,6 @@
 import type {
   ContextAssemblyDiagnostics,
+  ContextCompactionRecord,
   ContextProfile,
   ConversationDocumentContextWire,
   DiscussionMode,
@@ -31,7 +32,10 @@ import {
   conversationForGatewayWithCompaction,
   type ConversationCompactionOutcome,
 } from "./conversation-compaction.js";
-import { buildPromptAssemblyDiagnostics } from "./chat-prompt-budget-diagnostics.js";
+import {
+  buildPromptAssemblyDiagnostics,
+  withDeploymentContextProfile,
+} from "./chat-prompt-budget-diagnostics.js";
 import { buildChatCompactionResurfacingContext } from "./chat-compaction-resurfacing.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 
@@ -44,6 +48,8 @@ export interface GatewayPromptAssembly {
 }
 
 interface PromptAssemblyInput {
+  readonly continuityContextText?: string | undefined;
+  readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly historyPrefix: readonly ChatMessage[];
   readonly historyTurnCount: number;
   readonly request: {
@@ -347,6 +353,7 @@ function compactHistoryForBudget(
   try {
     return conversationForGatewayWithCompaction(input.historyPrefix, {
       contextProfile: input.profile,
+      earlierCompaction: input.earlierCompaction,
       effectiveInputBudget: historyBudget,
       preserveNewestTurn: false,
       redactionSecrets: input.redactionSecrets,
@@ -390,9 +397,15 @@ function buildPromptMessages(
   historyOutcome: ConversationCompactionOutcome,
   latestTurn: string,
   compactionContextText: string | undefined,
+  rehydratedContext: string | undefined,
 ): GatewayPromptAssembly["messages"] {
+  const [first, ...rest] = historyOutcome.messages;
+  const history =
+    first?.role === "system" && rehydratedContext !== undefined
+      ? [{ ...first, content: `${first.content}\n\n${rehydratedContext}` }, ...rest]
+      : historyOutcome.messages;
   return [
-    ...insertSystemScopedCompactionContext(historyOutcome.messages, compactionContextText),
+    ...insertSystemScopedCompactionContext(history, compactionContextText),
     { role: "user" as const, content: latestTurn },
   ];
 }
@@ -401,19 +414,25 @@ function assembleGatewayPromptCandidate(
   input: PromptAssemblyInput,
 ): GatewayPromptAssembly | undefined {
   const latestTurn = buildLatestUserTurn(input);
+  const continuityContext =
+    [input.continuityContextText, input.compactionContextText]
+      .filter((text): text is string => text !== undefined)
+      .join("\n\n") || undefined;
   const scaffoldTokens = promptScaffoldTokens(
     latestTurn,
-    input.compactionContextText,
+    continuityContext,
     input.profile,
     input.request.imageCount,
   );
-  if (scaffoldTokens > input.profile.effectiveInputBudget) {
-    return undefined;
-  }
-  const historyBudget = input.profile.effectiveInputBudget - scaffoldTokens;
-  const historyOutcome = compactHistoryForBudget(input, historyBudget);
+  if (scaffoldTokens > input.profile.effectiveInputBudget) return undefined;
+  const historyOutcome = fitHistoryProjection(input, latestTurn);
   if (historyOutcome === undefined) return undefined;
-  const messages = buildPromptMessages(historyOutcome, latestTurn, input.compactionContextText);
+  const messages = buildPromptMessages(
+    historyOutcome,
+    latestTurn,
+    input.compactionContextText,
+    input.continuityContextText,
+  );
   const accountedMessages = gatewayConversationImageAccounting(messages, input.request.imageCount);
   if (
     countGatewayPromptTokens({ messages: accountedMessages }, input.profile.tokenAccounting, {
@@ -442,7 +461,38 @@ function assembleGatewayPromptCandidate(
   };
 }
 
-export function selectGatewayPromptAssembly(input: {
+function fitHistoryProjection(
+  input: PromptAssemblyInput,
+  latestTurn: string,
+): ConversationCompactionOutcome | undefined {
+  // Recount the actual retained projection: reserving framing for every original message can
+  // itself exhaust a small window even after those messages have been compacted away.
+  let remaining = input.profile.effectiveInputBudget;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const outcome = compactHistoryForBudget(input, remaining);
+    if (outcome === undefined) return undefined;
+    const messages = buildPromptMessages(
+      outcome,
+      latestTurn,
+      input.compactionContextText,
+      input.continuityContextText,
+    );
+    const overflow =
+      countGatewayPromptTokens(
+        { messages: gatewayConversationImageAccounting(messages, input.request.imageCount) },
+        input.profile.tokenAccounting,
+        { contextWindow: input.profile.maxInputTokens },
+      ) - input.profile.effectiveInputBudget;
+    if (overflow <= 0) return outcome;
+    remaining -= overflow;
+    if (remaining < 0) return undefined;
+  }
+  return undefined;
+}
+
+function assembleSelectedGatewayPrompt(input: {
+  readonly continuityContextText?: string | undefined;
+  readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly historyPrefix: readonly ChatMessage[];
   readonly historyTurnCount: number;
   readonly request: {
@@ -457,6 +507,8 @@ export function selectGatewayPromptAssembly(input: {
   readonly redactionSecrets: readonly string[];
 }): GatewayPromptAssembly | undefined {
   const baseInput = {
+    continuityContextText: input.continuityContextText,
+    earlierCompaction: input.earlierCompaction,
     historyPrefix: input.historyPrefix,
     historyTurnCount: input.historyTurnCount,
     request: input.request,
@@ -467,14 +519,7 @@ export function selectGatewayPromptAssembly(input: {
     compactionContextText: input.compactionContextText,
     redactionSecrets: input.redactionSecrets,
   };
-  const selection = selectPromptLanes({
-    profile: input.profile,
-    request: input.request,
-    historyPrefix: input.historyPrefix,
-    memoryEntries: input.memoryEntries,
-    compactionContextText: input.compactionContextText,
-    documentContext: input.documentContext,
-  });
+  const selection = selectPromptLanes(input);
   for (const variant of promptLaneSelectionVariants(selection)) {
     const candidate = assembleGatewayPromptCandidate({
       ...baseInput,
@@ -493,6 +538,35 @@ export function selectGatewayPromptAssembly(input: {
 export function buildChatCompactionContextText(
   evidenceStore: EvidenceStore,
   chatId: string,
+  historyRevision?: number,
 ): string | undefined {
-  return buildChatCompactionResurfacingContext(evidenceStore, chatId);
+  return buildChatCompactionResurfacingContext(evidenceStore, chatId, historyRevision);
+}
+
+export function selectGatewayPromptAssembly(
+  input: Parameters<typeof assembleSelectedGatewayPrompt>[0] & {
+    readonly proactiveCompaction?: boolean;
+  },
+): GatewayPromptAssembly | undefined {
+  const candidate = assembleSelectedGatewayPrompt(input);
+  if (candidate === undefined || input.proactiveCompaction !== true) return candidate;
+  const before = countGatewayPromptTokens(
+    { messages: candidate.messages },
+    input.profile.tokenAccounting,
+  );
+  if (before < input.profile.effectiveInputBudget * 0.9) return candidate;
+  const compacted = assembleSelectedGatewayPrompt({
+    ...input,
+    profile: {
+      ...input.profile,
+      effectiveInputBudget: Math.floor(input.profile.effectiveInputBudget * 0.7),
+    },
+  });
+  if (compacted?.compaction === undefined) return candidate;
+  // Proactive maintenance must not remove this turn's attachments or retrieved memories.
+  if (compacted.messages.at(-1)?.content !== candidate.messages.at(-1)?.content) return candidate;
+  return {
+    ...compacted,
+    diagnostics: withDeploymentContextProfile(compacted.diagnostics, input.profile),
+  };
 }

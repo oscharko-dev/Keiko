@@ -155,6 +155,7 @@ function redactModelSummary(
   redact: Redactor,
 ): ContextCompactionModelSummary {
   return {
+    ...(summary.coveredItems === undefined ? {} : { coveredItems: summary.coveredItems }),
     promptVersion: summary.promptVersion,
     modelId: redactedPathSafe(summary.modelId, redact),
     ...(summary.status === undefined ? {} : { status: summary.status }),
@@ -255,6 +256,17 @@ function redactScalarFields(
   redact: Redactor,
 ): Partial<ContextCompactionRecord> {
   return {
+    ...(record.conversationCoverage === undefined
+      ? {}
+      : {
+          conversationCoverage: {
+            ...record.conversationCoverage,
+            throughMessageId: redactedPathSafe(
+              record.conversationCoverage.throughMessageId,
+              redact,
+            ),
+          },
+        }),
     ...(record.summaryRefHash === undefined
       ? {}
       : { summaryRefHash: redactedPathSafe(record.summaryRefHash, redact) }),

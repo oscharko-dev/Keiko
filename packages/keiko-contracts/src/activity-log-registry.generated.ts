@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "eb0d93554962247edeecfe20430c87f904e740d45e4b5005ed16986b334d4c40" as const;
+  "5b07400af7e395dc43f6287db2326dbaab068186e2644b0a33e20104b50bc18b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -880,6 +880,53 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["compaction-fact-classification"],
     proofIds: ["chat.compaction.facts.classified.line"],
     releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "chat.context.management",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "chat-context-log.logChatContextManagement",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["inspected", "compacted", "unchanged", "failed", "summary-discarded"],
+      },
+      inputTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      inputBudget: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      tokensSaved: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-context-management"],
+    proofIds: ["chat.context.management.line"],
+    releaseImpact: "minor",
   },
   {
     contractKind: "activity-log-operation",
@@ -29078,8 +29125,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 325,
-  completeClassCount: 325,
+  supportedClassCount: 326,
+  completeClassCount: 326,
   completeness: "complete",
   classes: [
     {
@@ -30790,6 +30837,74 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["chat.send.rejected.reason"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "chat-context-management",
+      requirementContract: "chat-context-management",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["chat.context.management"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "chat.context.management",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["chat.context.management"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "chat.context.management",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "inputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "inputTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "tokensSaved",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["chat.context.management.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -64169,6 +64284,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "activity-log.writer-rejected": "lifecycle-crash",
     "atlassian.credential.rejected": "bff",
     "chat.compaction.facts.classified": "bff",
+    "chat.context.management": "bff",
     "chat.context.selected": "bff",
     "chat.creation.rejected": "bff",
     "chat.regeneration.rejected": "bff",

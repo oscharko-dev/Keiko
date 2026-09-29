@@ -16,6 +16,7 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 
 export const CHAT_COMPACTION_CONTEXT_HEADER = "# Persisted compaction context";
 
@@ -58,12 +59,50 @@ const MAX_LINE_CHARS = 220;
 export function buildChatCompactionResurfacingContext(
   store: EvidenceStore,
   chatId: string,
+  historyRevision?: number,
 ): string | undefined {
   try {
-    return renderRecords(loadChatCompactionRecords(store, chatId));
-  } catch {
+    const records = loadChatCompactionRecords(store, chatId);
+    return renderRecords(
+      historyRevision === undefined
+        ? records
+        : records
+            .filter(
+              ({ record }) => record.conversationCoverage?.historyRevision === historyRevision,
+            )
+            .slice(-1),
+    );
+  } catch (error) {
+    recordReadFailure(error, sha256Hex(chatId));
     return undefined;
   }
+}
+
+export function loadChatContinuityCheckpoint(
+  store: EvidenceStore,
+  chatId: string,
+  historyRevision: number,
+): ContextCompactionRecord | undefined {
+  try {
+    return [...loadChatCompactionRecords(store, chatId)]
+      .reverse()
+      .find(({ record }) => record.conversationCoverage?.historyRevision === historyRevision)
+      ?.record;
+  } catch (error) {
+    recordReadFailure(error, sha256Hex(chatId));
+    return undefined;
+  }
+}
+
+function recordReadFailure(error: unknown, correlationId: string): void {
+  emitServerDiagnostic(undefined, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "chat.compaction.read",
+    source: "chat-compaction-resurfacing",
+    errorClass: contentFreeErrorClass(error),
+    message: "Audit or evidence persistence failed.",
+  });
 }
 
 // Feature-detect the node adapter's prefix-scoped listing (GEN-PERF-CHAT-005). When present it filters
@@ -148,7 +187,8 @@ function recordForResurfacing(
 function safeLoad(store: EvidenceStore, runId: string): EvidenceManifest | undefined {
   try {
     return loadEvidence(store, runId);
-  } catch {
+  } catch (error) {
+    recordReadFailure(error, runId);
     return undefined;
   }
 }
@@ -304,6 +344,8 @@ function formatHandle(handle: ContextRehydrationHandle | undefined): string | un
 }
 
 function formatRef(ref: ContextProvenanceRef): string | undefined {
+  if (ref.kind === "message")
+    return `Original chat message ${ref.stableId} is available for bounded rehydration.`;
   if (ref.notPersistedReason !== undefined) {
     return `${ref.stableId} is not directly rehydratable: ${ref.notPersistedReason}`;
   }

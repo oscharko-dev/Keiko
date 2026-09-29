@@ -285,26 +285,12 @@ export function AttachDropZone({ enabled, onFiles }: AttachDropZoneProps): React
 
 // ─── AttachButton ────────────────────────────────────────────────────────────
 
-// Stable ids for aria-describedby chains.
-const ATTACH_DISABLED_HINT_ID = "cmp-attach-disabled-hint";
-
 interface AttachButtonProps {
   readonly model: ModelCapability | undefined;
   readonly onFiles: (files: readonly File[]) => void;
-  /**
-   * uiux-fix F040 C207 — whether ANY configured model supports attachments.
-   * When false, the sr-only hint must not suggest switching models (there is
-   * no model the user could switch to). Defaults to true for callers that do
-   * not know the full model list.
-   */
-  readonly anyModelSupportsAttachments?: boolean;
 }
 
-export function AttachButton({
-  model,
-  onFiles,
-  anyModelSupportsAttachments = true,
-}: AttachButtonProps): ReactNode {
+export function AttachButton({ model, onFiles }: AttachButtonProps): ReactNode {
   const t = useTranslate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -326,16 +312,10 @@ export function AttachButton({
     }
   }, [onFiles]);
 
+  if (!supportsAny) return null;
+
   return (
     <>
-      {/* Visually-hidden hint so screen readers discover why the button is disabled */}
-      {!supportsAny ? (
-        <span id={ATTACH_DISABLED_HINT_ID} className="sr-only">
-          {anyModelSupportsAttachments
-            ? t("attachment.disabledDifferentModel")
-            : t("attachment.disabledNoModel")}
-        </span>
-      ) : null}
       {/* Hidden file input — triggered imperatively by the button */}
       <input
         ref={fileInputRef}
@@ -351,9 +331,7 @@ export function AttachButton({
         type="button"
         className="cmp-icon cmp-tip-start"
         aria-label={t("attachment.attachFile")}
-        aria-disabled={!supportsAny ? "true" : undefined}
-        aria-describedby={!supportsAny ? ATTACH_DISABLED_HINT_ID : undefined}
-        data-tip={supportsAny ? t("attachment.attachFile") : t("attachment.notSupported")}
+        data-tip={t("attachment.attachFile")}
         onClick={handleClick}
       >
         <PlusIcon size={16} />

@@ -191,6 +191,36 @@ function seedChat(): string {
   return store.createChat(projectDir, "Untitled chat", CHAT_MODEL).id;
 }
 
+it("never relabels a delayed checkpoint with a newer conversation revision", () => {
+  const chatId = seedChat();
+  const evidenceStore = createInMemoryEvidenceStore();
+  const revision = vi.spyOn(store, "chatHistoryRevision").mockReturnValue(7);
+  persistChatCompactionEvidence(deps(bufferedModel("answer"), evidenceStore, true), {
+    chatId,
+    modelId: CHAT_MODEL,
+    messageCount: 4,
+    startedAt: 1,
+    finishedAt: 2,
+    compaction: {
+      schemaVersion: "1",
+      laneId: "history-summary",
+      reason: "budget",
+      itemsBefore: 2,
+      itemsAfter: 1,
+      tokensBefore: 100,
+      tokensAfter: 20,
+      conversationCoverage: {
+        version: 1,
+        throughMessageId: "earlier-assistant",
+        historyRevision: 3,
+      },
+    },
+  });
+  const manifest = loadEvidence(evidenceStore, `chat-${sha256Hex(chatId).slice(0, 16)}-t4`);
+  expect(manifest?.compaction?.[0]?.conversationCoverage?.historyRevision).toBe(3);
+  revision.mockRestore();
+});
+
 // Seeds `count` alternating user/assistant turns. The first dropped user turn carries the config
 // secret so the redaction gate has something concrete to scrub.
 function seedHistory(chatId: string, count: number): void {

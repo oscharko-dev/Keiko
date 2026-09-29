@@ -159,7 +159,7 @@ function readOpaqueSource(input: {
   };
 }
 
-function readMessage(
+export function rehydrateMessage(
   stableId: string,
   deps: RehydrationDeps | undefined,
   maxBytes: number | undefined,
@@ -204,7 +204,7 @@ export async function rehydrateProvenanceRef(
     return readToolResultArtifact(ref.stableId, deps, maxBytes);
   }
   if (ref.kind === "message") {
-    return readMessage(ref.stableId, deps, maxBytes);
+    return rehydrateMessage(ref.stableId, deps, maxBytes);
   }
   if (ref.kind === "evidence-atom") {
     return readEvidenceAtom(ref.evidenceAtomId ?? ref.stableId, deps, maxBytes);

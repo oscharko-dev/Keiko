@@ -46,12 +46,13 @@ export function persistChatCompactionEvidence(
   if (input.compaction === undefined) {
     return;
   }
-  const record = input.compaction;
+  const originalRecord = input.compaction;
   // Computed before the try so a persistence failure can still report under it (ADR-0173 D5 /
   // g12): this run's own runId already ties the diagnostic back to the SAME compaction evidence
   // attempt an operator would otherwise have to guess at from a disconnected mint.
   let runId: string | undefined;
   try {
+    const record = originalRecord;
     const chatIdHash = sha256Hex(input.chatId);
     runId = compactionRunId(chatIdHash, input.messageCount);
     persistCompactionEvidence(

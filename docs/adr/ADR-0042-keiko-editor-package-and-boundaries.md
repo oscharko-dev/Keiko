@@ -97,6 +97,17 @@ internal module layout kept split-ready.
 
 ### D2 — Browser-tier dependency direction and monorepo-gate integration
 
+The chat composer also embeds code editors (2026-09-28, PR #3664). Its CommonMark document,
+selection and undo history are owned by ProseMirror in `keiko-ui`; the existing chat session still
+owns the draft as Markdown text. A code node lazily imports the same local Monaco runtime,
+language registration and token-derived Keiko themes as the file editor. The composer does not
+load file models, language-server bridges, repository authority or editor save actions. Markdown
+images and links are inert while composing, and pasted HTML is not rendered. Code editors are
+disposed with their nodes; a loading or unavailable editor retains an editable plain-text field.
+The outgoing prompt remains Markdown, including fences long enough to contain backticks in code.
+This adds no provider, persistence or network path. Composer lifecycle and bounded failure notices
+use the existing client diagnostic sink without draft text or code.
+
 `@oscharko-dev/keiko-editor` inherits the browser-tier trust boundary: it must not value-import
 Node-domain packages (`keiko-model-gateway`, `keiko-workspace`, `keiko-tools`, `keiko-harness`,
 `keiko-workflows`, `keiko-evidence`, `keiko-server`, `keiko-quality-intelligence`,

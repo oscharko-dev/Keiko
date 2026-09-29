@@ -52,6 +52,11 @@ import {
 
 let runtimeConfigured = false;
 
+/** Reuse this sole Monaco import for lazy, embedded composer code editors. */
+export function getMonacoNamespace(): typeof monaco {
+  return monaco;
+}
+
 const optionalLanguageLoaders = {
   go: () => import("monaco-editor/languages/definitions/go/register.js"),
   java: () => import("monaco-editor/languages/definitions/java/register.js"),
@@ -137,6 +142,10 @@ export function ensureMonacoRuntime(): EditorRuntimeStatus {
     );
     configureMonacoLoader(loader, monaco);
     registerJsonLanguageId(monaco);
+    monaco.editor.onDidCreateEditor((editor) => {
+      // The model view does not exist yet during creation; the host is already available.
+      editor.getContainerDomNode().dataset.workspaceScrollOwner = "virtual";
+    });
     runtimeConfigured = true;
   }
   return status;

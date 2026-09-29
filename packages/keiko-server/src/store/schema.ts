@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 38;
+export const SCHEMA_VERSION = 39;
 
 interface Migration {
   readonly version: number;
@@ -1408,6 +1408,33 @@ ALTER TABLE task_workspace_instances ADD COLUMN execution_location TEXT NOT NULL
   CHECK (execution_location IN ('local', 'worktree'));
 `;
 
+// Checkpoints survive append-only turns but are invalidated by edits, completion-state changes,
+// regeneration, or deletion. A new user turn is an INSERT and does not invalidate a saved prefix.
+const V39_SQL = `
+ALTER TABLE chats ADD COLUMN history_revision INTEGER NOT NULL DEFAULT 0;
+CREATE TRIGGER chat_history_revision_update AFTER UPDATE ON chat_messages
+WHEN OLD.content IS NOT NEW.content OR OLD.role IS NOT NEW.role
+  OR OLD.timestamp IS NOT NEW.timestamp
+  OR (OLD.client_turn_id IS NOT NEW.client_turn_id AND NOT (
+    OLD.role = 'assistant' AND OLD.client_turn_id IS NULL AND NEW.client_turn_id IS NOT NULL
+    AND EXISTS (SELECT 1 FROM chat_messages AS owner
+      WHERE owner.chat_id = NEW.chat_id AND owner.client_turn_id = NEW.client_turn_id
+        AND owner.role = 'user' AND owner.client_turn_state = 'pending')
+  ))
+  OR (OLD.client_turn_state IS NOT NEW.client_turn_state AND OLD.client_turn_state IS NOT 'pending')
+BEGIN
+  UPDATE chats SET history_revision = history_revision + 1 WHERE id = OLD.chat_id;
+END;
+CREATE TRIGGER chat_history_revision_backdated_insert AFTER INSERT ON chat_messages
+WHEN EXISTS (SELECT 1 FROM chat_messages WHERE chat_id = NEW.chat_id AND timestamp > NEW.timestamp)
+BEGIN
+  UPDATE chats SET history_revision = history_revision + 1 WHERE id = NEW.chat_id;
+END;
+CREATE TRIGGER chat_history_revision_delete AFTER DELETE ON chat_messages BEGIN
+  UPDATE chats SET history_revision = history_revision + 1 WHERE id = OLD.chat_id;
+END;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -1450,6 +1477,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 36, sql: V36_SQL },
   { version: 37, sql: V37_SQL },
   { version: 38, sql: V38_SQL },
+  { version: 39, sql: V39_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

@@ -1,4 +1,10 @@
 import { logChatResponseMessage } from "./chat-activity.js";
+import {
+  groundedConversationContinuity,
+  type GroundedConversationContinuity,
+} from "./grounded-conversation-continuity.js";
+import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 // BFF route POST /api/chats/messages/grounded (Issue #185 / Epic #177). Composes the
 // orchestrator's pure pipeline with the UiStore so a single HTTP round trip persists both
 // the user question and the assistant answer alongside a redacted citation projection.
@@ -285,6 +291,7 @@ export function isValidGroundedPack(pack: ConnectedContextPack): boolean {
 }
 
 export interface AskInput {
+  readonly retrievalContent?: string | undefined;
   readonly chatId: string;
   readonly content: string;
   readonly clientTurnId?: string | undefined;
@@ -696,6 +703,7 @@ export function groundedPromptInputTokensForCapability(
 
 export interface GroundedGatewayPromptOptions {
   readonly modelInputTokensMax?: number | undefined;
+  readonly tokenAccounting?: ContextProfile["tokenAccounting"];
 }
 
 function withPromptModelInputBudget(
@@ -833,10 +841,12 @@ function promptBudgetedMessages(
 ): readonly GatewayChatMessage[] {
   const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
+  const fits = (candidate: readonly GatewayChatMessage[]): boolean =>
+    promptByteLength(candidate) <= limit &&
+    countGatewayPromptTokens({ messages: candidate }, options.tokenAccounting) <=
+      budgetedPack.budget.modelInputTokensMax;
   const messages = build(question, budgetedPack, redactor);
-  if (promptByteLength(messages) <= limit) return messages;
-  const excerptCount = packExcerptCount(budgetedPack);
-  if (excerptCount === 0) return messages;
+  if (fits(messages)) return messages;
 
   const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
@@ -844,7 +854,7 @@ function promptBudgetedMessages(
   // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
   // excerpt trimming can bring the prompt within budget. Throw instead of sending an over-limit
   // prompt to the provider which would result in an opaque 400 context-window error.
-  if (overheadBytes > limit) {
+  if (!fits(emptyMessages)) {
     throw new ContextOverflowError(
       `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
@@ -859,7 +869,7 @@ function promptBudgetedMessages(
       withPromptExcerptBudget(budgetedPack, totalExcerptBytes),
       redactor,
     );
-    if (promptByteLength(candidate) <= limit) {
+    if (fits(candidate)) {
       best = candidate;
       low = totalExcerptBytes + 1;
     } else {
@@ -979,11 +989,15 @@ function createGatewayAnswerer(
   signal: AbortSignal,
   modelInputTokensMax: number | undefined,
   correlationId: string | undefined,
+  tokenAccounting: ContextProfile["tokenAccounting"],
 ): GroundedAnswerer {
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
       ensureNotCancelled(signal);
-      const promptOptions = modelInputTokensMax === undefined ? undefined : { modelInputTokensMax };
+      const promptOptions = {
+        ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
+        ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
+      };
       const response = await model.call(
         {
           modelId,
@@ -1059,6 +1073,7 @@ function runDefaultGroundedExploration(
       signal,
       modelInputTokensMax,
       runnerCtx.correlationId,
+      contextProfile?.tokenAccounting,
     ),
     nowMs,
     signal,
@@ -1221,6 +1236,7 @@ function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
 // ─── Route worker (extracted to keep handleGroundedAsk under the LOC bound) ───
 
 interface AskWorkerCtx {
+  readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly scope: SelectedScope;
   readonly content: string;
@@ -1241,6 +1257,7 @@ interface AskWorkerCtx {
 }
 
 interface PreparedGroundedAsk {
+  readonly continuity?: GroundedConversationContinuity | undefined;
   readonly chat: Chat;
   readonly input: AskInput;
   readonly signal: AbortSignal;
@@ -1470,7 +1487,7 @@ function persistGroundedAuditEvidence(
 
 async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const { content, deps } = workerCtx;
-  const query = buildQuery(content, () => Date.now());
+  const query = buildQuery(workerCtx.retrievalContent ?? content, () => Date.now());
   const output = await runGroundedRunner(workerCtx, query);
   if (isRouteResult(output)) return output;
   if (!isValidGroundedPack(output.pack)) {
@@ -1715,6 +1732,7 @@ async function dispatchMultiSourceAsk(
     chat,
     scopes,
     content: input.content,
+    retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
     answerOnlyContextAvailable: hasAnswerOnlyContext(args),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
@@ -1810,6 +1828,7 @@ async function dispatchFolderAsk(
     chat,
     scope,
     content: input.content,
+    retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
     answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
@@ -1867,6 +1886,7 @@ async function dispatchHybridAsk(
   return runHybridGroundedAsk({
     chat,
     content: input.content,
+    retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
     answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
@@ -2035,6 +2055,44 @@ function groundedTurnConflict(
   };
 }
 
+function withGroundedContinuity(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): PreparedGroundedAsk {
+  const continuity = groundedConversationContinuity(
+    deps,
+    admittedGroundedUser(prepared),
+    groundedModelId(prepared),
+  );
+  return {
+    ...prepared,
+    continuity,
+    input: {
+      ...prepared.input,
+      retrievalContent: continuity.retrievalContent,
+      answerContent: [continuity.answerContext, prepared.input.content]
+        .filter(Boolean)
+        .join("\n\n"),
+    },
+  };
+}
+
+function persistGroundedContinuity(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  result: RouteResult,
+): void {
+  if (result.status !== 200) return;
+  persistChatCompactionEvidence(deps, {
+    compaction: prepared.continuity?.compaction,
+    chatId: prepared.chat.id,
+    modelId: groundedModelId(prepared),
+    messageCount: deps.store.countMessages(prepared.chat.id),
+    startedAt: Date.now(),
+    finishedAt: Date.now(),
+  });
+}
+
 function groundedAnswerContent(content: string, memory: ConversationMemoryResultWire): string {
   const memoryText = memory.context.text.trim();
   if (!memory.context.enabled || memoryText.length === 0) return content;
@@ -2061,7 +2119,10 @@ function withPreparedGroundedMemory(
     ...prepared,
     input: {
       ...prepared.input,
-      answerContent: groundedAnswerContent(prepared.input.content, result),
+      answerContent: groundedAnswerContent(
+        prepared.input.answerContent ?? prepared.input.content,
+        result,
+      ),
     },
     memory: {
       context,
@@ -2147,7 +2208,10 @@ async function runAdmittedGroundedAsk(
 ): Promise<RouteResult> {
   let stagedAssistantId: string | undefined;
   try {
-    const memoryPrepared = await prepareGroundedMemory(admitted, deps);
+    const memoryPrepared = await prepareGroundedMemory(
+      withGroundedContinuity(admitted, deps),
+      deps,
+    );
     ensureNotCancelled(admitted.signal);
     if (isRouteResult(memoryPrepared)) {
       return settleGroundedChatTurn(admitted, deps, memoryPrepared);
@@ -2173,7 +2237,9 @@ async function runAdmittedGroundedAsk(
     ensureNotCancelled(memoryPrepared.signal);
     const withMemory = await attachGroundedMemory(memoryPrepared, deps, result);
     ensureNotCancelled(memoryPrepared.signal);
-    return settleGroundedChatTurn(memoryPrepared, deps, withMemory);
+    const settled = settleGroundedChatTurn(memoryPrepared, deps, withMemory);
+    persistGroundedContinuity(memoryPrepared, deps, settled);
+    return settled;
   } catch (error) {
     if (stagedAssistantId !== undefined) discardGroundedTurn(stagedAssistantId);
     deps.store.failChatTurn(admitted.chat.id, groundedCommitTurnId(admitted));

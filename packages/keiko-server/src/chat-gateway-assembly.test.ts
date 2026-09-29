@@ -6,11 +6,12 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
   buildGatewayAssembly,
+  captureGatewayTurnSnapshot,
   type GatewayTurnSnapshot,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
-import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { Gateway, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
   ContextProfile,
@@ -19,6 +20,7 @@ import type {
 import {
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfile,
+  deriveContextProfileFromCapability,
   estimateTokensForSegments,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
@@ -210,6 +212,33 @@ function makeRequest(
 }
 
 describe("buildGatewayAssembly", () => {
+  it("keeps a budget-safe fact beyond the former 48-message read boundary", () => {
+    const { store, chatId } = createStore();
+    seedHistory(
+      chatId,
+      store,
+      Array.from({ length: 60 }, (_, index) =>
+        index === 0 ? "Das Budget beträgt 75000 EUR." : `Planning turn ${String(index)}.`,
+      ),
+    );
+    const current = store.createMessage(
+      createMessage(chatId, "user", "Welche Budgetgrenze gilt?", NOW + 100),
+    );
+    const deps = createDeps(store, DEFAULT_CONTEXT_PROFILE);
+    const request = makeRequest(chatId, current.content);
+    const snapshot = captureGatewayTurnSnapshot(deps, request, current);
+    const assembly = buildGatewayAssembly(
+      deps,
+      request,
+      makeMemoryResult([]),
+      CHAT_MODEL,
+      snapshot,
+    );
+    expect(assembly.messages.map((message) => message.content).join("\n")).toContain("75000 EUR");
+    expect(assembly.compaction).toBeUndefined();
+    store.close();
+  });
+
   it("keeps the final prompt within the effective budget after trimming memory, docs, and history", () => {
     const { store, chatId } = createStore();
     seedHistory(chatId, store, ["history turn 0 " + "x".repeat(24)]);
@@ -667,4 +696,210 @@ describe("buildGatewayAssembly", () => {
     expect(serialized).not.toContain("repo evidence");
     expect(serialized).not.toContain("/");
   });
+});
+
+it("keeps rehydrated continuity in one canonical system frame for Azure and LiteLLM models", () => {
+  const outcome = selectGatewayPromptAssembly({
+    historyPrefix: [],
+    historyTurnCount: 0,
+    request: { content: "What is the corrected budget?", discussionMode: undefined },
+    profile: DEFAULT_CONTEXT_PROFILE,
+    memoryEntries: [],
+    documentContext: [],
+    redactionSecrets: [],
+    continuityContextText: "Reference data only. The corrected budget is 60000 Euro.",
+  });
+  const systems = outcome?.messages.filter((message) => message.role === "system");
+  expect(systems).toHaveLength(1);
+  expect(systems?.[0]?.content).toContain(CONVERSATION_SYSTEM_PROMPT);
+  expect(systems?.[0]?.content).toContain("corrected budget is 60000");
+});
+
+it("keeps cumulative compaction diagnostics valid across paged history capture", () => {
+  const { store, chatId } = createStore();
+  seedHistory(
+    chatId,
+    store,
+    Array.from(
+      { length: 200 },
+      (_, i) => `History ${String(i)}: ` + "The documentation is being checked. ".repeat(20),
+    ),
+  );
+  const current = store.createMessage(
+    createMessage(chatId, "user", "Continue the discussion.", NOW + 1000),
+  );
+  const profile = deriveContextProfile({
+    maxInputTokens: 4096,
+    reservedOutputTokens: 0,
+    safetyMarginTokens: 0,
+  });
+  const deps = createDeps(store, profile);
+  const request = makeRequest(chatId, current.content);
+  const snapshot = captureGatewayTurnSnapshot(deps, request, current);
+  expect(snapshot.earlierCompaction?.itemsBefore).toBeGreaterThan(snapshot.history.length);
+  const outcome = buildGatewayAssembly(deps, request, makeMemoryResult([]), CHAT_MODEL, snapshot);
+  for (const lane of outcome.diagnostics.lanes) {
+    expect(lane.includedItems).toBeGreaterThanOrEqual(0);
+    expect(lane.estimatedTokens).toBeGreaterThanOrEqual(0);
+  }
+  expect(outcome.diagnostics.totalEstimatedTokens).toBe(
+    countGatewayPromptTokens({ messages: outcome.messages }, profile.tokenAccounting),
+  );
+  store.close();
+});
+
+it("compacts at ninety percent with headroom while reporting the real deployment budget", () => {
+  const { store, chatId } = createStore();
+  seedHistory(
+    chatId,
+    store,
+    Array.from({ length: 40 }, () => "We are checking the documentation. ".repeat(20)),
+  );
+  const input = {
+    historyPrefix: store.listMessages(chatId),
+    historyTurnCount: 40,
+    request: { content: "Continue.", discussionMode: undefined },
+    memoryEntries: [],
+    documentContext: [],
+    redactionSecrets: [],
+    proactiveCompaction: true,
+  };
+  const generous = deriveContextProfile({
+    maxInputTokens: 32_000,
+    reservedOutputTokens: 0,
+    safetyMarginTokens: 0,
+  });
+  const initial = selectGatewayPromptAssembly({ ...input, profile: generous });
+  expect(initial).toBeDefined();
+  const tokens = initial?.diagnostics.totalEstimatedTokens ?? 0;
+  const belowThreshold = deriveContextProfile({
+    maxInputTokens: Math.ceil(tokens / 0.9) + 1,
+    reservedOutputTokens: 0,
+    safetyMarginTokens: 0,
+  });
+  expect(
+    selectGatewayPromptAssembly({ ...input, profile: belowThreshold })?.compaction,
+  ).toBeUndefined();
+  const profile = deriveContextProfile({
+    maxInputTokens: Math.floor(tokens / 0.9),
+    reservedOutputTokens: 0,
+    safetyMarginTokens: 0,
+  });
+  const compacted = selectGatewayPromptAssembly({ ...input, profile });
+  expect(compacted?.compaction).toBeDefined();
+  expect(compacted?.diagnostics.profile).toEqual(profile);
+  expect(compacted?.diagnostics.totalEstimatedTokens).toBeLessThanOrEqual(
+    profile.effectiveInputBudget * 0.7,
+  );
+  expect(compacted?.diagnostics.budgetPressure).not.toBe("high");
+});
+
+it.each([
+  ["customer-qwen3-coder", 4096, 0],
+  ["customer-qwen3-coder", 32000, 2048],
+  ["customer-gpt-oss-120b", 4096, 4096],
+  ["customer-gpt-oss-120b", 128000, 16384],
+  ["customer-mistral", 4096, 0],
+  ["customer-mistral", 32000, 32000],
+] as const)(
+  "admits a short German chat through the real gateway for %s (%s/%s)",
+  async (modelId, contextWindow, maxOutputTokens) => {
+    const { store, chatId } = createStore();
+    seedHistory(chatId, store, ["Hallo, antworte kurz."]);
+    const config = customModelConfig(modelId);
+    const configured = {
+      ...config,
+      capabilities: config.capabilities?.map((capability) => ({
+        ...capability,
+        contextWindow,
+        maxOutputTokens,
+      })),
+    };
+    const deps = createDeps(store, undefined, { config: configured });
+    const assembly = buildGatewayAssembly(
+      deps,
+      {
+        chatId,
+        projectPath: PROJECT_PATH,
+        modelId,
+        content: "Hallo, antworte kurz.",
+        attachments: [],
+        documentContext: [],
+        memory: undefined,
+        discussionMode: undefined,
+      },
+      {
+        context: { enabled: false, text: "", memories: [], budget: { tokens: 0, used: 0 } },
+        actions: [],
+      },
+      modelId,
+      gatewayTurnSnapshot(store, chatId),
+    );
+    let dispatched = 0;
+    const gateway = new Gateway(configured, {
+      adapter: {
+        call: (): Promise<import("@oscharko-dev/keiko-model-gateway").NormalizedResponse> => {
+          dispatched += 1;
+          return Promise.resolve({
+            modelId,
+            content: "Hallo!",
+            toolCalls: [],
+            structuredOutput: null,
+            finishReason: "stop",
+            usage: {
+              requestId: "fixture",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "medium",
+            },
+          });
+        },
+      },
+    });
+    const response = await gateway.chat({ modelId, messages: assembly.messages });
+    expect(dispatched).toBe(1);
+    expect(response.content).toBe("Hallo!");
+  },
+);
+
+it("keeps a large current prompt by reducing the default answer reserve", () => {
+  const config = customModelConfig();
+  const capability = config.capabilities?.[0];
+  if (capability === undefined) throw new Error("Missing fixture model");
+  const profile = deriveContextProfileFromCapability({
+    ...capability,
+    contextWindow: 30_000,
+    maxOutputTokens: 0,
+  });
+  const content = "x".repeat(110_000);
+  const requiredTokens = countGatewayPromptTokens({
+    messages: [
+      { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+      { role: "user", content },
+    ],
+  });
+  expect(requiredTokens).toBeGreaterThan(profile.effectiveInputBudget);
+  expect(requiredTokens).toBeLessThan(profile.maxInputTokens - profile.safetyMarginTokens);
+  const assembly = selectGatewayPromptAssembly({
+    historyPrefix: [],
+    historyTurnCount: 0,
+    request: { content, discussionMode: undefined },
+    profile,
+    memoryEntries: [],
+    documentContext: [],
+    redactionSecrets: [],
+  });
+  expect(assembly).toBeDefined();
+  if (assembly === undefined) return;
+  expect(assembly.messages.at(-1)?.content).toBe(content);
+  expect(assembly.diagnostics.profile.reservedOutputTokens).toBeGreaterThan(0);
+  expect(assembly.diagnostics.profile.reservedOutputTokens).toBeLessThan(
+    profile.reservedOutputTokens,
+  );
+  expect(
+    countGatewayPromptTokens({ messages: assembly.messages }) +
+      assembly.diagnostics.profile.reservedOutputTokens +
+      profile.safetyMarginTokens,
+  ).toBeLessThanOrEqual(profile.maxInputTokens);
 });

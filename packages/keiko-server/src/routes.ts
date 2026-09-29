@@ -49,6 +49,8 @@ import {
   handleUpdateChat,
   handleDeleteChat,
   handleListMessages,
+  handleChatContextStatus,
+  handleCompactChatContext,
   handleCreateMessage,
   handleUpdateMessage,
 } from "./store-handlers.js";
@@ -612,6 +614,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
+  { method: "GET", pattern: "/api/chats/context", handler: handleChatContextStatus },
+  { method: "POST", pattern: "/api/chats/context/compact", handler: handleCompactChatContext },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
   // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).

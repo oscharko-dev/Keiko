@@ -71,7 +71,7 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
             x: 64,
             y: 40,
             w: 900,
-            h: 760,
+            h: Math.min(760, Math.max(400, window.innerHeight - 230)),
             z: 10,
             cfg: { chatId, title },
             max: false,
@@ -139,4 +139,87 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await page.goto("/");
   const reopened = page.getByRole("region", { name: "Chat — E2E chat send" });
   await expect(reopened.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30_000 });
+});
+
+async function openFixtureComposer(page: Page, request: APIRequestContext): Promise<void> {
+  const { chat } = await createChat(request);
+  await seedChatWindow(page, chat);
+  await page.goto("/");
+  await expect(page.getByRole("textbox", { name: "Chat message" })).toBeVisible();
+}
+
+test("removes heading formatting after deleting its last character @smoke", async ({
+  page,
+  request,
+}) => {
+  await openFixtureComposer(page, request);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  await composer.pressSequentially("# Hallo");
+  await expect(composer.locator("h1")).toHaveText("Hallo");
+  for (let count = 0; count < 6; count += 1) await composer.press("Backspace");
+  await expect(composer.locator("h1")).toHaveCount(0);
+  await composer.pressSequentially("Normal");
+  await expect(composer.locator("p")).toHaveText("Normal");
+});
+
+test("loads local highlighting, pastes and scrolls code inside the Composer @smoke", async ({
+  page,
+  request,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openFixtureComposer(page, request);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  await composer.pressSequentially("```typescript");
+  await composer.press("Shift+Enter");
+  const code = composer.locator(".monaco-editor");
+  await expect(code).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Loading syntax highlighting…", { exact: true })).toBeHidden();
+  const source = Array.from(
+    { length: 80 },
+    (_, index) => `const value${String(index)} = ${String(index)};`,
+  ).join("\n");
+  await page.evaluate((text) => navigator.clipboard.writeText(text), source);
+  const input = code.getByRole("textbox", { name: "Code input" });
+  await code.locator(".view-lines").click();
+  await input.press("ControlOrMeta+V");
+  await input.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
+  await expect(code.locator(".view-lines")).toContainText("const value0");
+  const slider = code.locator(".scrollbar.vertical .slider");
+  const before = await slider.boundingBox();
+  expect(before).not.toBeNull();
+  await code.hover();
+  await page.mouse.wheel(0, 400);
+  await expect
+    .poll(async () => (await slider.boundingBox())?.y ?? 0)
+    .toBeGreaterThan(before?.y ?? 0);
+  await page.mouse.wheel(0, -400);
+  await expect
+    .poll(async () => (await slider.boundingBox())?.y ?? 0)
+    .toBeCloseTo(before?.y ?? 0, 0);
+  await page.getByRole("button", { name: "Continue below ↵" }).click();
+  await composer.pressSequentially("Explain the code.");
+  await expect(composer.locator("p").last()).toHaveText("Explain the code.");
+});
+
+test("keeps model selection and context disclosure inside a short viewport @smoke", async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 1116, height: 850 });
+  await openFixtureComposer(page, request);
+  const model = page.getByRole("combobox", { name: "Models", exact: true });
+  await model.click();
+  await expect(page.getByPlaceholder("Search models...")).toHaveCount(0);
+  const menu = page.getByRole("listbox");
+  const box = await menu.boundingBox();
+  expect(box).not.toBeNull();
+  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(850);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: /Conversation context:/ }).click();
+  const panel = page.getByRole("region", { name: "Conversation context", exact: true });
+  await expect(panel).toBeVisible();
+  const bounds = await panel.boundingBox();
+  expect(bounds?.x).toBeGreaterThanOrEqual(0);
+  expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeLessThanOrEqual(850);
 });

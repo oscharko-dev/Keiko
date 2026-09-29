@@ -1071,9 +1071,8 @@ describe("ChatWindow repository file focus picker", () => {
 
     const input = screen.getByRole("textbox", { name: "Chat message" });
     const draft = "Explain this @coding";
-    fireEvent.change(input, {
-      target: { value: draft, selectionStart: draft.length },
-    });
+    input.focus();
+    fireEvent.paste(input, { clipboardData: { getData: () => draft, files: [] } });
 
     const result = await findRepositoryResultOption("Reference src/context/coding-context.ts");
     expect(result).toHaveTextContent("Source");
@@ -1159,9 +1158,8 @@ describe("ChatWindow repository file focus picker", () => {
     );
 
     const input = screen.getByRole("textbox", { name: "Chat message" });
-    fireEvent.change(input, {
-      target: { value: "@ra", selectionStart: "@ra".length },
-    });
+    input.focus();
+    fireEvent.paste(input, { clipboardData: { getData: () => "@ra", files: [] } });
 
     await waitFor(() => {
       expect(fetchFilesSearchMock).toHaveBeenCalledWith(
@@ -1173,9 +1171,7 @@ describe("ChatWindow repository file focus picker", () => {
     });
     expect(signals[0]?.aborted).toBe(false);
 
-    fireEvent.change(input, {
-      target: { value: "@range", selectionStart: "@range".length },
-    });
+    await userEvent.setup().keyboard("nge");
 
     await waitFor(() => expect(signals[0]?.aborted).toBe(true));
     await findRepositoryResultOption("Reference src/range.ts");
@@ -1398,9 +1394,8 @@ describe("ChatWindow repository file focus picker", () => {
     );
 
     const input = screen.getByRole("textbox", { name: "Chat message" });
-    fireEvent.change(input, {
-      target: { value: "@readme", selectionStart: "@readme".length },
-    });
+    input.focus();
+    fireEvent.paste(input, { clipboardData: { getData: () => "@readme", files: [] } });
 
     expect(screen.queryByRole("dialog", { name: "Reference repository file" })).toBeNull();
     expect(fetchFilesSearchMock).not.toHaveBeenCalled();
@@ -2426,7 +2421,32 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(attachButton.querySelector('path[d="M12 5v14M5 12h14"]')).not.toBeNull();
   });
 
-  it("opens the compact model picker with the same menu width as the compact full model button", async () => {
+  it.each([9, 10, 20])(
+    "offers model search only from ten configured options (%s)",
+    async (count) => {
+      const user = userEvent.setup();
+      const models = Array.from({ length: count }, (_, index) =>
+        chatModelCapability(`customer-${index}`),
+      );
+      render(
+        <ChatSessionProvider
+          value={makeSession({
+            models,
+            selectedModel: models[0]!.id,
+            activeChat: makeChat({ selectedModel: models[0]!.id }),
+          })}
+        >
+          <ChatWindow />
+        </ChatSessionProvider>,
+      );
+      await user.click(screen.getByRole("combobox", { name: "Models" }));
+      expect(screen.queryByRole("searchbox", { name: "Search models..." }) !== null).toBe(
+        count >= 10,
+      );
+    },
+  );
+
+  it("opens a readable model menu without search for a short list", async () => {
     const user = userEvent.setup();
     const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
     render(
@@ -2456,7 +2476,8 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
 
     await user.click(trigger);
 
-    expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "118px" });
+    expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "300px" });
+    expect(screen.queryByRole("searchbox", { name: "Search models..." })).not.toBeInTheDocument();
   });
 
   it("uses the memory activation icon and hides history controls in minimal mode", () => {

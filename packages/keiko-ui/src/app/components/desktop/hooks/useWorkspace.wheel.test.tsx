@@ -44,6 +44,11 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
         <div data-testid="scroll-target" style={{ overflowY: "auto", width: 100, height: 80 }}>
           <div style={{ width: 100, height: 300 }} />
         </div>
+        <div className="monaco-editor">
+          <div className="monaco-scrollable-element" style={{ overflow: "hidden" }}>
+            <div data-testid="code-scroll-target" className="view-lines" />
+          </div>
+        </div>
       </section>
       <output data-testid="files-zoom">{files?.zoom ?? "missing"}</output>
       <output data-testid="view-zoom">{ws.view.zoom}</output>
@@ -111,6 +116,23 @@ describe("useWorkspace wheel zoom routing", () => {
     cleanup();
     window.localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it("lets the active Monaco editor handle wheel events despite its virtual scroll surface", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+    for (const deltaY of [-120, 120]) {
+      const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY });
+      screen.getByTestId("code-scroll-target").dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
   });
 
   it("routes Ctrl/Command wheel over a window to workspace zoom", async () => {

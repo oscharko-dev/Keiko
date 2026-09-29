@@ -338,6 +338,14 @@ function collectModelSummary(value: unknown, prefix: string): string[] {
   pushIf(reasons, !isNonEmptyTrimmed(value.modelId), `${prefix}.modelSummary.modelId invalid`);
   pushIf(
     reasons,
+    value.coveredItems !== undefined &&
+      (typeof value.coveredItems !== "number" ||
+        !Number.isSafeInteger(value.coveredItems) ||
+        value.coveredItems < 1),
+    `${prefix}.modelSummary.coveredItems invalid`,
+  );
+  pushIf(
+    reasons,
     typeof value.content !== "string" ||
       modelSummaryStringUnsafe(value.content, CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS),
     `${prefix}.modelSummary.content invalid`,
@@ -570,6 +578,7 @@ function collectTypedArray(
 
 function collectRecordOptionals(value: Record<string, unknown>, prefix: string): string[] {
   const reasons: string[] = [];
+  collectConversationCoverage(value.conversationCoverage, reasons, prefix);
   pushIf(
     reasons,
     value.orderedAt !== undefined && !isFiniteNumber(value.orderedAt),
@@ -605,4 +614,35 @@ export function validateContextCompactionRecord(value: unknown): ContextValidati
     ...collectRecordRequired(value, "compactionRecord"),
     ...collectRecordOptionals(value, "compactionRecord"),
   ]);
+}
+
+function collectConversationCoverage(coverage: unknown, reasons: string[], prefix: string): void {
+  if (coverage === undefined) return;
+  if (!isRecord(coverage)) {
+    reasons.push(`${prefix}.conversationCoverage invalid`);
+    return;
+  }
+  pushIf(
+    reasons,
+    coverage.version !== 1 ||
+      typeof coverage.throughMessageId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/u.test(coverage.throughMessageId),
+    `${prefix}.conversationCoverage identity invalid`,
+  );
+  pushIf(
+    reasons,
+    !nonNegativeInteger(coverage.historyRevision),
+    `${prefix}.conversationCoverage.historyRevision invalid`,
+  );
+  if (coverage.contextWindowTokens !== undefined) {
+    pushIf(
+      reasons,
+      !nonNegativeInteger(coverage.contextWindowTokens) || coverage.contextWindowTokens === 0,
+      `${prefix}.conversationCoverage.contextWindowTokens invalid`,
+    );
+  }
+}
+
+function nonNegativeInteger(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }

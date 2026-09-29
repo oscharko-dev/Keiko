@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eb0d93554962247edeecfe20430c87f904e740d45e4b5005ed16986b334d4c40"
+    "catalogDigest": "5b07400af7e395dc43f6287db2326dbaab068186e2644b0a33e20104b50bc18b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 476,
-    "proofCount": 484,
-    "resolvedProofCount": 484,
-    "failureClassCount": 325,
+    "operationCount": 477,
+    "proofCount": 485,
+    "resolvedProofCount": 485,
+    "failureClassCount": 326,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -86,6 +86,7 @@
       "operations": [
         "atlassian.credential.rejected",
         "chat.compaction.facts.classified",
+        "chat.context.management",
         "chat.context.selected",
         "chat.creation.rejected",
         "chat.regeneration.rejected",
@@ -646,6 +647,7 @@
     }
   ],
   "failureClassScenarios": {
+    "chat-context-management": ["bff.dependency-failure"],
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
     "gateway-context-admission": ["model-gateway.dependency-failure"],
     "coding-history-persistence": ["tools-workflows.dependency-failure"],
@@ -1018,6 +1020,7 @@
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
+    "chat.context.management.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.selected.budget": [
       "packages/keiko-server/src/chat-activity.test.ts",
       "packages/keiko-server/src/chat-stream-handlers.test.ts"

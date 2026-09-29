@@ -6,6 +6,7 @@ import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/r
 import {
   buildStructuredCompactionDigest,
   explicitClassification,
+  mergeHistoryDigests,
   type StructuredCompactionEntry,
 } from "./structured-digest.js";
 import { buildCompactionRecords } from "./compaction.js";
@@ -46,6 +47,32 @@ function compactedRecordFor(content: string): ContextCompactionRecord | undefine
 }
 
 describe("buildStructuredCompactionDigest", () => {
+  it("keeps recent corrections when a classified bucket fills and records bounded loss", () => {
+    const digest = buildStructuredCompactionDigest({
+      entries: [
+        ...Array.from({ length: 10 }, (_, index) => entry(`Fact: status ${String(index)}`)),
+        entry("Fact: corrected budget is 60000 Euro"),
+      ],
+    });
+    expect(digest.preservedFacts?.some((fact) => fact.statement.includes("60000"))).toBe(true);
+    expect(digest.preservedFacts).toHaveLength(8);
+    expect(digest.droppedCategories).toContain("bounded-structured-signals-require-rehydration");
+  });
+
+  it("carries all digest fields and resolved questions across repeated checkpoints", () => {
+    const older = {
+      ...buildStructuredCompactionDigest({ entries: [entry("Open question: Which date?")] }),
+      filesChanged: ["src/example.ts"],
+      commandOutcomes: [{ command: "npm test", exitCode: 0, summary: "Tests passed" }],
+    };
+    const newer = buildStructuredCompactionDigest({
+      entries: [entry("Resolved question: Which date? November 19.")],
+    });
+    const merged = mergeHistoryDigests(older, newer);
+    expect(merged.filesChanged).toEqual(older.filesChanged);
+    expect(merged.commandOutcomes).toEqual(older.commandOutcomes);
+    expect(merged.openQuestions).toEqual([]);
+  });
   it("extracts durable continuity fields from compacted conversation text", () => {
     const digest = buildStructuredCompactionDigest({
       entries: [

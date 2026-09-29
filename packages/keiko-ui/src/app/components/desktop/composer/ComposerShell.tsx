@@ -3,12 +3,12 @@
 import {
   useEffect,
   type ChangeEventHandler,
-  type KeyboardEvent,
   type KeyboardEventHandler,
   type ReactNode,
   type RefObject,
   type SyntheticEvent,
 } from "react";
+import type { ComposerKeyEvent } from "./composer-editor-types";
 
 /**
  * The one composer shell every conversational surface renders: the input stack (optional content
@@ -21,8 +21,9 @@ import {
 export interface ComposerShellProps {
   readonly value: string;
   readonly placeholder: string;
-  readonly onChange: ChangeEventHandler<HTMLTextAreaElement>;
-  readonly onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
+  readonly onChange?: ChangeEventHandler<HTMLTextAreaElement>;
+  readonly onKeyDown?: KeyboardEventHandler<HTMLTextAreaElement>;
+  readonly input?: ReactNode;
   readonly onSelect?: ((event: SyntheticEvent<HTMLTextAreaElement>) => void) | undefined;
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null> | undefined;
   readonly id?: string | undefined;
@@ -43,8 +44,8 @@ const COMPOSER_MAX_HEIGHT_PX = 220;
  * Chinese, Korean, …) confirms the composition and must never submit (uiux-fix F041 C206).
  * Returns true when the event was a submit request (already default-prevented).
  */
-export function composerEnterSubmits(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
-  if (event.nativeEvent.isComposing) return false;
+export function composerEnterSubmits(event: ComposerKeyEvent): boolean {
+  if (event.isComposing || event.nativeEvent?.isComposing) return false;
   if (event.key !== "Enter" || event.shiftKey) return false;
   event.preventDefault();
   return true;
@@ -77,32 +78,35 @@ export function ComposerShell({
   aboveInput,
   belowInput,
   footer,
+  input,
 }: ComposerShellProps): ReactNode {
   return (
     <>
       <div className="cmp-input-stack">
         {aboveInput}
         <div className="cmp-input-combobox">
-          <textarea
-            id={id}
-            className="cmp-input"
-            ref={textareaRef}
-            rows={2}
-            value={value}
-            aria-label={ariaLabel}
-            aria-controls={ariaControls}
-            placeholder={placeholder}
-            disabled={disabled}
-            maxLength={maxLength}
-            // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
-            // hooks/useKeyboardShortcuts.ts) so Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F
-            // keep working inside the product's primary input while its own text-editing chords
-            // (Cmd/Ctrl+Z undoes typing) stay with the field.
-            data-shell-chord-bypass=""
-            onChange={onChange}
-            onSelect={onSelect}
-            onKeyDown={onKeyDown}
-          />
+          {input ?? (
+            <textarea
+              id={id}
+              className="cmp-input"
+              ref={textareaRef}
+              rows={2}
+              value={value}
+              aria-label={ariaLabel}
+              aria-controls={ariaControls}
+              placeholder={placeholder}
+              disabled={disabled}
+              maxLength={maxLength}
+              // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
+              // hooks/useKeyboardShortcuts.ts) so Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F
+              // keep working inside the product's primary input while its own text-editing chords
+              // (Cmd/Ctrl+Z undoes typing) stay with the field.
+              data-shell-chord-bypass=""
+              onChange={onChange}
+              onSelect={onSelect}
+              onKeyDown={onKeyDown}
+            />
+          )}
         </div>
         {belowInput}
       </div>
