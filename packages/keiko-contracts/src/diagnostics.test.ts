@@ -375,8 +375,36 @@ describe("isClientStageIngestRequest", () => {
 
   it("accepts a well-formed started report for every closed stage id", () => {
     for (const stage of CLIENT_STAGE_IDS) {
-      expect(isClientStageIngestRequest({ ...startedRequest(), stage })).toBe(true);
+      expect(
+        isClientStageIngestRequest({
+          ...startedRequest(),
+          stage,
+          ...(stage === "chat history deletion"
+            ? { deletion: { requestedCount: 1, deletedCount: 0, failedCount: 0 } }
+            : {}),
+        }),
+      ).toBe(true);
     }
+  });
+
+  it("accepts body-free deletion counts and rejects content, missing counts and impossible settlements", () => {
+    const request = { ...settledRequest(), stage: "chat history deletion" };
+    const deletion = { requestedCount: 3, deletedCount: 2, failedCount: 1 };
+    expect(isClientStageIngestRequest({ ...request, deletion })).toBe(true);
+    for (const invalid of [
+      undefined,
+      { ...deletion, requestedCount: 0 },
+      { ...deletion, failedCount: -1 },
+      { ...deletion, deletedCount: 0 },
+      { ...deletion, requestedCount: 1.5 },
+      { ...deletion, requestedCount: 1_000_001 },
+      { ...deletion, title: "Private conversation" },
+    ])
+      expect(isClientStageIngestRequest({ ...request, deletion: invalid })).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...startedRequest(), stage: "chat history deletion", deletion }),
+    ).toBe(false);
+    expect(isClientStageIngestRequest({ ...settledRequest(), deletion })).toBe(false);
   });
 
   it("accepts a well-formed settled report, including a genuinely instant 0ms settle", () => {

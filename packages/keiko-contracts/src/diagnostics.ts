@@ -690,6 +690,7 @@ export const CLIENT_STAGE_IDS = [
   "files widget chunk",
   "chat bind",
   "command palette",
+  "chat history deletion",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -705,6 +706,12 @@ export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
 // anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
 export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
 
+export interface ClientChatHistoryDeletionCounts {
+  readonly requestedCount: number;
+  readonly deletedCount: number;
+  readonly failedCount: number;
+}
+
 // One correlation id per mounted stage (#3557 review): `started` and `settled` carry the same id, so
 // the pair joins in the log even when another tab reuses the same stage and ordinal.
 export interface ClientStageStartedIngestRequest {
@@ -713,6 +720,7 @@ export interface ClientStageStartedIngestRequest {
   readonly phase: "started";
   readonly ordinal: number;
   readonly correlationId?: string | undefined;
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
 }
 
 export interface ClientStageSettledIngestRequest {
@@ -722,6 +730,7 @@ export interface ClientStageSettledIngestRequest {
   readonly ordinal: number;
   readonly durationMs: number;
   readonly correlationId?: string | undefined;
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -736,7 +745,26 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "ordinal",
   "durationMs",
   "correlationId",
+  "deletion",
 ]);
+
+const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "requestedCount",
+  "deletedCount",
+  "failedCount",
+]);
+
+function hasValidStageDeletion(value: Record<string, unknown>): boolean {
+  if (value.stage !== "chat history deletion") return value.deletion === undefined;
+  const counts = value.deletion;
+  if (!isRecord(counts)) return false;
+  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  if (!isBoundedPositiveInteger(counts.requestedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isBoundedNonNegativeInteger(counts.deletedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (value.phase === "started") return counts.deletedCount === 0 && counts.failedCount === 0;
+  return counts.deletedCount + counts.failedCount === counts.requestedCount;
+}
 
 function isClientStageId(value: unknown): value is ClientStageId {
   return typeof value === "string" && CLIENT_STAGE_ID_SET.has(value);
@@ -766,6 +794,7 @@ export function isClientStageIngestRequest(value: unknown): value is ClientStage
   if (!isClientStageId(value.stage)) return false;
   if (!isBoundedPositiveInteger(value.ordinal, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
+  if (!hasValidStageDeletion(value)) return false;
   if (value.phase === "started") return value.durationMs === undefined;
   if (value.phase === "settled") {
     return isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX);

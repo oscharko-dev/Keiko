@@ -56,6 +56,7 @@ import {
   type ClientStageId,
   type ClientComposerActivity,
   type ClientComposerCodeStage,
+  type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -65,14 +66,15 @@ import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime
 // always built (so console output is unchanged); the transport below prefers this structured,
 // closed-vocabulary report over the message when building the wire body, because a stage that
 // starts and settles is the ordinary case, never a diagnostic.
-export type ClientDiagnosticStageReport =
+export type ClientDiagnosticStageReport = (
   | { readonly stage: ClientStageId; readonly phase: "started"; readonly ordinal: number }
   | {
       readonly stage: ClientStageId;
       readonly phase: "settled";
       readonly ordinal: number;
       readonly durationMs: number;
-    };
+    }
+) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 
 // A restored window's binding outcome (#3557), in closed values only: never the reference itself.
 // `meta.correlationId` names the request whose answer decided it.

@@ -1852,6 +1852,44 @@ describe("POST /api/diagnostics/client", () => {
     expect(stage.map((event) => event.extra?.stage)).toEqual([logStage, logStage]);
   });
 
+  it("records the correlated deletion lifecycle with counts and no conversation content", async () => {
+    const sink = captureServerLog();
+    for (const report of [
+      { phase: "started", deletion: { requestedCount: 3, deletedCount: 0, failedCount: 0 } },
+      {
+        phase: "settled",
+        durationMs: 12,
+        deletion: { requestedCount: 3, deletedCount: 2, failedCount: 1 },
+      },
+    ]) {
+      const body = {
+        kind: "stage",
+        stage: "chat history deletion",
+        ordinal: 1,
+        correlationId: "ui_history-delete-0001",
+        ...report,
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    }
+    const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+    expect(events.map((event) => [event.op, event.correlationId, event.extra?.stage])).toEqual([
+      ["client.stage.started", "ui_history-delete-0001", "chat-history-deletion"],
+      ["client.stage.settled", "ui_history-delete-0001", "chat-history-deletion"],
+    ]);
+    expect(events.at(-1)?.extra).toEqual({
+      stage: "chat-history-deletion",
+      ordinal: 1,
+      requestedCount: 3,
+      deletedCount: 2,
+      failedCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(events.at(-1)?.durationMs).toBe(12);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expectCompleteGitTimeline(events);
+  });
+
   // #3557 review: the stale-session repair outcome joins the denied request's timeline.
   describe("session repair evidence", () => {
     it.each([

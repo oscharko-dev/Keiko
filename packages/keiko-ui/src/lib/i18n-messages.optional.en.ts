@@ -171,12 +171,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.contextWindow.notice":
     "This transcript shows {count} turns. Context beyond the 48-turn boundary may be compacted.",
   "chat.history.purge": "Delete permanently",
-  "chat.history.purgeConfirm": "Confirm permanent delete",
-  "chat.history.purgeWarning":
-    "Permanently delete this conversation and its stored messages? This cannot be undone.",
-  "chat.history.purgeFailed": "Permanent delete failed: {detail}",
   "chat.history.renameEmptyTitle": "Title cannot be empty.",
   "chat.history.renameFailed": "Rename failed.",
+  "chat.history.bulkDeleteFailed": "Could not delete {count} selected chats: {detail}",
   "chat.history.deleteFailed": "Delete failed: {detail}",
   "chat.history.restoreFailed": "Restore failed: {detail}",
   "chat.regenerate.versionSelector": "Response version",

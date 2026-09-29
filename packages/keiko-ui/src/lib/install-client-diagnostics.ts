@@ -138,6 +138,7 @@ function clientStagePostBody(
         phase: "started",
         ordinal: report.ordinal,
         correlationId: id,
+        deletion: report.deletion,
       }
     : {
         kind: "stage",
@@ -146,6 +147,7 @@ function clientStagePostBody(
         ordinal: report.ordinal,
         durationMs: report.durationMs,
         correlationId: id,
+        deletion: report.deletion,
       };
 }
 

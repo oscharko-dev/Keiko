@@ -8,6 +8,9 @@ import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { notifyChatDeleted } from "../../hooks/useChatSession";
 import { ChatHistoryPanel, initialTabIndex } from "./ChatHistoryPanel";
+import { deleteHistoryChats } from "./chatHistoryDeletion";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import type { ClientDiagnosticMeta } from "@/lib/client-diagnostics";
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -120,24 +123,20 @@ function renderPanel(session: ChatSessionApi = makeSession()): void {
 describe("ChatHistoryPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetClientDiagnosticWriter();
   });
 
-  it("moves a chat to deleted after confirmation through the PATCH helper", async () => {
-    const chat = makeChat();
-    vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "closed" } });
-    const replaceChat = vi.fn();
+  it("permanently deletes an active chat with one click through the scoped DELETE helper", async () => {
+    vi.mocked(deleteChat).mockResolvedValueOnce();
     const user = userEvent.setup();
-    renderPanel(makeSession({ chats: [chat], replaceChat }));
-
-    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
-    expect(row).not.toBeNull();
-    const scoped = row as HTMLElement;
-    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
-    expect(screen.getByRole("button", { name: /^Cancel\b/ })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /^Delete\b/ }));
-
-    await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "closed" }));
-    expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "closed" });
+    renderPanel();
+    await user.click(screen.getByRole("button", { name: "Delete Sprint triage" }));
+    await waitFor(() =>
+      expect(deleteChat).toHaveBeenCalledWith("chat-1", "/repo", expect.any(String)),
+    );
+    expect(updateChat).not.toHaveBeenCalled();
+    expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
+    expect(screen.queryByRole("button", { name: /^Cancel\b/ })).not.toBeInTheDocument();
   });
 
   it("does not open a chat after the active project changes during creation", async (): Promise<void> => {
@@ -255,17 +254,11 @@ describe("ChatHistoryPanel", () => {
   });
 
   it("keeps the active tab selected after deleting a chat", async () => {
-    const chat = makeChat();
-    vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "closed" } });
+    vi.mocked(deleteChat).mockResolvedValueOnce();
     const user = userEvent.setup();
-    renderPanel(makeSession({ chats: [chat] }));
-
-    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
-    expect(row).not.toBeNull();
-    await user.click(within(row as HTMLElement).getByRole("button", { name: /^Delete\b/ }));
-    await user.click(screen.getByRole("button", { name: /^Delete\b/ }));
-
-    await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "closed" }));
+    renderPanel();
+    await user.click(screen.getByRole("button", { name: "Delete Sprint triage" }));
+    await waitFor(() => expect(deleteChat).toHaveBeenCalledOnce());
     expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute("aria-selected", "false");
   });
@@ -284,28 +277,35 @@ describe("ChatHistoryPanel", () => {
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "open" });
   });
 
-  it("cancels a hard-purge confirmation without calling the server", async () => {
+  it("selecting and deselecting legacy deleted chats never calls the server", async () => {
     const user = userEvent.setup();
     renderPanel(makeSession({ chats: [makeChat({ status: "closed" })] }));
     await user.click(screen.getByRole("tab", { name: /deleted/i }));
-    await user.click(screen.getByRole("button", { name: /^Delete .* permanently$/i }));
-    expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /^Cancel\b/ }));
-
+    const checkbox = screen.getByRole("checkbox", { name: "Select Sprint triage" });
+    await user.click(checkbox);
+    expect(screen.getByRole("button", { name: "Delete selected (1)" })).toBeEnabled();
+    await user.click(checkbox);
+    expect(screen.getByRole("button", { name: "Delete selected (0)" })).toBeDisabled();
     expect(deleteChat).not.toHaveBeenCalled();
   });
 
   it("purges only after server success and publishes the existing delete mutation", async () => {
-    vi.mocked(deleteChat).mockResolvedValueOnce();
-    const chat = makeChat({ status: "closed" });
+    const purge = deferred<void>();
+    vi.mocked(deleteChat).mockReturnValueOnce(purge.promise);
     const user = userEvent.setup();
-    renderPanel(makeSession({ chats: [chat], activeProject: makeProject("/repo") }));
+    renderPanel(makeSession({ chats: [makeChat({ status: "closed" })] }));
     await user.click(screen.getByRole("tab", { name: /deleted/i }));
-    await user.click(screen.getByRole("button", { name: /^Delete .* permanently$/i }));
-    await user.click(screen.getByRole("button", { name: /^Confirm permanent delete of/ }));
-
-    await waitFor(() => expect(deleteChat).toHaveBeenCalledWith("chat-1", "/repo"));
-    expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
+    await user.click(screen.getByRole("button", { name: /^Delete Sprint triage permanently$/ }));
+    expect(deleteChat).toHaveBeenCalledWith("chat-1", "/repo", expect.any(String));
+    expect(notifyChatDeleted).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: /^Delete Sprint triage permanently$/ }),
+    ).toBeDisabled();
+    await act(async () => {
+      purge.resolve();
+      await purge.promise;
+    });
+    await waitFor(() => expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1"));
   });
 
   it("keeps a failed purge available for an explicit retry", async () => {
@@ -315,11 +315,10 @@ describe("ChatHistoryPanel", () => {
     renderPanel(makeSession({ chats: [chat], activeProject: makeProject("/repo") }));
     await user.click(screen.getByRole("tab", { name: /deleted/i }));
     await user.click(screen.getByRole("button", { name: /^Delete .* permanently$/i }));
-    await user.click(screen.getByRole("button", { name: /^Confirm permanent delete of/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("disk busy");
     expect(notifyChatDeleted).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: /^Confirm permanent delete of/ }));
+    await user.click(screen.getByRole("button", { name: /^Delete .* permanently$/i }));
     await waitFor(() => expect(deleteChat).toHaveBeenCalledTimes(2));
     expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
   });
@@ -336,6 +335,149 @@ describe("ChatHistoryPanel", () => {
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "open" }));
     expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("deletes all checked active chats with one action and one shared correlation", async (): Promise<void> => {
+    vi.mocked(deleteChat).mockResolvedValue(undefined);
+    const chats = [makeChat(), makeChat({ id: "chat-2", title: "Bug hunt" })];
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats }));
+    await user.click(screen.getByRole("checkbox", { name: "Select all displayed chats" }));
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+    expect(screen.getByRole("checkbox", { name: "Select Sprint triage" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Select Bug hunt" })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+    await waitFor((): void => expect(notifyChatDeleted).toHaveBeenCalledTimes(2));
+    expect(deleteChat).toHaveBeenCalledWith("chat-1", "/repo", expect.any(String));
+    expect(deleteChat).toHaveBeenCalledWith(
+      "chat-2",
+      "/repo",
+      vi.mocked(deleteChat).mock.calls[0]?.[2],
+    );
+    expect(updateChat).not.toHaveBeenCalled();
+  });
+
+  it("selects only visible filtered chats and clears selection when the filter changes", async (): Promise<void> => {
+    vi.mocked(deleteChat).mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPanel(
+      makeSession({ chats: [makeChat(), makeChat({ id: "chat-2", title: "Bug hunt" })] }),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Select all displayed chats" }));
+    await user.type(screen.getByRole("textbox", { name: "Search chat history" }), "Bug");
+    expect(screen.getByRole("button", { name: "Delete selected (0)" })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "Select all displayed chats" }));
+    await user.click(screen.getByRole("button", { name: "Delete selected (1)" }));
+    await waitFor((): void => expect(deleteChat).toHaveBeenCalledOnce());
+    expect(deleteChat).toHaveBeenCalledWith("chat-2", "/repo", expect.any(String));
+    expect(notifyChatDeleted).not.toHaveBeenCalledWith("chat-1");
+  });
+
+  it("keeps only failed deletions selected and retries them without repeating successes", async (): Promise<void> => {
+    vi.mocked(deleteChat).mockResolvedValueOnce().mockRejectedValueOnce(new Error("disk busy"));
+    const user = userEvent.setup();
+    renderPanel(
+      makeSession({ chats: [makeChat(), makeChat({ id: "chat-2", title: "Bug hunt" })] }),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Select all displayed chats" }));
+    await user.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not delete 1 selected chats: disk busy",
+    );
+    expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
+    expect(notifyChatDeleted).not.toHaveBeenCalledWith("chat-2");
+    expect(screen.getByRole("checkbox", { name: "Select Sprint triage" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Select Bug hunt" })).toBeChecked();
+    vi.mocked(deleteChat).mockResolvedValueOnce();
+    await user.click(screen.getByRole("button", { name: "Delete selected (1)" }));
+    await waitFor((): void => expect(deleteChat).toHaveBeenCalledTimes(3));
+    expect(deleteChat).toHaveBeenLastCalledWith("chat-2", "/repo", expect.any(String));
+  });
+
+  it("clears selection across tab and project changes without resurrecting hidden selections", async (): Promise<void> => {
+    const user = userEvent.setup();
+    const chat = makeChat();
+    const view = render(
+      <ChatSessionProvider
+        value={makeSession({ chats: [chat], activeProject: makeProject("/repo") })}
+      >
+        <ChatHistoryPanel openChatWindow={vi.fn()} />
+      </ChatSessionProvider>,
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Select Sprint triage" }));
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("tab", { name: /active/i }));
+    expect(screen.getByRole("checkbox", { name: "Select Sprint triage" })).not.toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "Select Sprint triage" }));
+    view.rerender(
+      <ChatSessionProvider
+        value={makeSession({ chats: [chat], activeProject: makeProject("/other") })}
+      >
+        <ChatHistoryPanel openChatWindow={vi.fn()} />
+      </ChatSessionProvider>,
+    );
+    view.rerender(
+      <ChatSessionProvider
+        value={makeSession({ chats: [chat], activeProject: makeProject("/repo") })}
+      >
+        <ChatHistoryPanel openChatWindow={vi.fn()} />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Delete selected (0)" })).toBeDisabled();
+    expect(deleteChat).not.toHaveBeenCalled();
+  });
+
+  it("limits bulk deletion concurrency and records body-free settlement counts", async (): Promise<void> => {
+    const requests = Array.from({ length: 5 }, (): ReturnType<typeof deferred<void>> =>
+      deferred<void>(),
+    );
+    vi.mocked(deleteChat).mockImplementation((_id, _path): Promise<void> => {
+      const request = requests[vi.mocked(deleteChat).mock.calls.length - 1];
+      if (request === undefined) throw new Error("Unexpected deletion request");
+      return request.promise;
+    });
+    const reports: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta): void => {
+      if (meta !== undefined) reports.push(meta);
+    });
+    const chats = Array.from({ length: 5 }, (_, index): Chat =>
+      makeChat({ id: `bulk-${String(index)}` }),
+    );
+    const operation = deleteHistoryChats(chats);
+    expect(deleteChat).toHaveBeenCalledTimes(4);
+    expect(notifyChatDeleted).not.toHaveBeenCalled();
+    for (const request of requests.slice(0, 4)) request.resolve();
+    await waitFor((): void => expect(deleteChat).toHaveBeenCalledTimes(5));
+    requests[4]?.resolve();
+    const result = await operation;
+    expect(result.failedIds).toEqual([]);
+    expect(notifyChatDeleted).toHaveBeenCalledTimes(5);
+    expect(reports.map((meta) => meta.stageReport?.deletion)).toEqual([
+      { requestedCount: 5, deletedCount: 0, failedCount: 0 },
+      { requestedCount: 5, deletedCount: 5, failedCount: 0 },
+    ]);
+    expect(reports[0]?.correlationId).toBe(reports[1]?.correlationId);
+    expect(JSON.stringify(reports)).not.toMatch(/Sprint triage|\/repo|bulk-0/);
+    resetClientDiagnosticWriter();
+    vi.mocked(deleteChat).mockReset();
+  });
+
+  it("does not repeat requests when Delete is activated again while a batch is pending", async (): Promise<void> => {
+    const pending = deferred<void>();
+    vi.mocked(deleteChat).mockReturnValueOnce(pending.promise);
+    const user = userEvent.setup();
+    renderPanel();
+    const button = screen.getByRole("button", { name: "Delete Sprint triage" });
+    await user.click(button);
+    await user.click(button);
+    expect(deleteChat).toHaveBeenCalledOnce();
+    expect(screen.getByRole("checkbox", { name: "Select all displayed chats" })).toBeDisabled();
+    expect(screen.getByRole("tab", { name: /deleted/i })).toBeDisabled();
+    await act(async (): Promise<void> => {
+      pending.resolve();
+      await pending.promise;
+    });
+    await waitFor((): void => expect(button).toBeEnabled());
   });
 
   it("renames a chat through the PATCH helper", async () => {
@@ -463,32 +605,34 @@ describe("ChatHistoryPanel", () => {
     expect(activeTab).toHaveAttribute("aria-selected", "true");
   });
 
-  // GEN-UI-FOCUS-016 (test-plan #43) — entering inline delete-confirm moves focus onto
-  // the confirmation, and Escape cancels the destructive confirm.
-  it("focuses the confirm Delete button on delete-confirm and cancels on Escape (GEN-UI-FOCUS-016)", async () => {
+  // GEN-UI-FOCUS-016 (test-plan #43): the owner removed inline confirmation. The new
+  // pin retains keyboard cancellation before deletion and stable focus after the row disappears.
+  it("clears selection on Escape and restores stable focus after keyboard deletion (GEN-UI-FOCUS-016)", async () => {
+    vi.mocked(deleteChat).mockResolvedValueOnce();
     const user = userEvent.setup();
-    renderPanel();
-
-    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
-    expect(row).not.toBeNull();
-    const scoped = row as HTMLElement;
-
-    // Activate Delete via keyboard (focus + Enter).
-    const deleteButton = within(scoped).getByRole("button", { name: /^Delete\b/ });
+    const view = render(
+      <ChatSessionProvider value={makeSession()}>
+        <ChatHistoryPanel openChatWindow={vi.fn()} />
+      </ChatSessionProvider>,
+    );
+    const checkbox = screen.getByRole("checkbox", { name: "Select Sprint triage" });
+    checkbox.focus();
+    await user.keyboard(" ");
+    expect(checkbox).toBeChecked();
+    await user.keyboard("{Escape}");
+    expect(checkbox).not.toBeChecked();
+    expect(deleteChat).not.toHaveBeenCalled();
+    const deleteButton = screen.getByRole("button", { name: "Delete Sprint triage" });
     deleteButton.focus();
     await user.keyboard("{Enter}");
-
-    // Confirmation mode: focus lands on the destructive confirm Delete button.
-    const confirmDelete = within(scoped).getByRole("button", { name: /^Delete\b/ });
-    expect(confirmDelete).toHaveFocus();
-    expect(within(scoped).getByRole("button", { name: /^Cancel\b/ })).toBeInTheDocument();
-
-    // Escape cancels the confirmation and restores the default row actions.
-    await user.keyboard("{Escape}");
-    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
-    expect(within(scoped).getByRole("button", { name: /^Delete\b/ })).toBeInTheDocument();
-    expect(updateChat).not.toHaveBeenCalled();
+    await waitFor(() => expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1"));
+    expect(screen.getByRole("checkbox", { name: "Select all displayed chats" })).toHaveFocus();
+    view.rerender(
+      <ChatSessionProvider value={makeSession({ chats: [] })}>
+        <ChatHistoryPanel openChatWindow={vi.fn()} />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getByRole("textbox", { name: "Search chat history" })).toHaveFocus();
   });
 
   // #2723 (S3358): clicking Cancel while editing a title (distinct from the "empty submit"
@@ -508,64 +652,6 @@ describe("ChatHistoryPanel", () => {
     expect(updateChat).not.toHaveBeenCalled();
   });
 
-  // #2723 (S3358): clicking (not keying Escape on) the confirm-mode Cancel button.
-  it("clicking Cancel during delete-confirm closes it without deleting", async () => {
-    const user = userEvent.setup();
-    renderPanel();
-
-    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
-    expect(row).not.toBeNull();
-    const scoped = row as HTMLElement;
-
-    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
-    await user.click(within(scoped).getByRole("button", { name: /^Cancel\b/ }));
-
-    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
-    expect(updateChat).not.toHaveBeenCalled();
-  });
-
-  // #2723 (S3358): Escape while focus is on the confirm-mode Delete button itself (the
-  // existing GEN-UI-FOCUS-016 test above focuses it via Enter-to-activate; this pins the
-  // handler directly regardless of that focus path).
-  it("Escape on the confirm Delete button cancels the delete confirmation", async () => {
-    const user = userEvent.setup();
-    renderPanel();
-
-    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
-    expect(row).not.toBeNull();
-    const scoped = row as HTMLElement;
-
-    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
-    const confirmDelete = within(scoped).getByRole("button", { name: /^Delete\b/ });
-    confirmDelete.focus();
-    await user.keyboard("{Escape}");
-
-    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
-    expect(updateChat).not.toHaveBeenCalled();
-  });
-
-  // #2723 (S3358): Escape while focus is on the confirm-mode Cancel button (its own
-  // onKeyDown, distinct from the Delete button's handler pinned above).
-  it("Escape on the confirm Cancel button also cancels the delete confirmation", async () => {
-    const user = userEvent.setup();
-    renderPanel();
-
-    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
-    expect(row).not.toBeNull();
-    const scoped = row as HTMLElement;
-
-    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
-    const cancelButton = within(scoped).getByRole("button", { name: /^Cancel\b/ });
-    cancelButton.focus();
-    await user.keyboard("{Escape}");
-
-    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
-    expect(updateChat).not.toHaveBeenCalled();
-  });
-
   // #2723 (S3358): the "deleted" row-actions branch has its own Rename button (distinct
   // JSX from the default branch's Rename button already exercised above).
   // KEIKO-0452: with more than one row visible, every action button's accessible name must be
@@ -576,7 +662,9 @@ describe("ChatHistoryPanel", () => {
     const chatB = makeChat({ id: "b", title: "Bug hunt" });
     renderPanel(makeSession({ chats: [chatA, chatB] }));
     const renameButtons = screen.getAllByRole("button", { name: /^Rename\b/ });
-    const deleteButtons = screen.getAllByRole("button", { name: /^Delete\b/ });
+    const deleteButtons = screen
+      .getAllByRole("article")
+      .flatMap((row) => within(row).getAllByRole("button", { name: /^Delete\b/ }));
     const renameNames = renameButtons.map((btn) => btn.getAttribute("aria-label"));
     const deleteNames = deleteButtons.map((btn) => btn.getAttribute("aria-label"));
     expect(new Set(renameNames).size).toBe(renameNames.length);
@@ -604,7 +692,7 @@ describe("ChatHistoryPanel", () => {
 });
 
 // KEIKO-0820 — rename/delete/restore failure messages were hardcoded English, unlike the sibling
-// purge path (setError(optionalT("chat.history.purgeFailed", { detail }))). Locale set to German
+// permanent-deletion path. Locale set to German
 // (matching the window.localStorage.setItem("keiko.locale", "de") pattern established by
 // KeyboardShortcutsPanel.test.tsx) proves each of the four paths now renders through the optional
 // widget catalog instead of the literal English string.
@@ -680,15 +768,12 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
   });
 
   it("shows the German delete-failed error with the caught detail, not the English literal", async () => {
-    vi.mocked(updateChat).mockRejectedValueOnce(new Error("disk busy"));
+    vi.mocked(deleteChat).mockRejectedValueOnce(new Error("disk busy"));
     const user = userEvent.setup();
     renderGermanPanel();
     await waitFor(() => expect(document.documentElement.lang).toBe("de"));
 
-    // Both the trigger and the confirm button share the same aria-label pattern
-    // (t("chat.history.action.delete", { title })) for the non-deleted (moveToTrash) row.
-    await user.click(screen.getByRole("button", { name: /löschen/i }));
-    await user.click(screen.getByRole("button", { name: /löschen/i }));
+    await user.click(screen.getByRole("button", { name: "Sprint triage löschen" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Löschen fehlgeschlagen: disk busy");

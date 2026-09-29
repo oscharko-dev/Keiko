@@ -546,6 +546,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "files-widget-chunk",
   "chat-bind",
   "command-palette",
+  "chat-history-deletion",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -555,6 +556,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "files widget chunk": "files-widget-chunk",
   "chat bind": "chat-bind",
   "command palette": "command-palette",
+  "chat history deletion": "chat-history-deletion",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -570,6 +572,9 @@ const CLIENT_STAGE_FIELDS = {
     values: CLIENT_STAGE_ACTIVITY_LOG_IDS,
   },
   ordinal: { type: "integer", dataClass: "count", required: true },
+  requestedCount: { type: "integer", dataClass: "count", required: false },
+  deletedCount: { type: "integer", dataClass: "count", required: false },
+  failedCount: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const CLIENT_STAGE_STARTED_OPERATION = defineActivityLogOperation({
@@ -1520,6 +1525,7 @@ function logClientStageStarted(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
+        ...request.deletion,
         completeness: "complete",
         loss: "none",
       },
@@ -1538,6 +1544,7 @@ function logClientStageSettled(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
+        ...request.deletion,
         completeness: "complete",
         loss: "none",
       },

@@ -1256,15 +1256,21 @@ export async function updateChatGitChangeScopes(
   });
 }
 
-export async function deleteChat(id: string, projectPath: string): Promise<void> {
+export async function deleteChat(
+  id: string,
+  projectPath: string,
+  correlationId?: string,
+): Promise<void> {
   const request: PurgeChatRequest = {
     projectPath,
     confirmation: { chatId: id, irreversible: true },
   };
-  await fetchJson<void>(`/api/chats?id=${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    body: JSON.stringify(request),
-  });
+  await fetchJson<void>(
+    `/api/chats?id=${encodeURIComponent(id)}`,
+    { method: "DELETE", body: JSON.stringify(request) },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function fetchChatMessages(

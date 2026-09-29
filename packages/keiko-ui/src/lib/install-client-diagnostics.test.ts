@@ -3,7 +3,10 @@
 // that it does — and that it does nothing else — lives where a reviewer looks for it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  isClientDiagnosticIngestRequest,
+  isClientStageIngestRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
 import {
   clientDiagnosticPostFailureCount,
@@ -578,6 +581,30 @@ describe("fanOutClientDiagnostic stage evidence", () => {
       ordinal: 1,
       durationMs: 5,
     });
+  });
+
+  it("preserves correlated body-free bulk-deletion counts through the stage transport", () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("chat history deletion: settled", {
+      correlationId: "ui_history-delete-0001",
+      stageReport: {
+        stage: "chat history deletion",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 12,
+        deletion: { requestedCount: 3, deletedCount: 2, failedCount: 1 },
+      },
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(isClientStageIngestRequest(body)).toBe(true);
+    expect(body).toMatchObject({
+      correlationId: "ui_history-delete-0001",
+      deletion: { requestedCount: 3, deletedCount: 2, failedCount: 1 },
+    });
+    expect(body).not.toHaveProperty("message");
+    expect(debug).toHaveBeenCalledOnce();
   });
 
   it("never drains the page's pending delivery loss for a stage report, leaving it for the next report", () => {

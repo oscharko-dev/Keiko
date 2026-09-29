@@ -175,12 +175,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.contextWindow.notice":
     "Der sichtbare Verlauf enthält {count} Beiträge. Kontext jenseits der Grenze von 48 Beiträgen kann komprimiert werden.",
   "chat.history.purge": "Dauerhaft löschen",
-  "chat.history.purgeConfirm": "Dauerhaftes Löschen bestätigen",
-  "chat.history.purgeWarning":
-    "Diese Konversation und ihre gespeicherten Nachrichten dauerhaft löschen? Dies kann nicht rückgängig gemacht werden.",
-  "chat.history.purgeFailed": "Dauerhaftes Löschen fehlgeschlagen: {detail}",
   "chat.history.renameEmptyTitle": "Titel darf nicht leer sein.",
   "chat.history.renameFailed": "Umbenennen fehlgeschlagen.",
+  "chat.history.bulkDeleteFailed":
+    "{count} ausgewählte Chats konnten nicht gelöscht werden: {detail}",
   "chat.history.deleteFailed": "Löschen fehlgeschlagen: {detail}",
   "chat.history.restoreFailed": "Wiederherstellen fehlgeschlagen: {detail}",
   "chat.regenerate.versionSelector": "Antwortversion",

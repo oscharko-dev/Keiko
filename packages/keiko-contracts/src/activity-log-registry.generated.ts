@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "28a40a4ec944696171c9a58368fd521834ef7a9354d74e734fa5251b25086b8d" as const;
+  "7543576259f4830ccdd0796d0f95001cc79db0ad2e29b1b01fdc94e70bcb4fc0" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3344,12 +3344,28 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "files-widget-chunk",
           "chat-bind",
           "command-palette",
+          "chat-history-deletion",
         ],
       },
       ordinal: {
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      requestedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      deletedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      failedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -3388,12 +3404,28 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "files-widget-chunk",
           "chat-bind",
           "command-palette",
+          "chat-history-deletion",
         ],
       },
       ordinal: {
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      requestedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      deletedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      failedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -33368,10 +33400,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "deletedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "failedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "ordinal",
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "requestedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "stage",
@@ -33398,10 +33448,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "deletedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "failedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "ordinal",
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "requestedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "stage",
