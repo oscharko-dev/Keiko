@@ -47,6 +47,17 @@ function fixture(content: string): CurrentPromptCompactionInput {
 }
 
 describe("current prompt semantic compaction", () => {
+  it("frames descriptive summaries as the current task rather than another request to summarize", async () => {
+    const input = fixture("Project notes. ".repeat(1600));
+    const call: CurrentPromptCompactionInput["call"] = () =>
+      Promise.resolve(response("Task: Return only JSON with the corrected budget of 60000 EUR."));
+    const compacted = await compactCurrentChatPrompt({ ...input, call });
+    expect(compacted).toContain("Carry out the user's task described below");
+    expect(compacted).toContain("required output format");
+    expect(compacted).toContain("Later corrections override earlier statements");
+    expect(compacted).toContain("Return only JSON");
+  });
+
   it("allows a slow provider to complete within the total foreground preparation budget", async () => {
     vi.useFakeTimers();
     try {
