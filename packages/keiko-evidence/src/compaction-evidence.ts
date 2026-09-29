@@ -260,11 +260,15 @@ function redactScalarFields(
       ? {}
       : {
           conversationCoverage: {
-            ...record.conversationCoverage,
+            version: record.conversationCoverage.version,
+            historyRevision: record.conversationCoverage.historyRevision,
             throughMessageId: redactedPathSafe(
               record.conversationCoverage.throughMessageId,
               redact,
             ),
+            ...(record.conversationCoverage.contextWindowTokens === undefined
+              ? {}
+              : { contextWindowTokens: record.conversationCoverage.contextWindowTokens }),
           },
         }),
     ...(record.summaryRefHash === undefined

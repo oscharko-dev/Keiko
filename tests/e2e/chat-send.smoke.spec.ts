@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
-import { pasteFromSystemClipboard } from "./support/editor-chord.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -183,7 +182,9 @@ test("loads local highlighting, pastes and scrolls code inside the Composer @smo
   ).join("\n");
   const input = code.getByRole("textbox", { name: "Code input" });
   await code.locator(".view-lines").click();
-  await pasteFromSystemClipboard(page, input, source);
+  // Native clipboard paste follows the OS, independent of Monaco's user-agent command bindings.
+  await page.evaluate((content) => navigator.clipboard.writeText(content), source);
+  await input.press("ControlOrMeta+V");
   await code.hover();
   await expect
     .poll(() =>

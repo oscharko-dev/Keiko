@@ -20,7 +20,7 @@ function queryTerms(query: string): readonly string[] {
         .match(/\p{L}{5,}/gu) ?? [],
     ),
   ]
-    .map((word) => word.slice(0, 5))
+    .map((word) => Array.from(word).slice(0, 5).join(""))
     .slice(0, 24);
 }
 

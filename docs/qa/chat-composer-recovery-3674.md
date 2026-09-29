@@ -15,11 +15,17 @@ The original checkout remains unchanged. All 108 changed and untracked paths wer
 - Diagnose the reported all-model customer context rejection. The supplied screenshots show the generic error; the customer installation state is unavailable. Local real v1.1.12 requests currently succeed for GPT-5.4, Mistral-Large-3, and GPT-OSS-120B both with empty history and twelve-message history. This is a limitation of reproduction, not a customer resolution claim.
 - Run local applicable gates and required current-head CI, address every review conversation, and merge only after verified green checks. Do not publish a new release.
 
+## Audit follow-up
+
+Failure-first regressions reproduced and repaired a private-use Unicode caret-marker collision, truncated supplementary-plane letters in history recall, and unregistered checkpoint metadata being copied into evidence. The Composer cursor now selects a collision-free marker; history lookup preserves complete Unicode code points; checkpoint validation rejects unknown fields, and persistence copies only registered metadata. Additional schema tests cover invalid identities, revisions and window limits. The CodeQL trailing-argument finding is also repaired. Local failing and passing outputs are retained; review resolution awaits the published repair reference. Eleven HTTP-boundary tests exercise persisted manual compaction, unchanged source messages, wrong-project/model validation, CSRF rejection, and cancellation/listener cleanup behind a real predecessor. The initial required new-code coverage result was 84.55%; the added schema and route regressions close those observed coverage gaps, with the next exact-head report still required.
+
+The exact workflow OSV scanner reproduced two high-severity fast-uri findings and one medium-severity jsdom undici finding. Only the relevant overrides and lock entries are updated to fast-uri 3.1.7 and undici 8.10.2. The scanner passes the repaired lockfile without policy exceptions. A separate current npm audit reports zero known vulnerabilities across 1,025 resolved dependencies; both documented generic and provider secret-scanning queries return zero open alerts. Scoped registry signatures were verified; the full-tree attestation check remains limited by the existing upstream whatwg-url attestation 404. The native clipboard gesture remains directly in the Chat journey; the shared editor performance ruler is byte-identical to reviewed dev again. Its committed evidence is therefore retained unchanged. Lock-bound tool-catalog reference evidence and Linux production-bundle evidence still require regeneration through their existing producers.
+
 ## Verified behavior and limits
 
 All five real Chromium journeys in `tests/e2e/chat-send.smoke.spec.ts` pass: a persisted chat send; six Backspaces removing an empty heading; local Monaco highlighting with native system-clipboard paste and wheel scrolling; overlay containment in a short viewport; and twelve-model scrolling/filtering with unsupported attachment controls hidden. Clipboard input uses the actual operating-system paste chord rather than a Monaco command or a fabricated paste event.
 
-The complete UI coverage run passes 478 files and 8,846 tests, with one existing skipped test. The shared Composer Monaco adapter has 100% statement, branch, function and line coverage in lifecycle tests. Production assembly and editor bundle checks pass; the first-load editor/Monaco byte budget remains zero. Architecture, negative architecture fixtures, dependency currency, activity-log reconstruction, error observability, retrieval/grounded-faithfulness and context quality checks pass locally. Type-checking, ESLint and formatting are separate passing checks. The script coverage rerun passes 252 files and 6,642 tests, with 27 existing skips. The full package rerun encountered stale transformed code while new regressions were being added, plus one obsolete expectation that a configured model has no effective context profile. All six failures now pass in the final targeted run (61 tests); a fresh full package run is in progress with production sources frozen. The package coverage-floor judge passes all 27 packages and 74 governed file floors. No full-matrix or customer-resolution claim is made.
+The complete UI coverage run passes 478 files and 8,848 tests, with one existing skipped test. The shared Composer Monaco adapter has 100% statement, branch, function and line coverage in lifecycle tests. Production assembly and editor bundle checks pass; the first-load editor/Monaco byte budget remains zero. Architecture, negative architecture fixtures, dependency currency, activity-log reconstruction, error observability, retrieval/grounded-faithfulness and context quality checks pass locally. Type-checking, ESLint and formatting are separate passing checks. The script coverage rerun passes 252 files and 6,642 tests, with 27 existing skips. The full package rerun encountered stale transformed code while new regressions were being added, plus one obsolete expectation that a configured model has no effective context profile. All six failures now pass in the targeted run (61 tests). The fresh full package run with production sources frozen passes 2,176 files and 45,985 tests, with seven existing skipped files and 57 existing skipped tests. Subsequent audit repairs receive separate affected-area verification below. The package coverage-floor judge passes all 27 packages and 74 governed file floors. No full-matrix or customer-resolution claim is made.
 
 The [body-free actual-model qualification report](chat-context-model-qualification-3674.json) records five large-current-prompt tests and nine repeated-compaction/model-switch tests. Large prompts contain 106,557 German characters; all source characters are processed in ordered, individually admitted requests. The final answers preserve corrected amounts/deadlines, exact identifiers and JSON output on GPT-5.4, Mistral-Large-3 and GPT-OSS-120B through LiteLLM, and GPT-5.4/Mistral-Large-3 directly through Azure. The repeated-history matrix tests configured 4,096/16,384/4,096-token admission windows, persistent checkpoints and later corrections across three rounds. These are configured Keiko admission windows; the underlying deployed model can have a larger physical window.
 
@@ -33,113 +39,113 @@ This is release-impacting UI/context work with additive SQLite chat-history revi
 
 ## Original path disposition
 
-| Original path                                                                            | Integration disposition                                                     |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `docs/adr/ADR-0042-keiko-editor-package-and-boundaries.md`                               | Recovered original work                                                     |
-| `docs/observability/failure-surface-inventory.generated.json`                            | Integrated original work with reviewed dev implementation                   |
-| `docs/observability/op-catalog.generated.json`                                           | Integrated original work with reviewed dev implementation                   |
-| `docs/release/1209-bundle-evidence.json`                                                 | Recovered original work                                                     |
-| `docs/release/2296-dependency-security-closeout.md`                                      | Recovered original work                                                     |
-| `package-lock.json`                                                                      | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-contracts/src/activity-log-failure-class-contracts.ts`                   | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-contracts/src/activity-log-registry.generated.ts`                        | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-contracts/src/bff-wire.ts`                                               | Recovered original work                                                     |
-| `packages/keiko-contracts/src/context-engineering-compaction-validation.ts`              | Recovered original work                                                     |
-| `packages/keiko-contracts/src/context-engineering.ts`                                    | Recovered original work                                                     |
-| `packages/keiko-evidence/src/compaction-evidence.ts`                                     | Recovered original work                                                     |
-| `packages/keiko-model-gateway/src/gateway-prompt-admission.test.ts`                      | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/gateway-prompt-admission.ts`                           | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/gateway.admission-regressions.test.ts`                 | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/gateway.logging.test.ts`                               | Recovered original work                                                     |
-| `packages/keiko-model-gateway/src/gateway.test.ts`                                       | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts`                    | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/gateway.ts`                                            | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/observability.ts`                                      | Recovered original work                                                     |
-| `packages/keiko-model-gateway/src/prompt-admission.test.ts`                              | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/prompt-admission.ts`                                   | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/prompt-token-accounting.test.ts`                       | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/prompt-token-accounting.ts`                            | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/provider-token-counter.test.ts`                        | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/provider-token-counter.ts`                             | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-model-gateway/src/toolCatalogBridge.ts`                                  | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-compaction-evidence.test.ts`                             | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-compaction-evidence.ts`                                  | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-compaction-model-summary.ts`                             | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-compaction-resurfacing.ts`                               | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-context-log.ts`                                          | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-context-status.test.ts`                                  | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-context-status.ts`                                       | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-gateway-assembly.test.ts`                                | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/chat-handlers.ts`                                             | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/chat-history-rehydration.ts`                                  | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-history-snapshot.test.ts`                                | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/chat-history-snapshot.ts`                                     | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-prompt-budget-diagnostics.ts`                            | Recovered original work                                                     |
-| `packages/keiko-server/src/chat-prompt-budget-token-summary.ts`                          | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-server/src/chat-prompt-budget.ts`                                        | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/conversation-compaction.test.ts`                              | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/conversation-compaction.ts`                                   | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/conversation-gateway.ts`                                      | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/conversation-structured-compaction.test.ts`                   | Recovered original work                                                     |
-| `packages/keiko-server/src/gateway-discovery-log.ts`                                     | Recovered original work                                                     |
-| `packages/keiko-server/src/gateway-setup.test.ts`                                        | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-server/src/gateway-setup.ts`                                             | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-server/src/gitDelivery/commitDraftQuality.test.ts`                       | Recovered original work                                                     |
-| `packages/keiko-server/src/gitDelivery/commitDraftQuality.ts`                            | Recovered original work                                                     |
-| `packages/keiko-server/src/grounded-conversation-continuity.ts`                          | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-server/src/grounded-qa-hybrid.ts`                                        | Recovered original work                                                     |
-| `packages/keiko-server/src/grounded-qa-multi-source.ts`                                  | Recovered original work                                                     |
-| `packages/keiko-server/src/grounded-qa.ts`                                               | Recovered original work                                                     |
-| `packages/keiko-server/src/process-log-sink.test.ts`                                     | Retained reviewed dev implementation; overlapping original patch superseded |
-| `packages/keiko-server/src/process-log-sink.ts`                                          | Recovered original work                                                     |
-| `packages/keiko-server/src/routes.ts`                                                    | Recovered original work                                                     |
-| `packages/keiko-server/src/store-handlers.ts`                                            | Recovered original work                                                     |
-| `packages/keiko-server/src/store/db.ts`                                                  | Recovered original work                                                     |
-| `packages/keiko-server/src/store/messages.ts`                                            | Recovered original work                                                     |
-| `packages/keiko-server/src/store/schema.ts`                                              | Recovered original work                                                     |
-| `packages/keiko-server/src/store/types.ts`                                               | Recovered original work                                                     |
-| `packages/keiko-ui/eslint-suppressions.json`                                             | Recovered original work                                                     |
-| `packages/keiko-ui/package.json`                                                         | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-ui/src/app/components/desktop/AttachmentIntake.test.tsx`                 | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/AttachmentStrip.tsx`                       | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/ChatContextMeter.module.css`               | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/ChatContextMeter.test.tsx`                 | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/ChatContextMeter.tsx`                      | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/ChatContextMeterContainer.tsx`             | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/ChatWindow.test.tsx`                       | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx`                            | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/ComposerEmptyState.test.tsx`               | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/KeikoSelect.module.css`                    | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/KeikoSelect.test.tsx`                      | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/KeikoSelect.tsx`                           | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/ComposerShell.tsx`                | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/MarkdownComposer.module.css`      | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/MarkdownComposer.test.tsx`        | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/MarkdownComposer.tsx`             | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-code-runtime.ts`         | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-code-view.test.ts`       | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-code-view.ts`            | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-editor-controller.ts`    | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-editor-state.ts`         | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-editor-types.ts`         | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-format-commands.ts`      | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-input-rules.ts`          | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-markdown.test.ts`        | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/composer/composer-markdown.ts`             | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/hooks/useWorkspace.ts`                     | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-ui/src/app/components/desktop/hooks/useWorkspace.wheel.test.tsx`         | Integrated original work with reviewed dev implementation                   |
-| `packages/keiko-ui/src/app/components/desktop/useContextDisclosure.ts`                   | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/viewport-overlay.test.ts`                  | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/viewport-overlay.ts`                       | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/widgets/cards/editorMonacoRuntime.test.ts` | Recovered original work                                                     |
-| `packages/keiko-ui/src/app/components/desktop/widgets/cards/editorMonacoRuntime.ts`      | Recovered original work                                                     |
-| `packages/keiko-ui/src/lib/api.ts`                                                       | Recovered original work                                                     |
-| `packages/keiko-ui/src/lib/i18n-messages.de.ts`                                          | Recovered original work                                                     |
-| `packages/keiko-ui/src/lib/i18n-messages.en.ts`                                          | Recovered original work                                                     |
-| `packages/keiko-ui/vitest.setup.ts`                                                      | Recovered original work                                                     |
-| `packages/keiko-workflows/src/context-budget/index.ts`                                   | Recovered original work                                                     |
-| `packages/keiko-workflows/src/context-budget/rehydration.ts`                             | Recovered original work                                                     |
-| `packages/keiko-workflows/src/context-budget/structured-digest.test.ts`                  | Recovered original work                                                     |
-| `packages/keiko-workflows/src/context-budget/structured-digest.ts`                       | Recovered original work                                                     |
-| `scripts/lib/activity-log-failure-surfaces.mjs`                                          | Recovered original work                                                     |
-| `tests/activity-log-scenarios/model-gateway.test.ts`                                     | Recovered original work                                                     |
+| Original path                                                                            | Integration disposition                                                             |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `docs/adr/ADR-0042-keiko-editor-package-and-boundaries.md`                               | Recovered original work                                                             |
+| `docs/observability/failure-surface-inventory.generated.json`                            | Integrated original work with reviewed dev implementation                           |
+| `docs/observability/op-catalog.generated.json`                                           | Integrated original work with reviewed dev implementation                           |
+| `docs/release/1209-bundle-evidence.json`                                                 | Recovered original work                                                             |
+| `docs/release/2296-dependency-security-closeout.md`                                      | Recovered original work                                                             |
+| `package-lock.json`                                                                      | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-contracts/src/activity-log-failure-class-contracts.ts`                   | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-contracts/src/activity-log-registry.generated.ts`                        | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-contracts/src/bff-wire.ts`                                               | Recovered original work                                                             |
+| `packages/keiko-contracts/src/context-engineering-compaction-validation.ts`              | Recovered original work                                                             |
+| `packages/keiko-contracts/src/context-engineering.ts`                                    | Recovered original work                                                             |
+| `packages/keiko-evidence/src/compaction-evidence.ts`                                     | Recovered original work                                                             |
+| `packages/keiko-model-gateway/src/gateway-prompt-admission.test.ts`                      | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/gateway-prompt-admission.ts`                           | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/gateway.admission-regressions.test.ts`                 | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/gateway.logging.test.ts`                               | Recovered original work                                                             |
+| `packages/keiko-model-gateway/src/gateway.test.ts`                                       | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts`                    | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/gateway.ts`                                            | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/observability.ts`                                      | Recovered original work                                                             |
+| `packages/keiko-model-gateway/src/prompt-admission.test.ts`                              | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/prompt-admission.ts`                                   | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/prompt-token-accounting.test.ts`                       | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/prompt-token-accounting.ts`                            | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/provider-token-counter.test.ts`                        | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/provider-token-counter.ts`                             | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-model-gateway/src/toolCatalogBridge.ts`                                  | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-compaction-evidence.test.ts`                             | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-compaction-evidence.ts`                                  | Retained reviewed dev implementation; obsolete recovered alias removed during audit |
+| `packages/keiko-server/src/chat-compaction-model-summary.ts`                             | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-compaction-resurfacing.ts`                               | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-context-log.ts`                                          | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-context-status.test.ts`                                  | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-context-status.ts`                                       | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-gateway-assembly.test.ts`                                | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/chat-handlers.ts`                                             | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/chat-history-rehydration.ts`                                  | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-history-snapshot.test.ts`                                | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/chat-history-snapshot.ts`                                     | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-prompt-budget-diagnostics.ts`                            | Recovered original work                                                             |
+| `packages/keiko-server/src/chat-prompt-budget-token-summary.ts`                          | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-server/src/chat-prompt-budget.ts`                                        | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/conversation-compaction.test.ts`                              | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/conversation-compaction.ts`                                   | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/conversation-gateway.ts`                                      | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/conversation-structured-compaction.test.ts`                   | Recovered original work                                                             |
+| `packages/keiko-server/src/gateway-discovery-log.ts`                                     | Recovered original work                                                             |
+| `packages/keiko-server/src/gateway-setup.test.ts`                                        | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-server/src/gateway-setup.ts`                                             | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-server/src/gitDelivery/commitDraftQuality.test.ts`                       | Recovered original work                                                             |
+| `packages/keiko-server/src/gitDelivery/commitDraftQuality.ts`                            | Recovered original work                                                             |
+| `packages/keiko-server/src/grounded-conversation-continuity.ts`                          | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-server/src/grounded-qa-hybrid.ts`                                        | Recovered original work                                                             |
+| `packages/keiko-server/src/grounded-qa-multi-source.ts`                                  | Recovered original work                                                             |
+| `packages/keiko-server/src/grounded-qa.ts`                                               | Recovered original work                                                             |
+| `packages/keiko-server/src/process-log-sink.test.ts`                                     | Retained reviewed dev implementation; overlapping original patch superseded         |
+| `packages/keiko-server/src/process-log-sink.ts`                                          | Recovered original work                                                             |
+| `packages/keiko-server/src/routes.ts`                                                    | Recovered original work                                                             |
+| `packages/keiko-server/src/store-handlers.ts`                                            | Recovered original work                                                             |
+| `packages/keiko-server/src/store/db.ts`                                                  | Recovered original work                                                             |
+| `packages/keiko-server/src/store/messages.ts`                                            | Recovered original work                                                             |
+| `packages/keiko-server/src/store/schema.ts`                                              | Recovered original work                                                             |
+| `packages/keiko-server/src/store/types.ts`                                               | Recovered original work                                                             |
+| `packages/keiko-ui/eslint-suppressions.json`                                             | Recovered original work                                                             |
+| `packages/keiko-ui/package.json`                                                         | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-ui/src/app/components/desktop/AttachmentIntake.test.tsx`                 | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/AttachmentStrip.tsx`                       | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/ChatContextMeter.module.css`               | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/ChatContextMeter.test.tsx`                 | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/ChatContextMeter.tsx`                      | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/ChatContextMeterContainer.tsx`             | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/ChatWindow.test.tsx`                       | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx`                            | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/ComposerEmptyState.test.tsx`               | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/KeikoSelect.module.css`                    | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/KeikoSelect.test.tsx`                      | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/KeikoSelect.tsx`                           | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/ComposerShell.tsx`                | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/MarkdownComposer.module.css`      | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/MarkdownComposer.test.tsx`        | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/MarkdownComposer.tsx`             | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-code-runtime.ts`         | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-code-view.test.ts`       | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-code-view.ts`            | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-editor-controller.ts`    | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-editor-state.ts`         | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-editor-types.ts`         | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-format-commands.ts`      | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-input-rules.ts`          | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-markdown.test.ts`        | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/composer/composer-markdown.ts`             | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/hooks/useWorkspace.ts`                     | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-ui/src/app/components/desktop/hooks/useWorkspace.wheel.test.tsx`         | Integrated original work with reviewed dev implementation                           |
+| `packages/keiko-ui/src/app/components/desktop/useContextDisclosure.ts`                   | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/viewport-overlay.test.ts`                  | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/viewport-overlay.ts`                       | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/widgets/cards/editorMonacoRuntime.test.ts` | Recovered original work                                                             |
+| `packages/keiko-ui/src/app/components/desktop/widgets/cards/editorMonacoRuntime.ts`      | Recovered original work                                                             |
+| `packages/keiko-ui/src/lib/api.ts`                                                       | Recovered original work                                                             |
+| `packages/keiko-ui/src/lib/i18n-messages.de.ts`                                          | Recovered original work                                                             |
+| `packages/keiko-ui/src/lib/i18n-messages.en.ts`                                          | Recovered original work                                                             |
+| `packages/keiko-ui/vitest.setup.ts`                                                      | Recovered original work                                                             |
+| `packages/keiko-workflows/src/context-budget/index.ts`                                   | Recovered original work                                                             |
+| `packages/keiko-workflows/src/context-budget/rehydration.ts`                             | Recovered original work                                                             |
+| `packages/keiko-workflows/src/context-budget/structured-digest.test.ts`                  | Recovered original work                                                             |
+| `packages/keiko-workflows/src/context-budget/structured-digest.ts`                       | Recovered original work                                                             |
+| `scripts/lib/activity-log-failure-surfaces.mjs`                                          | Recovered original work                                                             |
+| `tests/activity-log-scenarios/model-gateway.test.ts`                                     | Recovered original work                                                             |

@@ -192,6 +192,15 @@ it("keeps excerpt offsets in the original Unicode text when lowercase expansion 
   expect(result).toContain("60000");
 });
 
+it("rehydrates source facts matched by letters outside the Unicode basic plane", () => {
+  const { store, chatId, add } = fixture();
+  const source = add("user", "𐐀𐐁𐐂𐐃𐐄: The corrected budget is 900 euros.");
+  add("assistant", "Understood.");
+  const result = rehydrateChatHistory(store, chatId, "𐐀𐐁𐐂𐐃𐐄?", new Set(), []);
+  expect(result).toContain(source.id);
+  expect(result).toContain("900 euros");
+});
+
 function canonicalTurn(
   store: UiStore,
   chatId: string,

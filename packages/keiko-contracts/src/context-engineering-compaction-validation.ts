@@ -34,6 +34,12 @@ const PROVENANCE_REF_KINDS: ReadonlySet<string> = new Set([
 const ASSUMPTION_CONFIDENCES: ReadonlySet<string> = new Set(["low", "medium", "high"]);
 
 const COMMAND_OUTCOME_SUMMARY_MAX_CHARS = 200;
+const CONVERSATION_COVERAGE_FIELDS: ReadonlySet<string> = new Set([
+  "version",
+  "throughMessageId",
+  "historyRevision",
+  "contextWindowTokens",
+]);
 
 // ─── Shared primitives (local; contracts is a leaf, no shared-util import) ──────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -622,6 +628,11 @@ function collectConversationCoverage(coverage: unknown, reasons: string[], prefi
     reasons.push(`${prefix}.conversationCoverage invalid`);
     return;
   }
+  pushIf(
+    reasons,
+    Object.keys(coverage).some((key) => !CONVERSATION_COVERAGE_FIELDS.has(key)),
+    `${prefix}.conversationCoverage unknown field`,
+  );
   pushIf(
     reasons,
     coverage.version !== 1 ||

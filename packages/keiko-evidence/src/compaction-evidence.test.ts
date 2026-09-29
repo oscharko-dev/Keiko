@@ -245,6 +245,39 @@ function sha256Hex(value: string): string {
 }
 
 describe("compaction evidence (ADR-0056 W2)", () => {
+  it.each([undefined, 4096])(
+    "persists only registered conversation coverage metadata: %s",
+    (contextWindowTokens) => {
+      const store = createInMemoryEvidenceStore();
+      const coverage = {
+        version: 1 as const,
+        throughMessageId: "message-fixture",
+        historyRevision: 2,
+        ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+      };
+      const record = {
+        ...compactionRecord(),
+        conversationCoverage: { ...coverage, privateBodyCanary: "private-body-canary" },
+      };
+      const result = persistCompactionEvidence(
+        {
+          runId: "coverage-field-fixture",
+          modelId: "example-model",
+          records: [record],
+          startedAt: NOW,
+          finishedAt: NOW + 5,
+        },
+        { store, env: {} },
+      );
+      expect(requireFirstCompaction(result.manifest).conversationCoverage).toEqual(coverage);
+      expect(store.get("coverage-field-fixture")).not.toContain("private-body-canary");
+      expect(
+        requireFirstCompaction(requireManifest(loadEvidence(store, "coverage-field-fixture")))
+          .conversationCoverage,
+      ).toEqual(coverage);
+    },
+  );
+
   it("Gate 4/5 — field+whole-object redaction removes secrets from the stored manifest JSON", () => {
     const store = createInMemoryEvidenceStore();
     const result = persistCompactionEvidence(

@@ -76915,7 +76915,7 @@
     {
       "op": "chat.compaction.evidence",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-compaction-evidence.ts:84",
+      "site": "packages/keiko-server/src/chat-compaction-evidence.ts:83",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

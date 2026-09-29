@@ -314,17 +314,3 @@ export async function replaceEditorBuffer(
   // can leak later as an unhandled rejection.
   await Promise.all([exactBufferObserved, performReplacementGesture(page, editorWindow, text)]);
 }
-
-/**
- * Paste is a native browser clipboard gesture, even when an editor owns the input. The operating
- * system selects its modifier; Monaco's forced user-agent platform only selects editor commands.
- * Keep this separate from editorModifier so macOS qualification also exercises real clipboard input.
- */
-export async function pasteFromSystemClipboard(
-  page: Page,
-  input: Locator,
-  text: string,
-): Promise<void> {
-  await page.evaluate((content) => navigator.clipboard.writeText(content), text);
-  await input.press("ControlOrMeta+V");
-}

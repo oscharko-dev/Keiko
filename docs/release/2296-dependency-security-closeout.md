@@ -35,11 +35,11 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
-| Source                     | Result                                                                     |
-| -------------------------- | -------------------------------------------------------------------------- |
-| `npm audit --json`         | 0 vulnerabilities across 998 resolved packages (99 prod, 878 dev, 145 opt) |
-| Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                |
-| Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout    |
+| Source                     | Result                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `npm audit --json`         | 0 vulnerabilities across 1,025 resolved packages (124 prod, 878 dev, 147 opt) |
+| Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                   |
+| Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout       |
 
 ### How this queue must be queried — and the trap in it
 
@@ -121,6 +121,8 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `fast-uri`                    | root                  | 3.1.7   | current        | Security patch for GHSA-58mr-gqgx-xq4g and GHSA-qw65-cvwx-89v3; exact OSV 2.6.0 lockfile scan passes. PR #3675.                                                                                                                                                                                              |
+| `undici`                      | root                  | 8.10.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-3wwx-pv8p-q78v; the separate 7.29.0 override remains scoped to other consumers. PR #3675.                                                                                                                                        |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                            |
 | `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                       |
