@@ -79,8 +79,16 @@ function type(editor: ComposerEditorController, value: string): void {
 }
 
 describe("Markdown composer editing", () => {
-  it("retains the code input and focus when detecting or changing its language", () => {
-    const { editor } = setup("```\n\n```");
+  it("does not publish an equivalent document replacement as a new draft", () => {
+    const { editor, config } = setup("An unchanged draft.");
+    const equivalent = parseComposerMarkdown("An unchanged draft.");
+    editor.view.dispatch(
+      editor.view.state.tr.replaceWith(0, editor.view.state.doc.content.size, equivalent.content),
+    );
+    expect(config.onChange).not.toHaveBeenCalled();
+  });
+  it("retains focus during language detection and the code input during a manual language change", () => {
+    setup("```\n\n```");
     const input = screen.getByRole("textbox", { name: "Code" });
     input.focus();
     fireEvent.input(input, { target: { value: "export interface Probe { count: number; }" } });

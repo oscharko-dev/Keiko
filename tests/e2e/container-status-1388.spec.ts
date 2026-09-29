@@ -12,7 +12,7 @@ const TAG = "@container-status-1388";
 // `keiko.workspace.v4` restores nothing: `sanitizeWindow` drops a transient record by design and
 // the window silently never appears. Seed the Runtime hub — which IS persisted — and open
 // Containers the way a human does, through its "Containers" action. That is also the only entry
-// point the product offers: `containerStatus` is in neither TYPE_ORDER nor the quick-access lists.
+// point the product offers: `containerStatus` is in neither TYPE_ORDER nor the workspace command lists.
 async function seedRuntimeHubWindow(page: Page): Promise<void> {
   await page.addInitScript(() => {
     window.localStorage.setItem(

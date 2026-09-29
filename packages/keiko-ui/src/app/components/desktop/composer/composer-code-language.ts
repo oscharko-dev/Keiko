@@ -17,7 +17,7 @@ const LANGUAGE_CUES: readonly (readonly [string, readonly RegExp[]])[] = [
   ["sql", [/^SELECT\b/iu, /^CREATE TABLE\b/iu, /^INSERT INTO\b/iu]],
   ["html", [/<!doctype html/iu, /<\/(?:div|span|body|html|p|section)>/iu]],
   ["css", [/^[.#][\w-]{1,128}[ \t]{0,16}\{/u]],
-  ["json", [/^(?:\{|\[)[ \t]{0,16}"/u]],
+  ["json", [/^[{[][ \t]{0,16}"/u]],
   [
     "javascript",
     [

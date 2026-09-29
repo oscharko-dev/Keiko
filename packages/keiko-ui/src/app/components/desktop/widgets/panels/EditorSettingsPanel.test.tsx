@@ -257,7 +257,7 @@ describe("EditorSettingsPanel", () => {
     renderPanel();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     fireEvent.keyDown(screen.getByRole("button", { name: "Press shortcut" }), {
@@ -270,13 +270,13 @@ describe("EditorSettingsPanel", () => {
     expect(editorSettingsView.current.setValue).toHaveBeenCalledWith(
       "user",
       "keybindingOverrides",
-      ["1|quick-access.files|CtrlOrMeta+Shift+O"],
+      ["1|workspace.commands|CtrlOrMeta+Shift+O"],
     );
   });
 
   it("removes and resets existing keyboard shortcut overrides", () => {
     const base = view();
-    const keybindingOverrides = ["1|quick-access.files|CtrlOrMeta+Shift+O"];
+    const keybindingOverrides = ["1|workspace.commands|CtrlOrMeta+Shift+O"];
     editorSettingsView.current = {
       ...base,
       snapshot: snapshot({ fontSize: 16, formatOnSave: true, keybindingOverrides }),
@@ -285,7 +285,7 @@ describe("EditorSettingsPanel", () => {
     renderPanel();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     fireEvent.click(screen.getByRole("button", { name: "Reset keyboard shortcuts" }));
@@ -307,7 +307,7 @@ describe("EditorSettingsPanel", () => {
     expect(screen.getByRole("button", { name: "Protected" })).toBeDisabled();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     fireEvent.keyDown(screen.getByRole("button", { name: "Press shortcut" }), {

@@ -669,7 +669,7 @@ describe("handleGatewaySetup", () => {
       modelId: provider.modelId,
       generation: gatewayConfig.generation(),
       checkedAt: proof.checkedAt,
-      fields: { toolCalling: true },
+      fields: { toolCalling: true, conversationReady: false },
     });
     deps.store.close();
   });

@@ -2,6 +2,7 @@ import type { MessageCatalog } from "./i18n-messages.en";
 
 export const DE_MESSAGES = {
   "chat.context.title": "Gesprächskontext",
+  "chat.context.heading": "Gesprächskontext {percent} %",
   "chat.context.label": "Gesprächskontext: ungefähr {percent}% belegt",
   "chat.context.used": "Geschätzt belegte Tokens",
   "chat.context.inputBudget": "Nutzbare Eingabe-Tokens",
@@ -26,8 +27,6 @@ export const DE_MESSAGES = {
   "header.tileAll": "Alle Fenster kacheln",
   "header.splitFront": "Vordere Fenster teilen",
   "header.cascade": "Fenster stapeln",
-  "header.quickAccess": "Schnellzugriff",
-  "header.openQuickAccess": "Schnellzugriff öffnen",
   "rail.primaryNavigation": "Primäre Arbeitsbereichsnavigation",
   "rail.newChat": "Neuer Chat",
   "rail.codingHistory": "Coding History",
@@ -331,7 +330,7 @@ export const DE_MESSAGES = {
   "window.edge.bottom": "untere",
   "window.edge.left": "linke",
   // Issue: German locale coverage. Window-type display copy lives HERE, not as literals in
-  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the quick-access command list
+  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the workspace command list
   // and the window chrome all resolve it through `localizedWindowTitle`/`localizedWindowDesc`, so
   // one locale switch moves every surface instead of leaving an English name behind.
   "window.type.chat.title": "Chat",

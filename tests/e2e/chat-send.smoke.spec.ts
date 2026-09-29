@@ -18,6 +18,21 @@ const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 // Must match tests/e2e/support/model-mock-server.mjs REPLY_MARKER exactly.
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const tempProjects: string[] = [];
+const updateLoopErrors = new WeakMap<Page, string[]>();
+
+test.beforeEach(({ page }) => {
+  const errors: string[] = [];
+  updateLoopErrors.set(page, errors);
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("Maximum update depth exceeded")) {
+      errors.push("Maximum update depth exceeded");
+    }
+  });
+});
+
+test.afterEach(({ page }) => {
+  expect(updateLoopErrors.get(page)).toEqual([]);
+});
 
 // The desktop shell does not scroll; a floating chat window's composer + send button must fit inside
 // the viewport for Playwright to click them. Give the page enough height for the seeded window.

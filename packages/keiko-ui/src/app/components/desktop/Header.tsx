@@ -6,7 +6,6 @@ import { useTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const SearchIcon = Icons.search;
 const TileIcon = Icons.tile;
 const SplitIcon = Icons.split;
 const CascadeIcon = Icons.cascade;
@@ -14,20 +13,12 @@ const CascadeIcon = Icons.cascade;
 export type HeaderStatusTone = "ok" | "warn" | "danger";
 
 interface HeaderProps {
-  // uiux-fix F039 C223 — visible entry point for the command palette; the Cmd/Ctrl+K
-  // chord alone was undiscoverable (no on-screen hint anywhere in the chrome).
-  readonly openCommandPalette: () => void;
   readonly onTileAll: () => void;
   readonly onSplitFront: () => void;
   readonly onCascade: () => void;
 }
 
-function HeaderImpl({
-  openCommandPalette,
-  onTileAll,
-  onSplitFront,
-  onCascade,
-}: HeaderProps): ReactNode {
+function HeaderImpl({ onTileAll, onSplitFront, onCascade }: HeaderProps): ReactNode {
   const t = useTranslate();
 
   return (
@@ -47,23 +38,13 @@ function HeaderImpl({
         <button
           type="button"
           className="hd-tool ui-tip"
-          onClick={openCommandPalette}
-          data-tip={t("header.quickAccess")}
-          aria-label={t("header.openQuickAccess")}
-        >
-          <SearchIcon size={16} />
-        </button>
-        <button
-          type="button"
-          className="hd-tool ui-tip"
           onClick={onTileAll}
           data-tip={t("header.tileAll")}
           aria-label={t("header.tileAll")}
         >
           <TileIcon size={16} />
         </button>
-        {/* uiux-fix F039 C401 — same wording as the CommandPalette command ("Split front
-            windows") so the action is recognizable across tooltip and palette. */}
+        {/* Keep tooltip and accessible labels consistent. */}
         <button
           type="button"
           className="hd-tool ui-tip"

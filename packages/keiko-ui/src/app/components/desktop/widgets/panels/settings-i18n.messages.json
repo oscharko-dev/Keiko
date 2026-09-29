@@ -855,22 +855,6 @@
     "en": "Open or focus workspace search.",
     "de": "Öffnet oder fokussiert die Arbeitsbereichssuche."
   },
-  "command.quickAccessFiles": {
-    "en": "Quick Access: files",
-    "de": "Schnellzugriff: Dateien"
-  },
-  "command.quickAccessFiles.description": {
-    "en": "Open the unified quick-access file picker.",
-    "de": "Öffnet den einheitlichen Datei-Schnellzugriff."
-  },
-  "command.quickAccessCommands": {
-    "en": "Quick Access: commands",
-    "de": "Schnellzugriff: Befehle"
-  },
-  "command.quickAccessCommands.description": {
-    "en": "Open the unified command palette.",
-    "de": "Öffnet die einheitliche Befehlspalette."
-  },
   "command.openEditorSettings": {
     "en": "Open editor settings",
     "de": "Editor-Einstellungen öffnen"
@@ -1258,5 +1242,13 @@
   "settings.autonomy.footnote": {
     "en": "Full access removes per-action prompts only inside the validated authority envelope. Hard denials and deployment ceilings always remain enforced.",
     "de": "Vollzugriff entfernt Einzelrückfragen nur innerhalb des validierten Authority Envelope. Harte Verbote und Bereitstellungsgrenzen bleiben immer wirksam."
+  },
+  "command.workspaceCommands": {
+    "en": "Workspace commands",
+    "de": "Arbeitsbereichsbefehle"
+  },
+  "command.workspaceCommands.description": {
+    "en": "Open the workspace and editor command palette.",
+    "de": "Öffnet die Befehlsliste für Arbeitsbereich und Editor."
   }
 }

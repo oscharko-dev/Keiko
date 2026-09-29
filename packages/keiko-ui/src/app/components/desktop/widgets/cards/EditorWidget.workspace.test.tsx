@@ -24,7 +24,7 @@ import { EditorWidget } from "./EditorWidget";
 import editorWidgetStyles from "./EditorWidget.module.css";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trust-api";
-import { EditorQuickAccessTriggerProvider } from "../../EditorQuickAccessTriggerContext";
+import { EditorShellActionsProvider } from "../../EditorShellActionsContext";
 import { editorSidebarTrackWidth } from "../../editorSidebarSizing";
 
 const createProjectMock = vi.hoisted(() => vi.fn());
@@ -2391,57 +2391,43 @@ describe("EditorWidget workspace session", () => {
   });
 });
 
-describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 regression)", () => {
-  // #2112 originally routed the Cmd/Ctrl+P chord for the editor-local Quick Open through the
-  // shared useKeyboardShortcuts substrate, which bails out for any editable event target
-  // (isEditableTarget) — including Monaco's own hidden textarea. That silently broke Cmd/Ctrl+P
-  // while the cursor was inside a file, regressing pre-#2112 behavior and violating the epic's
-  // own closure statement ("Cmd/Ctrl+P finds any file from anywhere"). The fix keeps this chord on
-  // the editor's own capture-phase container listener, which fires before Monaco and is
-  // unaffected by that guard.
-  it("opens the unified quick-access palette in file mode from the editor's capturing listener", () => {
-    const openFiles = vi.fn();
+describe("EditorWidget — workspace commands and settings while editing", () => {
+  it("does not capture the retired file-search shortcut", () => {
     const openCommands = vi.fn();
     const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
+      <EditorShellActionsProvider value={{ openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
-      </EditorQuickAccessTriggerProvider>,
+      </EditorShellActionsProvider>,
     );
-
     const workspace = container.querySelector(".editor-workspace");
-    expect(workspace).not.toBeNull();
-    fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true });
-
-    expect(openFiles).toHaveBeenCalledTimes(1);
+    expect(fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true })).toBe(true);
     expect(openCommands).not.toHaveBeenCalled();
+    expect(openEditorSettings).not.toHaveBeenCalled();
   });
 
-  it("opens the unified quick-access palette in command mode on Cmd/Ctrl+Shift+P", () => {
-    const openFiles = vi.fn();
+  it("opens the workspace command palette on Cmd/Ctrl+Shift+P", () => {
     const openCommands = vi.fn();
     const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
+      <EditorShellActionsProvider value={{ openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
-      </EditorQuickAccessTriggerProvider>,
+      </EditorShellActionsProvider>,
     );
 
     const workspace = container.querySelector(".editor-workspace");
     fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true, shiftKey: true });
 
     expect(openCommands).toHaveBeenCalledTimes(1);
-    expect(openFiles).not.toHaveBeenCalled();
   });
 
   it("opens Editor settings from Monaco's editable target", () => {
-    const openFiles = vi.fn();
     const openCommands = vi.fn();
     const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
+      <EditorShellActionsProvider value={{ openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
-      </EditorQuickAccessTriggerProvider>,
+      </EditorShellActionsProvider>,
     );
 
     const workspace = container.querySelector(".editor-workspace");
@@ -2451,11 +2437,10 @@ describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 reg
 
     expect(fireEvent.keyDown(monacoInput, { key: ",", metaKey: true })).toBe(false);
     expect(openEditorSettings).toHaveBeenCalledTimes(1);
-    expect(openFiles).not.toHaveBeenCalled();
     expect(openCommands).not.toHaveBeenCalled();
   });
 
-  it("does not throw when no quick-access trigger is registered (defensive no-op)", () => {
+  it("does not throw when no shell action is registered (defensive no-op)", () => {
     const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
     const workspace = container.querySelector(".editor-workspace");
     expect(() =>

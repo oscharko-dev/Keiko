@@ -1819,19 +1819,22 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   // #3557 review: both phases of one mounted stage carry the client-minted id, so they join.
-  it("logs both phases of a stage under the stage's own correlation id", async () => {
+  it.each([
+    ["chat bind", "chat-bind"],
+    ["command palette", "command-palette"],
+  ])("logs both phases of %s under the stage's own correlation id", async (stageId, logStage) => {
     const sink = captureServerLog();
     for (const body of [
       {
         kind: "stage",
-        stage: "chat bind",
+        stage: stageId,
         phase: "started",
         ordinal: 4,
         correlationId: "ui_stage-0004",
       },
       {
         kind: "stage",
-        stage: "chat bind",
+        stage: stageId,
         phase: "settled",
         ordinal: 4,
         durationMs: 12,
@@ -1846,6 +1849,7 @@ describe("POST /api/diagnostics/client", () => {
       ["client.stage.started", "ui_stage-0004"],
       ["client.stage.settled", "ui_stage-0004"],
     ]);
+    expect(stage.map((event) => event.extra?.stage)).toEqual([logStage, logStage]);
   });
 
   // #3557 review: the stale-session repair outcome joins the denied request's timeline.

@@ -10,7 +10,7 @@ export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 // The optional-widget catalog pair, read through `useOptionalWidgetTranslate`. It is a real
-// English/German catalog — the quick-access palette, the browser/commands/terminal widgets and the
+// English/German catalog — the command palette, the browser/commands/terminal widgets and the
 // search panel take every string from it — but it predates the `-i18n.{en,de}.ts` naming this guard
 // recognises, so a component whose strings legitimately live here was told to update shared
 // catalogs it never reads (#2768). Recognised by exact path rather than by loosening a pattern, and
@@ -122,7 +122,7 @@ function quotedValuesAfter(line, nameRe) {
   return values;
 }
 
-// The option/command registries. Keiko's launcher grid, quick-access command list, KeikoSelect
+// The option/command registries. Keiko's launcher grid, workspace command list, KeikoSelect
 // menus and agent picker are all driven by object literals whose `label`/`description`/`title`/
 // `scope`/`cta` fields render verbatim, which is how a whole German-locale surface can be English
 // without a single JSX literal in sight (issue: `AGENT_WORKFLOWS`, `WIN_TYPES`).
@@ -583,7 +583,7 @@ export function hasUserFacingTextLine(line) {
 // question cannot fail on the case it exists to prevent: a component may route ten strings through
 // `useTranslate` and hardcode the eleventh and still pass, and a `.ts` file was not examined at all.
 // The whole window-type table — every window title, description, launcher-field label and CTA the
-// window launcher, the New Window dialog and the quick-access command list render — shipped as
+// window launcher, the New Window dialog and the workspace command list render — shipped as
 // English literals in a `.ts` registry while this gate reported OK on every change to it.
 //
 // The rule below is per LITERAL and per POSITION, in the three positions a string literal is read by

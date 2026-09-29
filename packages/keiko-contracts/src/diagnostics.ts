@@ -385,6 +385,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-scroll-ready",
   "literal-input-preserved",
   "draft-resynchronized",
+  "equivalent-edit-ignored",
   "non-text-paste-ignored",
   "text-copied",
 ] as const;
@@ -686,6 +687,7 @@ export const CLIENT_STAGE_IDS = [
   "editor widget chunk",
   "files widget chunk",
   "chat bind",
+  "command palette",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 

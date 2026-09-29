@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
-import { CLIENT_STAGE_DURATION_MS_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  CLIENT_STAGE_DURATION_MS_MAX,
+  type ClientStageId,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
@@ -25,8 +28,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 // `client.stage.settled` lifecycle operation, instead of the failure-shaped `client.diagnostic` the
 // free-text message alone used to become (KEIKO-3557: 416 of 449 `client.diagnostic` lines in a live
 // log were this evidence, all misclassified warn/unknown and burying the rare real failures).
-export type WindowStage =
-  "window chunk" | "chat window chunk" | "editor widget chunk" | "files widget chunk" | "chat bind";
+export type WindowStage = ClientStageId;
 
 let nextStageSequence = 0;
 

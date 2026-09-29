@@ -1460,19 +1460,27 @@ function createRuntimeGatewayConfig(
     },
     verifiedCapability: (modelId): VerifiedModelCapabilityObservation | undefined =>
       verifiedCapabilities.get(modelId),
-    recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
-      if (observedGeneration !== undefined && observedGeneration !== generation) return;
-      verifiedCapabilities.set(modelId, {
-        modelId,
-        generation,
-        checkedAt,
-        fields: { ...fields },
-      });
-    },
+    recordVerifiedCapability: gatewayCapabilityRecorder(verifiedCapabilities, () => generation),
     clearVerifiedCapability: (modelId, observedGeneration): boolean => {
       if (observedGeneration !== undefined && observedGeneration !== generation) return false;
       return verifiedCapabilities.delete(modelId);
     },
+  };
+}
+
+function gatewayCapabilityRecorder(
+  observations: Map<string, VerifiedModelCapabilityObservation>,
+  generation: () => number,
+): RuntimeGatewayConfig["recordVerifiedCapability"] {
+  return (modelId, fields, checkedAt, observedGeneration): void => {
+    const currentGeneration = generation();
+    if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
+    observations.set(modelId, {
+      modelId,
+      generation: currentGeneration,
+      checkedAt,
+      fields: { ...fields },
+    });
   };
 }
 

@@ -6,8 +6,7 @@ export interface WorkspaceRootTarget {
   readonly label: string;
 }
 
-// Quick Access starts three governed searches per root. Four root workers therefore cap its
-// request fan-out at twelve in-flight calls, including at the 32-root manifest limit.
+// Keep cross-root workspace requests bounded, including at the 32-root manifest limit.
 export const WORKSPACE_ROOT_REQUEST_CONCURRENCY = 4 as const;
 
 export type WorkspaceRootRequestOutcome<T> =

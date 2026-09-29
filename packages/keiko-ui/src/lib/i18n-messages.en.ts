@@ -1,5 +1,6 @@
 export const EN_MESSAGES = {
   "chat.context.title": "Conversation context",
+  "chat.context.heading": "Conversation context {percent}%",
   "chat.context.label": "Conversation context: approximately {percent}% used",
   "chat.context.used": "Estimated tokens used",
   "chat.context.inputBudget": "Usable input tokens",
@@ -25,8 +26,6 @@ export const EN_MESSAGES = {
   "header.tileAll": "Tile all windows",
   "header.splitFront": "Split front windows",
   "header.cascade": "Cascade windows",
-  "header.quickAccess": "Quick access",
-  "header.openQuickAccess": "Open quick access",
   "rail.primaryNavigation": "Primary workspace navigation",
   "rail.newChat": "New chat",
   "rail.codingHistory": "Coding History",
@@ -315,7 +314,7 @@ export const EN_MESSAGES = {
   "window.edge.bottom": "bottom",
   "window.edge.left": "left",
   // Issue: German locale coverage. Window-type display copy lives HERE, not as literals in
-  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the quick-access command list
+  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the workspace command list
   // and the window chrome all resolve it through `localizedWindowTitle`/`localizedWindowDesc`, so
   // one locale switch moves every surface instead of leaving an English name behind.
   "window.type.chat.title": "Chat",

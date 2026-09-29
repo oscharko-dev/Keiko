@@ -24,14 +24,14 @@ describe("keyboardShortcutsRegistry", () => {
   it("builds one effective command model from defaults and M7 overrides", () => {
     const updated = updateKeyboardShortcutOverride({
       current: [],
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       binding: "CtrlOrMeta+Shift+O",
     });
     expect(updated.ok).toBe(true);
     if (!updated.ok) throw new Error("expected override");
 
     const registry = resolveEffectiveKeyboardShortcuts(updated.value);
-    const files = registry.commands.find((entry) => entry.command.id === "quick-access.files");
+    const files = registry.commands.find((entry) => entry.command.id === "workspace.commands");
 
     expect(registry.status).toEqual({ kind: "ready" });
     expect(files).toMatchObject({
@@ -40,7 +40,7 @@ describe("keyboardShortcutsRegistry", () => {
       modified: true,
     });
     expect(dispatchableWorkspaceShortcutsForContext(registry, "global")).toContainEqual({
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       chord: { key: "o", mod: ["cmd", "shift"] },
       binding: "CtrlOrMeta+Shift+O",
     });
@@ -48,7 +48,7 @@ describe("keyboardShortcutsRegistry", () => {
 
   it("fails closed for malformed, protected, reserved, modifier-only, and colliding overrides", () => {
     expect(
-      resolveEffectiveKeyboardShortcuts(["99|quick-access.files|CtrlOrMeta+O"]).status,
+      resolveEffectiveKeyboardShortcuts(["99|workspace.commands|CtrlOrMeta+O"]).status,
     ).toEqual({ kind: "fallback", reasonCode: "SCHEMA_VERSION_UNSUPPORTED" });
     expect(
       updateKeyboardShortcutOverride({
@@ -60,22 +60,22 @@ describe("keyboardShortcutsRegistry", () => {
     expect(
       updateKeyboardShortcutOverride({
         current: [],
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "CtrlOrMeta+Q",
       }),
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
     expect(
       updateKeyboardShortcutOverride({
         current: [],
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "CtrlOrMeta+Shift",
       }),
     ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
     expect(
       updateKeyboardShortcutOverride({
         current: [],
-        commandId: "quick-access.files",
-        binding: "CtrlOrMeta+Shift+P",
+        commandId: "workspace.commands",
+        binding: "CtrlOrMeta+Shift+F",
       }),
     ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
   });
@@ -83,14 +83,14 @@ describe("keyboardShortcutsRegistry", () => {
   it("removes overrides without dropping the last valid set on corrupt input", () => {
     const updated = updateKeyboardShortcutOverride({
       current: [],
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       binding: "CtrlOrMeta+Shift+O",
     });
     expect(updated.ok).toBe(true);
     if (!updated.ok) throw new Error("expected override");
 
-    expect(removeKeyboardShortcutOverride(updated.value, "quick-access.files")).toEqual([]);
-    expect(removeKeyboardShortcutOverride(["bad-record"], "quick-access.files")).toEqual([]);
+    expect(removeKeyboardShortcutOverride(updated.value, "workspace.commands")).toEqual([]);
+    expect(removeKeyboardShortcutOverride(["bad-record"], "workspace.commands")).toEqual([]);
   });
 
   it("captures layout-safe bindings and renders platform labels", () => {
@@ -107,7 +107,7 @@ describe("keyboardShortcutsRegistry", () => {
   it("replaces overrides, maps workspace chords, and rejects unsupported key events", () => {
     const first = updateKeyboardShortcutOverride({
       current: [],
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       binding: "Shift+CtrlOrMeta+O",
     });
     expect(first.ok).toBe(true);
@@ -115,11 +115,11 @@ describe("keyboardShortcutsRegistry", () => {
 
     const replaced = updateKeyboardShortcutOverride({
       current: first.value,
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       binding: "Alt+CtrlOrMeta+O",
     });
 
-    expect(replaced).toMatchObject({ ok: true, value: ["1|quick-access.files|CtrlOrMeta+Alt+O"] });
+    expect(replaced).toMatchObject({ ok: true, value: ["1|workspace.commands|CtrlOrMeta+Alt+O"] });
     expect(bindingToWorkspaceChord("CtrlOrMeta+Alt+ArrowLeft")).toEqual({
       key: "arrowleft",
       mod: ["cmd", "alt"],
@@ -182,9 +182,9 @@ describe("dispatchableWorkspaceShortcutsForContext", () => {
   });
 
   it("applies a validated override and reports its binding for labelling", () => {
-    const shortcuts = globalShortcuts(["1|quick-access.files|CtrlOrMeta+Shift+O"]);
+    const shortcuts = globalShortcuts(["1|workspace.commands|CtrlOrMeta+Shift+O"]);
 
-    expect(shortcuts.get("quick-access.files")).toEqual({
+    expect(shortcuts.get("workspace.commands")).toEqual({
       chord: "cmd+shift|o",
       binding: "CtrlOrMeta+Shift+O",
     });
@@ -295,7 +295,7 @@ describe("projectDispatchableWorkspaceShortcuts — a refusal is reported, never
   it("reports no refusal when an override applies cleanly", () => {
     const result = project([
       shortcut({ id: "undo", binding: "CtrlOrMeta+Z", modified: false }),
-      shortcut({ id: "quick-access.files", binding: "CtrlOrMeta+Shift+O", modified: true }),
+      shortcut({ id: "workspace.commands", binding: "CtrlOrMeta+Shift+O", modified: true }),
     ]);
 
     expect(result.refusals).toEqual([]);
@@ -304,15 +304,15 @@ describe("projectDispatchableWorkspaceShortcuts — a refusal is reported, never
 
   it("frees the default a command vacates so another command may still claim it", () => {
     const result = project([
-      shortcut({ id: "quick-access.files", binding: "CtrlOrMeta+Shift+O", modified: true }),
-      shortcut({ id: "undo", binding: "CtrlOrMeta+P", modified: true }),
+      shortcut({ id: "workspace.commands", binding: "CtrlOrMeta+Shift+O", modified: true }),
+      shortcut({ id: "undo", binding: "CtrlOrMeta+Shift+P", modified: true }),
     ]);
     const byId = new Map(
       result.shortcuts.map((entry) => [entry.commandId, workspaceChordKey(entry.chord)]),
     );
 
     expect(result.refusals).toEqual([]);
-    expect(byId.get("quick-access.files")).toBe("cmd+shift|o");
-    expect(byId.get("undo")).toBe("cmd|p");
+    expect(byId.get("workspace.commands")).toBe("cmd+shift|o");
+    expect(byId.get("undo")).toBe("cmd+shift|p");
   });
 });

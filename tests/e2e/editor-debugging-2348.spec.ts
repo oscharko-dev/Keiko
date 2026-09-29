@@ -685,7 +685,7 @@ async function startCatalogDebugging(
 
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
   // "ControlOrMeta", NOT `editorModifier`: this is a PRODUCT shortcut, not a Monaco one — the
-  // combobox it opens is Keiko's own quick access ("Command query" is `quickAccess.query.commands`
+  // combobox it opens is Keiko's workspace command palette ("Command query" is `commandPalette.query`
   // in keiko-ui's i18n catalog), and Keiko's `useKeyboardShortcuts` derives its platform from
   // `navigator.platform`, which the device presets do NOT override. Measured under this suite's
   // preset on a macOS host: `navigator.userAgent` reports "Windows NT 10.0" (so Monaco waits for

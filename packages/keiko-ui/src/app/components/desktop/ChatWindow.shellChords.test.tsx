@@ -122,7 +122,7 @@ describe("chat composer — shell chord dispatch (audit)", () => {
     expect(composer()).toHaveAttribute(SHELL_CHORD_BYPASS_ATTRIBUTE);
   });
 
-  it("dispatches Cmd+P, Cmd+Shift+P and Cmd+Shift+F from inside the composer", () => {
+  it("leaves the retired Cmd+P search inactive and dispatches commands and workspace search from inside the composer", () => {
     const dispatch = vi.fn();
     render(<ShellChordHarness dispatch={dispatch} />);
     const input = composer();
@@ -133,8 +133,7 @@ describe("chat composer — shell chord dispatch (audit)", () => {
     fireEvent.keyDown(input, { key: "f", metaKey: true, shiftKey: true });
 
     expect(dispatch.mock.calls.map(([id]) => id)).toEqual([
-      "quick-access.files",
-      "quick-access.commands",
+      "workspace.commands",
       "focus-workspace-search",
     ]);
   });

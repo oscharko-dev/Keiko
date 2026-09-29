@@ -162,7 +162,9 @@ export function ChatContextMeter(props: ChatContextMeterProps): ReactNode {
               aria-label={t("chat.context.title")}
             >
               <h3>
-                {t("chat.context.title")} {percentLabel === undefined ? "" : `${percentLabel} %`}
+                {percentLabel === undefined
+                  ? t("chat.context.title")
+                  : t("chat.context.heading", { percent: percentLabel })}
               </h3>
               <ContextDetails {...props} />
             </section>,

@@ -545,6 +545,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "editor-widget-chunk",
   "files-widget-chunk",
   "chat-bind",
+  "command-palette",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -553,6 +554,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "editor widget chunk": "editor-widget-chunk",
   "files widget chunk": "files-widget-chunk",
   "chat bind": "chat-bind",
+  "command palette": "command-palette",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its

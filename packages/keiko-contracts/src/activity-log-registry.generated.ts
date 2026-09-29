@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "fa5b0003ec321c1956c64ae40aedd50e50a449b48a1f3e0c21212120b0fb4d54" as const;
+  "0367efa21dfb37557e1ead2ee85024e30ecb89c8fba9f704e312b94a8fbfdf43" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2572,6 +2572,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-scroll-ready",
           "literal-input-preserved",
           "draft-resynchronized",
+          "equivalent-edit-ignored",
           "non-text-paste-ignored",
           "text-copied",
         ],
@@ -3340,6 +3341,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "editor-widget-chunk",
           "files-widget-chunk",
           "chat-bind",
+          "command-palette",
         ],
       },
       ordinal: {
@@ -3383,6 +3385,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "editor-widget-chunk",
           "files-widget-chunk",
           "chat-bind",
+          "command-palette",
         ],
       },
       ordinal: {

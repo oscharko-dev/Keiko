@@ -110,12 +110,19 @@ export class ComposerEditorController implements ComposerInputHandle {
     const before = this.view.state;
     const next = before.apply(tr);
     this.view.updateState(next);
-    if (before.doc !== next.doc) {
+    if (!before.doc.eq(next.doc)) {
       this.value = serializeComposerMarkdown(next.doc);
       this.onNotice("");
       this.props.onChange(this.value, this.mentionCursor());
-    } else if (!before.selection.eq(next.selection)) {
-      this.props.onSelect(this.value, this.mentionCursor());
+    } else {
+      if (before.doc !== next.doc) {
+        reportClientDiagnostic("Keiko composer equivalent document update ignored.", {
+          composerActivity: "equivalent-edit-ignored",
+        });
+      }
+      if (!before.selection.eq(next.selection)) {
+        this.props.onSelect(this.value, this.mentionCursor());
+      }
     }
   }
 

@@ -334,7 +334,7 @@ describe("editor profile routes", () => {
         action: "set",
         expectedRevision: 1,
         profileRef: "profile-focus",
-        values: { fontSize: 18, keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] },
+        values: { fontSize: 18, keybindingOverrides: ["1|workspace.commands|CtrlOrMeta+Shift+O"] },
       },
       createBody.etag,
       "configure-focus",

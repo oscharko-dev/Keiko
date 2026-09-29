@@ -134,7 +134,7 @@ describe("translate", () => {
   it("translates the remediated widget surfaces from the German catalog", async () => {
     await loadLocaleMessages("de");
 
-    expect(translateOptionalWidget("de", "quickAccess.title")).toBe("Schnellzugriff");
+    expect(translateOptionalWidget("de", "commandPalette.title")).toBe("Befehle");
     expect(translateOptionalWidget("de", "browserWidget.action.open")).toBe("Sitzung öffnen");
     expect(translateOptionalWidget("de", "documentationBrowser.action.prepareIndexing")).toBe(
       "Indizierung vorbereiten",

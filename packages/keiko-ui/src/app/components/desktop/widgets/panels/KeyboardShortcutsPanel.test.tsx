@@ -40,7 +40,7 @@ import { KeyboardShortcutsPanel } from "./KeyboardShortcutsPanel";
 
 type SettingValues = Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>;
 
-const USER_OVERRIDE = "1|quick-access.files|CtrlOrMeta+Shift+O";
+const USER_OVERRIDE = "1|workspace.commands|CtrlOrMeta+Shift+O";
 const PROFILE_OVERRIDE = "1|redo|CtrlOrMeta+Alt+J";
 
 function profileRef(value: string): WorkspaceProfileRef {
@@ -155,7 +155,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(currentView);
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
 
@@ -168,7 +168,7 @@ describe("KeyboardShortcutsPanel", () => {
     });
 
     expect(currentView.setValue).toHaveBeenCalledWith("user", "keybindingOverrides", [
-      "1|quick-access.files|CtrlOrMeta+Shift+O",
+      "1|workspace.commands|CtrlOrMeta+Shift+O",
     ]);
   });
 
@@ -176,7 +176,7 @@ describe("KeyboardShortcutsPanel", () => {
     const { container } = renderPanel(view());
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
 
@@ -189,7 +189,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(currentView);
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     fireEvent.keyDown(screen.getByRole("button", { name: "Press shortcut" }), {
@@ -210,7 +210,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(view());
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     (document.activeElement as HTMLElement | null)?.blur?.();
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
@@ -224,7 +224,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(view());
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     const recordButton = screen.getByRole("button", { name: "Record" });
     fireEvent.click(recordButton);
@@ -242,7 +242,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(view());
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
@@ -263,7 +263,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(view());
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
 
@@ -283,7 +283,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(view());
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
@@ -309,7 +309,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(view());
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
 
@@ -346,12 +346,12 @@ describe("KeyboardShortcutsPanel", () => {
 
   it("disables Remove for an unmodified shortcut and enables it once overridden", () => {
     const overriddenView = view({
-      snapshot: snapshot({ keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] }),
+      snapshot: snapshot({ keybindingOverrides: ["1|workspace.commands|CtrlOrMeta+Shift+O"] }),
     });
     renderPanel(overriddenView);
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
 
     expect(screen.getByRole("button", { name: "Remove" })).toBeEnabled();
@@ -365,7 +365,7 @@ describe("KeyboardShortcutsPanel", () => {
     renderPanel(currentView);
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Quick Access: files" },
+      target: { value: "Workspace commands" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     fireEvent.keyDown(screen.getByRole("button", { name: "Press shortcut" }), {
@@ -485,11 +485,11 @@ describe("KeyboardShortcutsPanel", () => {
       "profile",
     );
 
-    search("Quick Access: files");
+    search("Workspace commands");
 
     // The row reports the user layer's binding and marks it modified, even though the profile layer
     // being edited holds nothing for it: what you see stays the resolved view.
-    const row = screen.getByRole("article", { name: "Quick Access: files" });
+    const row = screen.getByRole("article", { name: "Workspace commands" });
     expect(row).toHaveTextContent("Ctrl+Shift+O");
     expect(row).toHaveTextContent("modified");
   });
@@ -501,7 +501,7 @@ describe("KeyboardShortcutsPanel", () => {
       "profile",
     );
 
-    search("Quick Access: files");
+    search("Workspace commands");
 
     expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
   });

@@ -25,7 +25,6 @@ import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
 import { useWorkspace } from "./hooks/useWorkspace";
-import { useWorkspaceManifest } from "./hooks/useWorkspaceManifest";
 import {
   appendConnectorScope,
   appendConnectedScope,
@@ -71,22 +70,16 @@ import { applyShellUndoAction, shellPanelIsOpen } from "./shell-undo-bindings";
 import type { ShellShortcutState } from "./shellShortcutState";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";
 import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryContext";
-import { EditorQuickAccessTriggerProvider } from "./EditorQuickAccessTriggerContext";
+import { EditorShellActionsProvider } from "./EditorShellActionsContext";
 import { WorkspaceReplaceBufferProvider } from "./WorkspaceReplaceBufferContext";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { OPEN_EDITOR_SETTINGS_EVENT } from "./widgets/panels/settingsPanelEvents";
-import {
-  QUICK_ACCESS_CARD_TYPES,
-  QUICK_ACCESS_TOOL_TYPES,
-  paletteWindowOrder,
-  type Command,
-} from "./quickAccessRegistry";
+import { WINDOW_LAUNCHER_TYPES, COMMAND_TOOL_TYPES, type Command } from "./workspaceCommands";
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
 import { chatWindowRuntimeTarget } from "./windows/chatWindowActivity";
 import { registerSw } from "./install/registerSw";
-import { workspaceRootTargets } from "./workspaceRootTargets";
 import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
 
@@ -206,8 +199,8 @@ const GatewaySetupDialog = dynamic(
   { ssr: false, loading: GatewaySetupLoading },
 );
 
-const UnifiedQuickAccessPalette = dynamic(
-  () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.DesktopQuickAccessPalette),
+const CommandPalette = dynamic(
+  () => import("./modals/CommandPalette").then((mod) => mod.DesktopCommandPalette),
   { ssr: false, loading: () => null },
 );
 
@@ -224,7 +217,7 @@ const Footer = dynamic(() => import("./Footer").then((mod) => mod.Footer), {
 });
 
 // Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture
-// (`pending !== null`), exactly like the quick-access palette and the gateway setup dialog above, so
+// (`pending !== null`), exactly like the command palette and the gateway setup dialog above, so
 // it must not sit in the first-load chunk. Its subtree (KeikoSelect, the native file-dialog client,
 // the workflow-eligibility predicate) is the largest gesture-only surface the shell still pulled in
 // eagerly; loading it behind the same `next/dynamic(..., { ssr: false })` boundary keeps the initial
@@ -709,8 +702,8 @@ export function normalizeEditorWindowCfg(cfg: Cfg): Cfg {
   return next;
 }
 
-const CARD_TYPES: readonly WindowType[] = QUICK_ACCESS_CARD_TYPES;
-const TOOL_TYPES: readonly WindowType[] = QUICK_ACCESS_TOOL_TYPES;
+const CARD_TYPES: readonly WindowType[] = WINDOW_LAUNCHER_TYPES;
+const TOOL_TYPES: readonly WindowType[] = COMMAND_TOOL_TYPES;
 
 export function opensDirectlyFromPalette(type: WindowType): boolean {
   // The documentation browser opens straight into its working surface (empty location input); it has
@@ -801,7 +794,7 @@ function undoRedoCommands(undoStack: WorkspaceUndoStackApi, t: I18nTranslate): r
 }
 
 // `t` is a required argument, not an optional convenience: every label and group name below reaches
-// the quick-access command list, which used to render English template literals (`New ${title}`,
+// the command list, which used to render English template literals (`New ${title}`,
 // "Layout", "Edit") no matter which locale the user selected.
 export function buildAppShellCommands(
   api: WorkspaceApi,
@@ -1470,8 +1463,8 @@ function AppShellInner(): ReactNode {
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
   const [newWindowOpener, setNewWindowOpener] = useState<HTMLElement | null>(null);
-  const [quickAccessMode, setQuickAccessMode] = useState<"files" | "commands" | null>(null);
-  const [quickAccessOpener, setQuickAccessOpener] = useState<HTMLElement | null>(null);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandPaletteOpener, setCommandPaletteOpener] = useState<HTMLElement | null>(null);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
   const [editorHosts, setEditorHosts] = useState<ReadonlyMap<string, EditorPaletteHost>>(
     () => new Map(),
@@ -1497,17 +1490,13 @@ function AppShellInner(): ReactNode {
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
-  const openQuickAccessFiles = useCallback((): void => {
-    setQuickAccessOpener(focusedModalOpener());
-    setQuickAccessMode("files");
+  const openCommands = useCallback((): void => {
+    setCommandPaletteOpener(focusedModalOpener());
+    setCommandPaletteOpen(true);
   }, []);
-  const openQuickAccessCommands = useCallback((): void => {
-    setQuickAccessOpener(focusedModalOpener());
-    setQuickAccessMode("commands");
-  }, []);
-  const closeQuickAccess = useCallback((): void => {
-    setQuickAccessMode(null);
-    setQuickAccessOpener(null);
+  const closeCommands = useCallback((): void => {
+    setCommandPaletteOpen(false);
+    setCommandPaletteOpener(null);
   }, []);
   const registerEditorHost = useCallback(
     (windowId: string, host: EditorPaletteHost): (() => void) => {
@@ -1646,15 +1635,14 @@ function AppShellInner(): ReactNode {
 
   const openEditorSettings = useCallback((): void => openEditorSettingsPanel(onTool), [onTool]);
   // Lets the editor's own capturing keydown listener (EditorWidget.tsx) invoke the shell action
-  // directly, so Cmd/Ctrl+P and Cmd/Ctrl+, work while the cursor is inside Monaco. The shell keeps
+  // directly, so command and settings shortcuts work while the cursor is inside Monaco. The shell keeps
   // ownership of opening the window and selecting its tab; the editor only owns chord recognition.
-  const editorQuickAccessTrigger = useMemo(
+  const editorShellActions = useMemo(
     () => ({
-      openFiles: openQuickAccessFiles,
-      openCommands: openQuickAccessCommands,
+      openCommands,
       openEditorSettings,
     }),
-    [openEditorSettings, openQuickAccessCommands, openQuickAccessFiles],
+    [openEditorSettings, openCommands],
   );
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
@@ -1674,7 +1662,7 @@ function AppShellInner(): ReactNode {
   }, [ws.wins, onTool]);
 
   // Epic #518 / ADR-0028 — shell chords route through useKeyboardShortcuts so conflict detection
-  // and editable-target guards apply to the unified quick-access surface.
+  // and editable-target guards apply to the command palette.
   const dispatchShortcut = useCallback(
     (commandId: string): void => {
       if (workspaceInteractionLocked()) return;
@@ -1683,19 +1671,10 @@ function AppShellInner(): ReactNode {
       else if (commandId === "focus-status") statusRef.current?.focus();
       else if (commandId === "focus-workspace-search") {
         openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
-      } else if (commandId === "quick-access.files") openQuickAccessFiles();
-      else if (commandId === "quick-access.commands") openQuickAccessCommands();
+      } else if (commandId === "workspace.commands") openCommands();
       else if (commandId === "open-editor-settings") openEditorSettings();
     },
-    [
-      activeWorkspace.activeRoot,
-      openEditorSettings,
-      openQuickAccessCommands,
-      openQuickAccessFiles,
-      searchOwner,
-      undoStack,
-      ws.api,
-    ],
+    [activeWorkspace.activeRoot, openEditorSettings, openCommands, searchOwner, undoStack, ws.api],
   );
   useKeyboardShortcuts({ bindings: shellShortcutState.bindings, dispatch: dispatchShortcut });
 
@@ -1728,14 +1707,6 @@ function AppShellInner(): ReactNode {
   );
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;
-  const quickAccessRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
-  const quickAccessWorkspace = useWorkspaceManifest(
-    quickAccessMode === null ? undefined : quickAccessRoot,
-  );
-  const quickAccessRoots = useMemo(
-    () => workspaceRootTargets(quickAccessRoot, quickAccessWorkspace.manifest),
-    [quickAccessRoot, quickAccessWorkspace.manifest],
-  );
   const configuredModelsAvailable = session.configuredModelsAvailable ?? session.models.length > 0;
   const needsGatewaySetup =
     !session.loading && session.error === undefined && !configuredModelsAvailable;
@@ -1746,7 +1717,7 @@ function AppShellInner(): ReactNode {
   }, [ws.api]);
 
   const paletteNode = palOpen ? (
-    <Palette types={WIN_TYPES} order={paletteWindowOrder()} onAdd={pick} onClose={closePalette} />
+    <Palette types={WIN_TYPES} order={WINDOW_LAUNCHER_TYPES} onAdd={pick} onClose={closePalette} />
   ) : null;
 
   // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the complete background shell out
@@ -1755,8 +1726,7 @@ function AppShellInner(): ReactNode {
   // footer are all unavailable. The non-modal `Palette` deliberately stays inside the workspace and
   // does not count here because it is designed to keep the shell interactive.
   const nestedModalOpen = useModalInteractionLockState();
-  const modalOpen =
-    pending !== null || quickAccessMode !== null || needsGatewaySetup || nestedModalOpen;
+  const modalOpen = pending !== null || commandPaletteOpen || needsGatewaySetup || nestedModalOpen;
   // GEN-UI-A11Y-003 — toggle `inert` AND `aria-hidden` imperatively so the modal lifecycle owns
   // the exact presence of both attributes across supported renderers. aria-hidden must not live in
   // JSX: React would commit it while the dialog's trigger (e.g. the workspace FAB) still holds
@@ -1772,7 +1742,7 @@ function AppShellInner(): ReactNode {
     <ActiveWorkspaceProvider value={activeWorkspace}>
       <ChatSessionProvider value={session}>
         <EditorPaletteHostRegistryProvider register={registerEditorHost}>
-          <EditorQuickAccessTriggerProvider value={editorQuickAccessTrigger}>
+          <EditorShellActionsProvider value={editorShellActions}>
             <WorkspaceReplaceBufferProvider>
               <WsContext.Provider value={wsContextValue}>
                 {/* GEN-UI-A11Y-004 — one always-mounted app-level live-region pair. The AnnouncerProvider
@@ -1788,7 +1758,6 @@ function AppShellInner(): ReactNode {
                     {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
                     <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
                     <Header
-                      openCommandPalette={openQuickAccessFiles}
                       onTileAll={ws.api.tileAll}
                       onSplitFront={ws.api.splitFront}
                       onCascade={ws.api.cascade}
@@ -1855,24 +1824,20 @@ function AppShellInner(): ReactNode {
                       onClose={closeDialog}
                     />
                   )}
-                  {quickAccessMode !== null ? (
-                    <UnifiedQuickAccessPalette
-                      initialMode={quickAccessMode}
-                      root={quickAccessRoot}
-                      roots={quickAccessRoots}
+                  {commandPaletteOpen ? (
+                    <CommandPalette
                       appCommands={commands}
                       editorHost={activeEditorHost}
                       shortcutLabels={shellShortcutState.labels}
-                      openEditorFile={ws.api.openEditorFile}
-                      opener={quickAccessOpener}
-                      onClose={closeQuickAccess}
+                      opener={commandPaletteOpener}
+                      onClose={closeCommands}
                     />
                   ) : null}
                   {needsGatewaySetup ? <GatewaySetupDialog /> : null}
                 </AnnouncerProvider>
               </WsContext.Provider>
             </WorkspaceReplaceBufferProvider>
-          </EditorQuickAccessTriggerProvider>
+          </EditorShellActionsProvider>
         </EditorPaletteHostRegistryProvider>
       </ChatSessionProvider>
     </ActiveWorkspaceProvider>

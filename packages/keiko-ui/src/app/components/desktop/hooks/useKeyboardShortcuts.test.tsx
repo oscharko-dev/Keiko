@@ -116,8 +116,8 @@ describe("useKeyboardShortcuts — pure helpers", () => {
         bind("redo", "z", ["cmd", "shift"]),
         bind("focus-status", "s", ["alt"]),
         bind("focus-workspace-search", "f", ["cmd", "shift"]),
-        bind("quick-access.files", "p", ["cmd"]),
-        bind("quick-access.commands", "p", ["cmd", "shift"]),
+        bind("fixture.files", "p", ["cmd"]),
+        bind("workspace.commands", "p", ["cmd", "shift"]),
       ]),
     ).toEqual([]);
   });
@@ -310,13 +310,13 @@ describe("useKeyboardShortcuts — opted-in text fields (SHELL_CHORD_BYPASS_ATTR
     field.dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }));
   }
 
-  it("forwards the quick-access and workspace-search chords from an opted-in field", () => {
+  it("forwards declared command and workspace-search chords from an opted-in field", () => {
     const dispatch = vi.fn();
     renderHook(() =>
       useKeyboardShortcuts({
         bindings: [
-          bind("quick-access.files", "p", ["cmd"]),
-          bind("quick-access.commands", "p", ["cmd", "shift"]),
+          bind("fixture.files", "p", ["cmd"]),
+          bind("workspace.commands", "p", ["cmd", "shift"]),
           bind("focus-workspace-search", "f", ["cmd", "shift"]),
         ],
         dispatch,
@@ -330,8 +330,8 @@ describe("useKeyboardShortcuts — opted-in text fields (SHELL_CHORD_BYPASS_ATTR
     fireFrom(field, { key: "f", metaKey: true, shiftKey: true });
 
     expect(dispatch.mock.calls.map(([id]) => id)).toEqual([
-      "quick-access.files",
-      "quick-access.commands",
+      "fixture.files",
+      "workspace.commands",
       "focus-workspace-search",
     ]);
     field.remove();
@@ -376,7 +376,7 @@ describe("useKeyboardShortcuts — opted-in text fields (SHELL_CHORD_BYPASS_ATTR
     const dispatch = vi.fn();
     renderHook(() =>
       useKeyboardShortcuts({
-        bindings: [bind("quick-access.files", "p", ["cmd"])],
+        bindings: [bind("fixture.files", "p", ["cmd"])],
         dispatch,
         platform: "mac",
       }),
@@ -394,7 +394,7 @@ describe("useKeyboardShortcuts — opted-in text fields (SHELL_CHORD_BYPASS_ATTR
     const dispatch = vi.fn();
     renderHook(() =>
       useKeyboardShortcuts({
-        bindings: [bind("quick-access.files", "p", ["cmd"])],
+        bindings: [bind("fixture.files", "p", ["cmd"])],
         dispatch,
         platform: "mac",
       }),
@@ -407,7 +407,7 @@ describe("useKeyboardShortcuts — opted-in text fields (SHELL_CHORD_BYPASS_ATTR
 
     fireFrom(field, { key: "p", metaKey: true });
 
-    expect(dispatch).toHaveBeenCalledWith("quick-access.files");
+    expect(dispatch).toHaveBeenCalledWith("fixture.files");
     wrapper.remove();
   });
 });

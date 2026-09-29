@@ -5,7 +5,6 @@ import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/ru
 import {
   EDITOR_PALETTE_COMMANDS,
   availablePaletteCommands,
-  fuzzyScore,
   resolveVerificationTarget,
   type EditorPaletteCommand,
   type EditorPaletteHost,
@@ -70,14 +69,6 @@ function commandById(id: string): EditorPaletteCommand {
   return command;
 }
 
-function score(query: string, target: string): number {
-  const result = fuzzyScore(query, target);
-  if (result === null) {
-    throw new Error(`Expected ${query} to match ${target}`);
-  }
-  return result;
-}
-
 describe("editor command registry", () => {
   it("exposes only commands whose host preconditions are satisfied", () => {
     // No active file, no resolvable target: tab/split/save all require an active file, so only the
@@ -135,15 +126,6 @@ describe("editor command registry", () => {
     expect(host.saveAll).toHaveBeenCalledTimes(1);
     expect(host.openProblems).toHaveBeenCalledTimes(1);
     expect(host.openFileHistory).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("fuzzyScore", () => {
-  it("scores empty, boundary, contiguous, and missing matches deterministically", () => {
-    expect(fuzzyScore("", "abc")).toBe(3);
-    expect(fuzzyScore("zz", "src/SearchPanel.tsx")).toBeNull();
-    expect(score("sp", "src/SearchPanel.tsx")).toBeLessThan(score("sp", "workspace/parser.ts"));
-    expect(score("FS", "file-search")).toBeLessThan(score("FS", "filesearch"));
   });
 });
 

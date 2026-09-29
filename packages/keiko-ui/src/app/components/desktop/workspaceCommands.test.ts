@@ -1,11 +1,11 @@
-import { buildUnifiedQuickAccessCommands } from "./quickAccessCommands";
+import { buildPaletteCommands } from "./paletteCommands";
 import { describe, expect, it, vi } from "vitest";
 import {
   appCommandWindowTypes,
   commandIdsForEvidence,
-  paletteWindowOrder,
+  WINDOW_LAUNCHER_TYPES,
   type Command,
-} from "./quickAccessRegistry";
+} from "./workspaceCommands";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { EDITOR_PALETTE_COMMANDS } from "./widgets/cards/editorCommands";
 import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
@@ -67,10 +67,10 @@ function host(): EditorPaletteHost {
   };
 }
 
-describe("quick access registry", () => {
+describe("workspace command registry", () => {
   it("combines app and editor command inventories without dropping ids", () => {
     const appCommands = [appCommand("new-chat"), appCommand("theme")];
-    const commands = buildUnifiedQuickAccessCommands(appCommands, host(), enTranslate);
+    const commands = buildPaletteCommands(appCommands, host(), enTranslate);
     const ids = commands.map((command) => command.id);
 
     expect(ids).toContain("new-chat");
@@ -103,18 +103,14 @@ describe("quick access registry", () => {
       "verification.trustWorkspaceScripts": "editor.command.trustWorkspaceScripts",
     });
     expect(
-      buildUnifiedQuickAccessCommands([], host(), (key) => `translated:${key}`).find(
+      buildPaletteCommands([], host(), (key) => `translated:${key}`).find(
         (command) => command.id === "run.fileTests",
       )?.label,
     ).toBe("translated:editor.command.runFileTests");
   });
 
   it("collapses an app command that collides with an editor command id, keeping the app definition", () => {
-    const commands = buildUnifiedQuickAccessCommands(
-      [appCommand("tab.close")],
-      host(),
-      enTranslate,
-    );
+    const commands = buildPaletteCommands([appCommand("tab.close")], host(), enTranslate);
     const matches = commands.filter((command) => command.id === "tab.close");
     const [surviving] = matches;
 
@@ -122,8 +118,8 @@ describe("quick access registry", () => {
     expect(surviving).toEqual(expect.objectContaining({ group: "App", label: "App tab.close" }));
   });
 
-  it("keeps the launcher grid sourced from the shared quick-access window order", () => {
-    expect(paletteWindowOrder()).toEqual([
+  it("keeps the launcher grid sourced from the window launcher order", () => {
+    expect(WINDOW_LAUNCHER_TYPES).toEqual([
       "chat",
       "connector",
       "files",
