@@ -2,17 +2,25 @@ import { useEffect, type ReactNode, type RefObject } from "react";
 import { useTranslate } from "@/lib/i18n";
 import styles from "./ChatHistorySelection.module.css";
 
-interface ChatHistorySelectionToolbarProps {
+interface SelectAllChatsProps {
   readonly checkboxRef: RefObject<HTMLInputElement | null>;
   readonly visibleCount: number;
   readonly selectedCount: number;
   readonly busy: boolean;
   readonly toggleAll: () => void;
   readonly clear: () => void;
+}
+
+interface DeleteSelectedChatsProps {
+  readonly selectedCount: number;
+  readonly busy: boolean;
+  readonly clear: () => void;
   readonly removeSelected: () => void;
 }
 
-function SelectAllChats(props: ChatHistorySelectionToolbarProps): ReactNode {
+type ChatHistorySelectionToolbarProps = SelectAllChatsProps & DeleteSelectedChatsProps;
+
+function SelectAllChats(props: SelectAllChatsProps): ReactNode {
   const t = useTranslate();
   const { checkboxRef, visibleCount, selectedCount, busy, toggleAll } = props;
   useEffect((): void => {
@@ -21,11 +29,11 @@ function SelectAllChats(props: ChatHistorySelectionToolbarProps): ReactNode {
     }
   }, [checkboxRef, selectedCount, visibleCount]);
   return (
-    <label className={styles.selectAll}>
+    <label className={styles.cmpSelectAll}>
       <input
         ref={checkboxRef}
         type="checkbox"
-        className={styles.checkbox}
+        className={styles.cmpCheckbox}
         checked={visibleCount > 0 && selectedCount === visibleCount}
         disabled={busy || visibleCount === 0}
         aria-label={t("chat.history.selection.allDisplayed")}
@@ -39,7 +47,7 @@ function SelectAllChats(props: ChatHistorySelectionToolbarProps): ReactNode {
   );
 }
 
-function DeleteSelectedChats(props: ChatHistorySelectionToolbarProps): ReactNode {
+function DeleteSelectedChats(props: DeleteSelectedChatsProps): ReactNode {
   const t = useTranslate();
   const { busy, selectedCount, removeSelected } = props;
   return (
@@ -60,9 +68,26 @@ function DeleteSelectedChats(props: ChatHistorySelectionToolbarProps): ReactNode
   );
 }
 
-export function ChatHistorySelectionToolbar(props: ChatHistorySelectionToolbarProps): ReactNode {
+export function ChatHistorySelectionToolbar({
+  checkboxRef,
+  visibleCount,
+  selectedCount,
+  busy,
+  toggleAll,
+  clear,
+  removeSelected,
+}: ChatHistorySelectionToolbarProps): ReactNode {
+  const props = {
+    checkboxRef,
+    visibleCount,
+    selectedCount,
+    busy,
+    toggleAll,
+    clear,
+    removeSelected,
+  };
   return (
-    <div className={styles.toolbar}>
+    <div className={styles.cmpToolbar}>
       <SelectAllChats {...props} />
       <DeleteSelectedChats {...props} />
     </div>

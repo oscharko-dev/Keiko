@@ -330,13 +330,13 @@
   font-size: 0.75rem;
 }
 
-article.userMessage[data-role="user"][data-layout="turn"] > .userMessageBubble {
+article.cmpUserMessage[data-role="user"][data-layout="turn"] > .cmpUserMessageBubble {
   min-width: 50%;
   max-width: 72%;
 }
 
 @container (max-width: 720px) {
-  article.userMessage[data-role="user"][data-layout="turn"] > .userMessageBubble {
+  article.cmpUserMessage[data-role="user"][data-layout="turn"] > .cmpUserMessageBubble {
     min-width: 0;
     max-width: 88%;
   }

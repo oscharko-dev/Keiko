@@ -307,7 +307,7 @@ describe("EditorSettingsPanel", () => {
     expect(screen.getByRole("button", { name: "Protected" })).toBeDisabled();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
-      target: { value: "Workspace commands" },
+      target: { value: "Undo" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
     fireEvent.keyDown(screen.getByRole("button", { name: "Press shortcut" }), {

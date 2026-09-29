@@ -45,45 +45,61 @@ function useChatContext(session: ContextSession): {
   const [state, setState] = useState<ContextState>({ key, compacting: false, error: false });
   const [revision, setRevision] = useState(0);
   const controller = useRef<AbortController | null>(null);
-  const refresh = useCallback(
-    (compact: boolean): void => {
-      controller.current?.abort();
-      if (chatId === undefined || projectPath === undefined || modelId === undefined) return;
-      const request = new AbortController();
-      controller.current = request;
-      setState((previous) => pendingContextState(previous, key, compact));
-      const call = compact ? compactChatContext : fetchChatContextStatus;
-      settleContextRequest(
-        call(chatId, projectPath, modelId, request.signal),
-        request,
-        key,
-        setState,
-        compact,
-      );
-    },
-    [chatId, projectPath, modelId, key],
-  );
+  const currentStatus = useRef(state.status);
+  currentStatus.current = state.status;
+  const refresh = useContextRefresh(chatId, projectPath, modelId, key, controller, setState);
   useEffect(() => {
     if (session.loading) return;
-    refresh(false);
-    // The persisted user row may arrive after the optimistic UI row. Refresh local estimates
-    // while the provider is pending; stream deltas never start additional status requests.
-    const timer = busy ? setInterval(() => refresh(false), 1_000) : undefined;
+    const cancel = pollPendingContext(refresh, busy, currentStatus.current?.estimatedInputTokens);
     return (): void => {
-      clearInterval(timer);
+      cancel();
       controller.current?.abort();
+      controller.current = null;
     };
   }, [refresh, busy, session.loading, historyKey, revision]);
   return {
     state: state.key === key ? state : { key, compacting: false, error: false },
     busy,
     compact: (): void => {
-      if (!busy && !state.compacting) refresh(true);
+      if (!busy && !state.compacting) void refresh(true);
     },
     retry: (): void => {
       setRevision((value) => value + 1);
     },
   };
+}
+
+function useContextRefresh(
+  chatId: string | undefined,
+  projectPath: string | undefined,
+  modelId: string | undefined,
+  key: string,
+  controller: { current: AbortController | null },
+  setState: Dispatch<SetStateAction<ContextState>>,
+): (compact: boolean) => Promise<number | undefined> {
+  return useCallback(
+    async (compact: boolean): Promise<number | undefined> => {
+      if (controller.current !== null) return undefined;
+      if (chatId === undefined || projectPath === undefined || modelId === undefined)
+        return undefined;
+      const request = new AbortController();
+      controller.current = request;
+      if (compact) setState((previous) => pendingContextState(previous, key, compact));
+      const call = compact ? compactChatContext : fetchChatContextStatus;
+      try {
+        return await settleContextRequest(
+          call(chatId, projectPath, modelId, request.signal),
+          request,
+          key,
+          setState,
+          compact,
+        );
+      } finally {
+        if (controller.current === request) controller.current = null;
+      }
+    },
+    [chatId, projectPath, modelId, key, controller, setState],
+  );
 }
 
 export function ChatContextMeterContainer({
@@ -105,31 +121,59 @@ export function ChatContextMeterContainer({
   );
 }
 
-function settleContextRequest(
+async function settleContextRequest(
   promise: Promise<ChatContextStatusWire>,
   request: AbortController,
   key: string,
   setState: Dispatch<SetStateAction<ContextState>>,
   compact: boolean,
-): void {
-  void promise
-    .then((status) => {
-      if (!request.signal.aborted) setState({ key, status, compacting: false, error: false });
-    })
-    .catch((error: unknown) => {
-      if (request.signal.aborted) return;
-      reportClientDiagnostic(
-        compact
-          ? "Keiko manual context compaction request failed."
-          : "Keiko context status request failed.",
-        {
-          correlationId: correlationIdOf(error),
-          errorKind: bffRequestErrorKind(error),
-          errorEvidence: clientErrorEvidence(error),
-        },
-      );
-      setState((previous) => ({ ...previous, compacting: false, error: true }));
-    });
+): Promise<number | undefined> {
+  try {
+    const status = await promise;
+    if (request.signal.aborted) return undefined;
+    setState({ key, status, compacting: false, error: false });
+    return status.estimatedInputTokens;
+  } catch (error) {
+    if (request.signal.aborted) return undefined;
+    reportClientDiagnostic(
+      compact
+        ? "Keiko manual context compaction request failed."
+        : "Keiko context status request failed.",
+      {
+        correlationId: correlationIdOf(error),
+        errorKind: bffRequestErrorKind(error),
+        errorEvidence: clientErrorEvidence(error),
+      },
+    );
+    setState((previous) => ({ ...previous, compacting: false, error: true }));
+    return undefined;
+  }
+}
+
+/** Serial, bounded refresh until the persisted turn changes the estimate; never per-token polling. */
+function pollPendingContext(
+  refresh: (compact: boolean) => Promise<number | undefined>,
+  busy: boolean,
+  baseline: number | undefined,
+): () => void {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let attempts = 0;
+  const next = async (): Promise<void> => {
+    const tokens = await refresh(false);
+    if (cancelled || !busy || tokens === undefined || attempts >= 6) return;
+    if (baseline !== undefined && tokens !== baseline) return;
+    baseline = tokens;
+    const delay = Math.min(1_000 * 2 ** attempts++, 8_000);
+    timer = setTimeout(() => {
+      void next();
+    }, delay);
+  };
+  void next();
+  return (): void => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
 }
 
 function pendingContextState(

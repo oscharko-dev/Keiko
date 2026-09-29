@@ -25,7 +25,7 @@ import {
 } from "react";
 import type { EditorAgentConflictCode } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
+import { parseSafeUserInput, parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   highlightLines,
@@ -72,6 +72,7 @@ export type AssistantCodeBlockApply = (
 ) => Promise<AssistantCodeBlockApplyOutcome>;
 
 export interface SafeMarkdownProps {
+  readonly literalUserInput?: boolean | undefined;
   readonly source: string;
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
@@ -85,6 +86,7 @@ export interface SafeMarkdownProps {
 }
 
 interface RenderOptions {
+  readonly literalUserInput: boolean;
   readonly applyScopeId: string | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
@@ -787,6 +789,13 @@ function renderInlineNode(
 ): ReactNode | null {
   switch (node.kind) {
     case "text":
+      if (options.literalUserInput)
+        return (
+          <span key={key}>
+            {node.text}
+            {trailing}
+          </span>
+        );
       return renderRepositoryText(node.text ?? "", key, options, trailing);
 
     case "inline-code":
@@ -900,6 +909,7 @@ function useMarkdownListEvidence(
 
 function SafeMarkdownImpl({
   source,
+  literalUserInput = false,
   diagnosticCorrelationId,
   diagnosticMessageId,
   applyScopeId,
@@ -910,10 +920,14 @@ function SafeMarkdownImpl({
   streaming = false,
   trailing,
 }: SafeMarkdownProps): ReactNode {
-  const tree = useMemo(() => parseSafeMarkdown(source), [source]);
+  const tree = useMemo(
+    () => (literalUserInput ? parseSafeUserInput(source) : parseSafeMarkdown(source)),
+    [source, literalUserInput],
+  );
   useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
   const options = useMemo<RenderOptions>(
     () => ({
+      literalUserInput,
       applyScopeId,
       citationPreview,
       streaming,
@@ -922,6 +936,7 @@ function SafeMarkdownImpl({
       onApplyCodeBlock,
     }),
     [
+      literalUserInput,
       applyScopeId,
       citationPreview,
       onApplyCodeBlock,
@@ -930,7 +945,11 @@ function SafeMarkdownImpl({
       streaming,
     ],
   );
-  return <div className="sm-root">{renderMarkdownTree(tree, options, trailing)}</div>;
+  return (
+    <div className="sm-root" style={literalUserInput ? { whiteSpace: "pre-wrap" } : undefined}>
+      {renderMarkdownTree(tree, options, trailing)}
+    </div>
+  );
 }
 
 // GEN-PERF-CHAT-010 — memoized so a settled assistant bubble does not re-parse/re-highlight its
@@ -949,6 +968,7 @@ export const SafeMarkdown = memo(SafeMarkdownImpl);
 // ---------------------------------------------------------------------------
 
 export interface SafeMarkdownBoundaryProps {
+  readonly literalUserInput?: boolean | undefined;
   readonly source: string;
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
@@ -987,6 +1007,7 @@ export class SafeMarkdownBoundary extends Component<
     return (
       <SafeMarkdown
         source={this.props.source}
+        literalUserInput={this.props.literalUserInput}
         diagnosticCorrelationId={this.props.diagnosticCorrelationId}
         diagnosticMessageId={this.props.diagnosticMessageId}
         applyScopeId={this.props.applyScopeId}

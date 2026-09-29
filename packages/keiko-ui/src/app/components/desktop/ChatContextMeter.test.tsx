@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ChatContextMeter } from "./ChatContextMeter";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
@@ -81,7 +81,7 @@ describe("Chat context meter", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Conversation context: approximately 0.4% used" }),
     );
-    expect(screen.getByRole("heading", { name: "Conversation context 0.4 %" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Conversation context 0.4%" })).toBeInTheDocument();
   });
   it("renders the expanded panel outside the clipping chat canvas", () => {
     const { container } = fixture(8_000);
@@ -246,3 +246,38 @@ describe("Chat context request diagnostics", () => {
     expect(contextApi.report).not.toHaveBeenCalled();
   });
 });
+
+it("lets a slow pending status settle, then stops polling once the persisted context changes", async () => {
+  vi.useFakeTimers();
+  contextApi.fetch.mockReset().mockResolvedValueOnce(status(8_000));
+  const session = contextSession();
+  const view = render(<ChatContextMeterContainer session={session} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  let finish!: (value: ChatContextStatusWire) => void;
+  contextApi.fetch.mockImplementation(
+    () =>
+      new Promise<ChatContextStatusWire>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  view.rerender(<ChatContextMeterContainer session={{ ...session, sending: true }} />);
+  const signal = contextApi.fetch.mock.calls.at(-1)?.[3] as AbortSignal;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000);
+  });
+  expect(signal.aborted).toBe(false);
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    finish(status(9_000));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
+afterEach(() => vi.useRealTimers());

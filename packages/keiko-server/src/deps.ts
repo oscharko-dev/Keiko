@@ -1,5 +1,8 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
-import { initializeConfiguredConversationReadiness } from "./gateway-readiness.js";
+import {
+  initializeConfiguredConversationReadiness,
+  stopConfiguredConversationReadiness,
+} from "./gateway-readiness.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
 // only the static-serving + CSP + port fields; the JSON/SSE handlers additionally need the resolved
 // gateway config (for the config inspector and for building a ModelPort), an evidence store, a live
@@ -504,13 +507,13 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 ) => QualityIntelligenceReviewPrincipal;
 
 export interface RuntimeGatewayConfig {
-  readonly subscribe?: (listener: () => void) => () => void;
+  readonly subscribe?: (listener: (correlationId?: string) => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
-  set(config: GatewayConfig | undefined, present: boolean): void;
+  set(config: GatewayConfig | undefined, present: boolean, correlationId?: string): void;
   /** Monotonic config generation; bumped by every set(). Probes capture it before running. */
   generation(): number;
   /**
@@ -1401,10 +1404,10 @@ function resolveConfiguredEgress(
 }
 
 function gatewayConfigListeners(): {
-  subscribe: (listener: () => void) => () => void;
-  notify: () => void;
+  subscribe: (listener: (correlationId?: string) => void) => () => void;
+  notify: (correlationId?: string) => void;
 } {
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(correlationId?: string) => void>();
   return {
     subscribe(listener): () => void {
       listeners.add(listener);
@@ -1412,8 +1415,25 @@ function gatewayConfigListeners(): {
         listeners.delete(listener);
       };
     },
-    notify(): void {
-      for (const listener of listeners) listener();
+    notify(correlationId): void {
+      const snapshot = new Set(listeners);
+      for (const listener of snapshot) {
+        try {
+          listener(correlationId);
+        } catch (error) {
+          emitServerDiagnostic(
+            undefined,
+            serverDiagnosticFromError({
+              correlationId: correlationId ?? newCorrelationId(),
+              operation: "gateway.readiness",
+              source: "gateway-config.subscriber",
+              error,
+              summary: "A gateway readiness probe could not be completed.",
+              redact: (message): string => message,
+            }),
+          );
+        }
+      }
     },
   };
 }
@@ -1443,13 +1463,13 @@ function createRuntimeGatewayConfig(
     spendBudget: gatewaySpendBudgetForEnv(env),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
-    set(next: GatewayConfig | undefined, nextPresent: boolean): void {
+    set(next: GatewayConfig | undefined, nextPresent: boolean, correlationId?: string): void {
       config = next;
       present = nextPresent;
       verification = UNVERIFIED_GATEWAY;
       verifiedCapabilities.clear();
       generation += 1;
-      listeners.notify();
+      listeners.notify(correlationId);
     },
     subscribe: listeners.subscribe,
     generation: (): number => generation,
@@ -4488,19 +4508,26 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
-  installConversationReadinessInitialization(deps);
-  return deps;
+  return installConversationReadinessInitialization(deps);
 }
 
-function installConversationReadinessInitialization(deps: UiHandlerDeps): void {
+function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
   initializeConfiguredConversationReadiness(deps);
-  deps.gatewayConfig?.subscribe?.(() => {
+  const unsubscribe = deps.gatewayConfig?.subscribe?.((correlationId) => {
     // Setup stamps its successful credential checks synchronously after replacement. Reuse
     // those observations before deciding which models still need startup verification.
     queueMicrotask(() => {
-      initializeConfiguredConversationReadiness(deps);
+      initializeConfiguredConversationReadiness(deps, correlationId ?? newCorrelationId());
     });
   });
+  return {
+    ...deps,
+    dispose: async (): Promise<void> => {
+      unsubscribe?.();
+      stopConfiguredConversationReadiness(deps);
+      await deps.dispose?.();
+    },
+  };
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {

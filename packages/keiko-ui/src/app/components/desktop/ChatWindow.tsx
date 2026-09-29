@@ -656,6 +656,7 @@ function ChatBubbleContentArea({
         // degrades this one bubble to plain text instead of crashing the view.
         <SafeMarkdownBoundary
           source={message.content}
+          literalUserInput={isUser}
           diagnosticCorrelationId={message.id}
           applyScopeId={`${message.chatId}:${message.id}`}
           repositoryRoots={repositoryRoots}
@@ -926,12 +927,14 @@ function ChatBubbleImpl({
   return (
     <article
       ref={bubbleRef}
-      className={isUser ? `chat-msg ${styles.userMessage}` : "chat-msg"}
+      className={isUser ? `chat-msg ${styles.cmpUserMessage}` : "chat-msg"}
       data-role={message.role}
       data-layout={layout}
       tabIndex={isUser ? undefined : -1}
     >
-      <div className={isUser ? `chat-msg-bubble ${styles.userMessageBubble}` : "chat-msg-bubble"}>
+      <div
+        className={isUser ? `chat-msg-bubble ${styles.cmpUserMessageBubble}` : "chat-msg-bubble"}
+      >
         {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
         {terminalTurnLabel === undefined ? null : (
           <output className={styles.turnEndState} style={NATIVE_BLOCK_STYLE}>

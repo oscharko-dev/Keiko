@@ -7,6 +7,7 @@ import {
   schema,
 } from "prosemirror-markdown";
 import { TextSelection, type Selection, type EditorState } from "prosemirror-state";
+import { detectComposerCodeLanguage } from "./composer-code-language";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 // Drafts are inert: links cannot navigate and Markdown images never fetch remote resources.
@@ -40,13 +41,25 @@ function visibleTitle(title: unknown): string {
 
 const tokenizer = defaultMarkdownParser.tokenizer;
 const parser = new MarkdownParser(composerSchema, tokenizer, defaultMarkdownParser.tokens);
-const serializer = new MarkdownSerializer(
+const literalSerializer = new MarkdownSerializer(
   {
     ...defaultMarkdownSerializer.nodes,
     text: (state, node): void => state.write(node.text ?? ""),
     hard_break: (state): void => state.write("\n"),
   },
   defaultMarkdownSerializer.marks,
+);
+
+const serializer = new MarkdownSerializer(
+  {
+    ...literalSerializer.nodes,
+    code_block: (state, node, parent, index): void => {
+      const params = node.attrs.params || detectComposerCodeLanguage(node.textContent) || "";
+      const labelled = node.type.create({ ...node.attrs, params }, node.content, node.marks);
+      defaultMarkdownSerializer.nodes.code_block!(state, labelled, parent, index);
+    },
+  },
+  literalSerializer.marks,
 );
 
 export function parseComposerMarkdown(value: string): DocumentNode {
@@ -70,7 +83,7 @@ export function parseComposerText(value: string): DocumentNode {
 /** Restore formatting only when interpretation would leave the complete saved draft unchanged. */
 export function parseComposerDraft(value: string): DocumentNode {
   const doc = parseComposerMarkdown(value);
-  return serializeComposerMarkdown(doc) === value ? doc : parseComposerText(value);
+  return literalSerializer.serialize(doc) === value ? doc : parseComposerText(value);
 }
 
 /** Locate the caret in the Markdown handed to existing mention/dictation integrations. */

@@ -5,6 +5,8 @@ import {
 import { deleteChat } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind } from "@/lib/http";
 import { clientErrorSummary } from "@/lib/client-error-summary";
 import type { Chat } from "@/lib/types";
 import { notifyChatDeleted } from "../../hooks/useChatSession";
@@ -47,7 +49,8 @@ function recordFailedDeletion(error: unknown, correlationId: string): string {
   // Never log the chat id, project, title, messages or server response body.
   reportClientDiagnostic(`chat history deletion: request failed (${clientErrorSummary(error)})`, {
     correlationId,
-    errorKind: "unknown",
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
   });
   return error instanceof Error ? error.message : "Request failed.";
 }

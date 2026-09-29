@@ -1987,11 +1987,13 @@ describe("desktop chat SSE streaming handler", () => {
     );
     // The model appears only as its digest on readiness lines (#3557 review).
     expect(started).toMatchObject({
-      correlationId: "corr-regeneration-initialization",
+      parentCorrelationId: "corr-regeneration-initialization",
+      correlationId: started?.correlationId,
       extra: { modelIdDigest: CHAT_MODEL_DIGEST, probeCount: 1 },
     });
     expect(completed).toMatchObject({
-      correlationId: "corr-regeneration-initialization",
+      correlationId: started?.correlationId,
+      parentCorrelationId: "corr-regeneration-initialization",
       extra: { modelIdDigest: CHAT_MODEL_DIGEST, overallStatus: "ready", probeCount: 1 },
     });
     expect(started?.extra).not.toHaveProperty("modelId");
@@ -2000,7 +2002,7 @@ describe("desktop chat SSE streaming handler", () => {
       expect.objectContaining({
         op: "gateway.readiness.automatic.joined",
         correlationId: "corr-regeneration-on-demand-ready",
-        parentCorrelationId: "corr-regeneration-initialization",
+        parentCorrelationId: started?.correlationId,
       }),
     );
     expect(JSON.stringify(vi.mocked(fetchImpl).mock.calls)).not.toContain(

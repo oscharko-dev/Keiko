@@ -206,8 +206,7 @@ export class ComposerCodeView implements NodeView {
     if (pos === undefined || value === this.node.textContent) return;
     const tr = this.view.state.tr.insertText(value, pos + 1, pos + 1 + this.node.content.size);
     const detected = this.node.attrs.params === "" ? detectComposerCodeLanguage(value) : undefined;
-    if (detected !== undefined) {
-      tr.setNodeMarkup(pos, undefined, { params: detected });
+    if (detected !== undefined && detected !== languageFor(this.node)) {
       reportClientDiagnostic("Keiko composer code language detected.", {
         composerActivity: "code-language-detected",
       });

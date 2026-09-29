@@ -44,7 +44,7 @@ describe("Header window controls (C023)", () => {
 describe("Header release controls", () => {
   it("exposes a reversible layout lock and disables arrangement commands while locked", () => {
     const props = renderHeader({ layoutLocked: true });
-    const lock = screen.getByRole("button", { name: "Unlock layout" });
+    const lock = screen.getByRole("button", { name: "Lock layout" });
     expect(lock).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(lock);
     expect(props.onToggleLayoutLock).toHaveBeenCalledOnce();

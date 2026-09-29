@@ -670,12 +670,7 @@ function usePanZoom({
     (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
       if (isLayoutLocked()) return;
       const effectiveSmoothness = Math.min(100, Math.max(0, cameraSmoothness * smoothnessScale));
-      if (
-        effectiveSmoothness <= 0 ||
-        prefersReducedCameraMotion() ||
-        typeof window.requestAnimationFrame !== "function" ||
-        typeof window.cancelAnimationFrame !== "function"
-      ) {
+      if (!supportsCameraAnimation(effectiveSmoothness)) {
         if (animationFrameRef.current !== null) {
           window.cancelAnimationFrame(animationFrameRef.current);
           animationFrameRef.current = null;
@@ -2812,63 +2807,58 @@ export function useWorkspace(
   // object keeps a constant identity during gestures, which is what lets the
   // React.memo on WindowFrame/ConnectionsLayer collapse the per-frame re-render
   // storm from O(N windows) to O(windows that actually changed).
-  const api = useMemo<WorkspaceApi>(
-    () =>
-      protectWorkspaceLayout(
-        {
-          toggleLayoutLock,
-          add: addWithActivation,
-          openEditorFile: mutations.openEditorFile,
-          toggleTool: toggleToolWithActivation,
-          activateWindow,
-          focus: focusWindow,
-          currentWindowStack,
-          currentSelection,
-          replaceSelection,
-          toggleWindowSelection,
-          clearSelection,
-          moveSelectedWindowsBy,
-          copySelectedWindows,
-          cutSelectedWindows,
-          pasteCopiedWindows,
-          close: closeWithTeardown,
-          minimize: mutations.minimize,
-          restore: mutations.restore,
-          maximize: mutations.maximize,
-          update: mutations.update,
-          setSnap: snap.setSnap,
-          commitSnap: snap.commitSnap,
-          tileAll: tileAllWithActivation,
-          splitFront: splitFrontWithActivation,
-          cascade: cascadeWithActivation,
-          startConnect: connectActions.startConnect,
-          confirmConnect: connectActions.confirmConnect,
-          cancelConnect: connectActions.cancelConnect,
-          removeConn: connectActions.removeConn,
-          updateConnBoundScope,
-          updateConnGitChangeScope,
-          connect: connectActions.connect,
-          linkedFilesRoot: connectActions.linkedFilesRoot,
-          linkedFilesContext: connectActions.linkedFilesContext,
-          linkedAllFilesRoots: connectActions.linkedAllFilesRoots,
-          linkedConnectorCapsuleIds: connectActions.linkedConnectorCapsuleIds,
-          linkedConnectorCapsuleSetIds: connectActions.linkedConnectorCapsuleSetIds,
-          linkedFigmaSnapshotRunIds: connectActions.linkedFigmaSnapshotRunIds,
-          linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
-          linkedImageSources: connectActions.linkedImageSources,
-          linkedGitChangeComparisons: connectActions.linkedGitChangeComparisons,
-          currentFilesContext: connectActions.currentFilesContext,
-          zoomTo,
-          fitView,
-          resetView,
-          panBy,
-          rect,
-          currentView,
-        },
-        isLayoutLocked,
-      ),
+  const rawApi = useMemo<WorkspaceApi>(
+    () => ({
+      toggleLayoutLock,
+      add: addWithActivation,
+      openEditorFile: mutations.openEditorFile,
+      toggleTool: toggleToolWithActivation,
+      activateWindow,
+      focus: focusWindow,
+      currentWindowStack,
+      currentSelection,
+      replaceSelection,
+      toggleWindowSelection,
+      clearSelection,
+      moveSelectedWindowsBy,
+      copySelectedWindows,
+      cutSelectedWindows,
+      pasteCopiedWindows,
+      close: closeWithTeardown,
+      minimize: mutations.minimize,
+      restore: mutations.restore,
+      maximize: mutations.maximize,
+      update: mutations.update,
+      setSnap: snap.setSnap,
+      commitSnap: snap.commitSnap,
+      tileAll: tileAllWithActivation,
+      splitFront: splitFrontWithActivation,
+      cascade: cascadeWithActivation,
+      startConnect: connectActions.startConnect,
+      confirmConnect: connectActions.confirmConnect,
+      cancelConnect: connectActions.cancelConnect,
+      removeConn: connectActions.removeConn,
+      updateConnBoundScope,
+      updateConnGitChangeScope,
+      connect: connectActions.connect,
+      linkedFilesRoot: connectActions.linkedFilesRoot,
+      linkedFilesContext: connectActions.linkedFilesContext,
+      linkedAllFilesRoots: connectActions.linkedAllFilesRoots,
+      linkedConnectorCapsuleIds: connectActions.linkedConnectorCapsuleIds,
+      linkedConnectorCapsuleSetIds: connectActions.linkedConnectorCapsuleSetIds,
+      linkedFigmaSnapshotRunIds: connectActions.linkedFigmaSnapshotRunIds,
+      linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
+      linkedImageSources: connectActions.linkedImageSources,
+      linkedGitChangeComparisons: connectActions.linkedGitChangeComparisons,
+      currentFilesContext: connectActions.currentFilesContext,
+      zoomTo,
+      fitView,
+      resetView,
+      panBy,
+      rect,
+      currentView,
+    }),
     [
-      isLayoutLocked,
       toggleLayoutLock,
       mutations,
       snap,
@@ -2901,6 +2891,11 @@ export function useWorkspace(
     ],
   );
 
+  const api = useMemo(
+    () => protectWorkspaceLayout(rawApi, isLayoutLocked),
+    [rawApi, isLayoutLocked],
+  );
+
   return {
     layoutLocked,
     wins,
@@ -2914,4 +2909,13 @@ export function useWorkspace(
     view,
     api,
   };
+}
+
+function supportsCameraAnimation(smoothness: number): boolean {
+  return (
+    smoothness > 0 &&
+    !prefersReducedCameraMotion() &&
+    typeof window.requestAnimationFrame === "function" &&
+    typeof window.cancelAnimationFrame === "function"
+  );
 }

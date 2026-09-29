@@ -1,4 +1,4 @@
-.toolbar {
+.cmpToolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -8,7 +8,7 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.selectAll {
+.cmpSelectAll {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -17,7 +17,7 @@
   cursor: pointer;
 }
 
-.checkbox {
+.cmpCheckbox {
   appearance: auto;
   flex: 0 0 auto;
   width: 16px;
@@ -27,31 +27,31 @@
   cursor: pointer;
 }
 
-.checkbox:disabled {
+.cmpCheckbox:disabled {
   cursor: default;
 }
 
-.checkbox:focus-visible {
+.cmpCheckbox:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 3px;
 }
 
-.row.row {
+.cmpRow.cmpRow {
   grid-template-columns: auto minmax(0, 1fr);
   column-gap: 10px;
 }
 
-.row > .checkbox {
+.cmpRow > .cmpCheckbox {
   grid-column: 1;
   grid-row: 1 / span 2;
   margin-top: 2px;
 }
 
-.actions {
+.cmpActions {
   grid-column: 2;
 }
 
-.selected.selected {
+.cmpSelected.cmpSelected {
   background: var(--surface-primary);
   border-color: var(--border-strong);
 }

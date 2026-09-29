@@ -141,7 +141,6 @@ async function seedWindows(page: Page, windows: readonly Record<string, unknown>
 const SHELL_CHORD_MODIFIER = "ControlOrMeta";
 
 async function waitForShell(page: Page): Promise<void> {
-  await expect(page.getByRole("button", { name: "Open quick access" })).toBeVisible();
   await expect(page.getByRole("main", { name: "Workspace surface" })).toBeVisible();
 }
 

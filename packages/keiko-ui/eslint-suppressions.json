@@ -86,11 +86,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/Header.tsx": {
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/KeikoSelect.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 3
@@ -389,7 +384,7 @@
       "count": 10
     },
     "complexity": {
-      "count": 4
+      "count": 3
     },
     "max-lines-per-function": {
       "count": 4
@@ -987,11 +982,6 @@
       "count": 2
     },
     "max-lines-per-function": {
-      "count": 1
-    }
-  },
-  "src/app/components/desktop/widgets/cards/editorCommands.ts": {
-    "complexity": {
       "count": 1
     }
   },

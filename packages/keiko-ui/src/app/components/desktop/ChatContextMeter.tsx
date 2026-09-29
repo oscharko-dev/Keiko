@@ -128,10 +128,7 @@ export function ChatContextMeter(props: ChatContextMeterProps): ReactNode {
   const locale = useLocale();
   const id = useId();
   const disclosure = useContextDisclosure();
-  const ratio =
-    props.status === undefined
-      ? undefined
-      : props.status.estimatedInputTokens / Math.max(1, props.status.inputBudgetTokens);
+  const ratio = contextRatio(props.status);
   const percent = ratio === undefined ? undefined : ratio * 100;
   const percentLabel = percent === undefined ? undefined : formatContextPercent(percent, locale);
   const label =
@@ -178,4 +175,10 @@ export function ChatContextMeter(props: ChatContextMeterProps): ReactNode {
 function formatContextPercent(percent: number, locale: string): string {
   if (percent > 0 && percent < 0.1) return `<${(0.1).toLocaleString(locale)}`;
   return percent.toLocaleString(locale, { maximumFractionDigits: 1 });
+}
+
+function contextRatio(status: ChatContextMeterProps["status"]): number | undefined {
+  return status === undefined
+    ? undefined
+    : status.estimatedInputTokens / Math.max(1, status.inputBudgetTokens);
 }

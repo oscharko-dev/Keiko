@@ -145,7 +145,7 @@ describe("Design-system styling exception register", () => {
     );
 
     expect(localClassNames(selection)).toStrictEqual(
-      new Set(["marquee", "workspaceWindow", "selectionRing"]),
+      new Set(["marquee", "workspaceWindow", "selectionRing", "cmpWorkspaceSurface"]),
     );
     expect(selection).toContain('.workspaceWindow:focus-visible:not([data-selected="true"])');
     expect(selection).toContain('.workspaceWindow.workspaceWindow[data-selected="true"]');

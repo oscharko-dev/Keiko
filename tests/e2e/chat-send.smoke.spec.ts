@@ -20,17 +20,17 @@ const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const tempProjects: string[] = [];
 const updateLoopErrors = new WeakMap<Page, string[]>();
 
-test.beforeEach(({ page }) => {
+test.beforeEach(({ page }): void => {
   const errors: string[] = [];
   updateLoopErrors.set(page, errors);
-  page.on("console", (message) => {
+  page.on("console", (message): void => {
     if (message.type() === "error" && message.text().includes("Maximum update depth exceeded")) {
       errors.push("Maximum update depth exceeded");
     }
   });
 });
 
-test.afterEach(({ page }) => {
+test.afterEach(({ page }): void => {
   expect(updateLoopErrors.get(page)).toEqual([]);
 });
 
@@ -64,12 +64,13 @@ async function ensureProject(request: APIRequestContext, projectPath: string): P
 
 async function createChat(
   request: APIRequestContext,
+  title = "E2E chat send",
 ): Promise<{ chat: ChatResponse["chat"]; projectPath: string }> {
   const projectPath = createProjectFixture();
   await ensureProject(request, projectPath);
   const create = await request.post("/api/chats", {
     headers: MUTATION_HEADERS,
-    data: { projectPath, title: "E2E chat send", selectedModel: CHAT_MODEL_ID },
+    data: { projectPath, title, selectedModel: CHAT_MODEL_ID },
   });
   expect(create.status(), await create.text().catch(() => "")).toBe(201);
   const created = (await create.json()) as ChatResponse;
@@ -491,4 +492,123 @@ test("scrolls and searches twelve models while hiding unsupported attachments @s
   await search.fill("model-11");
   await expect(menu.getByRole("option")).toHaveCount(1);
   await expect(menu.getByRole("option")).toHaveText("e2e-model-11");
+});
+
+test("deletes selected chats with one mouse action and no confirmation @smoke", async ({
+  page,
+  request,
+}) => {
+  const { chat, projectPath } = await createChat(request, "Batch deletion first");
+  const create = await request.post("/api/chats", {
+    headers: MUTATION_HEADERS,
+    data: { projectPath, title: "Batch deletion second", selectedModel: CHAT_MODEL_ID },
+  });
+  expect(create.status()).toBe(201);
+  const second = (await create.json()) as ChatResponse;
+  await seedChatWindow(page, chat);
+  await page.addInitScript(() => {
+    const windows = JSON.parse(localStorage.getItem("keiko.workspace.v4") ?? "[]") as unknown[];
+    localStorage.setItem(
+      "keiko.workspace.v4",
+      JSON.stringify([
+        ...windows,
+        {
+          id: "e2e-history-window",
+          type: "chatHistory",
+          x: 40,
+          y: 30,
+          w: 800,
+          h: 680,
+          z: 20,
+          cfg: {},
+          max: false,
+        },
+      ]),
+    );
+  });
+  await page.goto("/");
+  const history = page.getByRole("region", { name: /^Chat History/u });
+  await expect(history).toBeVisible();
+  await history.getByRole("textbox", { name: "Search chat history" }).fill("Batch deletion");
+  await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(2);
+  await history.getByRole("checkbox", { name: "Select all displayed chats" }).check();
+  await history.getByRole("button", { name: "Delete selected (2)", exact: true }).click();
+  await expect(history.getByRole("checkbox", { name: /^Select Batch deletion/u })).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  for (const id of [chat.id, second.chat.id]) {
+    const response = await request.get(
+      `/api/chats/messages?${new URLSearchParams({ chatId: id, projectPath }).toString()}`,
+    );
+    expect(response.status()).toBe(404);
+  }
+});
+
+test("locks layout while native scrolling works in an unselected window @smoke", async ({
+  page,
+  request,
+}) => {
+  const { chat, projectPath } = await createChat(request);
+  for (let index = 0; index < 12; index++) {
+    const response = await request.post("/api/chats", {
+      headers: MUTATION_HEADERS,
+      data: { projectPath, title: `Scroll fixture ${String(index)}`, selectedModel: CHAT_MODEL_ID },
+    });
+    expect(response.status()).toBe(201);
+  }
+  await page.addInitScript(
+    ({ chatId, title }) => {
+      localStorage.setItem(
+        "keiko.workspace.v4",
+        JSON.stringify([
+          {
+            id: "e2e-scroll-first",
+            type: "chatHistory",
+            x: 30,
+            y: 30,
+            w: 520,
+            h: 450,
+            z: 10,
+            cfg: {},
+            max: false,
+          },
+          {
+            id: "e2e-scroll-second",
+            type: "chat",
+            x: 580,
+            y: 30,
+            w: 520,
+            h: 450,
+            z: 20,
+            cfg: { chatId, title },
+            max: false,
+          },
+        ]),
+      );
+    },
+    { chatId: chat.id, title: chat.title },
+  );
+  await page.goto("/");
+  const windows = page.locator('.window[data-window-id^="e2e-scroll-"]');
+  await expect(windows).toHaveCount(2);
+  const lock = page.getByRole("button", { name: "Lock layout", exact: true });
+  await lock.click();
+  await expect(lock).toHaveAttribute("aria-pressed", "true");
+  const first = windows.first();
+  const header = first.locator("[data-window-header]");
+  const initialBox = await first.boundingBox();
+  if (initialBox === null) throw new Error("Missing window geometry");
+  const headBox = await header.boundingBox();
+  if (headBox === null) throw new Error("Missing header geometry");
+  await page.mouse.move(headBox.x + 150, headBox.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(headBox.x + 250, headBox.y + 110, { steps: 8 });
+  await page.mouse.up();
+  expect(await first.boundingBox()).toEqual(initialBox);
+  const scrollRegion = first.getByRole("tabpanel");
+  await scrollRegion.hover();
+  await page.mouse.wheel(0, 450);
+  await expect.poll(() => scrollRegion.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(first).not.toHaveAttribute("data-selected", "true");
+  await lock.click();
+  await expect(lock).toHaveAttribute("aria-pressed", "false");
 });

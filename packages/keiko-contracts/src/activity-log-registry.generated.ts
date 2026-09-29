@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7543576259f4830ccdd0796d0f95001cc79db0ad2e29b1b01fdc94e70bcb4fc0" as const;
+  "08e0798c8aa3e2cc6d47b03f3d626826dcfabd25ffd84069d89879dc16d2d26b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",

@@ -742,3 +742,27 @@ function parseBlocks(source: string, depth: number): readonly SafeMarkdownNode[]
 export function parseSafeMarkdown(source: string): readonly SafeMarkdownNode[] {
   return parseBlocks(source, 0);
 }
+
+/** User prose stays literal; only fenced code enters the existing safe code renderer. */
+export function parseSafeUserInput(source: string): readonly SafeMarkdownNode[] {
+  const nodes: SafeMarkdownNode[] = [];
+  const ctx: ParseContext = { lines: source.split("\n"), i: 0, depth: 0 };
+  let prose: string[] = [];
+  const flush = (): void => {
+    if (prose.length > 0)
+      nodes.push({ kind: "paragraph", children: [{ kind: "text", text: prose.join("\n") }] });
+    prose = [];
+  };
+  while (ctx.i < ctx.lines.length) {
+    const line = ctx.lines[ctx.i] ?? "";
+    if (/^(`{3,}|~{3,})(\S*)/u.test(line.trim())) {
+      flush();
+      tryConsumeCodeFence(ctx, line, nodes);
+    } else {
+      prose.push(line);
+      ctx.i++;
+    }
+  }
+  flush();
+  return nodes;
+}

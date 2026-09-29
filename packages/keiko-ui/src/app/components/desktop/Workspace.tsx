@@ -25,7 +25,6 @@ import {
   isTextInputTarget,
   workspaceInteractionLocked,
 } from "./interactionGuards";
-import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
 import { localizedWindowTitle } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
@@ -70,6 +69,12 @@ const ZoomOutIcon = Icons.zoomOut;
 const ExpandIcon = Icons.expand;
 const ZoomInIcon = Icons.zoomIn;
 const AddIcon = Icons.add;
+
+// Load connection geometry independently of the initial desktop shell.
+const ConnectionsLayer = dynamic(
+  () => import("./windows/ConnectionsLayer").then((mod) => mod.ConnectionsLayer),
+  { ssr: false, loading: () => null },
+);
 
 const WorkspaceShader = dynamic(
   () => import("./WorkspaceShader").then((mod) => mod.WorkspaceShader),
@@ -1466,7 +1471,7 @@ export function Workspace({
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
     <main
-      className={`workspace ${selectionStyles.workspaceSurface}`}
+      className={`workspace ${selectionStyles.cmpWorkspaceSurface}`}
       data-layout-locked={layoutLocked ? "true" : undefined}
       ref={wsRef}
       aria-label={t("workspace.surface")}

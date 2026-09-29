@@ -92,6 +92,7 @@ function commandKeyDownHandler(
       activate(selected);
     } else if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       onClose();
     } else if (event.key === "Tab") {
       event.preventDefault();
@@ -112,6 +113,7 @@ interface CommandPaletteState {
 }
 
 function useCommandPalette(props: CommandPaletteProps): CommandPaletteState {
+  const { onClose } = props;
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -131,9 +133,9 @@ function useCommandPalette(props: CommandPaletteProps): CommandPaletteState {
       if (command === undefined) return;
       command.run();
       focusActivatedTarget();
-      props.onClose();
+      onClose();
     },
-    [results, focusActivatedTarget, props.onClose],
+    [results, focusActivatedTarget, onClose],
   );
   return {
     query,
@@ -184,39 +186,63 @@ function CommandQuery({ state }: { readonly state: CommandPaletteState }): React
 function CommandList({ state }: { readonly state: CommandPaletteState }): ReactNode {
   const t = useOptionalWidgetTranslate();
   return (
-    <div id="command-palette-results" className="cmdk-list" role="listbox">
-      {state.results.length === 0 && <div className="cmdk-empty">{t("commandPalette.empty")}</div>}
+    <select
+      id="command-palette-results"
+      className="cmdk-list"
+      aria-label={t("commandPalette.title")}
+      size={Math.max(2, Math.min(8, state.results.length))}
+      value={String(state.selected)}
+      tabIndex={-1}
+      style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: 0 }}
+      onChange={(event): void => state.setSelected(Number(event.target.value))}
+      onClick={(event): void => {
+        const target = event.target;
+        const value =
+          target instanceof HTMLOptionElement ? target.value : event.currentTarget.value;
+        state.activate(Number(value));
+      }}
+    >
+      {state.results.length === 0 && <option disabled>{t("commandPalette.empty")}</option>}
       {state.results.map((command, index) => (
-        <button
+        <option
           key={command.id}
           id={`command-palette-option-${String(index)}`}
-          type="button"
-          role="option"
+          value={String(index)}
           aria-selected={index === state.selected}
           className="cmdk-row"
           data-sel={index === state.selected}
-          tabIndex={-1}
           onPointerEnter={() => state.setSelected(index)}
-          onClick={() => state.activate(index)}
         >
-          <span className="cmdk-label">{command.label}</span>
-          <span className="spacer" />
-          {command.shortcut !== undefined ? <span className="kbd">{command.shortcut}</span> : null}
-          <span className="cmdk-group mono">{command.group}</span>
-        </button>
+          {[command.label, command.shortcut, command.group].filter(Boolean).join(" · ")}
+        </option>
       ))}
-    </div>
+    </select>
   );
 }
 
 export function CommandPalette(props: CommandPaletteProps): ReactNode {
+  const { onClose } = props;
   useWindowStageEvidence("command palette");
   const t = useOptionalWidgetTranslate();
   const state = useCommandPalette(props);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dismiss = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && dialogRef.current?.contains(event.target as Node)) {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", dismiss);
+    return (): void => document.removeEventListener("keydown", dismiss);
+  }, [onClose]);
   const count = state.results.length;
+  const resultKey = count === 1 ? "commandPalette.result.singular" : "commandPalette.result.plural";
+  const resultSummary = count === 0 ? t("commandPalette.empty") : t(resultKey, { count });
   return (
     <div className="cmdk-overlay" onPointerDown={props.onClose}>
       <dialog
+        ref={dialogRef}
         open
         className="cmdk"
         aria-modal="true"
@@ -234,11 +260,7 @@ export function CommandPalette(props: CommandPaletteProps): ReactNode {
         </p>
         <CommandQuery state={state} />
         <output className="sr-only" style={NATIVE_BLOCK_STYLE}>
-          {count === 0
-            ? t("commandPalette.empty")
-            : t(count === 1 ? "commandPalette.result.singular" : "commandPalette.result.plural", {
-                count,
-              })}
+          {resultSummary}
         </output>
         <CommandList state={state} />
       </dialog>

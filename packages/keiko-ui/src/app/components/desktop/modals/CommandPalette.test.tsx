@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -225,7 +225,7 @@ describe("CommandPalette", () => {
     fireEvent.change(input, { target: { value: "><img src=x>\u0007" } });
     await waitFor(() => {
       expect(input).not.toHaveAttribute("aria-activedescendant");
-      expect(screen.queryByRole("option")).toBeNull();
+      expect(screen.getByRole("option")).toBeDisabled();
     });
   });
 
@@ -238,6 +238,15 @@ describe("CommandPalette", () => {
     );
 
     const option = await screen.findByRole("option", { name: /Toggle light \/ dark theme/ });
-    expect(within(option).getByText("⌘K")).toBeInTheDocument();
+    expect(option).toHaveTextContent("⌘K");
   });
+});
+
+it("dismisses Escape when the dialog itself owns focus", () => {
+  const onClose = vi.fn();
+  render(<CommandPalette commands={[]} onClose={onClose} />);
+  const dialog = screen.getByRole("dialog");
+  dialog.focus();
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(onClose).toHaveBeenCalledOnce();
 });

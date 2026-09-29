@@ -131,18 +131,17 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const deletion = useChatHistoryDeletion(scope);
   const busy = deletion.busy || busyId !== null;
   const selectedIds = new Set(selection.selectedChats.map((chat) => chat.id));
+  const deletionFailureKey =
+    deletion.failure?.requestedCount === 1
+      ? "chat.history.deleteFailed"
+      : "chat.history.bulkDeleteFailed";
   const deletionError =
     deletion.failure === null
       ? null
-      : optionalT(
-          deletion.failure.requestedCount === 1
-            ? "chat.history.deleteFailed"
-            : "chat.history.bulkDeleteFailed",
-          {
-            count: deletion.failure.failedIds.length,
-            detail: deletion.failure.detail ?? "Request failed.",
-          },
-        );
+      : optionalT(deletionFailureKey, {
+          count: deletion.failure.failedIds.length,
+          detail: deletion.failure.detail ?? "Request failed.",
+        });
 
   // GEN-UI-FOCUS-016: one-click deletion replaces the confirmation. Keep a stable keyboard
   // destination after the row disappears, rather than leaving focus on the document body.
@@ -172,7 +171,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const handleTablistKey = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (busy) return;
     const key = event.key;
-    if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") return;
+    if (!HISTORY_TAB_KEYS.has(key)) return;
     const container = tablistRef.current;
     if (container === null) return;
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>("button[role='tab']"));
@@ -183,11 +182,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         : -1;
     const from = initialTabIndex(view, current);
     event.preventDefault();
-    let next = from;
-    if (key === "ArrowRight") next = (from + 1) % tabs.length;
-    else if (key === "ArrowLeft") next = (from - 1 + tabs.length) % tabs.length;
-    else if (key === "Home") next = 0;
-    else if (key === "End") next = tabs.length - 1;
+    const next = historyNextTab(key, from, tabs.length);
     setView(next === 0 ? "active" : "deleted");
     selection.clear();
     tabs[next]?.focus();
@@ -470,14 +465,14 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
             return (
               <article
                 key={chat.id}
-                className={`chat-history-row ${styles.row} ${selectedIds.has(chat.id) ? styles.selected : ""}`}
+                className={`chat-history-row ${styles.cmpRow} ${selectedIds.has(chat.id) ? styles.cmpSelected : ""}`}
                 data-chat-id={chat.id}
                 data-state={deleted ? "deleted" : "active"}
                 aria-label={chat.title}
               >
                 <input
                   type="checkbox"
-                  className={styles.checkbox}
+                  className={styles.cmpCheckbox}
                   checked={selectedIds.has(chat.id)}
                   disabled={busy || session.loading}
                   aria-label={t("chat.history.selection.chat", { title: chat.title })}
@@ -528,7 +523,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
                     </button>
                   )}
                 </div>
-                <div className={`chat-history-actions ${styles.actions}`}>
+                <div className={`chat-history-actions ${styles.cmpActions}`}>
                   {renderRowActions({ chat, editing, deleted, busy })}
                 </div>
               </article>
@@ -538,4 +533,11 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       </div>
     </div>
   );
+}
+
+const HISTORY_TAB_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
+function historyNextTab(key: string, from: number, length: number): number {
+  if (key === "ArrowRight") return (from + 1) % length;
+  if (key === "ArrowLeft") return (from - 1 + length) % length;
+  return key === "Home" ? 0 : length - 1;
 }

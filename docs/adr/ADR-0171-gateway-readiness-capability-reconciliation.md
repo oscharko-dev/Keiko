@@ -47,7 +47,14 @@ either event basic-chat verification starts during configuration initialization.
 credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization, but must never initiate a provider readiness test. Failed initialization remains
-visible and can be retried from Settings. This prevents stale point-in-time evidence from becoming
+visible. Inconclusive transport or provider failures recover through configuration-owned background
+probes after a bounded cooldown; a conclusive unsupported-model rejection waits for a Settings
+change or explicit verification. Disposal aborts active requests, clears retries, and unsubscribes
+the configuration listener.
+At most two probes run concurrently per configuration holder, including across replacements;
+queued probes of superseded generations are discarded. Ready models are never rechecked per
+question. Settings-triggered background work carries a child correlation linked to the request
+that changed the configuration. Manual Settings checks remain available. This prevents stale point-in-time evidence from becoming
 durable configuration truth and removes an extra model request from interactive Chat traffic.
 
 ### D3 — Reconciliation is explicit and server-validated

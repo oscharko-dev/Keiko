@@ -1,8 +1,8 @@
-.workspaceSurface[data-layout-locked="true"] :global(.win-head) {
+.cmpWorkspaceSurface[data-layout-locked="true"] [data-window-header] {
   cursor: default;
 }
 
-.workspaceSurface[data-layout-locked="true"] :global(.win-body) {
+.cmpWorkspaceSurface[data-layout-locked="true"] [data-window-body] {
   overscroll-behavior: contain;
 }
 

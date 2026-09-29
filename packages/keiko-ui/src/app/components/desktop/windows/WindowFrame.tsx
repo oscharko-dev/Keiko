@@ -887,6 +887,28 @@ function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
   return target.closest(".window")?.contains(activeElement) === true;
 }
 
+function resizeHandlesAllowed(maximized: boolean, layoutLocked: boolean): boolean {
+  return !maximized && !layoutLocked;
+}
+
+function windowBodyStyle(
+  enableContentVisibility: boolean,
+  width: number,
+  height: number,
+  overflow: "hidden" | undefined,
+): CSSProperties {
+  return {
+    contain: "layout style paint",
+    ...(enableContentVisibility
+      ? {
+          contentVisibility: "auto",
+          containIntrinsicSize: `${String(Math.round(width))}px ${String(Math.round(height))}px`,
+        }
+      : {}),
+    ...(overflow === undefined ? {} : { overflow }),
+  };
+}
+
 // `linkRevision` only feeds the React.memo comparison and the linked-context
 // useMemo dependency below — it carries the "some other window's connection or
 // cfg changed" signal so this window refreshes its derived cross-window context
@@ -1045,7 +1067,14 @@ function WindowFrameImpl({
   }, [currentAutoGrowContentKey]);
 
   useEffect(() => {
-    if (layoutLocked || !shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full")
+    if (
+      !autoGrowLayoutAllowed(
+        layoutLocked,
+        shouldAutoGrowWindow(win.type, win.cfg),
+        win.max,
+        bodyMode,
+      )
+    )
       return;
     if (currentAutoGrowContentKey === null) return;
     const body = bodyRef.current;
@@ -1357,16 +1386,7 @@ function WindowFrameImpl({
       ? "hidden"
       : undefined;
   const bodyStyle = useMemo<CSSProperties>(
-    () => ({
-      ...(enableContentVisibility
-        ? {
-            contain: "layout style paint",
-            contentVisibility: "auto",
-            containIntrinsicSize: `${String(Math.round(ew))}px ${String(Math.round(eh))}px`,
-          }
-        : { contain: "layout style paint" }),
-      ...(bodyOverflow === undefined ? {} : { overflow: bodyOverflow }),
-    }),
+    () => windowBodyStyle(enableContentVisibility, ew, eh, bodyOverflow),
     [bodyOverflow, enableContentVisibility, ew, eh],
   );
   const sectionStyle = useMemo<CSSProperties>(
@@ -1449,6 +1469,7 @@ function WindowFrameImpl({
           {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
           <header
             className="win-head"
+            data-window-header
             onPointerDown={onHeaderPointerDown}
             onDoubleClick={(e) => {
               if (!layoutLocked && shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
@@ -1580,13 +1601,19 @@ function WindowFrameImpl({
               </button>
             </fieldset>
           </header>
-          <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
+          <div
+            ref={bodyRef}
+            className="win-body"
+            data-window-body
+            data-mode={bodyMode}
+            style={bodyStyle}
+          >
             {/* GEN-STAB-WINDOW-001 — a widget render throw degrades THIS body, not the canvas. */}
             <WindowBodyBoundary windowType={win.type}>{body}</WindowBodyBoundary>
           </div>
         </div>
       </div>
-      {!win.max && !layoutLocked
+      {resizeHandlesAllowed(win.max, layoutLocked)
         ? HANDLES.map((d: Handle) => (
             // GEN-UI-INTERACTION-007 — the resize handles are pointer-only affordances;
             // keyboard resize is the Alt+Arrow chord (useKeyboardCtrls). aria-hidden
@@ -1626,3 +1653,12 @@ function WindowFrameImpl({
 // `top`/`connState`/`linkRevision` are primitives. Default shallow comparison is
 // therefore sufficient and correct — `linkRevision` covers cross-window context.
 export const WindowFrame = memo(WindowFrameImpl);
+
+function autoGrowLayoutAllowed(
+  locked: boolean,
+  capable: boolean,
+  maximized: boolean | undefined,
+  mode: string,
+): boolean {
+  return !locked && capable && !maximized && mode === "full";
+}

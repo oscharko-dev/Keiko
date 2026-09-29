@@ -59,10 +59,10 @@ function HeaderTools({
     <div className="hd-tools">
       <button
         type="button"
-        className={`hd-tool ui-tip ${styles.layoutLock}`}
+        className={`hd-tool ui-tip ${styles.cmpLayoutLock}`}
         onClick={onToggleLayoutLock}
         aria-pressed={layoutLocked}
-        aria-label={label}
+        aria-label={t("header.lockLayout")}
         data-tip={label}
       >
         <LayoutLockIcon size={16} />

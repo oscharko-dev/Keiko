@@ -203,7 +203,9 @@ describe("dispatchableWorkspaceShortcutsForContext", () => {
     const shortcuts = globalShortcuts(["1|focus-status|Meta+Z"]);
 
     expect(shortcuts.get("undo")?.chord).toBe("cmd|z");
-    expect(shortcuts.size).toBe(6);
+    expect(shortcuts.size).toBe(5);
+    expect(shortcuts.has("workspace.files")).toBe(false);
+    expect(shortcuts.has("workspace.commands")).toBe(true);
   });
 
   it("emits no reserved and no duplicated chord for any persisted input", () => {

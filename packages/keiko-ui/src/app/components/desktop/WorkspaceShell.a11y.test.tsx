@@ -257,6 +257,7 @@ describe("Workspace shell accessibility", () => {
       expect(element).toHaveFocus();
     };
 
+    await tabTo(screen.getByRole("button", { name: "Lock layout" }));
     await tabTo(screen.getByRole("button", { name: "Tile all windows" }));
     await user.keyboard("{Enter}");
     expect(onTileAll).toHaveBeenCalledTimes(1);

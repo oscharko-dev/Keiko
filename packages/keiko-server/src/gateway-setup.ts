@@ -6243,7 +6243,7 @@ function finalizeVerifiedCandidate(
     deps,
     request.correlationId,
   );
-  gatewayConfig.set(verified.config, true);
+  gatewayConfig.set(verified.config, true, request.correlationId);
   for (const modelId of verified.testedModelIds) {
     gatewayConfig.recordVerifiedCapability(
       modelId,
@@ -6608,7 +6608,7 @@ function saveExistingConfigUpdate(
     linkLocalGatewayOverrideOptions(deps.env),
   );
   persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps, request.correlationId);
-  gatewayConfig.set(config, true);
+  gatewayConfig.set(config, true, request.correlationId);
   logVoiceSetupResolution(config, request.correlationId);
   recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(
@@ -7031,7 +7031,14 @@ function persistVerifiedCapabilityUpdate(
     // Continuing to route tool calls on the old in-memory proof would widen authority exactly when
     // the latest provider observation says it is no longer justified.
     if (!consumeObservation) {
-      applyVerifiedCapabilityUpdate(gatewayConfig, modelId, generation, updated, false);
+      applyVerifiedCapabilityUpdate(
+        gatewayConfig,
+        modelId,
+        generation,
+        updated,
+        false,
+        correlationId,
+      );
     }
     throw error;
   }
@@ -7041,6 +7048,7 @@ function persistVerifiedCapabilityUpdate(
     generation,
     updated,
     consumeObservation,
+    correlationId,
   );
 }
 
@@ -7050,6 +7058,7 @@ function applyVerifiedCapabilityUpdate(
   generation: number,
   updated: GatewayConfig,
   consumeObservation = true,
+  correlationId?: string,
 ): RouteResult {
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available
@@ -7077,7 +7086,7 @@ function applyVerifiedCapabilityUpdate(
   if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
-  gatewayConfig.set(updated, true);
+  gatewayConfig.set(updated, true, correlationId);
   for (const entry of observations) {
     gatewayConfig.recordVerifiedCapability(
       entry.modelId,
