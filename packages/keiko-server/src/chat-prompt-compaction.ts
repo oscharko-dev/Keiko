@@ -120,7 +120,7 @@ async function compactPromptRound(
         input,
         chunk,
         Math.ceil(target / chunks.length),
-        Math.min(30_000, remainingMs),
+        Math.min(60_000, remainingMs),
       ),
     );
   }

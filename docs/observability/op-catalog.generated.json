@@ -78677,7 +78677,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2415",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2439",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -78812,7 +78812,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1990",
+      "site": "packages/keiko-server/src/deps.ts:1995",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -79146,7 +79146,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4213",
+      "site": "packages/keiko-server/src/deps.ts:4218",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -79245,7 +79245,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2832",
+      "site": "packages/keiko-server/src/deps.ts:2837",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

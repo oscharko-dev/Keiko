@@ -169,7 +169,7 @@ The execution projection may use the summary, while the saved user message retai
 This preserves the non-evictable user-task lane; it does not silently truncate that lane.
 
 Foreground and background summaries share one cancellation and timeout helper. Foreground work
-has a maximum of 32 calls, three reduction rounds, 30 seconds per call, and 90 seconds overall.
+has a maximum of 32 calls, three reduction rounds, 60 seconds per call, and 90 seconds overall. The gateway retains its configured provider timeout; foreground preparation does not impose the shorter background-maintenance timeout.
 Each call revalidates the accepted gateway generation and readiness; final dispatch checks the
 same boundary again. Empty, incomplete, or non-reducing summaries fail explicitly. Counts and
 outcomes use the existing Activity Log operation, without prompt or summary bodies. Semantic

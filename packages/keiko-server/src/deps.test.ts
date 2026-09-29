@@ -62,6 +62,7 @@ import type {
 import {
   buildRedactor,
   buildUiHandlerDeps,
+  currentContextProfileForModel,
   createLiveCodingChildModelPortFactory,
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
@@ -2627,6 +2628,14 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
 
     expect(resolve("chat-live").effectiveInputBudget).toBe(181_750);
     store.close();
+  });
+
+  it("derives a bounded model profile when a handler only supplies gateway configuration", () => {
+    const config = parsedGatewayConfigWithCapabilities([chatCapability("chat-small", 4096, 1024)]);
+    const profile = currentContextProfileForModel({ config }, "chat-small");
+    expect(profile?.maxInputTokens).toBe(4096);
+    expect(profile?.reservedOutputTokens).toBe(1024);
+    expect(profile?.model?.id).toBe("chat-small");
   });
 
   it("does not cache unknown model ids across live runtime gateway config updates", () => {

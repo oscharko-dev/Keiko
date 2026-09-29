@@ -426,7 +426,7 @@ function assembleGatewayPromptCandidate(
     input.request.imageCount,
   );
   if (scaffoldTokens > input.profile.effectiveInputBudget) return undefined;
-  const historyOutcome = fitHistoryProjection(input, latestTurn);
+  const historyOutcome = fitHistoryProjection(input, latestTurn, scaffoldTokens);
   if (historyOutcome === undefined) return undefined;
   const messages = buildPromptMessages(
     historyOutcome,
@@ -465,10 +465,11 @@ function assembleGatewayPromptCandidate(
 function fitHistoryProjection(
   input: PromptAssemblyInput,
   latestTurn: string,
+  scaffoldTokens: number,
 ): ConversationCompactionOutcome | undefined {
-  // Recount the actual retained projection: reserving framing for every original message can
-  // itself exhaust a small window even after those messages have been compacted away.
-  let remaining = input.profile.effectiveInputBudget;
+  // Reserve the current turn, images and continuity before fitting history. Recount only the
+  // retained projection; original messages that were compacted away consume no framing budget.
+  let remaining = input.profile.effectiveInputBudget - scaffoldTokens;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const outcome = compactHistoryForBudget(input, remaining);
     if (outcome === undefined) return undefined;

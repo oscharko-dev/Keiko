@@ -1,12 +1,10 @@
 import type { editor } from "monaco-editor";
 import {
-  registerKeikoEditorTheme,
-  resolveEditorThemeTokensFromDom,
-} from "@oscharko-dev/keiko-editor";
-import {
   ensureMonacoRuntime,
   ensureMonacoLanguage,
   getMonacoNamespace,
+  registerKeikoEditorTheme,
+  resolveEditorThemeTokensFromDom,
 } from "../widgets/cards/editorMonacoRuntime";
 import { readEditorThemeVariant } from "../hooks/useEditorThemeVariant";
 

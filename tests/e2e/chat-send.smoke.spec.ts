@@ -2,6 +2,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { pasteFromSystemClipboard } from "./support/editor-chord.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -179,10 +181,9 @@ test("loads local highlighting, pastes and scrolls code inside the Composer @smo
     { length: 80 },
     (_, index) => `const value${String(index)} = ${String(index)};`,
   ).join("\n");
-  await page.evaluate((text) => navigator.clipboard.writeText(text), source);
   const input = code.getByRole("textbox", { name: "Code input" });
   await code.locator(".view-lines").click();
-  await input.press("ControlOrMeta+V");
+  await pasteFromSystemClipboard(page, input, source);
   await code.hover();
   await expect
     .poll(() =>
@@ -228,4 +229,39 @@ test("keeps model selection and context disclosure inside a short viewport @smok
   const bounds = await panel.boundingBox();
   expect(bounds?.x).toBeGreaterThanOrEqual(0);
   expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeLessThanOrEqual(850);
+});
+
+test("scrolls and searches twelve models while hiding unsupported attachments @smoke", async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 1116, height: 850 });
+  await page.route("**/api/models", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { models: ModelCapability[] };
+    const model = body.models.find((entry) => entry.id === CHAT_MODEL_ID);
+    if (model === undefined) throw new TypeError("Missing configured fixture model");
+    await route.fulfill({
+      response,
+      json: {
+        models: Array.from({ length: 12 }, (_, index) => ({
+          ...model,
+          id: index === 0 ? CHAT_MODEL_ID : `e2e-model-${String(index)}`,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+        })),
+      },
+    });
+  });
+  await openFixtureComposer(page, request);
+  await expect(page.getByRole("button", { name: "Attach file", exact: true })).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Models", exact: true }).click();
+  const menu = page.getByRole("listbox");
+  await menu.hover();
+  await page.mouse.wheel(0, 1000);
+  await expect(page.getByRole("option", { name: "e2e-model-11", exact: true })).toBeInViewport();
+  const search = page.getByRole("searchbox", { name: "Search models...", exact: true });
+  await search.fill("model-11");
+  await expect(menu.getByRole("option")).toHaveCount(1);
+  await expect(menu.getByRole("option")).toHaveText("e2e-model-11");
 });

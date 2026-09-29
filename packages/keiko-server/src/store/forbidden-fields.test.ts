@@ -65,6 +65,8 @@ const ALLOWED_CHATS_COLUMNS = new Set([
   // V28 (issue #3400): the third, sibling Git-change scope list — server-issued snapshot
   // reference and safe metadata only (contract correction 2). No path, diff, or credential.
   "git_change_scope_json",
+  // V39: a body-free counter invalidating stale conversation compaction after history edits.
+  "history_revision",
   "created_at",
   "updated_at",
 ]);

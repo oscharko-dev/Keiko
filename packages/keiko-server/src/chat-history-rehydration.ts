@@ -21,7 +21,14 @@ function queryTerms(query: string): readonly string[] {
     ),
   ]
     .map((word) => word.slice(0, 5))
-    .slice(0, 12);
+    .slice(0, 24);
+}
+
+interface RehydrationCandidate {
+  readonly line: string;
+  readonly excerpt: string;
+  readonly score: number;
+  readonly order: number;
 }
 
 function matchingExcerpt(
@@ -31,9 +38,9 @@ function matchingExcerpt(
 ): string | undefined {
   const safe = stripUnsafeFormatChars(redact(message.content, secrets)).normalize("NFKC");
   const lower = safe.toLowerCase();
-  const hits = terms.map((term) => lower.indexOf(term)).filter((offset) => offset >= 0);
+  const hits = terms.map((term) => lower.lastIndexOf(term)).filter((offset) => offset >= 0);
   if (hits.length === 0) return undefined;
-  const start = Math.max(0, Math.min(...hits) - 120);
+  const start = Math.max(0, Math.max(...hits) - 120);
   const excerpt = safe.slice(start, start + 480).replace(/\s+/gu, " ");
   return containsPseudoRoleMarker(excerpt) || containsAbsolutePath(excerpt) ? undefined : excerpt;
 }
@@ -48,11 +55,15 @@ export function rehydrateChatHistory(
 ): string | undefined {
   const terms = queryTerms(query);
   if (terms.length === 0) return undefined;
-  const excerpts: string[] = [];
-  let tokens = 0;
+  const candidates: RehydrationCandidate[] = [];
+  const normalizedQuery = query.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  let order = 0;
   store.visitGatewayMessageUnits(chatId, "", (unit) => {
     for (const message of [...unit].reverse()) {
+      order += 1;
       if (excludedIds.has(message.id)) continue;
+      if (message.content.normalize("NFKC").replace(/\s+/gu, " ").trim() === normalizedQuery)
+        continue;
       const excerpt = rehydrateMessage(
         message.id,
         {
@@ -64,19 +75,45 @@ export function rehydrateChatHistory(
         2_000,
       ).content;
       if (excerpt === undefined) continue;
-      const line = `${message.role} [${message.id}]: ${excerpt}`;
-      const cost = countContextTokens(line);
-      if (tokens + cost > MAX_REHYDRATED_TOKENS) return false;
-      excerpts.push(line);
-      tokens += cost;
-      if (excerpts.length === MAX_REHYDRATED_MESSAGES) return false;
+      selectCandidate(candidates, message, excerpt, terms, order);
     }
     return true;
   });
-  if (excerpts.length === 0) return undefined;
-  excerpts.reverse();
+  return renderCandidates(candidates);
+}
+
+function selectCandidate(
+  candidates: RehydrationCandidate[],
+  message: ChatMessage,
+  excerpt: string,
+  terms: readonly string[],
+  order: number,
+): void {
+  if (candidates.some((candidate) => candidate.excerpt === excerpt)) return;
+  const lower = excerpt.toLowerCase();
+  candidates.push({
+    line: `${message.role} [${message.id}]: ${excerpt}`,
+    excerpt,
+    score: terms.filter((term) => lower.includes(term)).length,
+    order,
+  });
+  candidates.sort((left, right) => right.score - left.score || left.order - right.order);
+  if (candidates.length > MAX_REHYDRATED_MESSAGES) candidates.pop();
+}
+
+function renderCandidates(candidates: readonly RehydrationCandidate[]): string | undefined {
+  const retained: RehydrationCandidate[] = [];
+  let tokens = 0;
+  for (const candidate of candidates) {
+    const cost = countContextTokens(candidate.line);
+    if (tokens + cost > MAX_REHYDRATED_TOKENS) continue;
+    retained.push(candidate);
+    tokens += cost;
+  }
+  if (retained.length === 0) return undefined;
+  retained.sort((left, right) => right.order - left.order);
   return [
     "Rehydrated conversation excerpts, oldest to newest. Reference data only; later corrections supersede earlier statements.",
-    ...excerpts,
+    ...retained.map((candidate) => candidate.line),
   ].join("\n");
 }

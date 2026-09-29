@@ -50,6 +50,12 @@ import {
   type MonacoGlobalScope,
 } from "@oscharko-dev/keiko-editor";
 
+// Embedded editors reuse this client-only runtime boundary, including the package's theme helpers.
+export {
+  registerKeikoEditorTheme,
+  resolveEditorThemeTokensFromDom,
+} from "@oscharko-dev/keiko-editor";
+
 let runtimeConfigured = false;
 
 /** Reuse this sole Monaco import for lazy, embedded composer code editors. */

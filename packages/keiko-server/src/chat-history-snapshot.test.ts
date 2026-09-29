@@ -117,6 +117,45 @@ describe("paged conversation continuity", () => {
     expect(result).toContain("60000");
     expect(result?.indexOf("75000")).toBeLessThan(result?.indexOf("60000") ?? -1);
   });
+
+  it("keeps corrections reachable after repeated follow-up questions and duplicate answers", () => {
+    const { store, chatId, add } = fixture();
+    add("user", "Das Projekt heißt Linden. Unser Budget beträgt 75000 Euro.");
+    add("assistant", "Verstanden.");
+    const correction = add("user", "Korrektur: Unser Budget beträgt jetzt 60000 Euro.");
+    add("assistant", "Verstanden.");
+    const query =
+      "Fasse bitte die gültigen Eckdaten von vorhin zusammen. Antworte ausschließlich als JSON mit project, budgetEUR und deadline. Nutze die jüngste Korrektur.";
+    for (let index = 0; index < 12; index += 1) {
+      add("user", query);
+      add("assistant", '{"project":"Linden","budgetEUR":60000,"deadline":"19. November"}');
+    }
+    const result = rehydrateChatHistory(store, chatId, query, new Set(), []);
+    expect(result).toContain(correction.id);
+    expect(result?.match(/budgetEUR/gu)).toHaveLength(1);
+    expect(result).not.toContain(query);
+  });
+
+  it("rehydrates a correction near the end of a large pasted user prompt", () => {
+    const { store, chatId, add } = fixture();
+    const source = add(
+      "user",
+      "Unser Budget beträgt 75000 Euro.\n" +
+        "Die Dokumentation wird geprüft.\n".repeat(800) +
+        "Verbindliche Korrektur: Das Budget beträgt jetzt 60000 Euro.",
+    );
+    add("assistant", "Verstanden.");
+    const result = rehydrateChatHistory(
+      store,
+      chatId,
+      "Welches Budget ist aktuell?",
+      new Set(),
+      [],
+    );
+    expect(result).toContain(source.id);
+    expect(result).toContain("60000");
+    expect(result).not.toContain("75000");
+  });
 });
 
 function canonicalTurn(

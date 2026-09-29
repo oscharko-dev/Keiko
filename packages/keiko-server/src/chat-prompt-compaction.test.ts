@@ -47,6 +47,46 @@ function fixture(content: string): CurrentPromptCompactionInput {
 }
 
 describe("current prompt semantic compaction", () => {
+  it("allows a slow provider to complete within the total foreground preparation budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const input = fixture("Important requirements. ".repeat(600));
+      const call: CurrentPromptCompactionInput["call"] = () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(response("Budget: 60000 Euro. Keep the current task."));
+          }, 40_000);
+        });
+      const completed = expect(compactCurrentChatPrompt({ ...input, call })).resolves.toContain(
+        "60000",
+      );
+      await vi.advanceTimersByTimeAsync(80_000);
+      await completed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the total preparation timeout bounded across several slow chunks", async () => {
+    vi.useFakeTimers();
+    try {
+      const input = fixture("Important requirements. ".repeat(1200));
+      const call: CurrentPromptCompactionInput["call"] = () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(response("Preserve the current task."));
+          }, 40_000);
+        });
+      const completed = expect(compactCurrentChatPrompt({ ...input, call })).rejects.toMatchObject({
+        code: "GATEWAY_TIMEOUT",
+      });
+      await vi.advanceTimersByTimeAsync(90_100);
+      await completed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a fitting current prompt without another model call", async () => {
     const input = fixture("Hallo, prüfe bitte diese Funktion.");
     expect(await compactCurrentChatPrompt(input)).toBe(input.content);
