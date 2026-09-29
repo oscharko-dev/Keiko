@@ -161,7 +161,10 @@ without requiring knowledge of specific path patterns.
 
 **Current chat behavior (#3674):** The original user message remains in the canonical store.
 Buffered sends, streamed sends, and regeneration share the same prompt assembly and output
-allocation. A large current prompt can reduce the default answer reservation to the actual
+allocation. Source-chat routes resolve the selected configured model capability when an explicit
+context-profile dependency is absent; the optional path-free summary can therefore be present
+without a singleton profile. The pure legacy projection still omits it when no effective profile
+or context-budget diagnostics exist. A large current prompt can reduce the default answer reservation to the actual
 remaining capacity; the complete final request still undergoes gateway token admission.
 When the current prompt itself exceeds 90% of the effective input budget, foreground semantic
 compaction processes every source character in ordered, individually budgeted model requests.
