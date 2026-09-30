@@ -1,5 +1,8 @@
 import { gatewayAssemblyOutputAllocation } from "./chat-prompt-budget.js";
-import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import {
+  withAdoptedContextWindowRetry,
+  type ContextWindowAttempt,
+} from "./gateway-context-window.js";
 import { logChatResponseMessages } from "./chat-activity.js";
 // Desktop chat SSE streaming BFF route (#152). ADDITIVE to the buffered /api/desktop/chat path,
 // which stays byte-identical as the client's fallback. This handler reuses the buffered path's
@@ -395,14 +398,11 @@ function streamWithWindowRetry(
     correlationId: ctx.correlationId,
     retryable: (): boolean => termination.tokenFrames === 0,
   };
-  return withAdoptedContextWindowRetry(deps, retry, async () => {
-    const assembly = await buildPreparedStreamAssembly(
-      ctx,
-      deps,
-      admitted,
-      memory,
-      controller.signal,
-    );
+  return withAdoptedContextWindowRetry(deps, retry, async (attempt) => {
+    const assembly = await buildPreparedStreamAssembly(ctx, deps, admitted, memory, {
+      signal: controller.signal,
+      attempt,
+    });
     const stream = admitted.callStream(
       {
         modelId,
@@ -421,7 +421,7 @@ async function buildPreparedStreamAssembly(
   deps: UiHandlerDeps,
   turn: AdmittedDesktopChatStream,
   memory: ConversationMemoryResultWire,
-  signal: AbortSignal,
+  { signal, attempt }: { readonly signal: AbortSignal; readonly attempt: ContextWindowAttempt },
 ): Promise<ReturnType<typeof buildGatewayAssembly>> {
   const { request, modelId } = turn.prepared;
   try {
@@ -447,7 +447,11 @@ async function buildPreparedStreamAssembly(
       ),
     );
   } catch (error) {
-    settleFailedChatPromptPreparation(deps, turn.prepared, turn.admitted, error, signal);
+    // A summary call that taught Keiko the model's real window is retried with the whole turn:
+    // the admitted turn stays open for it.
+    if (!attempt.retryFollows(error)) {
+      settleFailedChatPromptPreparation(deps, turn.prepared, turn.admitted, error, signal);
+    }
     throw error;
   }
 }

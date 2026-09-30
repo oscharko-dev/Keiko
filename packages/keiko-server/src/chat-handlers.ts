@@ -1,6 +1,9 @@
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { hasGroundingScope } from "./chat-grounding.js";
-import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import {
+  withAdoptedContextWindowRetry,
+  type ContextWindowAttempt,
+} from "./gateway-context-window.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 // Desktop chat BFF routes for the Keiko canvas UI. These routes intentionally keep the model call
 // behind the existing ModelPort/Gateway boundary: the browser sends only chat content and a registry
@@ -2378,6 +2381,7 @@ async function prepareBufferedGatewayAssembly(
   gatewayTurn: GatewayTurnSnapshot,
   signal: AbortSignal,
   correlationId: string | undefined,
+  attempt: ContextWindowAttempt,
 ): Promise<GatewayPromptAssembly> {
   const { request, modelId } = prepared;
   const { admitted, executionAdmission } = admission;
@@ -2399,7 +2403,11 @@ async function prepareBufferedGatewayAssembly(
       correlationId,
     );
   } catch (error) {
-    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    // A summary call that taught Keiko the model's real window is retried with the whole turn:
+    // the admitted turn stays open for it.
+    if (!attempt.retryFollows(error)) {
+      settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    }
     throw error;
   }
 }
@@ -2436,6 +2444,7 @@ async function assembleAndCallBuffered(
   snapshot: GatewayTurnSnapshot,
   abortSignal: AbortSignal,
   correlationId: string | undefined,
+  attempt: ContextWindowAttempt,
 ): Promise<{ assembly: GatewayPromptAssembly; response: NormalizedResponse } | RouteResult> {
   const { modelId } = prepared;
   const assembly = await prepareBufferedGatewayAssembly(
@@ -2446,6 +2455,7 @@ async function assembleAndCallBuffered(
     snapshot,
     abortSignal,
     correlationId,
+    attempt,
   );
   const model = bufferedModelAtProviderBoundary(
     deps,
@@ -2480,7 +2490,7 @@ async function executeBufferedModelTurn(
   const called = await withAdoptedContextWindowRetry(
     deps,
     { modelId, surface: "chat-buffered", correlationId },
-    () =>
+    (attempt) =>
       assembleAndCallBuffered(
         deps,
         prepared,
@@ -2489,6 +2499,7 @@ async function executeBufferedModelTurn(
         snapshot,
         abortSignal,
         correlationId,
+        attempt,
       ),
   );
   if (isRouteResult(called)) return called;

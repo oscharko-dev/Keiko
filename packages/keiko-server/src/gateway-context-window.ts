@@ -435,19 +435,33 @@ function adoptedWindowAfter(
  * once more. The attempt callback must assemble its prompt from the CURRENT context profile, so the
  * second run fits the adopted window. Any other failure — and a second overflow — propagates.
  */
+/** What an attempt knows about the retry around it. */
+export interface ContextWindowAttempt {
+  /** True on the single retry after an adoption. */
+  readonly retrying: boolean;
+  /**
+   * Whether a failure of this attempt will be retried on the adopted window. A failure handler
+   * inside the attempt then leaves the admitted turn open for the retry instead of settling it
+   * (PR #3678 review: a settled turn cannot take the retried answer).
+   */
+  readonly retryFollows: (error: unknown) => boolean;
+}
+
 export async function withAdoptedContextWindowRetry<T>(
   deps: UiHandlerDeps,
   input: ContextWindowRetryInput,
-  attempt: () => Promise<T>,
+  attempt: (context: ContextWindowAttempt) => Promise<T>,
 ): Promise<T> {
   const planned = plannedContextWindow(deps, input.modelId);
+  const retryFollows = (error: unknown): boolean =>
+    planned !== undefined && adoptedWindowAfter(deps, input, planned, error) !== undefined;
   try {
-    return await attempt();
+    return await attempt({ retrying: false, retryFollows });
   } catch (error) {
     const adopted = adoptedWindowAfter(deps, input, planned, error);
     if (adopted === undefined || planned === undefined) throw error;
     logRetry(input, planned, adopted);
-    return await attempt();
+    return await attempt({ retrying: true, retryFollows: () => false });
   }
 }
 
