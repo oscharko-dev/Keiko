@@ -7,7 +7,11 @@ import type {
   ChatContextSegmentWire,
   ChatContextStatusWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { useLocale, useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useLocale } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 import styles from "./ChatContextMeter.module.css";
 
 export interface ChatContextMeterProps {

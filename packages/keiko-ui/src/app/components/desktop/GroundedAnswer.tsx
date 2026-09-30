@@ -12,8 +12,11 @@ import type { ReactNode } from "react";
 import { citationMarkerIndices } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { formatBytes, formatMs } from "@/lib/format";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+import type { OptionalWidgetMessageKey as MessageKey } from "@/lib/i18n-messages.optional.en";
 import {
   RepositoryReferenceInline,
   type OpenRepositoryReference,

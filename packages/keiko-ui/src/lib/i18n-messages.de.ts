@@ -1,53 +1,6 @@
 import type { MessageCatalog } from "./i18n-messages.en";
 
 export const DE_MESSAGES = {
-  "chat.context.title": "Gesprächskontext",
-  "chat.context.heading": "Gesprächskontext {percent} %",
-  "chat.context.label": "Gesprächskontext: ungefähr {percent}% belegt",
-  "chat.context.used": "Geschätzt belegte Tokens",
-  "chat.context.inputBudget": "Nutzbare Eingabe-Tokens",
-  "chat.context.window": "Gesamtes Kontextfenster",
-  "chat.context.outputReserve": "Für die Antwort reserviert",
-  "chat.context.safetyMargin": "Sicherheitsreserve",
-  "chat.context.saved": "{tokens} Tokens bei {count} zusammengefassten Nachrichten eingespart.",
-  "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
-  "chat.context.estimate":
-    "Geschätzt für die nächste Anfrage, bei Wissens-Chats mit dem Quellenanteil der letzten Frage. Entwurf und Anhänge kommen beim Senden hinzu.",
-  "chat.context.automatic":
-    "Keiko kompaktiert ab 90% der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
-  "chat.context.retained":
-    "Kompaktierung fasst frühere Nachrichten zusammen. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
-  "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
-  "chat.context.retry": "Erneut versuchen",
-  "chat.context.compact": "Kontext jetzt kompaktieren",
-  "chat.context.compacting": "Kontext wird kompaktiert…",
-  "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
-  "chat.context.total": "{used} von {usable} nutzbaren Eingabe-Tokens · Kontextfenster {window}",
-  "chat.context.breakdown": "Aufteilung des Kontextfensters",
-  "chat.context.segment.system": "System-Anweisungen",
-  "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
-  "chat.context.segment.messages": "Nachrichten",
-  "chat.context.segment.knowledge": "Quellen (Wissen)",
-  "chat.context.segment.free": "Frei",
-  "chat.context.segment.compactionBuffer": "Kompaktierungspuffer",
-  "chat.context.count.messages": "{count} Nachrichten",
-  "chat.context.count.messages.one": "1 Nachricht",
-  "chat.context.count.summary": "{count} Nachrichten zusammengefasst",
-  "chat.context.count.summary.one": "1 Nachricht zusammengefasst",
-  "chat.context.count.references": "{sent} von {available} Referenzen gesendet",
-  "chat.context.referencesTrimmed":
-    "Nur {sent} von {available} Referenzen passten ins Kontextfenster des Modells. Verwendet wurden die relevantesten.",
-  "chat.context.lastRequestMeasured": "Letzte Anfrage: {tokens} Tokens (vom Anbieter gemessen).",
-  "chat.context.lastRequestMeasuredWithEstimate":
-    "Letzte Anfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hatte vorsichtig {estimated} geschätzt; die Aufteilung oben nutzt diese Schätzung.",
-  "chat.context.lastRequestEstimated": "Letzte Anfrage: ungefähr {tokens} Tokens (geschätzt).",
-  "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",
-  "chat.context.sourcesPolicy":
-    "Quellen werden für jede Frage frisch abgerufen und nie zusammengefasst. Kompaktiert wird nur der Gesprächsverlauf; er erhält bei Wissensfragen höchstens ein Drittel der Eingabe.",
-  "chat.context.windowAssumed":
-    "Das Gateway meldet für dieses Modell kein Kontextfenster. Keiko plant mit dem angenommenen Wert und übernimmt das tatsächliche Fenster automatisch, sobald der Anbieter es meldet.",
-  "chat.context.pending":
-    "Der gespeicherte Verlauf ({before} Tokens) wird beim nächsten Senden automatisch auf etwa {after} Tokens kompaktiert.",
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
@@ -1153,57 +1106,6 @@ export const DE_MESSAGES = {
   "memoria.healthScan.kind.staleNotArchived": "Veraltet, nicht archiviert",
   "memoria.healthScan.kind.danglingReviewItem": "Hängender Review-Eintrag",
   "chat.grounded.cancel": "Grounded-Anfrage abbrechen",
-  "grounded.reviewBadge": "Bitte prüfen",
-  "grounded.partialCoverage": "Teilweise abgedeckt",
-  "grounded.loading": "Verbundene Quellen werden durchsucht und Keiko wird gefragt …",
-  "grounded.title.evidence": "Evidenz",
-  "grounded.title.knowledge": "Knowledge-Evidenz",
-  "grounded.title.grounding": "Grounding-Evidenz",
-  "grounded.citations.evidenceAria": "Evidenz-Quellenangaben",
-  "grounded.citations.knowledge": "Knowledge-Quellenangaben",
-  "grounded.citations.showAll": "Alle {count} Quellenangaben anzeigen",
-  "grounded.citations.showFewer": "Weniger Quellenangaben anzeigen",
-  "grounded.summary.connected.one":
-    "{count} Quellenangabe · {read} / {max} Dateien gelesen{omitted}",
-  "grounded.summary.connected.other":
-    "{count} Quellenangaben · {read} / {max} Dateien gelesen{omitted}",
-  "grounded.summary.notUsed": " · {count} nicht verwendet",
-  "grounded.summary.knowledge.one": "{count} Quellenangabe · {used} / {budget} Referenzen",
-  "grounded.summary.knowledge.other": "{count} Quellenangaben · {used} / {budget} Referenzen",
-  "grounded.summary.hybrid.file.one": "{count} Datei-Quellenangabe",
-  "grounded.summary.hybrid.file.other": "{count} Datei-Quellenangaben",
-  "grounded.summary.hybrid.knowledge.one": "{count} Knowledge-Quellenangabe",
-  "grounded.summary.hybrid.knowledge.other": "{count} Knowledge-Quellenangaben",
-  "grounded.warning.noEvidence":
-    "Es wurde keine stützende Evidenz gefunden — diese Antwort ist nicht belegt.",
-  "grounded.warning.rerankerUnavailable":
-    "Ranking: Reranker nicht verfügbar — es wird die zusammengeführte Suchreihenfolge angezeigt.",
-  "grounded.count.unsupportedCitation.one": "{count} nicht belegte Quellenangabe",
-  "grounded.count.unsupportedCitation.other": "{count} nicht belegte Quellenangaben",
-  "grounded.count.unsupportedClaim.one": "{count} nicht gestützte Aussage",
-  "grounded.count.unsupportedClaim.other": "{count} nicht gestützte Aussagen",
-  "grounded.detail.unsupportedCitation":
-    "die Antwort verweist auf Quellen, die nicht in der abgerufenen Evidenz enthalten waren.",
-  "grounded.detail.unsupportedClaim":
-    "die Antwort behauptet etwas, das die zitierte Quelle nicht stützt.",
-  "grounded.detail.uncitedAnswer":
-    "Diese Antwort enthält Aussagen ohne Quellenangabe, die sich keiner Quelle zuordnen lassen.",
-  "grounded.detail.entailmentUnavailable":
-    "Die Quellenbelege konnten für einen Teil dieser Antwort nicht geprüft werden.",
-  "grounded.detail.incomplete":
-    "Die Antwort wurde vor dem Ende abgebrochen und ist möglicherweise unvollständig.",
-  "grounded.uncertainty.summary": "Unsicherheit ({count}) — {kinds}",
-  "grounded.uncertainty.kind.noEvidence": "keine Evidenz",
-  "grounded.uncertainty.kind.staleEvidence": "veraltete Evidenz",
-  "grounded.uncertainty.kind.scopeIncomplete": "Umfang unvollständig",
-  "grounded.uncertainty.kind.budgetClipped": "Budget gekürzt",
-  "grounded.uncertainty.kind.toolUnavailable": "Werkzeug nicht verfügbar",
-  "grounded.uncertainty.kind.lowConfidence": "geringe Sicherheit",
-  "grounded.uncertainty.kind.unsupportedCitation": "nicht belegte Quellenangabe",
-  "grounded.uncertainty.kind.uncitedAnswer": "Antwort ohne Quellenangabe",
-  "grounded.uncertainty.kind.incompleteAnswer": "unvollständige Antwort",
-  "grounded.uncertainty.kind.unsupportedClaim": "nicht gestützte Aussage",
-  "grounded.uncertainty.kind.entailmentUnavailable": "Belegprüfung nicht verfügbar",
   "attachment.rejection.textOnly":
     "Das ausgewählte Modell kann diesen Anhangstyp nicht verarbeiten. Wähle ein Modell mit Bild- oder Dokumentunterstützung.",
   "attachment.rejection.unsupported":
