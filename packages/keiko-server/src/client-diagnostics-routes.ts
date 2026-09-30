@@ -968,14 +968,6 @@ const CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
-// trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
-// shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
-// is the only line that shows which surface an operator's Escape actually dismissed: a closed menu
-// already leaves Escape to its ancestors and reports nothing, so every line here names a menu that
-// really was open. There is no failure variant of this report — Escape either closes an open menu or
-// it does not report at all — so it always spends the routine budget, never the one a genuine
-// failure needs.
 // PR #3678 review: the chat's Knowledge Pod picker offered no usable pod. The availability counts
 // used to ride only the free-text message, which ingest reduces to a digest, so the log could not
 // tell a missing bound pod from one still indexing. One line per distinct picture, counts only.
@@ -1004,6 +996,14 @@ const CLIENT_KNOWLEDGE_CATALOG_UNAVAILABLE_OPERATION = defineActivityLogOperatio
   releaseImpact: "patch",
 });
 
+// PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
+// trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
+// shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
+// is the only line that shows which surface an operator's Escape actually dismissed: a closed menu
+// already leaves Escape to its ancestors and reports nothing, so every line here names a menu that
+// really was open. There is no failure variant of this report — Escape either closes an open menu or
+// it does not report at all — so it always spends the routine budget, never the one a genuine
+// failure needs.
 const CLIENT_SELECT_DISMISSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

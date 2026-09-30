@@ -31,8 +31,9 @@ mechanisms, not one shared engine — this shapes where the entailment stage lan
   verified entailment gap.
 - **System B — the connector path** (`grounded-qa` dispatches a lone connector to
   `local-knowledge-grounded-qa.ts` → `runGroundedAnswer`, `[n]` citations). Its
-  `citation-attacher.ts` already ships a deterministic **token-overlap** citation-support check
-  (`citationPassesFaithfulness`).
+  `citation-attacher.ts` ships a deterministic **token-overlap** citation-support signal: a weak
+  overlap flags the attached citation (`lexicalSupport: "weak"`) and never drops it (see the
+  2026-09 amendment below).
 
 The original issue text assumed `runGroundedAnswer` served all four topologies and named its
 `citationFaithfulness` seam as the wiring point; the code shows `runGroundedAnswer` is the
@@ -51,7 +52,7 @@ keeping the leaf dependency-light (contract types only):
   inside a `[routes.ts:5]` citation, pairing each claim span with its inline citations.
 - `reconcileClaimEntailment` — runs **strictly after** membership reconciliation and **only** over
   citations that passed membership (a fabricated citation is never double-reported), bounded by a
-  per-answer claim budget and a per-claim excerpt cap.
+  per-answer claim budget and a per-item excerpt cap.
 - `buildPackExcerptTextResolver` — resolves the bounded, already-redacted excerpt text for a cited
   `[path:line]` from the in-pack `ContextExcerpt.content` (no second excerpt reader).
 - `unsupportedClaimMarker` / `entailmentUnavailableMarker` — new `UncertaintyMarker` kinds
@@ -72,9 +73,9 @@ with the same shared claim/citation contract and resolved only against the exact
 candidate rendering that reached the answer model. The single-connector path contributes its
 prompt-capped `[n] label + excerpt` rendering; the hybrid path contributes only its post-rerank,
 prompt-selected connector candidates. Neither path performs a second search, consults a broader
-corpus, or promotes a malformed, missing, or unselected marker into semantic evidence. The former
-token-overlap check remains a conservative citation-attachment filter, not the semantic success
-criterion. The shared NLI stage supplies the existing bounded, unavailable-to-WARN behavior and
+corpus, or promotes a malformed, missing, or unselected marker into semantic evidence. The
+token-overlap check is a soft signal on an attached citation, never a filter and never the semantic
+success criterion. The shared NLI stage supplies the existing bounded, unavailable-to-WARN behavior and
 body-free diagnostics for System B and hybrid connector citations as well as path-and-line citations.
 
 ### D2 — The production judge is a Model-Gateway NLI pass over the same configured model
@@ -91,7 +92,7 @@ enforce the verdict JSON schema makes the stage inert.
 Token overlap was deliberately **not** chosen for the production judge: the motivating failure
 ("10 years" cited to a "30 days" excerpt) has high lexical overlap and opposite meaning, so only a
 semantic (NLI) judge catches it. Token overlap remains adequate for the deterministic gate (below)
-and for System B's existing check.
+and as System B's soft weak-support signal.
 
 ### D3 — Policy gating on the resolved `answerSynthesis` decision (no new contract operation)
 
@@ -154,8 +155,8 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
 - **One marker grammar.** Numeric markers are parsed only by `findCitationMarkerGroups`
   (`keiko-contracts` `runtime/citation-markers`): `[1]`, the grouped `[1, 7, 8]` / `[1,7]` / `[1; 2]`,
   and the CJK/fullwidth bracket glyphs. The attacher, `reconcileNumericCitations`, the claim
-  segmentation, the answer renderer and the copy stripper all use it; four private one-integer
-  regexes that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
+  segmentation, the answer renderer, the copy stripper and the read-aloud text all use it; the
+  private one-integer grammars that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
   markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
   scanned, so `const a = [1, 2, 3];` cites nothing. A grouped bracket none of whose indices names a
   supported reference (`[80, 443]`) is content, not a dangling citation; a lone `[9]` or the 9 in

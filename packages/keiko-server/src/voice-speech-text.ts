@@ -1,3 +1,5 @@
+import { findCitationMarkerGroups } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+
 // The trailing "decoration" after the keyword -- whitespace, an optional colon, optional bold
 // (`**`/`__`) markers, in any order and of any length -- is matched with a single non-backtracking
 // character class run instead of two independently optional `\s*` runs sandwiching a
@@ -79,6 +81,24 @@ function citationMarkerEnd(text: string, open: number): number | undefined {
  * amortized-O(n) argument `stripMarkdownLinks` relies on, without needing its bounded window.
  */
 function stripCitationMarkers(text: string): string {
+  return stripLabelledCitationMarkers(stripGroundedCitationMarkers(text));
+}
+
+// Grounded numeric markers in every form the answer renderer links -- grouped `[1, 7, 8]`, `[1;2]`,
+// CJK `【1】` and fullwidth `［1］` -- through the one shared grammar (keiko-contracts). This file's own
+// scanner below knows only single-index ASCII markers, so a grouped or CJK marker was spoken aloud
+// (PR #3678 review).
+function stripGroundedCitationMarkers(text: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const group of findCitationMarkerGroups(text)) {
+    result += text.slice(cursor, group.start);
+    cursor = group.end;
+  }
+  return result + text.slice(cursor);
+}
+
+function stripLabelledCitationMarkers(text: string): string {
   const parts: string[] = [];
   let cursor = 0;
   while (cursor < text.length) {

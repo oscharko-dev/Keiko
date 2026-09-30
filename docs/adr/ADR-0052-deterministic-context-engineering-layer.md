@@ -144,7 +144,8 @@ declared — a LiteLLM `hosted_vllm` deployment without `max_input_tokens`, a mo
 model, an Azure deployment set up without discovery, or an env-only provider — carries the 4,096
 setup placeholder flagged `contextWindowAssumed`. The placeholder is a floor only for surfaces that
 need a proven window (the Coding Workbench). `deriveContextProfileFromCapability` plans an assumed
-window with the default geometry (128,000 / 8,000 / 4,000), because the 1.1.12 admission otherwise
+window with the default geometry (128,000 input window, an 8,000 output reserve, or the declared
+output limit when that is smaller, and a 4,000 safety margin), because the 1.1.12 admission otherwise
 refused every grounded question against 2,944 usable tokens. Configurations persisted before the flag
 existed are marked at the file-load boundary when a record carries the exact placeholder signature.
 The real window replaces the assumption from the provider's own statement, never from a guess:
@@ -205,7 +206,7 @@ a second meter.
 
 While a chat is grounded, the next question is planned with the source share of its latest grounded
 request. Knowledge Pod, folder, multi-source and hybrid answers all report that share. The
-conversation then receives at most min(8,000, one third of the input budget) tokens
+conversation then receives min(8,000, one third of the input budget) tokens, never fewer than 512
 (`groundedHistoryLaneTokens`). The meter projects the history against that lane with the same
 profile the grounded send path compacts with (`groundedConversationLaneProfile`). Retrieved sources are fetched fresh for every question and are never
 compacted. Compaction summarizes only the conversation lane; sources give way only by rank inside
