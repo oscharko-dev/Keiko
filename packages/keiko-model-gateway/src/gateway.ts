@@ -116,6 +116,12 @@ export interface ContextWindowReport {
    * to that deployment: a late answer must never rewrite a replacement's window.
    */
   readonly deploymentFingerprint?: string | undefined;
+  /**
+   * The host configuration generation the reporting Gateway was built for, stamped by the host (the
+   * Gateway itself never sets it). A setup that replaces credentials behind the same endpoint and
+   * alias advances the generation, so a late report of the replaced routing is never adopted.
+   */
+  readonly configurationGeneration?: number | undefined;
 }
 
 // A gateway call plus the caller's log context.

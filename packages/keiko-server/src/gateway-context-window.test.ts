@@ -243,6 +243,65 @@ describe("deployment-bound adoption", () => {
   });
 });
 
+describe("generation-bound adoption", () => {
+  // PR #3678 review: a multi-tenant proxy routes one alias by API key. A setup that replaced only
+  // the credentials keeps endpoint and alias (and so the fingerprint), but it is a different routing:
+  // the replaced tenant's late answer must not overwrite the new tenant's window, and the new
+  // routing is asked anew.
+  it("ignores a late statement after a credential-only replacement and asks the new routing", async () => {
+    const sink = capture();
+    const answers: ((response: Response) => void)[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    void discoverAssumedContextWindow(deps, MODEL, "corr-tenant-a");
+    await vi.waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    const replacement = (apiKey: string, capability: ModelCapability): void => {
+      deps.gatewayConfig?.set(
+        parseGatewayConfig({
+          providers: [
+            {
+              modelId: MODEL,
+              baseUrl: "https://litellm.example.invalid/v1",
+              apiKey,
+              timeoutMs: 5_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 1,
+            },
+          ],
+          capabilities: [capability],
+          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+        }),
+        true,
+      );
+    };
+    replacement("fake-tenant-b-key", assumedChatCapability(MODEL));
+    answers[0]?.(rejection("max_tokens=1000000000 cannot be greater than max_model_len=8192."));
+    await contextWindowProbesSettledForTests(deps);
+    expect(stored(deps)?.contextWindowAssumed).toBe(true);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        extra: expect.objectContaining({ state: "stale-deployment" }) as unknown,
+      }),
+    );
+
+    void discoverAssumedContextWindow(deps, MODEL, "corr-tenant-b");
+    await vi.waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+    answers[1]?.(rejection("max_tokens=1000000000 cannot be greater than max_model_len=131072."));
+    await contextWindowProbesSettledForTests(deps);
+    expect(stored(deps)?.contextWindow).toBe(131_072);
+  });
+});
+
 describe("provider-reported window adoption", () => {
   it("replaces even a declared window in either direction with the provider's statement", () => {
     const sink = capture();
@@ -520,5 +579,45 @@ describe("provider-reported window re-check", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(stored(deps)?.contextWindow).toBe(131_072);
     expect(stored(deps)?.contextWindowReported).toBe(true);
+  });
+
+  // PR #3678 review: an idle meter opened after a restart shows the persisted reported window while
+  // the background re-check runs. The reading says so, and the next reading carries the new window.
+  it("marks the idle reading pending while a reported window is re-checked", async () => {
+    let answer!: (response: Response) => void;
+    const fetchImpl = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { deps } = fixture(
+      { ...createDefaultChatCapability(MODEL), contextWindow: 16_384, contextWindowReported: true },
+      fetchImpl,
+    );
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-recheck-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const read = (): Promise<{ readonly body: unknown }> =>
+      handleChatContextStatus(
+        {
+          correlationId: "corr-meter-recheck",
+          params: {},
+          url: new URL(
+            `http://localhost/api/chats/context?${new URLSearchParams({ chatId, projectPath: project, modelId: MODEL }).toString()}`,
+          ),
+        } as unknown as RouteContext,
+        deps,
+      );
+    expect((await read()).body).toMatchObject({
+      contextWindowTokens: 16_384,
+      contextWindowProbePending: true,
+    });
+    answer(rejection("max_tokens=1000000000 cannot be greater than max_model_len=131072."));
+    await contextWindowProbesSettledForTests(deps);
+    const after = (await read()).body;
+    expect(after).toMatchObject({ contextWindowTokens: 131_072 });
+    expect(after).not.toHaveProperty("contextWindowProbePending");
   });
 });

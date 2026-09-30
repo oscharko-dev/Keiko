@@ -5,11 +5,13 @@
 // `contextWindowAssumed`. Conversation budgeting plans such a model with the default geometry;
 // this module replaces the assumption with the deployment's exact window from two provider
 // statements:
-//   1. a context-window probe when a conversation first shows the model (once per deployment);
+//   1. a context-window probe when a conversation first shows the model (once per deployment and
+//      configuration generation);
 //   2. every provider overflow answer that names the window (the Gateway's report hook).
-// Both persist through gateway-setup's verified-capability path, which advances the configuration
-// generation so every surface re-plans the model. Nothing here throws into a caller: an adoption
-// or probe failure is recorded as a diagnostic and the assumption stays in place.
+// Both persist through gateway-setup and apply as a configuration refinement without a generation
+// bump, so every surface re-plans the model. A statement is adopted only for the deployment and
+// generation that made it. Nothing here throws into a caller: an adoption or probe failure is
+// recorded as a diagnostic and the assumption stays in place.
 
 import {
   activityLogEvent,
@@ -215,18 +217,29 @@ export function adoptReportedContextWindow(
 // stated it. A probe or call started before setup replaced the endpoint must never write its late
 // answer onto the replacement (PR #3678 review).
 function reportFromCurrentDeployment(deps: UiHandlerDeps, report: ContextWindowReport): boolean {
-  if (report.deploymentFingerprint === undefined) return true;
+  const { configurationGeneration, deploymentFingerprint } = report;
+  // A setup that replaced only the credentials keeps endpoint and alias, and so the fingerprint,
+  // but advances the generation.
+  if (
+    configurationGeneration !== undefined &&
+    configurationGeneration !== deps.gatewayConfig?.generation()
+  ) {
+    return false;
+  }
+  if (deploymentFingerprint === undefined) return true;
   const config = currentGatewayConfig(deps);
-  return (
-    config !== undefined && deploymentKey(config, report.modelId) === report.deploymentFingerprint
-  );
+  return config !== undefined && deploymentKey(config, report.modelId) === deploymentFingerprint;
 }
 
-// One attempt per deployment identity per runtime configuration holder: a provider that states no
-// window is asked again only after a restart or a changed deployment, never on every generation.
+// One attempt per deployment identity and configuration generation per runtime configuration
+// holder: a provider that states no window is asked again only after a restart or a setup that
+// replaced its routing (a new generation), never on every reading. Adoption itself is a refinement
+// and does not advance the generation.
 // Disposal aborts the in-flight probe and drains the queue before shutdown sealing.
 interface ProbeState {
   readonly probed: Set<string>;
+  /** Probe identities queued or running; the meter reads again while its model's is here. */
+  readonly inFlight: Set<string>;
   readonly controller: AbortController;
   queue: Promise<void>;
   disposed: boolean;
@@ -241,6 +254,7 @@ function probeState(deps: UiHandlerDeps): ProbeState | undefined {
   if (state === undefined) {
     state = {
       probed: new Set(),
+      inFlight: new Set(),
       controller: new AbortController(),
       queue: Promise.resolve(),
       disposed: false,
@@ -276,6 +290,7 @@ async function probeContextWindow(
   probe: ProbeCorrelation,
 ): Promise<void> {
   const config = currentGatewayConfig(deps);
+  const configurationGeneration = deps.gatewayConfig?.generation();
   const provider = config?.providers.find((candidate) => candidate.modelId === modelId);
   if (state.disposed || config === undefined || provider === undefined) return;
   try {
@@ -296,6 +311,7 @@ async function probeContextWindow(
         contextWindowTokens: outcome.contextWindowTokens,
         correlationId: probe.correlationId,
         deploymentFingerprint: toolCallingConfigurationFingerprint(provider),
+        configurationGeneration,
       };
       adoptReportedContextWindow(deps, report, "window-probe", probe.parentCorrelationId);
     }
@@ -332,17 +348,48 @@ export function discoverAssumedContextWindow(
   const state = probeState(deps);
   if (config === undefined || state === undefined || state.disposed) return Promise.resolve();
   if (!windowAssumed(config, modelId)) return Promise.resolve();
-  const key = deploymentKey(config, modelId);
+  const key = probeKey(deps, config, modelId);
   if (key === undefined || state.probed.has(key)) return state.queue;
   state.probed.add(key);
+  state.inFlight.add(key);
   // Each probe is its own background operation, joined to the read that spawned it.
   const probe = { correlationId: newCorrelationId(), parentCorrelationId: correlationId };
   if (deps.gatewayConfig?.spendBudget !== undefined) {
+    state.inFlight.delete(key);
     logProbe(modelId, { status: "skipped-spend-budget" }, probe);
     return Promise.resolve();
   }
-  state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, probe));
+  state.queue = state.queue.then(async () => {
+    try {
+      await probeContextWindow(deps, state, modelId, probe);
+    } finally {
+      state.inFlight.delete(key);
+    }
+  });
   return state.queue;
+}
+
+// The generation is part of the identity: a setup that replaced only the credentials behind the
+// same endpoint and alias is a different routing and is asked again.
+function probeKey(deps: UiHandlerDeps, config: GatewayConfig, modelId: string): string | undefined {
+  const deployment = deploymentKey(config, modelId);
+  return deployment === undefined
+    ? undefined
+    : `${String(deps.gatewayConfig?.generation())}:${deployment}`;
+}
+
+/**
+ * True while a window probe for the model's current deployment and generation is queued or
+ * running. A reading answered meanwhile tells the meter to read again (`contextWindowProbePending`),
+ * for an assumed window as for the re-check of a provider-reported one.
+ */
+export function contextWindowProbeInFlight(deps: UiHandlerDeps, modelId: string): boolean {
+  const holder = deps.gatewayConfig;
+  const config = currentGatewayConfig(deps);
+  const state = holder === undefined ? undefined : probeStates.get(holder);
+  if (config === undefined || state === undefined) return false;
+  const key = probeKey(deps, config, modelId);
+  return key !== undefined && state.inFlight.has(key);
 }
 
 // An assumed window is asked for; a provider-reported one is asked again once per process, so a

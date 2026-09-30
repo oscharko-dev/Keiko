@@ -232,6 +232,18 @@ function logRuntimeUnavailable(
   );
 }
 
+// A Gateway reports the windows its providers state; the host learns which configuration generation
+// that Gateway was built for, so a report from replaced routing can be told apart (PR #3678 review).
+function generationStampedReporter(
+  reporter: ContextWindowReporter | undefined,
+  generation: number,
+): ContextWindowReporter | undefined {
+  if (reporter === undefined) return undefined;
+  return (report): void => {
+    reporter({ ...report, configurationGeneration: generation });
+  };
+}
+
 class GatewayInstanceCache {
   constructor(private readonly spendBudget?: GatewaySpendBudget) {}
   private readonly byConfig = new WeakMap<GatewayConfig, Gateway>();
@@ -271,9 +283,10 @@ class GatewayInstanceCache {
     // A runtime generation change invalidates circuit-breaker and request state even when a caller
     // reused the same parsed config object. A config change inside the SAME generation is not an
     // invalidation, so it must still converge with direct callers on the config-keyed instance.
+    const reporter = generationStampedReporter(source.onContextWindowReported, generation);
     const gateway = isLifecycleResetReason(reason)
-      ? newGateway(config, this.spendBudget, undefined, source.onContextWindowReported)
-      : this.forConfig(config, initializationCorrelationId, source.onContextWindowReported);
+      ? newGateway(config, this.spendBudget, undefined, reporter)
+      : this.forConfig(config, initializationCorrelationId, reporter);
     this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });
     return gateway;
   }

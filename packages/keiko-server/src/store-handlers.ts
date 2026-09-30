@@ -1,6 +1,9 @@
 import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
 import { logChatContextManagement } from "./chat-context-log.js";
-import { discoverAssumedContextWindow } from "./gateway-context-window.js";
+import {
+  contextWindowProbeInFlight,
+  discoverAssumedContextWindow,
+} from "./gateway-context-window.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
@@ -1471,20 +1474,23 @@ async function contextStatusWithMeasuredWindow(
     correlationId ?? UNKNOWN_CORRELATION_ID,
   );
   // A provider-reported window is re-checked in the background; only an assumed one delays.
-  if (status.contextWindowAssumed !== true) return status;
-  let timer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => {
-      resolve(false);
-    }, CONTEXT_WINDOW_PROBE_WAIT_MS);
-  });
-  const settled = await Promise.race([probe.then(() => true), deadline]);
-  clearTimeout(timer);
-  const measured = readChatContextStatus(deps, chatId, modelId, correlationId);
-  // A slower probe is still running: the meter reads again until its answer is in (PR #3678 review).
-  return settled || measured.contextWindowAssumed !== true
-    ? measured
-    : { ...measured, contextWindowProbePending: true };
+  if (status.contextWindowAssumed === true) {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CONTEXT_WINDOW_PROBE_WAIT_MS);
+    });
+    await Promise.race([probe, deadline]);
+    clearTimeout(timer);
+  }
+  const measured =
+    status.contextWindowAssumed === true
+      ? readChatContextStatus(deps, chatId, modelId, correlationId)
+      : status;
+  // A probe still running — a slow one, or the background re-check of a reported window — tells
+  // the meter to read again until its answer is in (PR #3678 review).
+  return contextWindowProbeInFlight(deps, modelId)
+    ? { ...measured, contextWindowProbePending: true }
+    : measured;
 }
 
 export async function handleCompactChatContext(
