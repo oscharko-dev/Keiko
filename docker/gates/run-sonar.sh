@@ -18,6 +18,15 @@ if [[ ! "${sonar_port}" =~ ^[0-9]+$ ]] ||
   exit 2
 fi
 host="http://127.0.0.1:${sonar_port}"
+# The SonarJS bridge heap. The default fits Docker Desktop's common 8 GiB VM; a whole-project scan
+# (a changed path no exact inclusion can express) needs more on this repository, so a machine with a
+# larger VM may raise it (PR #3678: 4608 MiB ran out of memory on 7,488 indexed files).
+node_maxspace="${KEIKO_LOCAL_SONAR_NODE_MAXSPACE:-4608}"
+if [[ ! "${node_maxspace}" =~ ^[0-9]+$ ]] ||
+  ((10#${node_maxspace} < 1024 || 10#${node_maxspace} > 65536)); then
+  printf 'KEIKO_LOCAL_SONAR_NODE_MAXSPACE must be an integer from 1024 through 65536 (MiB)\n' >&2
+  exit 2
+fi
 
 # Worktrees of one repository share the server and its administrator credential. A checkout-local
 # credential file cannot represent that server-global password: the second worktree would generate
@@ -257,10 +266,12 @@ if [[ "${analysis_scope}" == "${changed_scope}" ]]; then
 fi
 # SonarQube is already started and host-verified above. Do not let `compose run` reconcile the
 # dependency again: a recreation between the readiness check and scanner startup disconnects the
-# scanner from the exact server instance whose token it carries.
+# scanner from the exact server instance whose token it carries. A whole-project scan leaves
+# scanner_args empty, and macOS's bash 3.2 treats an empty array as unbound under `set -u`, so the
+# expansion is guarded (PR #3678: the full-scan path aborted with "scanner_args[@]: unbound").
 KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps scanner \
-  "${scanner_args[@]}" \
-  -Dsonar.javascript.node.maxspace=4608 \
+  ${scanner_args[@]+"${scanner_args[@]}"} \
+  -Dsonar.javascript.node.maxspace="${node_maxspace}" \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
