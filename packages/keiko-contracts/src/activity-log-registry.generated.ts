@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c8954dcc4fb5fce39dd246dfca441bb586590ffef11d44df9d013f0f8d70f70c" as const;
+  "4feb482480762adc93e45f0f4e824dc7c980910c52ea7b3ccb80f1146aa563c2" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -995,6 +995,56 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       contextWindowAssumed: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      autoCompactionAtTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      lastRequestTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      lastRequestMeasured: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      lastRequestEstimatedTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sentReferenceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      availableReferenceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      systemTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      summaryTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      messageTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      contextWindowProbePending: {
         type: "boolean",
         dataClass: "closed-enum",
         required: false,
@@ -31672,7 +31722,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "autoCompactionAtTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "availableReferenceCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "contextWindowAssumed",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "contextWindowProbePending",
               type: "boolean",
               dataClass: "closed-enum",
               required: false,
@@ -31696,6 +31764,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "lastRequestEstimatedTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "lastRequestMeasured",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "lastRequestTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "messageTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
@@ -31714,7 +31806,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "sentReferenceCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "storedHistoryTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "summaryTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "systemTokens",
               type: "integer",
               dataClass: "count",
               required: false,
