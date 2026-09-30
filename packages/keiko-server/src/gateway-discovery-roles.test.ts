@@ -125,6 +125,18 @@ describe("discovery roles", () => {
     expect(parsed.rerankModelIds).toEqual(["late-reranker"]);
   });
 
+  it("merges load-balanced replicas of one declared reranker into one rerank engine", () => {
+    const parsed = normalizeDiscoveryPayloadForSetup({
+      data: [
+        { model_name: "qwen-chat", model_info: { mode: "chat" } },
+        { model_name: "house-reranker", model_info: { mode: "rerank" } },
+        { model_name: "house-reranker", model_info: { mode: "rerank" } },
+      ],
+    });
+    expect(parsed.rerankModelIds).toEqual(["house-reranker"]);
+    expect(parsed.unsupportedModels).toEqual([{ id: "house-reranker", reason: "rerank" }]);
+  });
+
   it("still refuses a routing alias that mixes a declared reranker with chat", () => {
     const entries = [
       { model_name: "shared-alias", model_info: { mode: "rerank" } },

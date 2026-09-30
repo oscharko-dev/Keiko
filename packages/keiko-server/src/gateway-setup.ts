@@ -1584,28 +1584,49 @@ function mergeDiscoveryDeployment(
 ): ClassifiedDiscoveryModel {
   if (existing === undefined) return incoming;
   if (existing.deploymentConflict === true) return existing;
-  if (hasDeclaredNonChatDeployment(existing, incoming)) {
-    return {
-      ...existing,
-      kind: "unsupported",
-      deploymentConflict: true,
-      reason: "not-chat-capable",
-    };
-  }
+  // Load-balanced replicas of one declared non-chat role (two `mode: "rerank"` entries of one
+  // alias) are one engine; only an alias that MIXES roles is a conflict.
+  if (isSameRoleUnsupportedReplica(existing, incoming)) return mergedReplica(existing, incoming);
+  if (hasDeclaredNonChatDeployment(existing, incoming)) return conflictingDeployment(existing);
   if (existing.kind === "unsupported") return incoming;
   if (incoming.kind === "unsupported") return existing;
   if (existing.kind !== incoming.kind || existing.voiceRole !== incoming.voiceRole) {
-    return {
-      ...existing,
-      kind: "unsupported",
-      deploymentConflict: true,
-      reason: "not-chat-capable",
-    };
+    return conflictingDeployment(existing);
   }
+  return mergedReplica(existing, incoming);
+}
+
+function isSameRoleUnsupportedReplica(
+  existing: ClassifiedDiscoveryModel,
+  incoming: ClassifiedDiscoveryModel,
+): boolean {
+  return (
+    existing.kind === "unsupported" &&
+    incoming.kind === "unsupported" &&
+    existing.reason === incoming.reason
+  );
+}
+
+function mergedReplica(
+  existing: ClassifiedDiscoveryModel,
+  incoming: ClassifiedDiscoveryModel,
+): ClassifiedDiscoveryModel {
   return {
     ...existing,
+    ...(existing.declaredNonChat === true || incoming.declaredNonChat === true
+      ? { declaredNonChat: true }
+      : {}),
     supportsImageInput: existing.supportsImageInput && incoming.supportsImageInput,
     metadata: intersectDeploymentMetadata(existing.metadata, incoming.metadata),
+  };
+}
+
+function conflictingDeployment(existing: ClassifiedDiscoveryModel): ClassifiedDiscoveryModel {
+  return {
+    ...existing,
+    kind: "unsupported",
+    deploymentConflict: true,
+    reason: "not-chat-capable",
   };
 }
 

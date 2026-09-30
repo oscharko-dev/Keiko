@@ -5227,6 +5227,41 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // 1.1.13 field report: a fresh setup against a gateway that declares no window must install the
+  // model as window-ASSUMED immediately — not only after a reload migrates the placeholder.
+  it("installs an undeclared chat window as assumed on fresh setup, without a restart", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-assumed-window-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-assumed-window-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["hosted-vllm-chat"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const live = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "hosted-vllm-chat",
+    );
+    expect(live?.contextWindowAssumed).toBe(true);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      readonly providers?: readonly {
+        readonly modelId: string;
+        readonly capability?: { readonly contextWindowAssumed?: boolean };
+      }[];
+    };
+    expect(
+      saved.providers?.find((item) => item.modelId === "hosted-vllm-chat")?.capability
+        ?.contextWindowAssumed,
+    ).toBe(true);
+    deps.store.close();
+  });
+
   it("keeps a NEW image claim on the verified rebuild path", async () => {
     // Expanding image capability onto an id that never carried it still demands the vision
     // probe — only clears and shrinks are metadata edits.
