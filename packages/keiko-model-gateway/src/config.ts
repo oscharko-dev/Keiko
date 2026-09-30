@@ -1038,8 +1038,11 @@ function migrateChatCapabilityContextWindow(raw: unknown): unknown {
 // signature — the placeholder window, no declared output limit, the runtime-configured limitation
 // and no explicit flag — is marked as assumed at the file-load boundary. A wrong guess is safe: the
 // provider's overflow answer or the startup context-window probe replaces it with the real window.
+// A provider-reported window carries its own provenance and is never reclassified, even when the
+// provider stated exactly 4,096 tokens.
 function markAssumedChatCapability(raw: unknown): unknown {
-  if (!isRecord(raw) || raw.kind !== "chat" || raw.contextWindowAssumed !== undefined) return raw;
+  if (!isRecord(raw) || raw.kind !== "chat") return raw;
+  if (raw.contextWindowAssumed !== undefined || raw.contextWindowReported !== undefined) return raw;
   const placeholder =
     raw.contextWindow === PLACEHOLDER_CHAT_CONTEXT_WINDOW &&
     (raw.maxOutputTokens ?? 0) === 0 &&

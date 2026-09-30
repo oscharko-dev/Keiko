@@ -116,6 +116,38 @@ describe("OpenAiAdapter overflow mapping", () => {
     expect(error).not.toBeInstanceOf(ProviderError);
     expect((error as ContextOverflowError).reportedContextWindowTokens).toBe(8_192);
   });
+
+  // Every window form the parser reads must also be CLASSIFIED as an overflow — otherwise the
+  // rejection maps to a generic ProviderError and the stated window is never adopted.
+  it.each([
+    [
+      "TGI",
+      "`inputs` tokens + `max_new_tokens` must be <= 8192. Given: 9000 `inputs` tokens and 1024 `max_new_tokens`",
+      422,
+      8_192,
+    ],
+    ["Anthropic via LiteLLM", "prompt is too long: 250000 tokens > 200000 maximum", 400, 200_000],
+    [
+      "llama.cpp",
+      "the request exceeds the available context size (n_ctx = 8192), try increasing it",
+      400,
+      8_192,
+    ],
+  ])(
+    "classifies the %s window rejection as an overflow",
+    async (_name, message, status, tokens) => {
+      const adapter = new OpenAiAdapter({
+        requestId: "overflow-mapping",
+        costClass: "medium",
+        fetchImpl: (): Promise<Response> => Promise.resolve(rejection(message, status)),
+      });
+      const error: unknown = await adapter
+        .call({ modelId: PROVIDER.modelId, messages: [{ role: "user", content: "hi" }] }, PROVIDER)
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ContextOverflowError);
+      expect((error as ContextOverflowError).reportedContextWindowTokens).toBe(tokens);
+    },
+  );
 });
 
 function assumedConfig(): GatewayConfig {
@@ -233,6 +265,30 @@ describe("assumed context windows", () => {
     expect(marked.capabilities[0]?.contextWindowAssumed).toBe(true);
     expect(marked.capabilities[1]).not.toHaveProperty("contextWindowAssumed");
     expect(marked.providers[0]?.capability.contextWindowAssumed).toBe(true);
+  });
+
+  it("keeps a provider-reported 4,096-token window proven across a reload", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-reported-window-"));
+    try {
+      const path = join(dir, "keiko.config.json");
+      writeFileSync(
+        path,
+        JSON.stringify({
+          schemaVersion: 2,
+          providers: [{ ...PROVIDER }],
+          capabilities: [
+            { ...createDefaultChatCapability(PROVIDER.modelId), contextWindowReported: true },
+          ],
+        }),
+      );
+      const loaded = loadConfigFromFile(path).capabilities?.[0];
+      expect(loaded?.contextWindowReported).toBe(true);
+      expect(loaded).not.toHaveProperty("contextWindowAssumed");
+      if (loaded === undefined) throw new Error("expected the loaded capability");
+      expect(deriveContextProfileFromCapability(loaded).maxInputTokens).toBe(4_096);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("loads a persisted 1.1.13 placeholder capability as assumed", () => {

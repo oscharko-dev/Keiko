@@ -933,9 +933,10 @@ function errorSignal(payload: unknown): string {
 
 // vLLM (>= 0.11) rejects an output allocation larger than the whole window as
 // "max_tokens=N cannot be greater than max_model_len=M"; Anthropic says "prompt is too long",
-// llama.cpp "exceeds the available context size" — each an overflow like any other.
+// llama.cpp "exceeds the available context size", TGI "`max_new_tokens` must be <= N" — each an
+// overflow like any other, and each a form REPORTED_CONTEXT_WINDOW_PATTERNS reads the window from.
 const CONTEXT_OVERFLOW_SIGNAL =
-  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len|available context size/;
+  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len|available context size|max_new_tokens`? must be <=/;
 
 function isContextOverflow(status: number, payload: unknown): boolean {
   if (status !== 400 && status !== 413 && status !== 422) {
