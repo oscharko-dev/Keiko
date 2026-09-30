@@ -39,6 +39,11 @@ describe("isNoEvidenceAnswerText", () => {
     "Java 17 wird nicht mehr unterstützt.",
     "The client does not retry on a 429.",
     "There is no data loss when the process restarts.",
+    // Short negative FACTS (PR #3678 review): a negated verb without any mention of the evidence.
+    "The API does not provide authentication. Requests are anonymous.",
+    "The protocol does not contain a checksum. It relies on TLS.",
+    "Der Dienst ist nicht dokumentiert abgesichert, er nutzt mTLS.",
+    "The export does not include deleted records.",
   ])("does not treat %j as a refusal", (answer) => {
     expect(isNoEvidenceAnswerText(answer)).toBe(false);
   });

@@ -145,7 +145,10 @@ describe("attachCitationsToAnswer", () => {
   // The lexical overlap gate used to DROP a marker whose claim shared too few tokens with the
   // excerpt. It is a token-equality heuristic (no stemming), so faithful German or paraphrased
   // citations failed it routinely and were left as dead text: no link, no footer count. An
-  // in-range marker now always stays attached; a weak overlap is reported, never acted on.
+  // in-range marker now stays attached and is flagged weak here. The user-visible guard this pin
+  // once held moved to the server: an answer with a weak citation carries the fail-closed
+  // "support could not be verified" caveat (keiko-server `withWeakCitationCaveat`, pinned in
+  // local-knowledge-grounded-qa.rescue.test.ts "weakly supported citations").
   it("keeps a marker attached and flags it weak when the claim has no significant overlap", () => {
     const refs = [reference("ch-a")];
     const result = attachCitationsToAnswer(
@@ -275,7 +278,8 @@ describe("attachCitationsToAnswer", () => {
   });
 
   // The comparison itself is not weakened: a file-naming claim cited against unrelated evidence is
-  // still recognised as unfaithful. It is reported (weak) instead of being silently erased.
+  // still recognised as unfaithful. It is flagged weak instead of being silently erased, and the
+  // server turns that flag into the answer's unverified-support caveat (see the pin above).
   it("flags a file-naming claim as weak when the excerpt is unrelated", () => {
     const refs = [reference("ch-a")];
     const result = attachCitationsToAnswer("It is implemented in `code-parser.ts`[1].", refs, {

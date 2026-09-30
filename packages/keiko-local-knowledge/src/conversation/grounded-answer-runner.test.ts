@@ -163,6 +163,27 @@ describe("runGroundedAnswer — happy path", () => {
     expect(generator.calls[0]?.query.answerQuestion).toContain("Use pnpm");
   });
 
+  // PR #3678 review: a window-fitted prompt carries only the highest-ranked references. A marker
+  // naming a reference the prompt did not carry must not attach as supported evidence.
+  it("resolves markers only against the references the fitted prompt carried", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-fitted" });
+    let carried: readonly AnswerGeneratorInput["references"][number][] = [];
+    const generator: AnswerGenerator = {
+      generate: (input) => {
+        carried = input.references.slice(0, 1);
+        return Promise.resolve("The prompt evidence says so [1], and so does the rest [3].");
+      },
+      promptReferences: () => carried,
+    };
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-fitted", capsuleId: seeded.capsuleId, text: "alpha beta" },
+    );
+    expect(result.references.length).toBeGreaterThanOrEqual(3);
+    expect(result.citations.map((citation) => citation.index)).toEqual([1]);
+  });
+
   it("retries once with citationRepair when the model omits markers", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair" });

@@ -99,6 +99,7 @@ import {
 } from "./grounded-rerank-facade.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import {
+  entailmentUnavailableMarker,
   missingCitationMarkerFor,
   reconcileNumericCitations,
   unsupportedNumericCitationMarker,
@@ -753,6 +754,11 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return this.renderedNumericEvidence;
   }
 
+  /** The references the last prompt carried; a window-fitted prompt may carry fewer. */
+  public promptReferences(): readonly RetrievalReference[] {
+    return this.sentReferences;
+  }
+
   /** Counts of the last request this generator sent; undefined before the first call. */
   public promptContext(): GroundedPromptContextWire | undefined {
     const share = this.renderedShare;
@@ -780,7 +786,10 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         this.limits,
       );
     const profile = currentContextProfileForModel(this.context.deps, this.modelId);
-    const fitted = fitKnowledgePrompt(available, render, profile, this.context.correlationId);
+    const fitted = fitKnowledgePrompt(available, render, profile, {
+      correlationId: this.context.correlationId,
+      diagnostics: this.context.deps.diagnostics,
+    });
     this.renderedNumericEvidence = fitted.prompt.numericEvidence;
     this.sentReferences = input.references.slice(0, fitted.referenceCount);
     this.renderedShare = {
@@ -2306,6 +2315,24 @@ async function appendLocalKnowledgeNumericEntailment(
   };
 }
 
+// Weak lexical overlap is not a verdict. An in-range marker stays attached so the reader can open
+// its source, yet nothing confirmed that the source supports the claim: the lexical check failed
+// and the numeric judge reads no other claim. The answer therefore carries the fail-closed
+// "support could not be verified" caveat instead of presenting the citation as confirmed support
+// (PR #3678 review; the unrelated-evidence pins in citation-attacher.test.ts).
+function withWeakCitationCaveat(
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+): GroundedAnswer {
+  if ((result.weakCitationCount ?? 0) === 0) return answer;
+  if (answer.uncertainty.some((marker) => marker.kind === "entailment-unavailable")) return answer;
+  const caveat = entailmentUnavailableMarker(Date.now());
+  return {
+    ...answer,
+    uncertainty: [...answer.uncertainty, { kind: caveat.kind, claim: caveat.claim }],
+  };
+}
+
 function buildPersistedScopedAnswer(input: {
   readonly chat: Chat;
   readonly store: KnowledgeStore;
@@ -2397,13 +2424,16 @@ async function persistScopedGroundedAnswer(
     sourceLookup,
     deps,
   });
-  const entailed = await appendLocalKnowledgeNumericEntailment(
-    answer,
+  const entailed = withWeakCitationCaveat(
+    await appendLocalKnowledgeNumericEntailment(
+      answer,
+      result,
+      numericEvidence,
+      selected,
+      context,
+      deps,
+    ),
     result,
-    numericEvidence,
-    selected,
-    context,
-    deps,
   );
   const { promptContext } = persistedInput;
   const finalAnswer = promptContext === undefined ? entailed : { ...entailed, promptContext };

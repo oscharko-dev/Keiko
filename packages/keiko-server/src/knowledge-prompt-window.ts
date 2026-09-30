@@ -19,6 +19,11 @@ import {
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 
 import { correlationIdOrUnknown } from "./correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import { getServerLogger } from "./observability/index.js";
 
 const KNOWLEDGE_PROMPT_WINDOW_OPERATION = defineActivityLogOperation({
@@ -38,6 +43,8 @@ const KNOWLEDGE_PROMPT_WINDOW_OPERATION = defineActivityLogOperation({
     referenceCount: { type: "integer", dataClass: "count", required: true },
     sentReferenceCount: { type: "integer", dataClass: "count", required: true },
     inputBudget: { type: "integer", dataClass: "count", required: true },
+    // The estimate of the prompt that was sent (trimmed) or of the smallest one refused.
+    promptTokens: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -49,11 +56,16 @@ const KNOWLEDGE_PROMPT_WINDOW_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+interface PromptWindowFit {
+  readonly state: "trimmed" | "refused";
+  readonly referenceCount: number;
+  readonly sentReferenceCount: number;
+  readonly promptTokens: number;
+}
+
 function logPromptWindowFit(
-  state: "trimmed" | "refused",
-  referenceCount: number,
-  sentReferenceCount: number,
-  inputBudget: number,
+  fit: PromptWindowFit,
+  profile: ContextProfile,
   correlationId: string | undefined,
 ): void {
   getServerLogger().info(
@@ -61,13 +73,11 @@ function logPromptWindowFit(
       KNOWLEDGE_PROMPT_WINDOW_OPERATION,
       {
         correlationId: correlationIdOrUnknown(correlationId),
-        ...(state === "refused" ? { errorKind: "invalid-request" } : {}),
+        ...(fit.state === "refused" ? { errorKind: "invalid-request" } : {}),
       },
       {
-        state,
-        referenceCount,
-        sentReferenceCount,
-        inputBudget,
+        ...fit,
+        inputBudget: profile.effectiveInputBudget,
         completeness: "complete",
         loss: "none",
       },
@@ -75,17 +85,46 @@ function logPromptWindowFit(
   );
 }
 
+/** Where a fitted prompt reports: the request's correlation and the server diagnostic port. */
+export interface KnowledgePromptWindowContext {
+  readonly correlationId: string | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+}
+
+// A local refusal never reaches the gateway, so its structured failure diagnostic — error class and
+// dist-anchored frames on the request's correlation — is emitted here (PR #3678 review).
+function refusal(context: KnowledgePromptWindowContext): ContextOverflowError {
+  const error = new ContextOverflowError(
+    "the grounded question with one reference exceeds the model input budget",
+  );
+  emitServerDiagnostic(
+    context.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(context.correlationId),
+      operation: "search.prompt.window-fitted",
+      source: "knowledge-prompt-window.fit",
+      error,
+      summary:
+        "A Knowledge Pod question did not fit the model's context window with a single reference.",
+      redact: (message): string => message,
+    }),
+  );
+  return error;
+}
+
 export interface FittedKnowledgePrompt<T> {
   readonly prompt: T;
   readonly referenceCount: number;
 }
 
+function promptTokens(prompt: GatewayPromptTokenInput, profile: ContextProfile): number {
+  return countGatewayPromptTokens(prompt, profile.tokenAccounting, {
+    contextWindow: profile.maxInputTokens,
+  });
+}
+
 function fitsBudget(prompt: GatewayPromptTokenInput, profile: ContextProfile): boolean {
-  return (
-    countGatewayPromptTokens(prompt, profile.tokenAccounting, {
-      contextWindow: profile.maxInputTokens,
-    }) <= profile.effectiveInputBudget
-  );
+  return promptTokens(prompt, profile) <= profile.effectiveInputBudget;
 }
 
 // Largest reference count in [1, available) whose prompt fits; 0 when not even one fits.
@@ -114,7 +153,7 @@ export function fitKnowledgePrompt<T extends GatewayPromptTokenInput>(
   available: number,
   render: (referenceCount: number) => T,
   profile: ContextProfile | undefined,
-  correlationId: string | undefined,
+  context: KnowledgePromptWindowContext,
 ): FittedKnowledgePrompt<T> {
   const full = render(available);
   if (profile === undefined || available === 0 || fitsBudget(full, profile)) {
@@ -122,13 +161,31 @@ export function fitKnowledgePrompt<T extends GatewayPromptTokenInput>(
   }
   const count = largestFittingCount(available, render, profile);
   if (count === 0) {
-    logPromptWindowFit("refused", available, 0, profile.effectiveInputBudget, correlationId);
-    throw new ContextOverflowError(
-      "the grounded question with one reference exceeds the model input budget",
+    const smallest = promptTokens(render(1), profile);
+    logPromptWindowFit(
+      {
+        state: "refused",
+        referenceCount: available,
+        sentReferenceCount: 0,
+        promptTokens: smallest,
+      },
+      profile,
+      context.correlationId,
     );
+    throw refusal(context);
   }
-  logPromptWindowFit("trimmed", available, count, profile.effectiveInputBudget, correlationId);
-  return { prompt: render(count), referenceCount: count };
+  const prompt = render(count);
+  logPromptWindowFit(
+    {
+      state: "trimmed",
+      referenceCount: available,
+      sentReferenceCount: count,
+      promptTokens: promptTokens(prompt, profile),
+    },
+    profile,
+    context.correlationId,
+  );
+  return { prompt, referenceCount: count };
 }
 
 /**

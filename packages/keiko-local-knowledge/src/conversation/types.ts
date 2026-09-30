@@ -105,6 +105,13 @@ export interface AnswerGeneratorInput {
 // out-of-bounds markers. Implementations MUST NOT mutate any input.
 export interface AnswerGenerator {
   readonly generate: (input: AnswerGeneratorInput) => Promise<string>;
+  /**
+   * The references the last `generate` call actually put into the prompt, in their prompt order.
+   * A generator that fits its prompt to the model's window may send fewer than it was given; a
+   * marker beyond them names evidence the model never saw and must not attach. Absent means every
+   * given reference was sent.
+   */
+  readonly promptReferences?: () => readonly RetrievalReference[];
 }
 
 // Optional pre-answer reranker port. The BFF owns provider configuration; this package only sees

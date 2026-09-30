@@ -645,6 +645,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The verified gateway context window could not be persisted.",
   "The provider-reported gateway context window could not be adopted.",
   "The gateway context-window probe could not be completed.",
+  "A Knowledge Pod question did not fit the model's context window with a single reference.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
   // KEIKO-0884 (#3333): loopback was the only egress class Gateway Setup accepted with no
   // configuration signal, no log line, and no opt-in trail. Not a failure — a deliberate, silent

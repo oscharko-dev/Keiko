@@ -11,6 +11,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
@@ -54,14 +55,14 @@ function capture(): ReturnType<typeof createBufferedServerLogSink> {
 describe("fitKnowledgePrompt", () => {
   it("sends every reference when the prompt fits and records nothing", () => {
     const sink = capture();
-    const fitted = fitKnowledgePrompt(16, render, profile(128_000), "corr-fits");
+    const fitted = fitKnowledgePrompt(16, render, profile(128_000), { correlationId: "corr-fits" });
     expect(fitted.referenceCount).toBe(16);
     expect(sink.events).toHaveLength(0);
   });
 
   it("keeps the highest-ranked references that fit a small window", () => {
     const sink = capture();
-    const fitted = fitKnowledgePrompt(16, render, profile(3_072), "corr-trim");
+    const fitted = fitKnowledgePrompt(16, render, profile(3_072), { correlationId: "corr-trim" });
     expect(fitted.referenceCount).toBeGreaterThan(0);
     expect(fitted.referenceCount).toBeLessThan(16);
     expect(fitted.prompt).toEqual(render(fitted.referenceCount));
@@ -77,17 +78,41 @@ describe("fitKnowledgePrompt", () => {
 
   it("refuses locally when not even one reference fits", () => {
     const sink = capture();
-    expect(() => fitKnowledgePrompt(16, render, profile(900), "corr-refused")).toThrow(
-      ContextOverflowError,
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    expect(() =>
+      fitKnowledgePrompt(16, render, profile(900), {
+        correlationId: "corr-refused",
+        diagnostics: { record: (record) => diagnostics.push(record) },
+      }),
+    ).toThrow(ContextOverflowError);
+    const record = expectActivityLogProof(
+      "search.prompt.window-fitted.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
     );
-    expect(sink.events[0]).toMatchObject({
-      op: "search.prompt.window-fitted",
+    expect(record).toMatchObject({
+      correlationId: "corr-refused",
       errorKind: "invalid-request",
-      extra: { state: "refused", sentReferenceCount: 0 },
+      state: "refused",
+      sentReferenceCount: 0,
     });
+    expect((record as { readonly promptTokens: number }).promptTokens).toBeGreaterThan(
+      profile(900).effectiveInputBudget,
+    );
+    // PR #3678 review: the refusal never reaches the gateway, so it carries its own structured
+    // failure diagnostic on the request's correlation.
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId: "corr-refused",
+      operation: "search.prompt.window-fitted",
+      source: "knowledge-prompt-window.fit",
+      errorClass: "ContextOverflowError",
+    });
+    expect(diagnostics[0]?.frames?.length ?? 0).toBeGreaterThan(0);
   });
 
   it("sends the full prompt when no profile is known", () => {
-    expect(fitKnowledgePrompt(4, render, undefined, undefined).referenceCount).toBe(4);
+    expect(
+      fitKnowledgePrompt(4, render, undefined, { correlationId: undefined }).referenceCount,
+    ).toBe(4);
   });
 });

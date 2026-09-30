@@ -15,6 +15,8 @@
 //   * A text that carries an inline citation marker is an answer: it cites a source.
 //   * The broad absence phrasings additionally require that the text does not continue with a
 //     contrast ("... aber Y ist in Kapitel 3 beschrieben"): that is a partial answer, not a refusal.
+//   * A negated verb ("does not contain", "nicht erwähnt") additionally requires that the text names
+//     the evidence it searched; without it the sentence is a negative fact about the subject.
 
 import { findCitationMarkerGroups } from "./citation-markers.js";
 
@@ -32,23 +34,35 @@ const STOCK_REFUSAL_PATTERNS: readonly RegExp[] = [
   /\bnicht\s+genug\s+(?:evidenz|belege|hinweise)\b/iu,
 ];
 
-// Natural absence statements. Each is bounded (`{0,n}`) so matching stays linear in the text.
-const ABSENCE_PATTERNS: readonly RegExp[] = [
+// Natural statements that INFORMATION is absent: phrased about what the evidence holds ("keine
+// Angaben", "no information", "could not find"). Each is bounded (`{0,n}`) so matching stays linear.
+const INFORMATION_ABSENCE_PATTERNS: readonly RegExp[] = [
   // German: "keine (relevanten) Informationen/Angaben/Vorgaben/... gefunden|enthalten".
   /\bkeine\s+(?:\p{L}+\s+){0,2}(?:informationen?|angaben?|vorgaben?|hinweise?|belege?|nachweise?|anhaltspunkte?|erkenntnisse|treffer|details)\b/iu,
-  // German: "... ist/wird nicht enthalten|beschrieben|erwähnt|angegeben|gefunden".
-  /\bnicht\s+(?:\p{L}+\s+){0,4}(?:enthalten|beschrieben|erwähnt|genannt|angegeben|dokumentiert|aufgeführt|abgedeckt|gefunden)\b/iu,
   // German: "nichts ... gefunden|erwähnt|angegeben".
   /\bnichts\s+(?:\p{L}+\s+){0,3}(?:gefunden|erwähnt|angegeben|enthalten|beschrieben|dokumentiert)\b/iu,
   // English: "no (relevant) information/evidence/mention/details ...".
   /\bno\s+(?:\p{L}+\s+){0,2}(?:information|evidence|mentions?|references?|details|indication|guidance|specifications?)\b/iu,
-  // English: "not mentioned|specified|described|covered|documented|stated|found".
-  /\b(?:not|never)\s+(?:\p{L}+\s+){0,2}(?:mentioned|specified|described|covered|documented|stated|found)\b/iu,
-  // English: "could not find", "cannot find", "unable to find", "does not contain/mention/...".
+  // English: "could not find", "cannot find", "unable to find".
   /\b(?:could|can)(?:\s+not|not|'t|n't)\s+(?:\p{L}+\s+){0,2}find\b/iu,
   /\bunable\s+to\s+find\b/iu,
+];
+
+// Negated verbs state a negative FACT about the subject as often as a refusal: "The API does not
+// provide authentication" is an answer (PR #3678 review). They count only when the text names the
+// evidence it searched ("in the provided documents", "in den Unterlagen").
+const NEGATED_VERB_PATTERNS: readonly RegExp[] = [
+  // German: "... ist/wird nicht enthalten|beschrieben|erwähnt|angegeben|gefunden".
+  /\bnicht\s+(?:\p{L}+\s+){0,4}(?:enthalten|beschrieben|erwähnt|genannt|angegeben|dokumentiert|aufgeführt|abgedeckt|gefunden)\b/iu,
+  // English: "not mentioned|specified|described|covered|documented|stated|found".
+  /\b(?:not|never)\s+(?:\p{L}+\s+){0,2}(?:mentioned|specified|described|covered|documented|stated|found)\b/iu,
+  // English: "does not contain/include/mention/specify/provide/describe".
   /\b(?:do|does)(?:\s+not|n't)\s+(?:\p{L}+\s+){0,2}(?:contain|include|mention|specify|provide|describe)\b/iu,
 ];
+
+// The evidence a refusal refers to: the documents, sources, excerpts or context Keiko retrieved.
+const EVIDENCE_REFERENT_PATTERN =
+  /\b(?:documents?|documentation|sources?|context|excerpts?|materials?|knowledge\s+base|provided|retrieved|dokument(?:e|en|s|ation)?|quellen?|unterlagen|kontext|auszüge?n?|bereitgestellt\p{L}*|wissensbasis|vorliegend\p{L}*)\b/iu;
 
 // A contrast after an absence statement turns it into a partial answer that still says something.
 const CONTRAST_PATTERN =
@@ -70,5 +84,9 @@ export function isNoEvidenceAnswerText(answer: string): boolean {
   if (findCitationMarkerGroups(compact).length > 0) return false;
   if (STOCK_REFUSAL_PATTERNS.some((pattern) => pattern.test(compact))) return true;
   if (CONTRAST_PATTERN.test(compact)) return false;
-  return ABSENCE_PATTERNS.some((pattern) => pattern.test(compact));
+  if (INFORMATION_ABSENCE_PATTERNS.some((pattern) => pattern.test(compact))) return true;
+  return (
+    EVIDENCE_REFERENT_PATTERN.test(compact) &&
+    NEGATED_VERB_PATTERNS.some((pattern) => pattern.test(compact))
+  );
 }

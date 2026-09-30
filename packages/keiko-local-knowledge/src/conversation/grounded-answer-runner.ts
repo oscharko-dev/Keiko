@@ -135,21 +135,31 @@ async function rerankReferences(
 async function generateGroundedAnswerText(
   deps: GroundedAnswerDependencies,
   answerInput: AnswerGeneratorInput,
-  references: readonly RetrievalReference[],
 ): Promise<AttachCitationsResult> {
   const answerText = await deps.answerGenerator.generate(answerInput);
-  const attached = attachCitationsToAnswer(answerText, references, deps.citationFaithfulness);
-  if (
-    deps.signal?.aborted === true ||
-    !shouldRepairMissingCitations(answerText, references, attached)
-  ) {
+  const sent = promptReferencesOf(deps, answerInput.references);
+  const attached = attachCitationsToAnswer(answerText, sent, deps.citationFaithfulness);
+  if (deps.signal?.aborted === true || !shouldRepairMissingCitations(answerText, sent, attached)) {
     return attached;
   }
   const repairedText = await deps.answerGenerator.generate({
     ...answerInput,
     citationRepair: true,
   });
-  return attachCitationsToAnswer(repairedText, references, deps.citationFaithfulness);
+  return attachCitationsToAnswer(
+    repairedText,
+    promptReferencesOf(deps, answerInput.references),
+    deps.citationFaithfulness,
+  );
+}
+
+// Citations resolve only against the evidence the model was shown: a window-fitted prompt keeps
+// the highest-ranked references under their original numbers, so the rest are out of range.
+function promptReferencesOf(
+  deps: GroundedAnswerDependencies,
+  references: readonly RetrievalReference[],
+): readonly RetrievalReference[] {
+  return deps.answerGenerator.promptReferences?.() ?? references;
 }
 
 // ─── Final answer assembly ─────────────────────────────────────────────────────
@@ -198,7 +208,7 @@ export async function runGroundedAnswer(
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   };
 
-  const attached = await generateGroundedAnswerText(deps, answerInput, references);
+  const attached = await generateGroundedAnswerText(deps, answerInput);
   const answer = buildGroundedAnswer(attached, references, pack, retrieval, rerankerDiagnostics);
   return answerOnly ? { ...answer, noEvidence: true, answerOnlyContextUsed: true } : answer;
 }

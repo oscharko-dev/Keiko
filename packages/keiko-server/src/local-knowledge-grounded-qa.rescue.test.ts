@@ -726,6 +726,96 @@ describe("grounded prompt context evidence", () => {
   });
 });
 
+// PR #3678 review (the SOC2 pin): an in-range marker whose claim shares no wording with its excerpt
+// stays attached for navigation, but the answer must not present it as confirmed support.
+describe("weakly supported citations", () => {
+  async function askWith(answerText: string, capsuleSuffix: string): Promise<GroundedAnswer> {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Release Checklist",
+      capsuleId: `cap-weak-${capsuleSuffix}`,
+      sourceId: `src-weak-${capsuleSuffix}`,
+      text: "The release checklist covers signing, notarization and upload.",
+      // One chunk, so reference [1] is the whole sentence the claims are compared with.
+      chunkingOptions: { maxTokens: 64, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    const project = rescueStore.createProject(rescueTmp, `weak-${capsuleSuffix}`);
+    const created = rescueStore.createChat(project.path, "Weak support", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const fakeModel: ModelPort = {
+      call: (request) => {
+        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        return Promise.resolve({
+          modelId: "chat-model",
+          content: isQueryTransform ? '{"queries":["release"]}' : answerText,
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "weak-support",
+            promptTokens: 40,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+    };
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What does the release checklist cover?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return result.body as GroundedAnswer;
+  }
+
+  it("keeps the unrelated-evidence citation navigable but marks its support unverified", async () => {
+    const answer = await askWith("The SOC2 control requires quarterly access reviews [1].", "soc2");
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
+  it("adds no caveat when the claim shares its wording with the cited excerpt", async () => {
+    const answer = await askWith(
+      "The release checklist covers signing, notarization and upload [1].",
+      "aligned",
+    );
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("entailment-unavailable");
+  });
+});
+
 describe("redactText fallback — non-string redactor output strips unsafe chars instead of returning raw", () => {
   it("persists stripped (not raw) content when the redactor returns a non-string", async () => {
     // Arrange: seed a ready capsule so embedding + retrieval succeed and persistGroundedExchange
@@ -3349,8 +3439,9 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
 
   // The lexical claim/excerpt overlap check used to drop an in-range marker whose claim shared no
   // token with the excerpt (every German paraphrase). The marker stayed in the text with no link and
-  // was then reported as unsupported.
-  it("keeps an in-range marker attached and unflagged when the claim shares no token with the excerpt", async () => {
+  // was then reported as unsupported. It now stays linked and is never called a fabricated
+  // citation, but its support is stated as unverified (PR #3678 review).
+  it("keeps an in-range marker attached, never unsupported, but unverified when the claim shares no token with the excerpt", async () => {
     const chat = await seedFailClosedChat("weak-overlap");
 
     const answer = await askFailClosedChat(
@@ -3360,7 +3451,7 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
     );
 
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
-    expect(answer.uncertainty).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toEqual(["entailment-unavailable"]);
   });
 
   // Customer defect: an answer ending "[1], [5], [6]" showed "0 citations". The claim before the
@@ -3376,8 +3467,10 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
     );
 
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
-    expect(answer.uncertainty).toHaveLength(1);
-    expect(answer.uncertainty[0]?.kind).toBe("unsupported-citation");
+    expect(answer.uncertainty.map((marker) => marker.kind)).toEqual([
+      "unsupported-citation",
+      "entailment-unavailable",
+    ]);
     expect(answer.uncertainty[0]?.claim).toContain("[5]");
     expect(answer.uncertainty[0]?.claim).toContain("[6]");
   });
