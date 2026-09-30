@@ -606,6 +606,12 @@ export interface GatewayDiscoveredModels {
 export interface GatewayDiscoveredModelMetadata {
   readonly tokenCounter?: "litellm" | undefined;
   readonly contextWindow?: number | undefined;
+  /**
+   * True when at least one replica of this alias declared no window, so `contextWindow` is the
+   * conservative 4,096 fallback, not a declaration. Setup then keeps the window assumed and lets
+   * the provider's own statement replace it (PR #3678 review).
+   */
+  readonly contextWindowUndeclared?: boolean | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;
   readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;

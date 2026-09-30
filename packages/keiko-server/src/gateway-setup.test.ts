@@ -28,6 +28,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   ERROR_CODES,
+  assumedChatCapability,
   createDefaultChatCapability,
   parseGatewayConfig,
   resolveCodingSafeSidecarGatewayProfile,
@@ -1390,6 +1391,47 @@ describe("handleGatewaySetup", () => {
     expect(contextWindow()).toBe(32_000);
     expect(await apply(8_000)).toBe(200);
     expect(contextWindow()).toBe(32_000);
+    deps.store.close();
+  });
+
+  // PR #3678 review: the long-context proof is a lower bound. On an undeclared window it raises the
+  // stored floor the Coding Workbench reads, but the window stays assumed, so conversations keep
+  // the default geometry and the provider's own statement can still replace it.
+  it("raises an assumed window's proven floor without ending the assumption", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-assumed-floor-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-assumed-floor-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+        ],
+        capabilities: [assumedChatCapability("model-one")],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { contextWindow: 32_000 },
+      "2026-09-30T06:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { contextWindow: 32_000 } }), params: { modelId: "model-one" } },
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const capability = requiredGatewayConfig(deps).capabilities?.find(
+      (candidate) => candidate.id === "model-one",
+    );
+    expect(capability?.contextWindow).toBe(32_000);
+    expect(capability?.contextWindowAssumed).toBe(true);
     deps.store.close();
   });
 
@@ -5591,6 +5633,37 @@ describe("handleGatewaySetup", () => {
       ],
     });
     expect(result.modelMetadata?.["shared-chat"]?.contextWindow).toBe(4_096);
+    // PR #3678 review: the fallback is not a declaration.
+    expect(result.modelMetadata?.["shared-chat"]?.contextWindowUndeclared).toBe(true);
+  });
+
+  it("installs a partly undeclared replica set as window-assumed", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-partly-undeclared-");
+    const discovered = parseModelDiscovery({
+      data: [
+        { model_name: "shared-chat", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+        { model_name: "shared-chat", model_info: { mode: "chat" } },
+      ],
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-partly-undeclared-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(discovered),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "shared-chat",
+    );
+    expect(capability?.contextWindowAssumed).toBe(true);
+    deps.store.close();
   });
 
   it("keeps prompt capacity when an unknown context has a declared output ceiling", () => {

@@ -658,7 +658,9 @@ function withContextWindowProvenance(
   capability: ModelCapability,
 ): ModelCapability {
   const measured = withoutAssumedContextWindow(capability);
-  if (capability.kind !== "chat" || discovered?.contextWindow !== undefined) return measured;
+  const declared =
+    discovered?.contextWindow !== undefined && discovered.contextWindowUndeclared !== true;
+  if (capability.kind !== "chat" || declared) return measured;
   if (existing === undefined || existing.contextWindowAssumed === true) {
     return { ...measured, contextWindowAssumed: true };
   }
@@ -1697,7 +1699,7 @@ function discoveredModelLists(
     imageInputModelIds: usable
       .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
       .map((entry) => entry.id),
-    modelMetadata: Object.fromEntries(usable.map((entry) => [entry.id, entry.metadata])),
+    modelMetadata: Object.fromEntries(usable.map((entry) => [entry.id, discoveredMetadata(entry)])),
     ...(unsupported.length > 0
       ? {
           unsupportedModels: unsupported.map((entry) => ({
@@ -1709,6 +1711,14 @@ function discoveredModelLists(
     ...rerankCandidateList(unsupported),
     ...(wasTruncated ? { truncated: true } : {}),
   };
+}
+
+// A replica set in which one deployment declared no window merges to the conservative fallback;
+// the metadata says so, so setup keeps that window assumed instead of treating 4,096 as declared.
+function discoveredMetadata(entry: ClassifiedDiscoveryModel): GatewayDiscoveredModelMetadata {
+  return entry.undeclaredContext === true && entry.metadata.contextWindow !== undefined
+    ? { ...entry.metadata, contextWindowUndeclared: true }
+    : entry.metadata;
 }
 
 // The rerank engines among the recognised-but-unconfigured models, in discovery order. They are
@@ -7170,13 +7180,15 @@ function replaceModelCapability(
     toolCallingStatus,
   );
   const replacement = {
-    ...(fields.contextWindow === undefined ? current : withoutAssumedContextWindow(current)),
+    ...current,
     ...fields,
     // The long-context probe proves a lower bound, so it may raise a stored window, never shrink
-    // it. A proven window also ends an assumed one: the proof, not the placeholder, now plans it.
+    // it. It does not end an assumed or provider-reported window: only the provider's own
+    // statement does (gateway-context-window.ts), so conversations keep planning the assumption and
+    // the window probe keeps running, while the Coding Workbench reads the proven floor.
     ...(fields.contextWindow === undefined
       ? {}
-      : { contextWindow: provenContextWindow(current, fields.contextWindow) }),
+      : { contextWindow: Math.max(current.contextWindow, fields.contextWindow) }),
     ...(fields.toolCalling === true
       ? {
           knownLimitations: current.knownLimitations.filter(
@@ -7193,12 +7205,6 @@ function replaceModelCapability(
     ...config,
     capabilities,
   };
-}
-
-// An assumed window is a placeholder, not a floor: the proof replaces it outright. A measured
-// window is a floor the lower-bound proof may only raise.
-function provenContextWindow(current: ModelCapability, proven: number): number {
-  return current.contextWindowAssumed === true ? proven : Math.max(current.contextWindow, proven);
 }
 
 function responseFormatCapabilityFields(
