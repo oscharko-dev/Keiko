@@ -350,8 +350,8 @@ describe("tool-catalog producer lineage", () => {
     // Both the identity and the Git facts are injected, for different reasons. The identity, so the
     // check reaches the receipts instead of stopping at "lineage stale" whenever the producer has
     // moved past its last entry. The Git facts, so this case asks about the COMMITTED EVIDENCE and
-    // not about the clone it runs in: `node-26-compatibility` checks out shallow, where no
-    // `sourceCommit` resolves, and a full clone additionally reports the producer as changed since
+    // not about the clone it runs in: a depth-limited checkout may not resolve a
+    // `sourceCommit`, and a full clone additionally reports the producer as changed since
     // that commit. Neither is a statement about whether the receipts bind their entries, which is
     // the one thing this case exists to prove against the real `docs/` files.
     const failures = await producerLineageFailures(repoRoot, record, {
