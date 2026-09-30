@@ -647,26 +647,45 @@ function GroundedEvidenceDisclosure({
   );
 }
 
+// PR #3678 review: a citation whose claim shares little wording with its excerpt stays linked, but
+// while no entailment judge verified the answer (its `entailment-unavailable` caveat) the chip says
+// the support is unverified, so the reader knows WHICH source the caveat is about.
+function supportUnverified(markers: readonly GroundedUncertainty[]): boolean {
+  return markers.some((marker) => marker.kind === "entailment-unavailable");
+}
+
+function UnverifiedSupportBadge(): ReactNode {
+  const t = useTranslate();
+  return (
+    <span className={activityBadgeStyles.citationUnverified}>
+      {t("grounded.citation.unverified")}
+    </span>
+  );
+}
+
+function knowledgeCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
+  if (citation.htmlManual !== undefined) {
+    return manualCitationLabel(citation);
+  }
+  return citation.source === undefined
+    ? `${citation.marker} ${citation.label}`
+    : `${citation.marker} ${citation.source} · ${citation.label}`;
+}
+
 function LocalKnowledgeCitationList({
   citations,
   citationPreview,
   openDocumentationTarget,
+  unverifiedSupport = false,
 }: {
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
   readonly citationPreview: CitationPreviewController | undefined;
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+  readonly unverifiedSupport?: boolean;
 }): ReactNode {
   const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
-  function labelForCitation(citation: LocalKnowledgeEvidenceCitation): string {
-    if (citation.htmlManual !== undefined) {
-      return manualCitationLabel(citation);
-    }
-    return citation.source === undefined
-      ? `${citation.marker} ${citation.label}`
-      : `${citation.marker} ${citation.source} · ${citation.label}`;
-  }
   // uiux-fix F012 C091 — same cap + disclosure as CitationList above.
   const sorted = uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
@@ -682,8 +701,9 @@ function LocalKnowledgeCitationList({
             <KnowledgeCitationChip
               citation={citation}
               citationPreview={citationPreview}
-              label={labelForCitation(citation)}
+              label={knowledgeCitationLabel(citation)}
               openDocumentationTarget={openDocumentationTarget}
+              unverified={unverifiedSupport && citation.lexicalSupport === "weak"}
             />
           </li>
         ))}
@@ -795,16 +815,30 @@ function ManualCitationChip({
   );
 }
 
+function pdfPreviewActionText(state: string): {
+  readonly actionLabel: string;
+  readonly actionTitle: string;
+} {
+  if (state === "recoverable")
+    return { actionLabel: "Recover PDF", actionTitle: "Open PDF recovery" };
+  if (state === "blocked") {
+    return { actionLabel: "PDF unavailable", actionTitle: "PDF preview unavailable" };
+  }
+  return { actionLabel: "Open PDF", actionTitle: "Open PDF preview" };
+}
+
 function KnowledgeCitationChip({
   citation,
   citationPreview,
   label,
   openDocumentationTarget,
+  unverified,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly label: string;
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+  readonly unverified: boolean;
 }): ReactNode {
   if (citation.htmlManual !== undefined) {
     return (
@@ -820,6 +854,7 @@ function KnowledgeCitationChip({
     return (
       <span className="grounded-citation" title={knowledgeCitationTitle(citation)}>
         <span className="grounded-citation-range">{label}</span>
+        {unverified ? <UnverifiedSupportBadge /> : null}
         <CitationScore score={citation.score} />
       </span>
     );
@@ -827,18 +862,7 @@ function KnowledgeCitationChip({
 
   const blocked = affordance.state === "blocked";
   const opening = citationPreview?.isOpening(citation) ?? false;
-  let actionLabel: string;
-  let actionTitle: string;
-  if (affordance.state === "recoverable") {
-    actionLabel = "Recover PDF";
-    actionTitle = "Open PDF recovery";
-  } else if (affordance.state === "blocked") {
-    actionLabel = "PDF unavailable";
-    actionTitle = "PDF preview unavailable";
-  } else {
-    actionLabel = "Open PDF";
-    actionTitle = "Open PDF preview";
-  }
+  const { actionLabel, actionTitle } = pdfPreviewActionText(affordance.state);
 
   return (
     <button
@@ -854,6 +878,7 @@ function KnowledgeCitationChip({
       }}
     >
       <span className="grounded-citation-range">{label}</span>
+      {unverified ? <UnverifiedSupportBadge /> : null}
       <span className="grounded-citation-action-label">{actionLabel}</span>
       <CitationScore score={citation.score} />
     </button>
@@ -1277,6 +1302,7 @@ export function GroundedAnswer({
             citations={answer.citations}
             citationPreview={citationPreview}
             openDocumentationTarget={openDocumentationTarget}
+            unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
@@ -1307,6 +1333,7 @@ export function GroundedAnswer({
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}
             openDocumentationTarget={openDocumentationTarget}
+            unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />

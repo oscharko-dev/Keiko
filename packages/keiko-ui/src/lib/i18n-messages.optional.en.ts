@@ -1150,6 +1150,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.pending":
     "The stored history ({before} tokens) is compacted automatically to about {after} tokens before the next request.",
   "grounded.reviewBadge": "Needs review",
+  "grounded.citation.unverified": "unverified",
   "grounded.partialCoverage": "Partial coverage",
   "grounded.loading": "Searching connected sources and asking Keiko…",
   "grounded.title.evidence": "Evidence",

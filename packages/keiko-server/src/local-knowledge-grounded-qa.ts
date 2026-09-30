@@ -1172,15 +1172,17 @@ export function buildLocalKnowledgeCitations(
   if (noEvidenceReason !== undefined) return [];
   // When the model emitted [n] markers, honour exactly what it cited.
   if (result.citations.length > 0) {
-    return result.citations.map((entry) =>
-      projectLocalKnowledgeCitation(
+    return result.citations.map((entry) => ({
+      ...projectLocalKnowledgeCitation(
         entry.reference,
         entry.marker,
         sourceLookup,
         redactLabel,
         store,
       ),
-    );
+      // The attacher's weak-overlap signal reaches the reader (PR #3678 review).
+      ...(entry.lexicalSupport === "weak" ? { lexicalSupport: "weak" as const } : {}),
+    }));
   }
   return [];
 }

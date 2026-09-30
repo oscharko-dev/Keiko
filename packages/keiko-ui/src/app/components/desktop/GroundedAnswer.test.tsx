@@ -1529,6 +1529,37 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
 
   // PR #3678 review: the server lists at most eight findings per marker; the count must be the
   // stated total, not the listed items, and one claims marker can stand for several claims.
+  // PR #3678 review: the answer-level "support could not be verified" caveat must say which
+  // source it is about, and a verified answer must not mark any source.
+  it("marks a weakly supported citation unverified only while no judge verified the answer", () => {
+    const weak = knowledgeCitation({ lexicalSupport: "weak" });
+    const strong = knowledgeCitation({
+      stableId: "lk-2",
+      marker: "[2]",
+      label: "beta.md",
+      lineage: { ...weak.lineage, chunkId: "chunk-2" as typeof weak.lineage.chunkId },
+    });
+    const caveat = { kind: "entailment-unavailable", claim: "Support could not be verified." };
+    const unverified = render(
+      <GroundedAnswer
+        answer={{ ...localKnowledgeAnswer([weak, strong]), uncertainty: [caveat] }}
+        busy={false}
+      />,
+    );
+    const chips = unverified.container.querySelectorAll(".grounded-citation");
+    expect(chips).toHaveLength(2);
+    expect(within(unverified.container).getAllByText("unverified")).toHaveLength(1);
+    expect([...chips].find((chip) => chip.textContent.includes("alpha.md"))?.textContent).toContain(
+      "unverified",
+    );
+    unverified.unmount();
+
+    const verified = render(
+      <GroundedAnswer answer={localKnowledgeAnswer([weak, strong])} busy={false} />,
+    );
+    expect(within(verified.container).queryByText("unverified")).toBeNull();
+  });
+
   it("counts the stated total of a marker that lists only part of its findings", () => {
     const listed = Array.from({ length: CITATION_FINDING_LIST_MAX }, (_, i) => i + 5);
     const a = localKnowledgeAnswer();

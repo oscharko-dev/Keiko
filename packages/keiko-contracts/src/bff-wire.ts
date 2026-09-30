@@ -1513,6 +1513,10 @@ export interface LocalKnowledgeEvidenceCitation {
   // (the capsule/capsule-set displayName). Absent for legacy single-connector answers, which carry
   // no per-source attribution (mirrors GroundedEvidenceCitation.source for folder evidence).
   readonly source?: string;
+  // PR #3678 review: the claim around this citation shares little wording with the cited excerpt
+  // (the citation attacher's soft signal). Never a filter — the citation stays linked. While no
+  // entailment judge verified the answer, the UI marks the citation as unverified.
+  readonly lexicalSupport?: "weak" | undefined;
   readonly htmlManual?: HtmlManualCitationMetadata;
 }
 

@@ -913,6 +913,8 @@ describe("weakly supported citations", () => {
     const answer = await askWith("The SOC2 control requires quarterly access reviews [1].", "soc2");
     expect(answer.citations).toHaveLength(1);
     expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+    // The citation itself says which source the caveat is about.
+    expect(answer.citations[0]?.lexicalSupport).toBe("weak");
   });
 
   it("leaves the verdict to the entailment judge when it ran", async () => {
@@ -939,6 +941,7 @@ describe("weakly supported citations", () => {
     );
     expect(answer.citations).toHaveLength(1);
     expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("entailment-unavailable");
+    expect(answer.citations[0]?.lexicalSupport).toBeUndefined();
   });
 });
 
