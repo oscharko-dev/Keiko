@@ -130,14 +130,12 @@ describe("toSpeakableText", () => {
     expect(spoken).not.toContain("More citation text");
   });
 
-  // PR #3678 review: grouped and CJK markers are linked by the answer renderer, so they are
-  // citations and must never be spoken either.
-  it("strips grouped, semicolon and CJK citation markers like single ones", () => {
-    const spoken = toSpeakableText(
-      "Java 17 wird verwendet [1, 7, 8]. Maven [1;2] und Gradle 【3】 ［4］.",
+  // PR #3678 review: this route receives only text and cannot tell grouped citations from a
+  // numeric list, so groups stay content; the UI strips a grounded answer's markers before synthesis.
+  it("keeps ordinary numeric lists in an answer it cannot know to be grounded", () => {
+    expect(toSpeakableText("The valid values are [1, 2] and the coordinates are [7, 8].")).toBe(
+      "The valid values are [1, 2] and the coordinates are [7, 8].",
     );
-
-    expect(spoken).toBe("Java 17 wird verwendet. Maven und Gradle.");
   });
 
   it("strips citation markers with an arbitrarily long digit run -- never leaves the marker unstripped (#2906 round 3)", () => {

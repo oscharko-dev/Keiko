@@ -364,6 +364,31 @@ describe("provider-reported window adoption", () => {
     );
   });
 
+  // PR #3678 review (P1): lowering a declared window must not turn it into a learned one that a
+  // later statement raises past the operator's ceiling.
+  it("keeps a lowered declared window a ceiling that a later statement cannot raise", () => {
+    capture();
+    const { deps, configPath } = fixture({
+      ...createDefaultChatCapability(MODEL),
+      contextWindow: 32_768,
+    });
+    for (const [tokens, id] of [
+      [16_384, "corr-declared-lower"],
+      [131_072, "corr-declared-raise-after-lower"],
+    ] as const) {
+      adoptReportedContextWindow(
+        deps,
+        { modelId: MODEL, contextWindowTokens: tokens, correlationId: id },
+        "provider-overflow",
+      );
+    }
+
+    expect(stored(deps)?.contextWindow).toBe(16_384);
+    expect(stored(deps)).not.toHaveProperty("contextWindowReported");
+    // The persisted file keeps the ceiling as a declared window, so a restart cannot lose it.
+    expect(readFileSync(configPath, "utf8")).not.toContain("contextWindowReported");
+  });
+
   it("never raises a declared window from a provider statement and records it unchanged", () => {
     const sink = capture();
     const { deps } = fixture({ ...createDefaultChatCapability(MODEL), contextWindow: 32_768 });

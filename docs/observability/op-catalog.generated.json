@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "52b8aeb3aa856fd6c72f14521ea989f14b3a240c1627b22491e691a7aac251f0",
+    "catalogDigest": "985437f1dc351ee4198343859d7f9740ed13319364b4031044c24b678038d1ff",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -14938,7 +14938,7 @@
         "proofIds": ["gateway.tool-calling.verification.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gateway-setup.ts:161",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7755"]
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7760"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15347,7 +15347,7 @@
         "proofIds": ["gateway.voice.setup.resolved.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/gateway-setup.ts:191",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7777"]
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7782"]
       },
       {
         "contractKind": "activity-log-operation",

@@ -11,6 +11,7 @@ import {
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { translate } from "@/lib/i18n";
+import { recordResponseCorrelationId } from "@/lib/bff-correlation";
 import {
   fetchCapsules,
   fetchCapsuleSets,
@@ -176,7 +177,10 @@ describe("loadKnowledgeCatalog", () => {
   });
 
   it("returns a load error for a capsule response without capsules instead of rejecting", async () => {
-    fetchCapsulesMock.mockResolvedValueOnce({} as CapsulesResponse);
+    const malformed = {} as CapsulesResponse;
+    // What the BFF fetch scaffold records for a parsed 200 body (PR #3678 review).
+    recordResponseCorrelationId(malformed, "catalog-original-request");
+    fetchCapsulesMock.mockResolvedValueOnce(malformed);
 
     const snapshot = await loadKnowledgeCatalog();
 
@@ -186,6 +190,7 @@ describe("loadKnowledgeCatalog", () => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toBe("Keiko knowledge catalog load failed (list=capsules).");
     expect(diagnostics[0]?.meta?.errorKind).toBe("validation-failed");
+    expect(diagnostics[0]?.meta?.correlationId).toBe("catalog-original-request");
   });
 
   it("returns a load error when a list request throws before it returns a promise", async () => {

@@ -20,6 +20,7 @@ import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
+  speakableAnswerText,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
   normalizeMemoryBudgetInput,
@@ -3941,6 +3942,32 @@ describe("ChatWindow message copy", () => {
     expect(copyableMessageText("Not a marker [1, x] and [note].", 8)).toBe(
       "Not a marker [1, x] and [note].",
     );
+  });
+
+  // PR #3678 review: read-aloud text must drop a grounded answer's markers, grouped and CJK
+  // included, while an ordinary answer's numeric lists stay spoken content.
+  it("reads a grounded answer aloud without its markers and an ordinary answer unchanged", () => {
+    const base = {
+      id: "m2",
+      chatId: "chat-1",
+      role: "assistant" as const,
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+    const grounded = "Java 17 wird verwendet [1, 2]. Maven 【2】.";
+    expect(
+      speakableAnswerText({
+        ...base,
+        content: grounded,
+        groundedAnswer: copyTestGroundedAnswer(grounded, 2),
+      }),
+    ).toBe("Java 17 wird verwendet. Maven.");
+    const ordinary = "The valid values are [1, 2] and the coordinates are [7, 8].";
+    expect(speakableAnswerText({ ...base, content: ordinary })).toBe(ordinary);
   });
 
   it("keeps brackets that name no reference of the grounded answer", () => {

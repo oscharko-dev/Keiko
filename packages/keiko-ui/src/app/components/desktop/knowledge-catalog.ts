@@ -21,6 +21,7 @@ import type { ActivityLogErrorKind, CapsuleLifecycleState } from "@oscharko-dev/
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
+import { responseCorrelationIdOf } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
@@ -105,9 +106,10 @@ function reportCatalogLoadFailure(
   list: CatalogList,
   reason: unknown,
   errorKind: ActivityLogErrorKind = bffRequestErrorKind(reason),
+  correlationId: string | undefined = correlationIdOf(reason),
 ): void {
   reportClientDiagnostic(`Keiko knowledge catalog load failed (list=${list}).`, {
-    correlationId: correlationIdOf(reason),
+    correlationId,
     errorKind,
     errorEvidence: clientErrorEvidence(reason),
   });
@@ -132,7 +134,10 @@ function settleCatalogList<Response, Entry>(
   try {
     return { failed: false, entries: toEntries(result.value) };
   } catch (malformed) {
-    reportCatalogLoadFailure(list, malformed, "validation-failed");
+    // The mapping error carries no correlation of its own; the response it failed on does, so the
+    // report still names the request whose body was malformed (PR #3678 review).
+    const correlationId = responseCorrelationIdOf(result.value);
+    reportCatalogLoadFailure(list, malformed, "validation-failed", correlationId);
     return { failed: true, reason: malformed };
   }
 }

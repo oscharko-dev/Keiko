@@ -155,14 +155,16 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
 - **One marker grammar.** Numeric markers are parsed only by `findCitationMarkerGroups`
   (`keiko-contracts` `runtime/citation-markers`): `[1]`, the grouped `[1, 7, 8]` / `[1,7]` / `[1; 2]`,
   and the CJK/fullwidth bracket glyphs. The attacher, `reconcileNumericCitations`, the claim
-  segmentation, the answer renderer, the copy stripper and the read-aloud text all use it; the
+  segmentation, the answer renderer and the copy stripper all use it; the
   private one-integer grammars that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
   markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
   scanned, so `const a = [1, 2, 3];` cites nothing; an inline code span never reaches across a
   blank line or a fence. Outside code, every index of every group is reconciled: a fabricated
   `[9, 10]` beside a real `[1]` dangles, because failing closed beats a quiet source attribution.
   The copy stripper removes only a grounded answer's groups whose every index names one of its
-  references and leaves an ordinary answer's brackets untouched.
+  references and leaves an ordinary answer's brackets untouched. Read-aloud text is stripped by
+  the same rule in the UI before synthesis (`speakableAnswerText`); the synthesis route sees only
+  text, so it keeps grouped brackets as content.
 - **Token overlap is a soft signal, never a filter — and never a confirmation.**
   `attachCitationsToAnswer` keeps every in-range marker attached so the reader can open its source.
   A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the

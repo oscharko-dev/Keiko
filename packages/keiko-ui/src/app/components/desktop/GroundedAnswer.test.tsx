@@ -1560,6 +1560,39 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     expect(within(verified.container).queryByText("unverified")).toBeNull();
   });
 
+  // PR #3678 review: the HTML-manual chip dropped the unverified support, and a chip whose
+  // aria-label replaces its content must name it for a screen reader as well.
+  it("names unverified support on the HTML-manual chip, visibly and in its accessible name", () => {
+    const manualCitation = knowledgeCitation({
+      source: "Device Handbook",
+      lexicalSupport: "weak",
+      htmlManual: {
+        sourceKind: "html-manual-http",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        sectionPath: ["Troubleshooting", "Timeouts"],
+        anchorId: "timeouts",
+        parsedUnitId: "unit-device",
+        targetSummary: { originSummary: "https://manual.internal", pathSummary: "/…" },
+        open: { state: "available", target: "keiko-html-manual-citation:opaque" },
+      },
+    });
+    const caveat = { kind: "entailment-unavailable", claim: "Support could not be verified." };
+    const { container } = render(
+      <GroundedAnswer
+        answer={{ ...localKnowledgeAnswer([manualCitation]), uncertainty: [caveat] }}
+        busy={false}
+        openDocumentationTarget={vi.fn().mockReturnValue(true)}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: "[1] Device Handbook · HTML manual · device-handbook.html · Troubleshooting · Timeouts · unverified · Open manual",
+    });
+    expect(chip).toHaveTextContent("unverified");
+  });
+
   it("counts the stated total of a marker that lists only part of its findings", () => {
     const listed = Array.from({ length: CITATION_FINDING_LIST_MAX }, (_, i) => i + 5);
     const a = localKnowledgeAnswer();

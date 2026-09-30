@@ -487,6 +487,16 @@ export function copyableMessageText(content: string, citationCeiling = 0): strin
   return stripCitationMarkers(sanitizeRepositoryEvidenceText(content), citationCeiling);
 }
 
+/**
+ * The text read aloud for an assistant answer: its grounded citation markers removed by the same
+ * rule as the copy (every index names one of the answer's references), so `[1, 7, 8]` of a grounded
+ * answer is never spoken while an ordinary answer's `[1, 2]` stays content. The synthesis route sees
+ * only text and cannot tell the two apart (PR #3678 review).
+ */
+export function speakableAnswerText(message: ChatMessage): string {
+  return copyableMessageText(message.content, groundedCitationCeiling(message.groundedAnswer));
+}
+
 // The copy's body-free evidence (PR #3678 review): whether it succeeded, whether the answer was
 // grounded, and how many marker groups the copy removed and kept — by the same rule as the copy
 // itself. Never the copied text.
@@ -3272,7 +3282,7 @@ function ComposerCoreImpl({
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
     // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
     enabled: voiceDialogActive && voiceAnswer !== undefined,
-    text: voiceAnswer?.content,
+    text: voiceAnswer === undefined ? undefined : speakableAnswerText(voiceAnswer),
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,
     onSettled: (assistantMessageId) => batchSpeechSettledRef.current?.(assistantMessageId),

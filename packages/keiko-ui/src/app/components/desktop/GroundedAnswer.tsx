@@ -654,6 +654,13 @@ function supportUnverified(markers: readonly GroundedUncertainty[]): boolean {
   return markers.some((marker) => marker.kind === "entailment-unavailable");
 }
 
+// A chip whose aria-label replaces its content names the unverified support in that label too, so a
+// screen reader hears it on the HTML-manual and PDF-preview chips as well (PR #3678 review).
+function useSupportAwareLabel(label: string, unverified: boolean): string {
+  const t = useTranslate();
+  return unverified ? `${label} · ${t("grounded.citation.unverified")}` : label;
+}
+
 function UnverifiedSupportBadge(): ReactNode {
   const t = useTranslate();
   return (
@@ -777,13 +784,16 @@ function ManualCitationChip({
   citation,
   label,
   openDocumentationTarget,
+  unverified = false,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly label: string;
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+  readonly unverified?: boolean;
 }): ReactNode {
   const manual = citation.htmlManual;
   const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
+  const accessibleLabel = useSupportAwareLabel(label, unverified);
   if (manual === undefined) return null;
   const unavailable = manual.open.state === "unavailable";
   const actionLabel = manualCitationChipActionLabel(state, manual);
@@ -794,7 +804,7 @@ function ManualCitationChip({
       type="button"
       className={`grounded-citation grounded-citation-action ${activityBadgeStyles.manualCitationAction}${modifier}`}
       aria-disabled={unavailable ? "true" : undefined}
-      aria-label={`${label} · ${actionLabel}`}
+      aria-label={`${accessibleLabel} · ${actionLabel}`}
       title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
       onClick={() => {
         if (target === undefined || unavailable || openDocumentationTarget === undefined) return;
@@ -807,6 +817,7 @@ function ManualCitationChip({
       <span className={`grounded-citation-range ${activityBadgeStyles.manualCitationRange}`}>
         {label}
       </span>
+      {unverified ? <UnverifiedSupportBadge /> : null}
       <span className="grounded-citation-action-label" aria-live="polite">
         {actionLabel}
       </span>
@@ -840,12 +851,14 @@ function KnowledgeCitationChip({
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
   readonly unverified: boolean;
 }): ReactNode {
+  const accessibleLabel = useSupportAwareLabel(label, unverified);
   if (citation.htmlManual !== undefined) {
     return (
       <ManualCitationChip
         citation={citation}
         label={label}
         openDocumentationTarget={openDocumentationTarget}
+        unverified={unverified}
       />
     );
   }
@@ -869,7 +882,7 @@ function KnowledgeCitationChip({
       type="button"
       className={`grounded-citation grounded-citation-action grounded-citation-action--${affordance.state}`}
       aria-disabled={blocked || opening ? "true" : undefined}
-      aria-label={`${label} · ${actionLabel}`}
+      aria-label={`${accessibleLabel} · ${actionLabel}`}
       data-tip={actionTitle}
       title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
       onClick={() => {

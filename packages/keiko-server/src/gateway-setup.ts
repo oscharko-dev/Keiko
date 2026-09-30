@@ -7711,15 +7711,20 @@ function applyContextWindowRefinement(
   }
 }
 
+// A declared window the provider lowered stays declared: the lowered value is the operator's cap
+// from now on, so a later statement can lower it further but never raise it past the ceiling the
+// operator set — not in this process and not after a restart (PR #3678 review, P1). Only an assumed
+// or already learned window becomes a reported one that follows the provider either way.
 function replaceCapabilityContextWindow(
   config: GatewayConfig,
   stored: ModelCapability,
   contextWindow: number,
 ): GatewayConfig {
+  const declared = stored.contextWindowAssumed !== true && stored.contextWindowReported !== true;
   const replacement = {
     ...withoutAssumedContextWindow(stored),
     contextWindow,
-    contextWindowReported: true,
+    ...(declared ? {} : { contextWindowReported: true }),
   };
   const capabilities = [...(config.capabilities ?? [])];
   const index = capabilities.findIndex((capability) => capability.id === stored.id);

@@ -161,7 +161,8 @@ The real window replaces the assumption from the provider's own statement, never
   `ContextOverflowError` and reported by the Gateway to its configuration source. Only the first
   4,096 characters of an error body are read, with bounded patterns.
 - An assumed or provider-reported window is adopted exactly, in either direction; a declared window
-  is only ever lowered, and a raise is recorded as `unchanged`. The adopted window is applied as a
+  is only ever lowered, and a raise is recorded as `unchanged`; a lowered declared window stays
+  declared, so the operator's ceiling survives later statements and restarts. The adopted window is applied as a
   configuration refinement without a generation bump, then persisted; a failed write still leaves
   it applied in memory and is reported as a diagnostic. The admitted turn whose overflow reported
   it re-plans from the current profile and is sent once more: buffered chat and its regeneration,
