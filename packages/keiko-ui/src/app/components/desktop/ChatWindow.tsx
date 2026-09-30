@@ -776,13 +776,10 @@ function useRegisterPdfCitationPreviewTarget(
 // so sent Composer formatting remains visible, with assistant-only apply actions. A streaming
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
-type ChatBubbleContentProps = {
+type ChatBubbleMarkdownProps = {
   readonly message: ChatMessage;
   readonly isUser: boolean;
   readonly streaming: boolean;
-  readonly contentId: string;
-  readonly collapsed: boolean;
-  readonly canCollapse: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
@@ -792,7 +789,7 @@ type ChatBubbleContentProps = {
 // Streaming assistant turns use the same safe renderer as persisted answers; parser failures fall
 // back to plain-text raw source for this bubble. SM-1: wrapped in a per-message boundary so a
 // parser/render defect degrades this one bubble to plain text instead of crashing the view.
-function ChatBubbleMarkdown(props: ChatBubbleContentProps): ReactNode {
+function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
   const { message, isUser, streaming } = props;
   if (carriesOwnAssessment(message)) {
     return (
@@ -823,8 +820,17 @@ function ChatBubbleMarkdown(props: ChatBubbleContentProps): ReactNode {
   );
 }
 
-function ChatBubbleContentArea(props: ChatBubbleContentProps): ReactNode {
-  const { isUser, contentId, collapsed, canCollapse } = props;
+function ChatBubbleContentArea({
+  contentId,
+  collapsed,
+  canCollapse,
+  ...markdown
+}: ChatBubbleMarkdownProps & {
+  readonly contentId: string;
+  readonly collapsed: boolean;
+  readonly canCollapse: boolean;
+}): ReactNode {
+  const { isUser } = markdown;
   return (
     <div
       id={isUser ? undefined : contentId}
@@ -832,7 +838,7 @@ function ChatBubbleContentArea(props: ChatBubbleContentProps): ReactNode {
       data-collapsed={!isUser && collapsed ? "true" : "false"}
       data-collapsible={canCollapse ? "true" : "false"}
     >
-      <ChatBubbleMarkdown {...props} />
+      <ChatBubbleMarkdown {...markdown} />
     </div>
   );
 }
