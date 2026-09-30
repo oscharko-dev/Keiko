@@ -15,6 +15,7 @@ import {
   parseSupportIncidentFileName,
   parseSupportIncidentFingerprintClaimFileName,
   parseSupportIncidentRecord,
+  parseSupportIncidentPrivateProjection,
   parseSupportIncidentSlotClaimFileName,
   supportIncidentBuild,
   supportIncidentFileName,
@@ -409,5 +410,79 @@ describe("public and private projections", () => {
       sufficiencyReasons: ["sequence-anomaly"],
       coverage: { degradedClassCount: 1 },
     });
+  });
+});
+
+describe("received private incident projection", () => {
+  const projection = supportIncidentPrivateProjection(incident());
+  const segment = projection.segments[0];
+  if (segment === undefined) throw new TypeError("missing production projection segment");
+
+  it("accepts the owning producer's complete closed projection", () => {
+    expect(parseSupportIncidentPrivateProjection(projection)).toEqual(projection);
+  });
+
+  it.each([
+    ["non-object", null],
+    ["unknown section", { ...projection, prompt: "private" }],
+    ["invalid underlying record", { ...projection, incidentId: "../private" }],
+    ["contradictory product version", { ...projection, productVersion: "9.0.0" }],
+    ["contradictory platform", { ...projection, platformClass: "linux-x64" }],
+    ["contradictory verdict", { ...projection, sufficiencyStatus: "complete" }],
+    ["unknown integrity", { ...projection, integrity: "trusted" }],
+    ["unknown completeness", { ...projection, completeness: "trusted" }],
+    ["unknown loss", { ...projection, loss: "trusted" }],
+    ["unknown verdict", { ...projection, sufficiencyStatus: "trusted" }],
+    ["missing reasons", { ...projection, sufficiencyReasons: null }],
+    [
+      "too many reasons",
+      { ...projection, sufficiencyReasons: Array.from({ length: 65 }, () => "sequence-anomaly") },
+    ],
+    ["non-string reason", { ...projection, sufficiencyReasons: [1] }],
+    ["unknown reason", { ...projection, sufficiencyReasons: ["trusted"] }],
+    ["missing segments", { ...projection, segments: null }],
+    ["too many segments", { ...projection, segments: Array.from({ length: 4097 }, () => segment) }],
+    ["non-object segment", { ...projection, segments: [null] }],
+    ["unknown segment field", { ...projection, segments: [{ ...segment, path: "/private" }] }],
+    ["non-string segment identity", { ...projection, segments: [{ ...segment, segmentId: 1 }] }],
+    [
+      "unsafe segment identity",
+      { ...projection, segments: [{ ...segment, segmentId: "../private" }] },
+    ],
+    ["unknown segment state", { ...projection, segments: [{ ...segment, state: "trusted" }] }],
+    ["negative segment size", { ...projection, segments: [{ ...segment, sizeBytes: -1 }] }],
+    ["negative line count", { ...projection, lineCount: -1 }],
+    ["missing coverage", { ...projection, coverage: null }],
+    [
+      "unknown coverage field",
+      { ...projection, coverage: { ...projection.coverage, prompt: "private" } },
+    ],
+    [
+      "negative coverage count",
+      { ...projection, coverage: { ...projection.coverage, requiredClassCount: -1 } },
+    ],
+    [
+      "more present than required",
+      { ...projection, coverage: { ...projection.coverage, requiredClassCount: 0 } },
+    ],
+    [
+      "contradictory status counts",
+      { ...projection, coverage: { ...projection.coverage, completeClassCount: 1 } },
+    ],
+    [
+      "overflowing status counts",
+      {
+        ...projection,
+        coverage: {
+          requiredClassCount: Number.MAX_SAFE_INTEGER,
+          presentClassCount: Number.MAX_SAFE_INTEGER,
+          completeClassCount: Number.MAX_SAFE_INTEGER,
+          degradedClassCount: 1,
+          insufficientClassCount: 0,
+        },
+      },
+    ],
+  ])("refuses %s without exposing the invalid input", (_label, value) => {
+    expect(parseSupportIncidentPrivateProjection(value)).toBeUndefined();
   });
 });
