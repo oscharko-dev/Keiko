@@ -130,13 +130,21 @@ describe("context-window probe", () => {
     const persisted = readFileSync(configPath, "utf8");
     expect(persisted).toContain('"contextWindow": 65536');
     expect(persisted).not.toContain("contextWindowAssumed");
-    expect(sink.events).toContainEqual(
-      expect.objectContaining({
-        op: "gateway.context-window.probe",
-        correlationId: "corr-startup-window",
-        extra: expect.objectContaining({ state: "reported", contextWindow: 65_536 }) as unknown,
-      }),
-    );
+    // PR #3678 review: the probe is its own background operation, joined to the read that
+    // spawned it — never a second use of that read's correlation.
+    const probeLine = sink.events.find((event) => event.op === "gateway.context-window.probe");
+    expect(probeLine).toMatchObject({
+      parentCorrelationId: "corr-startup-window",
+      extra: expect.objectContaining({ state: "reported", contextWindow: 65_536 }) as unknown,
+    });
+    expect(probeLine?.correlationId).toEqual(expect.any(String));
+    expect(probeLine?.correlationId).not.toBe("corr-startup-window");
+    expect(
+      sink.events.find((event) => event.op === "gateway.context-window.adoption"),
+    ).toMatchObject({
+      correlationId: probeLine?.correlationId,
+      parentCorrelationId: "corr-startup-window",
+    });
     expect(sink.events).toContainEqual(
       expect.objectContaining({
         op: "gateway.context-window.adoption",
@@ -318,6 +326,50 @@ describe("withAdoptedContextWindowRetry", () => {
   });
 });
 
+describe("retry on the refined gateway", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // PR #3678 review: the retry after an adoption must run on the Gateway built from the refined
+  // configuration. A port resolved BEFORE the adoption kept the Gateway of the old window, so its
+  // admission and output allocation still planned the window Keiko had just learned was wrong.
+  it("plans a port resolved before the adoption against the adopted window", async () => {
+    const { deps } = fixture({
+      ...createDefaultChatCapability(MODEL),
+      contextWindow: 128_000,
+      maxOutputTokens: 8_000,
+    });
+    const questionMarker = "refined-gateway-question";
+    const providerQuestions = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>((_input, init) => {
+        const body = typeof init?.body === "string" ? init.body : "";
+        if (body.includes(questionMarker)) providerQuestions();
+        return Promise.resolve(rejection("upstream refused"));
+      }),
+    );
+    const port = deps.modelPortFactory(MODEL);
+    if (port === undefined) throw new Error("expected a model port");
+    adoptReportedContextWindow(
+      deps,
+      { modelId: MODEL, contextWindowTokens: 4_096, correlationId: "corr-refined" },
+      "provider-overflow",
+    );
+    // About 6,000 tokens: inside the old 128,000 window, far outside the adopted 4,096.
+    const oversized = `${questionMarker} ${"alpha beta gamma delta ".repeat(1_500)}`;
+    const error: unknown = await port
+      .call(
+        { modelId: MODEL, messages: [{ role: "user", content: oversized }], stream: false },
+        new AbortController().signal,
+      )
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ContextOverflowError);
+    expect(providerQuestions).not.toHaveBeenCalled();
+  });
+});
+
 describe("context status of an assumed window", () => {
   it("tells the meter that the window is assumed and plans the default geometry", () => {
     const { deps } = fixture(assumedChatCapability(MODEL));
@@ -357,6 +409,49 @@ describe("context meter reading", () => {
     expect(result.body).toMatchObject({ contextWindowTokens: 32_768 });
     expect(result.body).not.toHaveProperty("contextWindowAssumed");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("context meter reading of a slow probe", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // PR #3678 review: a probe slower than the reading's wait must not leave the meter on the
+  // assumption for good — the reading says the probe is still running, so the meter reads again.
+  it("marks the reading pending while the window probe is still running", async () => {
+    vi.useFakeTimers();
+    let answer!: (response: Response) => void;
+    const fetchImpl = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-slow-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const query = new URLSearchParams({ chatId, projectPath: project, modelId: MODEL });
+    const reading = handleChatContextStatus(
+      {
+        correlationId: "corr-meter-slow",
+        params: {},
+        url: new URL(`http://localhost/api/chats/context?${query.toString()}`),
+      } as unknown as RouteContext,
+      deps,
+    );
+    await vi.advanceTimersByTimeAsync(3_001);
+    const result = await reading;
+    expect(result.body).toMatchObject({
+      contextWindowAssumed: true,
+      contextWindowProbePending: true,
+    });
+    answer(rejection("max_tokens=1000000000 cannot be greater than max_model_len=32768."));
+    vi.useRealTimers();
+    await contextWindowProbesSettledForTests(deps);
+    expect(stored(deps)?.contextWindow).toBe(32_768);
   });
 });
 

@@ -86,6 +86,14 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
     inputTokens: { type: "integer", dataClass: "count", required: true },
     inputBudget: { type: "integer", dataClass: "count", required: true },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
+    // An inspection that projected automatic compaction: the stored history before the projection
+    // and the projected history after it, so an oversized history that the meter reports as fitting
+    // stays distinguishable from a small one (PR #3678 review).
+    storedHistoryTokens: { type: "integer", dataClass: "count", required: false },
+    projectedHistoryTokens: { type: "integer", dataClass: "count", required: false },
+    projectedMessagesCompacted: { type: "integer", dataClass: "count", required: false },
+    knowledgeSourceTokens: { type: "integer", dataClass: "count", required: false },
+    contextWindowAssumed: { type: "boolean", dataClass: "closed-enum", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -106,7 +114,7 @@ export function logChatContextManagement(
     | "summary-discarded"
     | "prompt-compacted"
     | "prompt-failed",
-  status: Pick<ChatContextStatusWire, "estimatedInputTokens" | "inputBudgetTokens">,
+  status: ContextManagementStatus,
   tokensSaved: number,
   correlationId: string,
 ): void {
@@ -119,9 +127,35 @@ export function logChatContextManagement(
         inputTokens: status.estimatedInputTokens,
         inputBudget: status.inputBudgetTokens,
         tokensSaved,
+        ...contextStatusEvidence(status),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
+}
+
+type ContextManagementStatus = Pick<
+  ChatContextStatusWire,
+  "estimatedInputTokens" | "inputBudgetTokens"
+> &
+  Partial<
+    Pick<ChatContextStatusWire, "pendingCompaction" | "knowledgeSources" | "contextWindowAssumed">
+  >;
+
+function contextStatusEvidence(status: ContextManagementStatus): Record<string, number | boolean> {
+  const pending = status.pendingCompaction;
+  return {
+    ...(pending === undefined
+      ? {}
+      : {
+          storedHistoryTokens: pending.tokensBefore,
+          projectedHistoryTokens: pending.tokensAfter,
+          projectedMessagesCompacted: pending.messagesCompacted,
+        }),
+    ...(status.knowledgeSources === undefined
+      ? {}
+      : { knowledgeSourceTokens: status.knowledgeSources.tokens }),
+    ...(status.contextWindowAssumed === true ? { contextWindowAssumed: true } : {}),
+  };
 }

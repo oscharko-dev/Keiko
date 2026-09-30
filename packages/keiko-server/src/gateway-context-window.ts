@@ -30,7 +30,7 @@ import { persistAdoptedContextWindow, type AdoptedContextWindowOutcome } from ".
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import { getServerLogger } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import { correlationIdOrUnknown } from "./correlation.js";
+import { correlationIdOrUnknown, newCorrelationId } from "./correlation.js";
 
 type ContextWindowSource = "provider-overflow" | "window-probe";
 
@@ -89,7 +89,8 @@ const CONTEXT_WINDOW_PROBE = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
+  // A probe is a background job spawned by the conversation read that first showed the model.
+  causal: "parent-correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-context-window-adoption"],
@@ -125,41 +126,43 @@ const CONTEXT_WINDOW_RETRY = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// The correlation of one background probe: its own id, joined to the read that spawned it.
+interface ProbeCorrelation {
+  readonly correlationId: string;
+  readonly parentCorrelationId: string;
+}
+
 function logAdoption(
   modelId: string,
   contextWindow: number,
   source: ContextWindowSource,
   outcome: AdoptedContextWindowOutcome,
-  correlationId: string,
+  correlation: { readonly correlationId: string; readonly parentCorrelationId?: string },
 ): void {
   getServerLogger().info(
-    activityLogEvent(
-      CONTEXT_WINDOW_ADOPTION,
-      { correlationId },
-      {
-        ...modelIdEvidence(modelId),
-        source,
-        state: outcome.state,
-        contextWindow,
-        ...(outcome.state === "adopted"
-          ? { previousContextWindow: outcome.previousContextWindow, wasAssumed: outcome.wasAssumed }
-          : {}),
-        completeness: "complete",
-        loss: "none",
-      },
-    ),
+    activityLogEvent(CONTEXT_WINDOW_ADOPTION, correlation, {
+      ...modelIdEvidence(modelId),
+      source,
+      state: outcome.state,
+      contextWindow,
+      ...(outcome.state === "adopted"
+        ? { previousContextWindow: outcome.previousContextWindow, wasAssumed: outcome.wasAssumed }
+        : {}),
+      completeness: "complete",
+      loss: "none",
+    }),
   );
 }
 
 function logProbe(
   modelId: string,
   outcome: GatewayContextWindowDiscovery | { readonly status: "failed" | "skipped-spend-budget" },
-  correlationId: string,
+  probe: ProbeCorrelation,
 ): void {
   getServerLogger().info(
     activityLogEvent(
       CONTEXT_WINDOW_PROBE,
-      { correlationId, ...(outcome.status === "failed" ? { errorKind: "unavailable" } : {}) },
+      { ...probe, ...(outcome.status === "failed" ? { errorKind: "unavailable" } : {}) },
       {
         ...modelIdEvidence(modelId),
         state: outcome.status,
@@ -177,7 +180,12 @@ export function adoptReportedContextWindow(
   deps: UiHandlerDeps,
   report: ContextWindowReport,
   source: ContextWindowSource,
+  parentCorrelationId?: string,
 ): void {
+  const correlation = {
+    correlationId: report.correlationId,
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+  };
   try {
     const outcome = persistAdoptedContextWindow(
       deps,
@@ -185,12 +193,12 @@ export function adoptReportedContextWindow(
       report.contextWindowTokens,
       report.correlationId,
     );
-    logAdoption(report.modelId, report.contextWindowTokens, source, outcome, report.correlationId);
+    logAdoption(report.modelId, report.contextWindowTokens, source, outcome, correlation);
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: report.correlationId,
+        ...correlation,
         operation: "gateway.context-window",
         source: "gateway-context-window.adopt",
         error,
@@ -252,7 +260,7 @@ async function probeContextWindow(
   deps: UiHandlerDeps,
   state: ProbeState,
   modelId: string,
-  correlationId: string,
+  probe: ProbeCorrelation,
 ): Promise<void> {
   const config = currentGatewayConfig(deps);
   const provider = config?.providers.find((candidate) => candidate.modelId === modelId);
@@ -265,20 +273,21 @@ async function probeContextWindow(
         ? {}
         : { fetchImpl: deps.gatewayReadinessFetch }),
       log: deps.activityLog ?? processServerLogSink(),
-      correlationId,
+      correlationId: probe.correlationId,
       signal: state.controller.signal,
     });
-    logProbe(modelId, outcome, correlationId);
+    logProbe(modelId, outcome, probe);
     if (outcome.status === "reported") {
-      const report = { modelId, contextWindowTokens: outcome.contextWindowTokens, correlationId };
-      adoptReportedContextWindow(deps, report, "window-probe");
+      const { contextWindowTokens } = outcome;
+      const report = { modelId, contextWindowTokens, correlationId: probe.correlationId };
+      adoptReportedContextWindow(deps, report, "window-probe", probe.parentCorrelationId);
     }
   } catch (error) {
-    logProbe(modelId, { status: "failed" }, correlationId);
+    logProbe(modelId, { status: "failed" }, probe);
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId,
+        ...probe,
         operation: "gateway.context-window",
         source: "gateway-context-window.probe",
         error,
@@ -309,11 +318,13 @@ export function discoverAssumedContextWindow(
   const key = deploymentKey(config, modelId);
   if (key === undefined || state.probed.has(key)) return state.queue;
   state.probed.add(key);
+  // Each probe is its own background operation, joined to the read that spawned it.
+  const probe = { correlationId: newCorrelationId(), parentCorrelationId: correlationId };
   if (deps.gatewayConfig?.spendBudget !== undefined) {
-    logProbe(modelId, { status: "skipped-spend-budget" }, correlationId);
+    logProbe(modelId, { status: "skipped-spend-budget" }, probe);
     return Promise.resolve();
   }
-  state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, correlationId));
+  state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, probe));
   return state.queue;
 }
 

@@ -491,6 +491,21 @@ describe("composer context status and manual maintenance", () => {
     expect(before.pendingCompaction?.tokensBefore).toBeGreaterThan(before.inputBudgetTokens);
     expect(before.estimatedInputTokens).toBeLessThanOrEqual(before.inputBudgetTokens);
     expect(before.canCompact).toBe(true);
+    // PR #3678 review: the inspection line keeps the stored and the projected history apart.
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    logChatContextManagement("inspected", before, 0, "corr-inspect-projection");
+    const record = expectActivityLogProof(
+      "chat.context.management.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(record).toMatchObject({
+      outcome: "inspected",
+      inputTokens: before.estimatedInputTokens,
+      storedHistoryTokens: before.pendingCompaction?.tokensBefore,
+      projectedHistoryTokens: before.pendingCompaction?.tokensAfter,
+      projectedMessagesCompacted: before.pendingCompaction?.messagesCompacted,
+    });
     const after = compactChatContext(deps, chatId, "fixture", "corr-first-pair-maintenance");
     expect(after.estimatedInputTokens).toBeLessThan(before.pendingCompaction?.tokensBefore ?? 0);
     expect(after.estimatedInputTokens).toBeLessThanOrEqual(after.inputBudgetTokens);

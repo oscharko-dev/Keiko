@@ -532,6 +532,11 @@ export interface ChatContextStatusWire {
   readonly segments?: readonly ChatContextSegmentWire[] | undefined;
   /** Input tokens at which Keiko compacts automatically before the next request (90 %). */
   readonly autoCompactionAtTokens?: number | undefined;
+  /**
+   * True while the probe that asks the deployment for its undeclared window is still running: the
+   * meter reads the status again until the answer is in, instead of keeping the assumption.
+   */
+  readonly contextWindowProbePending?: boolean | undefined;
 }
 
 export interface ChatResponse {

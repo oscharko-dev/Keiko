@@ -54,7 +54,7 @@ import {
   type TextToSpeechRequest,
   type TextToSpeechStreamOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
-import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
+import { GatewayModelPort, type ChatModel, type ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createAuditRedactor,
   DEFAULT_RETENTION,
@@ -1938,11 +1938,33 @@ export function currentEvidenceRequiresFullStringRedaction(deps: UiHandlerDeps):
 // config was resolved so the run route answers 400 NO_MODEL rather than constructing a broken port.
 function defaultModelPortFactory(runtimeConfig: RuntimeGatewayConfig): ModelPortFactory {
   return (): ModelPort | undefined => {
+    const generation = runtimeConfig.generation();
     const gateway = gatewayForRuntimeConfig(runtimeConfig);
     if (gateway === undefined) {
       return undefined;
     }
-    return new GatewayModelPort(gateway);
+    return new GatewayModelPort(refinedGatewayOf(runtimeConfig, generation, gateway));
+  };
+}
+
+// A port stays bound to the generation it was resolved in, yet follows that generation's
+// refinements. Adopting a provider-reported context window refines the configuration without a
+// generation bump (gateway-context-window.ts). The re-planned retry of the admitted turn must then
+// run on the Gateway built from the refined configuration: the captured one would allocate the old
+// window's output reserve again and overflow once more (PR #3678 review). A generation change keeps
+// the captured Gateway, so an admitted request never silently moves to a different setup.
+function refinedGatewayOf(
+  runtimeConfig: RuntimeGatewayConfig,
+  generation: number,
+  captured: Gateway,
+): ChatModel {
+  const current = (): Gateway =>
+    runtimeConfig.generation() === generation
+      ? (gatewayForRuntimeConfig(runtimeConfig) ?? captured)
+      : captured;
+  return {
+    chat: (request) => current().chat(request),
+    chatStream: (request) => current().chatStream(request),
   };
 }
 

@@ -428,4 +428,32 @@ it("lets a slow pending status settle, then stops polling once the persisted con
   view.unmount();
 });
 
+// PR #3678 review: an idle chat whose first reading still carries the assumed window reads again
+// until the server's window probe is in, instead of keeping the assumption until the next send.
+it("reads an idle chat's status again while its window probe is pending", async () => {
+  vi.useFakeTimers();
+  contextApi.fetch
+    .mockReset()
+    .mockResolvedValueOnce({
+      ...status(8_000),
+      contextWindowAssumed: true,
+      contextWindowProbePending: true,
+    })
+    .mockResolvedValueOnce({ ...status(8_000), contextWindowTokens: 32_768 });
+  const view = render(<ChatContextMeterContainer session={contextSession()} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
 afterEach(() => vi.useRealTimers());
