@@ -1518,21 +1518,25 @@ function processSseLines(
 // instead of showing "Receiving response" forever.
 export const DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS = 60_000;
 
-function stalledDesktopChatStreamError(): ApiError {
-  return new ApiError(
+// The stalled turn's own request correlation, so the diagnostic joins the failed turn's timeline.
+function stalledDesktopChatStreamError(correlationId: string): ApiError {
+  const error = new ApiError(
     "DESKTOP_CHAT_STREAM_STALLED",
     "The connection to Keiko stopped delivering the answer. Retry the request.",
     504,
   );
+  error.correlationId = correlationId;
+  return error;
 }
 
 async function readWithinIdleLimit(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  correlationId: string,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stalled = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      reject(stalledDesktopChatStreamError());
+      reject(stalledDesktopChatStreamError(correlationId));
     }, DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS);
   });
   try {
@@ -1548,23 +1552,49 @@ async function readWithinIdleLimit(
   }
 }
 
+// `done`, `error` and `cancelled` end the turn. Nothing after them is read and the body is
+// released, so a proxy that keeps the socket half-open after the terminal event cannot turn a
+// settled turn into a late stalled-stream failure (PR #3678 review).
+function terminalAwareHandlers(handlers: StreamHandlers, onTerminal: () => void): StreamHandlers {
+  return {
+    onToken: handlers.onToken,
+    onDone: (payload): void => {
+      onTerminal();
+      handlers.onDone(payload);
+    },
+    onError: (payload): void => {
+      onTerminal();
+      handlers.onError(payload);
+    },
+    onCancelled: (): void => {
+      onTerminal();
+      handlers.onCancelled();
+    },
+  };
+}
+
 // Reads `response.body` as a text/event-stream, buffering partial lines across
 // reads. Dispatches typed events to `handlers`. Respects the passed `signal` —
 // when aborted it stops reading without dispatching further events.
 async function consumeSseStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
-  handlers: StreamHandlers,
+  streamHandlers: StreamHandlers,
+  correlationId: string,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let lineBuffer = "";
   let pendingEvent: DesktopChatStreamEventType | undefined;
   let reachedEof = false;
+  let terminated = false;
+  const handlers = terminalAwareHandlers(streamHandlers, () => {
+    terminated = true;
+  });
 
   try {
-    while (!signal.aborted) {
-      const read = await readWithinIdleLimit(reader);
+    while (!signal.aborted && !terminated) {
+      const read = await readWithinIdleLimit(reader, correlationId);
       if (read.done) {
         reachedEof = true;
         break;
@@ -1581,6 +1611,7 @@ async function consumeSseStream(
     if (reachedEof && lineBuffer !== "") {
       processSseLines([lineBuffer], pendingEvent, handlers);
     }
+    if (terminated && !reachedEof) void reader.cancel();
   } finally {
     reader.releaseLock();
   }
@@ -1640,7 +1671,7 @@ export async function sendDesktopChatStream(
     throw streamingError;
   }
 
-  await consumeSseStream(res.body, signal, handlers);
+  await consumeSseStream(res.body, signal, handlers, responseCorrelationId);
 }
 
 // ---------------------------------------------------------------------------

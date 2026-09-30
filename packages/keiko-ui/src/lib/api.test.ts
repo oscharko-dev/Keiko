@@ -2764,7 +2764,39 @@ describe("sendDesktopChatStream — stalled stream watchdog", () => {
     const outcome = expect(pending).rejects.toMatchObject({ code: "DESKTOP_CHAT_STREAM_STALLED" });
     await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS + 1);
     await outcome;
+    await expect(pending).rejects.toMatchObject({ correlationId: expect.any(String) as unknown });
     expect(handlers.onToken).toHaveBeenCalledTimes(1);
+    expect(cancelled).toBe(true);
+  });
+
+  // PR #3678 review: a proxy may forward the terminal `done` event and keep the body half-open.
+  // The settled turn must not fail sixty seconds later.
+  it("stops reading after the terminal done event, even without EOF", async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(
+          encoder.encode(
+            `event: token\ndata: {"text":"Hallo"}\n\nevent: done\ndata: ${JSON.stringify({ chat: { id: "c1" }, messages: [] })}\n\n`,
+          ),
+        );
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS * 2);
+    await expect(pending).resolves.toBeUndefined();
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
     expect(cancelled).toBe(true);
   });
 

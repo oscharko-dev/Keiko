@@ -2290,7 +2290,9 @@ function handleStreamUngroundedTransportFailure(
   // Activity Log shows why the turn stopped (field report 1.1.13).
   if (caught instanceof ApiError && caught.code === "DESKTOP_CHAT_STREAM_STALLED") {
     reportClientDiagnostic("[keiko] chat stream stalled: no byte within the idle limit", {
+      kind: "sse-error",
       errorKind: "timeout",
+      correlationId: caught.correlationId,
     });
   }
   setError(errorMessage(caught));
