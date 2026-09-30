@@ -1148,7 +1148,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   // window, so their strings stay out of the first-load catalog (editor-bundle-size budget).
   "chat.context.title": "Gesprächskontext",
   "chat.context.heading": "Gesprächskontext {percent} %",
-  "chat.context.label": "Gesprächskontext: ungefähr {percent}% belegt",
+  "chat.context.label": "Gesprächskontext: ungefähr {percent} % belegt",
   "chat.context.used": "Geschätzt belegte Tokens",
   "chat.context.inputBudget": "Nutzbare Eingabe-Tokens",
   "chat.context.window": "Gesamtes Kontextfenster",
@@ -1159,7 +1159,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.estimate":
     "Geschätzt für die nächste Anfrage, bei Wissens-Chats mit dem Quellenanteil der letzten Frage. Entwurf und Anhänge kommen beim Senden hinzu.",
   "chat.context.automatic":
-    "Keiko kompaktiert ab 90% der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
+    "Keiko kompaktiert ab 90 % der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
   "chat.context.retained":
     "Kompaktierung fasst frühere Nachrichten zusammen. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
   "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
@@ -1195,7 +1195,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Der gespeicherte Verlauf ({before} Tokens) wird beim nächsten Senden automatisch auf etwa {after} Tokens kompaktiert.",
   "grounded.reviewBadge": "Bitte prüfen",
   "grounded.partialCoverage": "Teilweise abgedeckt",
-  "grounded.loading": "Verbundene Quellen werden durchsucht und Keiko wird gefragt …",
+  "grounded.loading": "Verbundene Quellen werden durchsucht und Keiko wird gefragt…",
   "grounded.title.evidence": "Evidenz",
   "grounded.title.knowledge": "Knowledge-Evidenz",
   "grounded.title.grounding": "Grounding-Evidenz",

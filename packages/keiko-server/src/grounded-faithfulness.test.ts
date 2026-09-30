@@ -406,6 +406,22 @@ describe("numeric citation reconciliation", () => {
     expect(numeric.unsupportedMarkers).toEqual([7, 8, 9]);
   });
 
+  it("does not report a grouped bracket that names no reference as a dangling citation", () => {
+    const numeric = reconcileNumericCitations(
+      "Open ports [80, 443] for the years [2020; 2024]; see [1] and [1, 9], not [7].",
+      new Set([1, 2]),
+    );
+
+    // Grouped content brackets are not citations; a lone [7] and the 9 next to a cited 1 still
+    // dangle, and code never cites.
+    expect([...numeric.citedMarkers]).toEqual([1]);
+    expect(numeric.unsupportedMarkers).toEqual([9, 7]);
+    expect(
+      reconcileNumericCitations("Use `a = [5]` and\n```\nb = [6, 7]\n```\n[1].", new Set([1]))
+        .unsupportedMarkers,
+    ).toEqual([]);
+  });
+
   it("stays in lockstep with the attacher's marker grammar", () => {
     const answer = "Alpha 【1】 beta ［2］ gamma [3】.";
     const attached = attachCitationsToAnswer(answer, [driftPinReference()]);

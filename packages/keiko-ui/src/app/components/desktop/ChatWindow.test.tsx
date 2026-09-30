@@ -3723,6 +3723,7 @@ describe("ChatWindow message copy", () => {
             workflowStatus: undefined,
             shortResult: undefined,
             taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer("Paris 【1】 is the capital [2].", 2),
           },
         ],
       }),
@@ -3751,20 +3752,76 @@ describe("ChatWindow message copy", () => {
     }
   });
 
+  it("copies an ordinary answer's brackets unchanged: only grounded citations are stripped", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const content = "Open the ports [80, 443] and set `const a = [1, 2, 3];` [1].";
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(content);
+    });
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
   it("removes grounded source labels and duplicate repository references from copied answers", () => {
     expect(
       copyableMessageText(
         "Check [packages/keiko-harness/src/context.ts:49-58] [source: api] packages/keiko-harness/src/context.ts:49-58 【1】.",
+        1,
       ),
     ).toBe("Check packages/keiko-harness/src/context.ts:49-58.");
   });
 
   it("removes grouped citation markers from copied answers like single ones", () => {
-    expect(copyableMessageText("Java 17 wird verwendet [1, 7, 8]. Maven [2]; 【3, 4】.")).toBe(
+    expect(copyableMessageText("Java 17 wird verwendet [1, 7, 8]. Maven [2]; 【3, 4】.", 8)).toBe(
       "Java 17 wird verwendet. Maven;.",
     );
-    expect(copyableMessageText("Not a marker [1, x] and [note].")).toBe(
+    expect(copyableMessageText("Not a marker [1, x] and [note].", 8)).toBe(
       "Not a marker [1, x] and [note].",
+    );
+  });
+
+  it("keeps brackets that name no reference of the grounded answer", () => {
+    // Beyond the references ([80, 443]), partly beyond ([2, 9]) and index 0 are content.
+    expect(copyableMessageText("Ports [80, 443] and [2, 9] and [0], per [1, 2].", 3)).toBe(
+      "Ports [80, 443] and [2, 9] and [0], per.",
+    );
+    // An ordinary answer (no references) strips nothing at all.
+    expect(copyableMessageText("Use a[1] and [1, 2, 3].")).toBe("Use a[1] and [1, 2, 3].");
+  });
+
+  it("keeps brackets inside Markdown code of a grounded answer", () => {
+    const content = "Set it [1]:\n```ts\nconst a = [1, 2, 3];\n```\nor `b = [2]` [2].";
+
+    expect(copyableMessageText(content, 3)).toBe(
+      "Set it:\n```ts\nconst a = [1, 2, 3];\n```\nor `b = [2]`.",
     );
   });
 
@@ -4590,3 +4647,36 @@ it("preserves literal user line breaks, indentation and path punctuation in the 
   expect(prompt?.textContent).toBe(content);
   expect(prompt?.querySelector("strong")).toBeNull();
 });
+
+function copyTestGroundedAnswer(content: string, sentReferenceCount: number): GroundedAnswer {
+  return {
+    groundingKind: "local-knowledge",
+    userMessageId: "m1",
+    assistantMessageId: "m2",
+    content,
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 5,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: "lk-1",
+      scopeLabel: "Caps",
+      capsuleCount: 1,
+      sourceCount: 1,
+      citationCount: 0,
+      referenceBudget: 10,
+      referencesUsed: sentReferenceCount,
+    },
+    promptContext: {
+      promptTokens: 900,
+      promptTokensMeasured: false,
+      instructionTokens: 200,
+      sourceTokens: 600,
+      sentReferenceCount,
+      availableReferenceCount: sentReferenceCount,
+    },
+  };
+}

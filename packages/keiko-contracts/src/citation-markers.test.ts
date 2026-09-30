@@ -95,6 +95,52 @@ describe("findCitationMarkerGroups", () => {
     expect(findCitationMarkerGroups("plain prose without markers")).toEqual([]);
   });
 
+  it("never reads a marker inside an inline code span", () => {
+    const text = "Use `const ports = [80, 443];` as shown [2] and ``a ` [3] `` here [4].";
+
+    expect(citationMarkerIndices(text)).toEqual([2, 4]);
+  });
+
+  it("never reads a marker inside a fenced code block, backtick or tilde", () => {
+    const text = [
+      "Configure it [1]:",
+      "```ts",
+      "const a = [1, 2, 3];",
+      "```",
+      "  ~~~",
+      "[5]",
+      "  ~~~~",
+      "Then restart [2].",
+    ].join("\n");
+
+    expect(citationMarkerIndices(text)).toEqual([1, 2]);
+  });
+
+  it("runs an unclosed fence to the end of the text, like the Markdown renderer", () => {
+    expect(citationMarkerIndices("Intro [1]\n```\nconst a = [2];\nstill code [3]")).toEqual([1]);
+  });
+
+  it("does not close a fence on a line that carries text after the fence", () => {
+    const text = "```\nx = [1]\n``` not a close [2]\n```\nAfter [3]";
+
+    expect(citationMarkerIndices(text)).toEqual([3]);
+  });
+
+  it("treats an unmatched backtick or a short tilde run as literal text", () => {
+    expect(citationMarkerIndices("A lone ` backtick [1] and ~~strike~~ [2]")).toEqual([1, 2]);
+    expect(citationMarkerIndices("Mid-line ``` is inline code `[1]` [2]")).toEqual([2]);
+  });
+
+  it("stays linear on hostile runs of unmatched backticks of distinct lengths", () => {
+    // Mid-line, so no run opens a fence; every run length occurs once and never closes.
+    const runs = Array.from({ length: 1_500 }, (_, index) => `${"`".repeat(index + 1)}x`);
+    const hostile = `Text ${runs.reverse().join(" [1] ")}`;
+    const started = performance.now();
+
+    expect(citationMarkerIndices(hostile)).toHaveLength(1_499);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
   it("stays linear on hostile bracket and whitespace runs", () => {
     const hostile = `${"[ ".repeat(20_000)}${" ".repeat(20_000)}[1${" ".repeat(20_000)}x`;
     const started = performance.now();

@@ -16,6 +16,8 @@
 //   * Ranges (`[1-3]`) are deliberately NOT expanded: `[0-9]`, `[1-5]` and `[2020-2024]` are far
 //     more often a character class or a year span in the answer prose than a citation.
 //   * Anything else inside the brackets (`[note]`, `[a.ts:1-2]`, `[1, x]`) is NOT a marker.
+//   * Markdown code is never scanned: a fenced block (``` or ~~~) or an inline code span holds
+//     code such as `const a = [1, 2, 3];`, never a citation (PR #3678 review).
 //   * The scan is a single forward pass with no regular expression, so it stays linear in the text
 //     length however many brackets or spaces the input holds.
 
@@ -119,14 +121,103 @@ function buildGroup(text: string, start: number, scan: GroupScan): CitationMarke
   };
 }
 
+function runLength(text: string, from: number, character: string): number {
+  let end = from;
+  while (text.charAt(end) === character) end += 1;
+  return end - from;
+}
+
+// True when only up to three spaces precede `position` on its line: where a code fence may open.
+function atFenceIndent(text: string, position: number): boolean {
+  let start = position;
+  while (start > 0 && position - start <= 3 && text.charAt(start - 1) === " ") start -= 1;
+  return position - start <= 3 && (start === 0 || text.charAt(start - 1) === "\n");
+}
+
+function lineEndOf(text: string, from: number): number {
+  const end = text.indexOf("\n", from);
+  return end === -1 ? text.length : end;
+}
+
+// True when the line starting at `lineStart` closes a fence of `length` `fence` characters: up to
+// three spaces, at least as long a run of the same character, then only whitespace.
+function closesFence(text: string, lineStart: number, fence: string, length: number): boolean {
+  let first = lineStart;
+  while (first - lineStart < 3 && text.charAt(first) === " ") first += 1;
+  const run = runLength(text, first, fence);
+  return run >= length && text.slice(first + run, lineEndOf(text, first)).trim() === "";
+}
+
+// The end of a fenced block opened at `position`: the end of its closing fence line, or the text
+// end for a fence that never closes (CommonMark runs it to the end of the document).
+function fencedBlockEnd(text: string, position: number, fence: string, length: number): number {
+  let lineEnd = lineEndOf(text, position);
+  while (lineEnd < text.length) {
+    if (closesFence(text, lineEnd + 1, fence, length)) return lineEndOf(text, lineEnd + 1);
+    lineEnd = lineEndOf(text, lineEnd + 1);
+  }
+  return text.length;
+}
+
+// Every backtick run of the text, grouped by run length in document order, so an inline code span
+// finds its closing run without rescanning the text: the per-length cursor only moves forward, so
+// the whole scan stays linear however many unmatched runs the text holds.
+class BacktickRuns {
+  private readonly startsByLength = new Map<number, number[]>();
+  private readonly cursorByLength = new Map<number, number>();
+
+  constructor(text: string) {
+    let next = text.indexOf("`");
+    while (next !== -1) {
+      const length = runLength(text, next, "`");
+      const starts = this.startsByLength.get(length) ?? [];
+      starts.push(next);
+      this.startsByLength.set(length, starts);
+      next = text.indexOf("`", next + length);
+    }
+  }
+
+  /** The end of the span a run of `length` opens at `position`, or undefined when none closes it. */
+  closingEnd(position: number, length: number): number | undefined {
+    const starts = this.startsByLength.get(length) ?? [];
+    let cursor = this.cursorByLength.get(length) ?? 0;
+    while (cursor < starts.length && (starts[cursor] ?? 0) <= position) cursor += 1;
+    this.cursorByLength.set(length, cursor);
+    const close = starts[cursor];
+    return close === undefined ? undefined : close + length;
+  }
+}
+
 /**
- * Every inline citation marker in `text`, in document order. Each returned group is one bracket
- * pair; a grouped marker such as `[1, 7, 8]` is ONE group carrying three entries.
+ * Where the scan resumes after the backtick or tilde run at `position`: past the fenced block or
+ * code span it opens, or past the run itself when it is literal text. Undefined when no run starts.
+ */
+function afterCodeRun(text: string, position: number, runs: BacktickRuns): number | undefined {
+  const character = text.charAt(position);
+  if (character !== "`" && character !== "~") return undefined;
+  const length = runLength(text, position, character);
+  if (length >= 3 && atFenceIndent(text, position)) {
+    return fencedBlockEnd(text, position, character, length);
+  }
+  if (character === "~") return position + length;
+  return runs.closingEnd(position, length) ?? position + length;
+}
+
+/**
+ * Every inline citation marker in `text`, in document order, outside Markdown code. Each returned
+ * group is one bracket pair; a grouped marker such as `[1, 7, 8]` is ONE group carrying three
+ * entries.
  */
 export function findCitationMarkerGroups(text: string): readonly CitationMarkerGroup[] {
   const groups: CitationMarkerGroup[] = [];
+  const runs = new BacktickRuns(text);
   let cursor = 0;
   while (cursor < text.length) {
+    const code = afterCodeRun(text, cursor, runs);
+    if (code !== undefined) {
+      cursor = code;
+      continue;
+    }
     if (!OPEN_BRACKETS.has(text.charAt(cursor))) {
       cursor += 1;
       continue;

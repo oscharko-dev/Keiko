@@ -26,7 +26,10 @@ import type {
   LineRange,
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
-import { citationMarkerIndices } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import {
+  citationMarkerIndices,
+  findCitationMarkerGroups,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
@@ -200,6 +203,23 @@ function parseNumericCitations(answerText: string): readonly number[] {
   return citationMarkerIndices(answerText).filter((marker) => marker > 0);
 }
 
+// The indices of the marker groups that cite at all. A grouped bracket none of whose indices names
+// a supported reference (`[80, 443]`, `[2020, 2024]`) is answer content, never a citation, so it
+// must not surface as a dangling one (PR #3678 review). A lone out-of-range marker (`[9]`) and an
+// out-of-range index next to a supported one (`[1, 9]`) remain dangling citations.
+function citingMarkerIndices(
+  answerText: string,
+  supportedMarkers: ReadonlySet<number>,
+): readonly number[] {
+  return findCitationMarkerGroups(answerText)
+    .filter(
+      (group) =>
+        group.indices.length === 1 || group.indices.some((index) => supportedMarkers.has(index)),
+    )
+    .flatMap((group) => group.indices)
+    .filter((marker) => marker > 0);
+}
+
 /** Reconcile hybrid `[n]` markers against the exact selected evidence marker set. */
 export function reconcileNumericCitations(
   answerText: string,
@@ -208,7 +228,7 @@ export function reconcileNumericCitations(
   const citedMarkers = new Set<number>();
   const unsupportedMarkers: number[] = [];
   const seenUnsupported = new Set<number>();
-  for (const marker of parseNumericCitations(answerText)) {
+  for (const marker of citingMarkerIndices(answerText, supportedMarkers)) {
     if (supportedMarkers.has(marker)) {
       citedMarkers.add(marker);
     } else if (!seenUnsupported.has(marker)) {

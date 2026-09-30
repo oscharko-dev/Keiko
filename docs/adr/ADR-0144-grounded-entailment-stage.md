@@ -156,7 +156,11 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   and the CJK/fullwidth bracket glyphs. The attacher, `reconcileNumericCitations`, the claim
   segmentation, the answer renderer and the copy stripper all use it; four private one-integer
   regexes that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
-  markers (`[0-9]`, `[2020-2024]`).
+  markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
+  scanned, so `const a = [1, 2, 3];` cites nothing. A grouped bracket none of whose indices names a
+  supported reference (`[80, 443]`) is content, not a dangling citation; a lone `[9]` or the 9 in
+  `[1, 9]` still dangles. The copy stripper removes only a grounded answer's groups whose every
+  index names one of its references and leaves an ordinary answer's brackets untouched.
 - **Token overlap is a soft signal, never a filter — and never a confirmation.**
   `attachCitationsToAnswer` keeps every in-range marker attached so the reader can open its source.
   A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the

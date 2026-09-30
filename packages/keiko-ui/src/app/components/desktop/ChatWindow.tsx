@@ -35,7 +35,10 @@ import {
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { findCitationMarkerGroups } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import {
+  citationMarkerIndices,
+  findCitationMarkerGroups,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useChatSessionCatalog,
@@ -427,7 +430,10 @@ function modelList(models: readonly ModelCapability[]): readonly ModelCapability
 // uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], grouped [1, 7, 8], CJK
 // lenticular 【n】, fullwidth ［n］ — the one grammar shared with the citation attacher and the
 // answer renderer via keiko-contracts) are stripped together with their leading whitespace so
-// copied prose stays clean.
+// copied prose stays clean. Only a grounded answer's markers are stripped, and only a group whose
+// every index names one of the answer's references: `[1, 2, 3]` in an ordinary answer, `[80, 443]`
+// beyond the references and any bracket inside Markdown code are content, not citations
+// (PR #3678 review).
 //
 // Leading whitespace is trimmed by a bounded backward scan in stripCitationMarkers below rather
 // than by a `\s*` in front of a marker pattern (SonarCloud S8786): an unbounded quantifier directly
@@ -442,10 +448,11 @@ const QUESTION_MAP_PREVIEW_MAX = 76;
 // Equivalent to removing every marker group together with the whitespace before it, but as a single
 // forward pass plus a bounded backward whitespace scan per marker, so total work stays O(n)
 // regardless of how much whitespace precedes a marker.
-function stripCitationMarkers(text: string): string {
+function stripCitationMarkers(text: string, citationCeiling: number): string {
   let result = "";
   let cursor = 0;
   for (const group of findCitationMarkerGroups(text)) {
+    if (!group.indices.every((index) => index >= 1 && index <= citationCeiling)) continue;
     let markerStart = group.start;
     while (markerStart > cursor && CITATION_MARKER_WHITESPACE.test(text.charAt(markerStart - 1))) {
       markerStart -= 1;
@@ -456,8 +463,37 @@ function stripCitationMarkers(text: string): string {
   return result + text.slice(cursor);
 }
 
-export function copyableMessageText(content: string): string {
-  return stripCitationMarkers(sanitizeRepositoryEvidenceText(content));
+/**
+ * The copy text of an assistant message. `citationCeiling` is the highest reference index the
+ * message's grounded answer can cite; 0 (an ordinary answer) strips no marker at all.
+ */
+export function copyableMessageText(content: string, citationCeiling = 0): string {
+  return stripCitationMarkers(sanitizeRepositoryEvidenceText(content), citationCeiling);
+}
+
+function highestCitedMarker(markers: readonly (string | number | undefined)[]): number {
+  let highest = 0;
+  for (const marker of markers) {
+    const indices = typeof marker === "number" ? [marker] : citationMarkerIndices(marker ?? "");
+    for (const index of indices) highest = Math.max(highest, index);
+  }
+  return highest;
+}
+
+/**
+ * The highest reference index a grounded answer can cite: the references its prompt carried, and
+ * never fewer than its attached citations or their own markers (answers that predate the prompt
+ * context). Undefined answer: 0, so an ordinary answer keeps every bracket.
+ */
+export function groundedCitationCeiling(answer: GroundedAnswerWire | undefined): number {
+  if (answer === undefined) return 0;
+  const knowledge = "knowledgeCitations" in answer ? answer.knowledgeCitations : [];
+  const citations = [...answer.citations, ...knowledge];
+  return Math.max(
+    answer.promptContext?.sentReferenceCount ?? 0,
+    citations.length,
+    highestCitedMarker(citations.map((citation) => citation.marker)),
+  );
 }
 
 function questionMapPreview(content: string): string {
@@ -476,13 +512,19 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 // uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
 // non-secure contexts and announced status (WCAG 4.1.3).
-function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
+function MessageCopyButton({
+  content,
+  citationCeiling,
+}: {
+  readonly content: string;
+  readonly citationCeiling: number;
+}): ReactNode {
   const t = useTranslate();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
   const handleCopy = useCallback(() => {
-    void copyTextToClipboard(copyableMessageText(content)).then(
+    void copyTextToClipboard(copyableMessageText(content, citationCeiling)).then(
       () => {
         setCopyState("copied");
         setStatus(t("chat.copy.copiedStatus"));
@@ -496,7 +538,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
         setStatus(t("chat.copy.failedStatus"));
       },
     );
-  }, [content, t]);
+  }, [citationCeiling, content, t]);
 
   const copied = copyState === "copied";
   const failed = copyState === "failed";
@@ -787,7 +829,10 @@ function ChatBubbleFooterActions({
           onCancel={onCancelRegenerate}
         />
       ) : null}
-      <MessageCopyButton content={message.content} />
+      <MessageCopyButton
+        content={message.content}
+        citationCeiling={groundedCitationCeiling(message.groundedAnswer)}
+      />
       {canCollapse ? (
         <button
           type="button"
