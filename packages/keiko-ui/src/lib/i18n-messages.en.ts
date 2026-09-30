@@ -1134,7 +1134,6 @@ export const EN_MESSAGES = {
   "scope.pressure.moderate": "Moderate",
   "scope.pressure.high": "High",
   "scope.pressure.exceeded": "Exceeded",
-  "scope.budgetSummary": "Last grounded run: {tokens} tokens, {files} files",
   "scope.connectedFolder": "Connected folder",
   "scope.folder": "Folder: {name}",
   "scope.repository": "Repository scope",
@@ -1147,8 +1146,6 @@ export const EN_MESSAGES = {
     "Keiko may inspect only the connected folder; safe-read exclusions and context budget limits apply before each answer.",
   "scope.boundary.file":
     "Keiko may inspect only the connected file scope; safe-read exclusions and context budget limits apply before each answer.",
-  "scope.disconnect": "Disconnect {label} from chat",
-  "scope.disconnectWithPath": "Disconnect {label} from chat ({path})",
   "scope.disconnectError": "Unable to disconnect scope.",
   "settings.title": "Settings",
   "settings.language.compactLabel": "Language",

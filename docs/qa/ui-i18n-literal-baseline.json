@@ -12,10 +12,6 @@
       "Type FORGET to remove .",
       "When muted, Keiko cannot hear your microphone until you unmute."
     ],
-    "packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.tsx": [
-      "Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/ConnectorScopePill.tsx": ["Disconnect from chat"],
     "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": ["Preferred editor for “"],
     "packages/keiko-ui/src/app/components/desktop/Footer.tsx": ["Keiko |"],
     "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [

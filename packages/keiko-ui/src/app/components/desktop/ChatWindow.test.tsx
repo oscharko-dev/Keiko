@@ -1654,6 +1654,31 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.queryByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeNull();
   });
 
+  // PR #3678: the header pill of a bound pod the catalog does not list showed "Knowledge Pod: <id>".
+  it("names a bound pod the catalog does not list by its kind, never by its raw id", async () => {
+    const capsuleId = makeCapsuleId("87251961-0000-4000-8000-00000000000f");
+    let answerCatalog: (value: { capsules: [] }) => void = () => undefined;
+    fetchCapsulesMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerCatalog = resolve;
+      }),
+    );
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: 1 }],
+        }),
+      }),
+    );
+
+    // While the catalog has not answered, the pill names only the kind.
+    expect(await screen.findByLabelText("Knowledge Pod")).toBeInTheDocument();
+    answerCatalog({ capsules: [] });
+    expect(await screen.findByLabelText("Knowledge Pod (unavailable)")).toBeInTheDocument();
+    expect(screen.queryByText(/87251961/u)).toBeNull();
+  });
+
   it("shows a failed bound pod as failed by name, never as unavailable or by id", async () => {
     const capsuleId = makeCapsuleId("87251961-0000-4000-8000-000000000002");
     fetchCapsulesMock.mockResolvedValueOnce({

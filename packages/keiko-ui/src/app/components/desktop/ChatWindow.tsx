@@ -4433,6 +4433,7 @@ function ChatScopeHeaderImpl({
         chat={chat}
         onDisconnect={onChatChanged}
         labels={connectorScopeLabels(catalog, t)}
+        labelsSettled={!catalog.loading && catalog.loadError === null}
       />
       {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
           Chat" action renders here, alongside the grounding scope control, so its current /

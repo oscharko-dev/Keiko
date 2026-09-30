@@ -1165,7 +1165,6 @@ export const DE_MESSAGES = {
   "scope.pressure.moderate": "Moderat",
   "scope.pressure.high": "Hoch",
   "scope.pressure.exceeded": "Überschritten",
-  "scope.budgetSummary": "Letzter Grounding-Lauf: {tokens} Token, {files} Dateien",
   "scope.connectedFolder": "Verbundener Ordner",
   "scope.folder": "Ordner: {name}",
   "scope.repository": "Repository-Bereich",
@@ -1178,8 +1177,6 @@ export const DE_MESSAGES = {
     "Keiko darf nur den verbundenen Ordner prüfen; Safe-Read-Ausschlüsse und Kontextbudget-Limits gelten vor jeder Antwort.",
   "scope.boundary.file":
     "Keiko darf nur den verbundenen Dateibereich prüfen; Safe-Read-Ausschlüsse und Kontextbudget-Limits gelten vor jeder Antwort.",
-  "scope.disconnect": "{label} vom Chat trennen",
-  "scope.disconnectWithPath": "{label} vom Chat trennen ({path})",
   "scope.disconnectError": "Bereich konnte nicht getrennt werden.",
   "settings.title": "Einstellungen",
   "settings.language.compactLabel": "Sprache",
