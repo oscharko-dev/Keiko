@@ -11,6 +11,7 @@ import {
   trimTrailingSlash,
 } from "./config.js";
 import { gatewayFetch, readJsonCapped } from "./http.js";
+import { reportedContextWindowTokens } from "./openai-adapter.js";
 import {
   activityLogErrorKind,
   logEndpointHost,
@@ -474,4 +475,59 @@ function sentOutputTokenField(request: GatewayReadinessChatCompletionRequest): O
     providerOutputTokenLimit(request.maxOutputTokens, request.provider)
     ? "max_completion_tokens"
     : "max_tokens";
+}
+
+// ─── Context-window discovery (customer report on 1.1.13) ─────────────────────────────────────
+// A LiteLLM `hosted_vllm` deployment declares no window in `/model/info`, so Keiko cannot plan its
+// conversations from discovery. vLLM validates the requested output allocation against its
+// `max_model_len` BEFORE any generation and names that limit in the rejection, so one tiny request
+// with an output allocation larger than any real window costs no generation and returns the exact
+// window. A provider that accepts the allocation (or rejects it without naming a window) reports
+// nothing; the caller then keeps planning with its assumption and learns the window from the
+// provider's first real overflow instead. Transport failures and unreadable rejections throw.
+const CONTEXT_WINDOW_PROBE_OUTPUT_TOKENS = 1_000_000_000;
+const CONTEXT_WINDOW_PROBE_TIMEOUT_MS = 30_000;
+
+export type GatewayContextWindowDiscovery =
+  | { readonly status: "reported"; readonly contextWindowTokens: number }
+  | { readonly status: "not-reported"; readonly httpStatus: number };
+
+export interface GatewayContextWindowDiscoveryRequest {
+  readonly config: GatewayConfig;
+  readonly provider: ModelProviderConfig;
+  readonly fetchImpl?: typeof fetch | undefined;
+  readonly log?: ModelGatewayLogSink | undefined;
+  readonly correlationId?: string | undefined;
+}
+
+export async function discoverGatewayContextWindow(
+  request: GatewayContextWindowDiscoveryRequest,
+): Promise<GatewayContextWindowDiscovery> {
+  const { config, provider, correlationId } = request;
+  const answer = await gatewayFetch(readinessChatCompletionsUrl(provider), {
+    method: "POST",
+    headers: providerHeaders(provider),
+    body: JSON.stringify({
+      model: provider.modelId,
+      messages: [{ role: "user", content: "Reply with OK." }],
+      temperature: 0,
+      ...providerOutputTokenLimit(CONTEXT_WINDOW_PROBE_OUTPUT_TOKENS, provider),
+    }),
+    ...(request.fetchImpl === undefined ? {} : { fetchImpl: request.fetchImpl }),
+    timeoutMs: Math.min(provider.timeoutMs, CONTEXT_WINDOW_PROBE_TIMEOUT_MS),
+    maxResponseBytes: READINESS_REJECTION_MAX_BYTES,
+    ...(config.egress === undefined ? {} : { egress: config.egress }),
+    ...(request.log === undefined ? {} : { log: request.log }),
+    ...(correlationId === undefined ? {} : { logContext: { correlationId } }),
+  });
+  if (answer.ok) {
+    await answer.body?.cancel();
+    return { status: "not-reported", httpStatus: answer.status };
+  }
+  // An unreadable rejection throws to the caller, which records it as an inconclusive probe.
+  const payload = await readJsonCapped(answer, READINESS_REJECTION_MAX_BYTES);
+  const contextWindowTokens = reportedContextWindowTokens(payload);
+  return contextWindowTokens === undefined
+    ? { status: "not-reported", httpStatus: answer.status }
+    : { status: "reported", contextWindowTokens };
 }

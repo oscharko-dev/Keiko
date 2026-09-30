@@ -740,12 +740,17 @@ export function undeclaredOutputReserveTokens(maxInputTokens: number): number {
 }
 
 // Derives a model-keyed ContextProfile from a configured chat capability. Unknown/placeholder
-// runtime capabilities (0 window / 0 output) fall back to the DEFAULT_CONTEXT_PROFILE geometry.
+// runtime capabilities (0 window / 0 output, or a window flagged `contextWindowAssumed`) fall back
+// to the DEFAULT_CONTEXT_PROFILE geometry: an undeclared window is not evidence of a small model,
+// and the provider's own overflow answer corrects the assumption (customer report on 1.1.13).
 export function deriveContextProfileFromCapability(
-  capability: Pick<ModelCapability, "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting">,
+  capability: Pick<
+    ModelCapability,
+    "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting" | "contextWindowAssumed"
+  >,
 ): ContextProfile {
   const maxInputTokens =
-    capability.contextWindow > 0
+    capability.contextWindow > 0 && capability.contextWindowAssumed !== true
       ? capability.contextWindow
       : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
   const reservedOutputTokens =

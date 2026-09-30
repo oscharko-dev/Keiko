@@ -98,6 +98,17 @@ export interface GatewayDeps {
   // without touching the real network. Unset means the adapter falls back to `globalThis.fetch`,
   // exactly as it did before this field existed.
   readonly fetchImpl?: typeof fetch | undefined;
+  // Receives the total context window a provider stated in an overflow answer, so the host can
+  // adopt a deployment's real window instead of a placeholder (customer report on 1.1.13). A
+  // count, a model id and the call's correlation id — never content. Invoked synchronously before
+  // the overflow is rethrown, so the observer MUST NOT throw: it owns and logs its own failures.
+  readonly onContextWindowReported?: ((report: ContextWindowReport) => void) | undefined;
+}
+
+export interface ContextWindowReport {
+  readonly modelId: string;
+  readonly contextWindowTokens: number;
+  readonly correlationId: string;
 }
 
 // A gateway call plus the caller's log context.
@@ -829,6 +840,7 @@ export class Gateway {
   private readonly breakers = new Map<string, CircuitBreaker>();
   private readonly log: ModelGatewayLogSink;
   private readonly configurationCorrelationId: string | undefined;
+  private readonly onContextWindowReported: GatewayDeps["onContextWindowReported"];
 
   constructor(
     private readonly config: GatewayConfig,
@@ -842,6 +854,7 @@ export class Gateway {
     this.fetchImpl = deps.fetchImpl;
     this.log = resolveLogSink(deps.log);
     this.configurationCorrelationId = deps.configurationCorrelationId;
+    this.onContextWindowReported = deps.onContextWindowReported;
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
     this.logConfigResolved();
   }
@@ -941,6 +954,7 @@ export class Gateway {
       // traceable to the gateway record (previously requestId was attached only on success/usage).
       attachGatewayRequestId(error, requestId);
       this.logCallFailed(ids, route, elapsed(), error);
+      this.reportContextWindow(route, ids, error);
       throw error;
     }
     this.logCallCompleted(ids, route, result, elapsed());
@@ -1144,7 +1158,20 @@ export class Gateway {
   ): never {
     attachGatewayRequestId(error, ids.requestId);
     this.logStreamFailed(ids, route, chunkCount, durationMs, error);
+    this.reportContextWindow(route, ids, error);
     throw error;
+  }
+
+  // Hands a provider-stated window to the host before the overflow is rethrown.
+  private reportContextWindow(route: RoutedCall, ids: CallIds, error: unknown): void {
+    if (!(error instanceof ContextOverflowError)) return;
+    const contextWindowTokens = error.reportedContextWindowTokens;
+    if (contextWindowTokens === undefined) return;
+    this.onContextWindowReported?.({
+      modelId: route.provider.modelId,
+      contextWindowTokens,
+      correlationId: ids.correlationId,
+    });
   }
 
   // THE ATTEMPT LINE for a model call — written BEFORE the adapter is invoked, not after it

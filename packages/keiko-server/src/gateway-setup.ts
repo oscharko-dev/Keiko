@@ -1,4 +1,8 @@
-import { logAliasIntersection } from "./gateway-discovery-log.js";
+import {
+  logAliasIntersection,
+  logRerankerSetupResolution,
+  type DiscoveryAliasRole,
+} from "./gateway-discovery-log.js";
 import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 // First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
 // and optionally a Figma PAT; the loopback BFF builds the local provider config, performs a real
@@ -47,6 +51,7 @@ import {
 import {
   boundedUnsupportedReason,
   isChatCompatibleDeclaredMode,
+  isLikelyRerankModelId,
   modelKindForDeclaredMode,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
@@ -116,6 +121,7 @@ import {
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
 import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
 import { probeGatewayToolCalling, transientGatewayStatus } from "./gateway-tool-calling-probe.js";
+import { requestRerankerProbe, rerankerProbePassed } from "./gateway-reranker-probe.js";
 
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 
@@ -220,6 +226,8 @@ const ALLOW_LINK_LOCAL_GATEWAY_ENV = "KEIKO_ALLOW_LINK_LOCAL_GATEWAY";
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayEmbeddingProbe = NonNullable<UiHandlerDeps["gatewayEmbeddingProbe"]>;
+/** Runs the live two-document rerank probe against the reranker the given config names. */
+type GatewayRerankerProbe = (config: GatewayConfig) => Promise<boolean>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
 type FigmaCredentialTester = NonNullable<UiHandlerDeps["figmaCredentialTester"]>;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
@@ -611,7 +619,7 @@ function createDefaultSetupCapability(
   // when its kind no longer matches so the flow restarts from baseCapability's defaults.
   const existing = rawExisting?.kind === baseCapability.kind ? rawExisting : undefined;
   const discovered = options.modelMetadata?.[modelId];
-  const capability: ModelCapability = {
+  const capability: ModelCapability = withContextWindowProvenance(existing, discovered, {
     ...baseCapability,
     // The endpoint-move restriction is PRESERVE semantics: a fresh replacement deliberately
     // treats stored capabilities as absent, like every stored list on this route (review
@@ -629,8 +637,32 @@ function createDefaultSetupCapability(
       existing,
       options.workflowEligibleModelIds,
     ),
-  };
+  });
   return capability;
+}
+
+/** The capability without its "window not yet measured" flag. */
+export function withoutAssumedContextWindow(capability: ModelCapability): ModelCapability {
+  const { contextWindowAssumed, ...measured } = capability;
+  return contextWindowAssumed === true ? measured : capability;
+}
+
+// A window is assumed only while nobody has stated it: a discovered declaration ends the
+// assumption, a stored capability keeps its own provenance (a probed or provider-reported window
+// survives a rediscovery that declares nothing), and a brand-new chat model starts assumed.
+function withContextWindowProvenance(
+  existing: ModelCapability | undefined,
+  discovered: GatewayDiscoveredModelMetadata | undefined,
+  capability: ModelCapability,
+): ModelCapability {
+  const measured = withoutAssumedContextWindow(capability);
+  const assumed =
+    capability.kind === "chat" &&
+    discovered?.contextWindow === undefined &&
+    (existing === undefined
+      ? capability.contextWindowAssumed === true
+      : existing.contextWindowAssumed === true);
+  return assumed ? { ...measured, contextWindowAssumed: true } : measured;
 }
 
 // The generic endpoint protocol persists VERBATIM — absent fields stay absent so the runtime
@@ -869,9 +901,30 @@ function reasoningEffortsFromDiscoveryRecords(
     : undefined;
 }
 
+// Declared context-window fields in order of authority; the first one a deployment declares wins.
+// LiteLLM `/model/info` publishes `max_input_tokens`, a vLLM `/v1/models` entry publishes
+// `max_model_len`, and OpenAI-compatible proxies in the field use `context_length` or
+// `context_window`. Reading only the first left every model of a vLLM-fronted gateway with an
+// undeclared window (customer report on 1.1.13: a `hosted_vllm` model planned as a 4,096-token
+// model failed every grounded question).
+const DECLARED_CONTEXT_WINDOW_FIELDS: readonly string[] = [
+  "max_input_tokens",
+  "max_model_len",
+  "context_length",
+  "context_window",
+];
+
+function declaredContextWindow(records: readonly Record<string, unknown>[]): number | undefined {
+  for (const field of DECLARED_CONTEXT_WINDOW_FIELDS) {
+    const declared = numberFieldFromRecords(records, [field]);
+    if (declared !== undefined) return declared;
+  }
+  return undefined;
+}
+
 function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscoveredModelMetadata {
   const records = discoveryRecords(item);
-  const contextWindow = numberFieldFromRecords(records, ["max_input_tokens"]);
+  const contextWindow = declaredContextWindow(records);
   const maxOutputTokens = numberFieldFromRecords(records, ["max_output_tokens", "max_tokens"]);
   const toolCalling = optionalBooleanFieldFromRecords(records, [
     "supports_function_calling",
@@ -1349,14 +1402,47 @@ function isUnsupportedEntry(entry: ClassifiedDiscoveryModel): entry is Unsupport
   return entry.kind === "unsupported" && entry.reason !== undefined;
 }
 
+// A rerank engine is recognised and REPORTED here, never configured as chat or embedding. Setup
+// wires it as the retrieval reranker afterwards, and only when a live probe answers — the entry
+// stays in the unsupported list until then, and after it whenever the operator already owns one.
+function rerankDiscoveryModel(
+  id: string,
+  metadata: GatewayDiscoveredModelMetadata,
+  declared: boolean,
+): ClassifiedDiscoveryModel {
+  return {
+    id,
+    kind: "unsupported",
+    ...(declared ? { declaredNonChat: true } : {}),
+    supportsImageInput: false,
+    metadata,
+    reason: "rerank",
+  };
+}
+
 // Classification WITHOUT a declaration: the id heuristic is all a `/models`-only gateway gives us.
+// A name that says "reranker" is decided FIRST — "bge-reranker-v2-m3" carries the "bge" embedding
+// family prefix and must never be claimed as an embedding model. `capabilities.chat_completion ===
+// false` states what the model is NOT, which is not a role: an embedding model legitimately carries
+// it, so the id heuristic still decides and cannot fall through to "chat".
 function classifyUndeclaredDiscoveryItem(
   item: Record<string, unknown>,
   id: string,
   metadata: GatewayDiscoveredModelMetadata,
 ): ClassifiedDiscoveryModel {
+  if (isLikelyRerankModelId(id)) return rerankDiscoveryModel(id, metadata, false);
   if (isLikelyEmbeddingModelId(id)) {
     return { id, kind: "embedding", supportsImageInput: false, metadata };
+  }
+  if (isExplicitlyNonChatModel(item)) {
+    return {
+      id,
+      kind: "unsupported",
+      supportsImageInput: false,
+      metadata,
+      reason: "not-chat-capable",
+      declaredNonChat: true,
+    };
   }
   return {
     id,
@@ -1380,52 +1466,36 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
   }
   const metadata = metadataFromDiscoveryItem(item);
   const declaredMode = modelModeFromDiscoveryItem(item);
-  if (declaredMode !== undefined) {
-    const voiceRole = voiceRoleForDeclaredMode(declaredMode);
-    if (voiceRole !== undefined) {
-      return { id, kind: "voice", voiceRole, supportsImageInput: false, metadata };
-    }
-    const role = modelKindForDeclaredMode(declaredMode);
-    if (role === "unsupported") {
-      // The reason is drawn from a CLOSED vocabulary. A declared mode is gateway-controlled text of
-      // unbounded shape; echoing it verbatim would put foreign strings into the diagnostic channel
-      // and the setup response, which the redaction rules forbid.
-      const reason = boundedUnsupportedReason(declaredMode);
-      return {
-        id,
-        kind: "unsupported",
-        declaredNonChat: true,
-        supportsImageInput: false,
-        metadata,
-        reason,
-      };
-    }
-    if (role === "embedding") {
-      return { id, kind: "embedding", supportsImageInput: false, metadata };
-    }
+  if (declaredMode === undefined) return classifyUndeclaredDiscoveryItem(item, id, metadata);
+  const voiceRole = voiceRoleForDeclaredMode(declaredMode);
+  if (voiceRole !== undefined) {
+    return { id, kind: "voice", voiceRole, supportsImageInput: false, metadata };
+  }
+  const role = modelKindForDeclaredMode(declaredMode);
+  if (role === "rerank") return rerankDiscoveryModel(id, metadata, true);
+  if (role === "unsupported") {
+    // The reason is drawn from a CLOSED vocabulary. A declared mode is gateway-controlled text of
+    // unbounded shape; echoing it verbatim would put foreign strings into the diagnostic channel
+    // and the setup response, which the redaction rules forbid.
+    const reason = boundedUnsupportedReason(declaredMode);
     return {
       id,
-      kind: "chat",
-      supportsImageInput: supportsImageInputFromDiscoveryItem(item, id),
+      kind: "unsupported",
+      declaredNonChat: true,
+      supportsImageInput: false,
       metadata,
+      reason,
     };
   }
-  // No declaration. `capabilities.chat_completion === false` states what the model is NOT, which
-  // is not a role: an embedding model legitimately carries it. So the id heuristic still decides,
-  // exactly as before — it just cannot fall through to "chat".
-  if (isExplicitlyNonChatModel(item)) {
-    return isLikelyEmbeddingModelId(id)
-      ? { id, kind: "embedding", supportsImageInput: false, metadata }
-      : {
-          id,
-          kind: "unsupported",
-          supportsImageInput: false,
-          metadata,
-          reason: "not-chat-capable",
-          declaredNonChat: true,
-        };
+  if (role === "embedding") {
+    return { id, kind: "embedding", supportsImageInput: false, metadata };
   }
-  return classifyUndeclaredDiscoveryItem(item, id, metadata);
+  return {
+    id,
+    kind: "chat",
+    supportsImageInput: supportsImageInputFromDiscoveryItem(item, id),
+    metadata,
+  };
 }
 
 function voiceRoleForDeclaredMode(mode: string): DiscoveryVoiceRole | undefined {
@@ -1613,8 +1683,21 @@ function discoveredModelLists(
           })),
         }
       : {}),
+    ...rerankCandidateList(unsupported),
     ...(wasTruncated ? { truncated: true } : {}),
   };
+}
+
+// The rerank engines among the recognised-but-unconfigured models, in discovery order. They are
+// partitioned out of the same pre-cap entry list as every other role, so a gateway listing dozens
+// of chat aliases ahead of its reranker cannot push the reranker out of reach.
+function rerankCandidateList(
+  unsupported: readonly UnsupportedDiscoveryModel[],
+): Pick<GatewayDiscoveredModels, "rerankModelIds"> {
+  const rerankModelIds = unsupported
+    .filter((entry) => entry.reason === "rerank")
+    .map((entry) => entry.id);
+  return rerankModelIds.length === 0 ? {} : { rerankModelIds };
 }
 
 function assertDiscoveryYieldedUsableModels(
@@ -2483,6 +2566,34 @@ function gatewayEmbeddingProbe(
       deps.env,
       correlationId ?? UNKNOWN_CORRELATION_ID,
     );
+}
+
+// A rerank probe answers two short documents; a healthy engine takes a moment, an unreachable one
+// must not hold the setup response for the adapter's multi-minute retrieval floor. The caller
+// signal is what bounds it (the adapter takes the SHORTER of its own deadline and the signal).
+const RERANKER_SETUP_PROBE_DEADLINE_MS = 30_000;
+
+// The same two-document probe gateway readiness runs, over the request's own dependencies: the
+// egress policy, spend guard and activity-log line all apply to a discovered engine exactly as
+// they do to a configured one. Any failure — a refused request, a wrong ranking, a thrown
+// transport error — is "not admitted", never a failed setup.
+function gatewayRerankerProbe(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): GatewayRerankerProbe {
+  return async (config) => {
+    try {
+      const selection = await requestRerankerProbe({
+        deps,
+        config,
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        signal: AbortSignal.timeout(RERANKER_SETUP_PROBE_DEADLINE_MS),
+      });
+      return rerankerProbePassed(selection);
+    } catch {
+      return false;
+    }
+  };
 }
 
 // The seam type (UiHandlerDeps["gatewaySetupTester"]) is a fixed 2-arg shape shared by every
@@ -4861,6 +4972,7 @@ interface VerifiedSetup {
 
 interface SetupVerificationInput {
   readonly embeddingProbe: GatewayEmbeddingProbe;
+  readonly rerankerProbe: GatewayRerankerProbe;
   readonly preserveExisting: boolean;
   readonly baseUrl: string;
   readonly apiKey: string;
@@ -4910,6 +5022,9 @@ interface SetupCandidateModels {
   readonly voiceSpeechOutputModelIds?: readonly string[];
   readonly voiceRealtimeModelIds?: readonly string[];
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
+  // Rerank engines discovery recognised (candidates) — or, on the admitted view, the one engine that
+  // passed its live probe and is wired as the retrieval reranker.
+  readonly rerankModelIds?: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
   // KEIKO-0325: true when the raw discovery payload contained more distinct model ids
@@ -5022,6 +5137,7 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
       ...(result.unsupportedModels !== undefined
         ? { unsupportedModels: result.unsupportedModels }
         : {}),
+      ...(result.rerankModelIds !== undefined ? { rerankModelIds: result.rerankModelIds } : {}),
     };
   }
   return normalizeLegacyDiscoveryResult(result);
@@ -6266,6 +6382,7 @@ interface SetupSeams {
   readonly tester: GatewaySetupTester;
   readonly discovery: GatewayModelDiscovery;
   readonly embeddingProbe: GatewayEmbeddingProbe;
+  readonly rerankerProbe: GatewayRerankerProbe;
 }
 
 async function trySetupCandidate(
@@ -6278,6 +6395,7 @@ async function trySetupCandidate(
 ): Promise<RouteResult> {
   const verified = await verifySetupCandidate({
     embeddingProbe: seams.embeddingProbe,
+    rerankerProbe: seams.rerankerProbe,
     preserveExisting: request.preserveExisting,
     baseUrl,
     apiKey: request.apiKey,
@@ -6644,6 +6762,7 @@ async function verifyAndSaveGatewaySetup(
   const seams: SetupSeams = {
     tester: gatewaySetupTester(deps, request.correlationId),
     embeddingProbe: gatewayEmbeddingProbe(deps, request.correlationId),
+    rerankerProbe: gatewayRerankerProbe(deps, request.correlationId),
     discovery: deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery,
   };
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
@@ -6888,12 +7007,13 @@ function replaceModelCapability(
     toolCallingStatus,
   );
   const replacement = {
-    ...current,
+    ...(fields.contextWindow === undefined ? current : withoutAssumedContextWindow(current)),
     ...fields,
-    // The long-context probe proves a lower bound, so it may raise a stored window, never shrink it.
+    // The long-context probe proves a lower bound, so it may raise a stored window, never shrink
+    // it. A proven window also ends an assumed one: the proof, not the placeholder, now plans it.
     ...(fields.contextWindow === undefined
       ? {}
-      : { contextWindow: Math.max(current.contextWindow, fields.contextWindow) }),
+      : { contextWindow: provenContextWindow(current, fields.contextWindow) }),
     ...(fields.toolCalling === true
       ? {
           knownLimitations: current.knownLimitations.filter(
@@ -6910,6 +7030,12 @@ function replaceModelCapability(
     ...config,
     capabilities,
   };
+}
+
+// An assumed window is a placeholder, not a floor: the proof replaces it outright. A measured
+// window is a floor the lower-bound proof may only raise.
+function provenContextWindow(current: ModelCapability, proven: number): number {
+  return current.contextWindowAssumed === true ? proven : Math.max(current.contextWindow, proven);
 }
 
 function responseFormatCapabilityFields(
@@ -7161,7 +7287,8 @@ export function reconcileGatewayContextWindowReadiness(
   const reconciliation = currentToolCallingReconciliation(deps, observedGeneration);
   if (reconciliation === undefined) return;
   const stored = findConfiguredCapability(reconciliation.current, report.modelId);
-  if (stored?.kind !== "chat" || stored.contextWindow >= verified) return;
+  if (stored?.kind !== "chat") return;
+  if (stored.contextWindowAssumed !== true && stored.contextWindow >= verified) return;
   const updated = replaceModelCapability(
     reconciliation.current,
     report.modelId,
@@ -7178,6 +7305,60 @@ export function reconcileGatewayContextWindowReadiness(
     false,
     correlationId,
   );
+}
+
+export type AdoptedContextWindowOutcome =
+  | { readonly state: "adopted"; readonly previousContextWindow: number; readonly wasAssumed: boolean }
+  | { readonly state: "unchanged" | "not-chat" | "unconfigured" };
+
+/**
+ * Adopts the total context window a provider stated itself — in its overflow answer or in answer to
+ * the startup context-window probe. Unlike the long-context probe's lower bound this is the
+ * deployment's exact limit, so it replaces the stored window in either direction and ends an
+ * assumed one. Persisted like every other verified capability update: the configuration generation
+ * advances, so every conversation surface re-plans the model with the real window.
+ */
+export function persistAdoptedContextWindow(
+  deps: UiHandlerDeps,
+  modelId: string,
+  contextWindowTokens: number,
+  correlationId: string,
+): AdoptedContextWindowOutcome {
+  const reconciliation = currentToolCallingReconciliation(deps, undefined);
+  if (reconciliation === undefined) return { state: "unconfigured" };
+  const stored = findConfiguredCapability(reconciliation.current, modelId);
+  if (stored?.kind !== "chat") return { state: "not-chat" };
+  if (stored.contextWindowAssumed !== true && stored.contextWindow === contextWindowTokens) {
+    return { state: "unchanged" };
+  }
+  const updated = replaceCapabilityContextWindow(reconciliation.current, stored, contextWindowTokens);
+  persistVerifiedCapabilityUpdate(
+    reconciliation.gatewayConfig,
+    deps,
+    modelId,
+    reconciliation.gatewayConfig.generation(),
+    updated,
+    false,
+    correlationId,
+  );
+  return {
+    state: "adopted",
+    previousContextWindow: stored.contextWindow,
+    wasAssumed: stored.contextWindowAssumed === true,
+  };
+}
+
+function replaceCapabilityContextWindow(
+  config: GatewayConfig,
+  stored: ModelCapability,
+  contextWindow: number,
+): GatewayConfig {
+  const replacement = { ...withoutAssumedContextWindow(stored), contextWindow };
+  const capabilities = [...(config.capabilities ?? [])];
+  const index = capabilities.findIndex((capability) => capability.id === stored.id);
+  if (index === -1) capabilities.push(replacement);
+  else capabilities[index] = replacement;
+  return { ...config, capabilities };
 }
 
 function currentToolCallingReconciliation(
@@ -7317,6 +7498,7 @@ function logDiscoveryMerge(
   logAliasIntersection(
     {
       alias: merged.id,
+      role: discoveryRoleOf(merged),
       contextWindow: merged.metadata.contextWindow ?? 0,
       undeclaredLimit: merged.undeclaredContext === true,
       deploymentCount: merged.deploymentCount ?? 1,
@@ -7327,6 +7509,12 @@ function logDiscoveryMerge(
     },
     correlationId,
   );
+}
+
+// The rerank engines travel as `unsupported` entries with the reason "rerank" until setup admits one,
+// but their role is "rerank": that is what an operator reading the log needs to see.
+function discoveryRoleOf(merged: ClassifiedDiscoveryModel): DiscoveryAliasRole {
+  return merged.kind === "unsupported" && merged.reason === "rerank" ? "rerank" : merged.kind;
 }
 
 function discoveryMergeState(

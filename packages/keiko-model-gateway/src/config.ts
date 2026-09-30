@@ -15,6 +15,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { VOICE_PERSONAS, VOICE_PROVIDER_LOCALITIES } from "./types.js";
 import {
+  PLACEHOLDER_CHAT_CONTEXT_WINDOW,
+  RUNTIME_CONFIGURED_CAPABILITY_LIMITATION,
+} from "./capabilities.js";
+import {
   MODEL_REASONING_EFFORTS,
   PROVIDER_ENDPOINT_STYLES,
   REALTIME_AUTH_MODES,
@@ -1028,6 +1032,38 @@ function migrateChatCapabilityContextWindow(raw: unknown): unknown {
   return { ...raw, contextWindow: LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT };
 }
 
+// Configurations persisted before 1.1.14 stored an undeclared chat window as the bare 4,096 setup
+// placeholder, indistinguishable from a declared one, so every conversation surface planned such a
+// model as a 4k model (customer report on 1.1.13). A record that still carries the exact placeholder
+// signature — the placeholder window, no declared output limit, the runtime-configured limitation
+// and no explicit flag — is marked as assumed at the file-load boundary. A wrong guess is safe: the
+// provider's overflow answer or the startup context-window probe replaces it with the real window.
+function markAssumedChatCapability(raw: unknown): unknown {
+  if (!isRecord(raw) || raw.kind !== "chat" || raw.contextWindowAssumed !== undefined) return raw;
+  const placeholder =
+    raw.contextWindow === PLACEHOLDER_CHAT_CONTEXT_WINDOW &&
+    (raw.maxOutputTokens ?? 0) === 0 &&
+    Array.isArray(raw.knownLimitations) &&
+    raw.knownLimitations.includes(RUNTIME_CONFIGURED_CAPABILITY_LIMITATION);
+  return placeholder ? { ...raw, contextWindowAssumed: true } : raw;
+}
+
+export function markAssumedPlaceholderContextWindows(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const marked: Record<string, unknown> = { ...raw };
+  if (Array.isArray(marked.capabilities)) {
+    marked.capabilities = (marked.capabilities as unknown[]).map(markAssumedChatCapability);
+  }
+  if (Array.isArray(marked.providers)) {
+    marked.providers = (marked.providers as unknown[]).map((provider) =>
+      isRecord(provider) && isRecord(provider.capability)
+        ? { ...provider, capability: markAssumedChatCapability(provider.capability) }
+        : provider,
+    );
+  }
+  return marked;
+}
+
 export function migrateLegacyChatContextWindows(raw: unknown): unknown {
   if (!isRecord(raw)) return raw;
   if (!isLegacySchemaRoot(raw)) return raw;
@@ -1272,6 +1308,7 @@ function buildProviderCapabilityBody(
     ...flags,
     ...optionalToolCallingVerification(raw, path, kind),
     ...optionalChatModeDeclaredFlag(raw, path),
+    ...optionalContextWindowAssumedFlag(raw, path, kind),
     ...optionalReasoningEfforts(raw.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     ...parseVoiceCapabilityFields(raw, path, kind),
@@ -1340,6 +1377,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "id",
   "kind",
   "contextWindow",
+  "contextWindowAssumed",
   "maxOutputTokens",
   "toolCalling",
   "toolCallingVerification",
@@ -1422,6 +1460,22 @@ function optionalChatModeDeclaredFlag(
   return value.chatModeDeclared !== undefined
     ? { chatModeDeclared: requireBoolean(value.chatModeDeclared, `${path}.chatModeDeclared`) }
     : {};
+}
+
+// Optional "window not yet measured" flag — preserved only when true so a declared or verified
+// capability round-trips without it. Only a chat window can be assumed: an embedding or voice
+// capability never feeds conversation budgeting.
+function optionalContextWindowAssumedFlag(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "contextWindowAssumed">> {
+  if (value.contextWindowAssumed === undefined) return {};
+  const assumed = requireBoolean(value.contextWindowAssumed, `${path}.contextWindowAssumed`);
+  if (assumed && kind !== "chat") {
+    throw new ConfigInvalidError(`${path}.contextWindowAssumed is only valid for chat models`);
+  }
+  return assumed ? { contextWindowAssumed: true } : {};
 }
 
 function isCanonicalIsoTimestamp(value: unknown): value is string {
@@ -1609,6 +1663,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     ...optionalDeterminismFlags(value, path),
     ...optionalReasoningEfforts(value.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...optionalChatModeDeclaredFlag(value, path),
+    ...optionalContextWindowAssumedFlag(value, path, kind),
     ...optionalInfillingFlags(value, path, kind),
     ...parseVoiceCapabilityFields(value, path, kind),
     workflowEligible,
@@ -2177,7 +2232,9 @@ export function loadConfigFromFile(
   // configs runs HERE at the file-load boundary — not inside parseGatewayConfig — so a
   // fresh setup wizard save with contextWindow:0 still gets the strict rejection.
   return parseGatewayConfig(
-    migrateLegacyChatContextWindows(readGatewayConfigFile(path)),
+    markAssumedPlaceholderContextWindows(
+      migrateLegacyChatContextWindows(readGatewayConfigFile(path)),
+    ),
     env,
     options,
   );

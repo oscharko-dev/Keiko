@@ -3,6 +3,10 @@ import {
   initializeConfiguredConversationReadiness,
   stopConfiguredConversationReadiness,
 } from "./gateway-readiness.js";
+import {
+  adoptReportedContextWindow,
+  discoverAssumedContextWindows,
+} from "./gateway-context-window.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
 // only the static-serving + CSP + port fields; the JSON/SSE handlers additionally need the resolved
 // gateway config (for the config inspector and for building a ModelPort), an evidence store, a live
@@ -27,6 +31,7 @@ import {
   resolveCostClass,
   type EnvSource,
   type GatewayRequest,
+  type ContextWindowReport,
   type GatewaySpendBudget,
   type GatewayStreamChunk,
   type GatewayConfig,
@@ -509,6 +514,12 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 export interface RuntimeGatewayConfig {
   readonly subscribe?: (listener: (correlationId?: string) => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  /** Provider-stated context windows observed by this source's gateways. Never throws. */
+  readonly onContextWindowReported?: ((report: ContextWindowReport) => void) | undefined;
+  /** Binds the host's adoption path (gateway-context-window.ts) once the handler deps exist. */
+  readonly bindContextWindowReporter?:
+    | ((reporter: (report: ContextWindowReport) => void) => void)
+    | undefined;
   readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
@@ -579,6 +590,10 @@ export interface GatewayDiscoveredModels {
   // moderation, or an unrecognised value). Recognised, reported, never configured — so the
   // operator learns the model exists and why it was skipped instead of it vanishing silently.
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
+  // Rerank engines among the models above — declared `mode: "rerank"`, or named as one when the
+  // gateway declared no mode. They are ALSO listed in `unsupportedModels` until setup admits one as
+  // the retrieval reranker after a live probe; never present when the gateway offers none.
+  readonly rerankModelIds?: readonly string[];
 }
 
 export interface GatewayDiscoveredModelMetadata {
@@ -1457,10 +1472,17 @@ function createRuntimeGatewayConfig(
   // replacement config with an outcome nobody measured against it (#2847 review).
   let generation = 0;
   const listeners = gatewayConfigListeners();
+  let contextWindowReporter: ((report: ContextWindowReport) => void) | undefined;
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
     spendBudget: gatewaySpendBudgetForEnv(env),
+    onContextWindowReported: (report): void => {
+      contextWindowReporter?.(report);
+    },
+    bindContextWindowReporter: (reporter): void => {
+      contextWindowReporter = reporter;
+    },
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
     set(next: GatewayConfig | undefined, nextPresent: boolean, correlationId?: string): void {
@@ -4513,11 +4535,22 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 
 function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
   initializeConfiguredConversationReadiness(deps);
+  // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
+  // answer, and once per deployment from the startup context-window probe (customer, 1.1.13).
+  deps.gatewayConfig?.bindContextWindowReporter?.((report) => {
+    adoptReportedContextWindow(deps, report, "provider-overflow");
+  });
+  discoverAssumedContextWindows(
+    deps,
+    deps.gatewayConfig?.initializationCorrelationId ?? newCorrelationId(),
+  );
   const unsubscribe = deps.gatewayConfig?.subscribe?.((correlationId) => {
     // Setup stamps its successful credential checks synchronously after replacement. Reuse
     // those observations before deciding which models still need startup verification.
     queueMicrotask(() => {
-      initializeConfiguredConversationReadiness(deps, correlationId ?? newCorrelationId());
+      const id = correlationId ?? newCorrelationId();
+      initializeConfiguredConversationReadiness(deps, id);
+      discoverAssumedContextWindows(deps, id);
     });
   });
   return {

@@ -931,14 +931,68 @@ function errorSignal(payload: unknown): string {
     .toLowerCase();
 }
 
+// vLLM (>= 0.11) rejects an output allocation larger than the whole window as
+// "max_tokens=N cannot be greater than max_model_len=M"; Anthropic says "prompt is too long",
+// llama.cpp "exceeds the available context size" — each an overflow like any other.
 const CONTEXT_OVERFLOW_SIGNAL =
-  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt too long|context overflow/;
+  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len|available context size/;
 
 function isContextOverflow(status: number, payload: unknown): boolean {
   if (status !== 400 && status !== 413 && status !== 422) {
     return false;
   }
   return CONTEXT_OVERFLOW_SIGNAL.test(errorSignal(payload));
+}
+
+// How providers state the deployment's TOTAL window in an overflow answer, first match wins:
+//   vLLM / OpenAI / Azure : "This model's maximum context length is 32768 tokens. ..."
+//   vLLM >= 0.11          : "max_tokens=... cannot be greater than max_model_len=32768. ..."
+//   Anthropic via LiteLLM : "prompt is too long: 250000 tokens > 200000 maximum"
+//   TGI                   : "`inputs` tokens + `max_new_tokens` must be <= 8192. Given: ..."
+//   llama.cpp server      : "... exceeds the available context size (n_ctx = 8192) ..."
+// LiteLLM forwards the upstream text inside its own message, so the same patterns apply behind it.
+const REPORTED_CONTEXT_WINDOW_PATTERNS: readonly RegExp[] = [
+  /maximum context length is (\d{3,9}) tokens/,
+  /max_model_len\s*=\s*(\d{3,9})/,
+  /\d+ tokens? > (\d{3,9}) maximum/,
+  /must be <= (\d{3,9})\. given/,
+  /n_ctx\s*[=:]\s*(\d{3,9})/,
+];
+const MIN_REPORTED_CONTEXT_WINDOW = 512;
+const MAX_REPORTED_CONTEXT_WINDOW = 100_000_000;
+
+/**
+ * The total context window a provider stated in an overflow answer, or undefined when it named
+ * none. Exported for the startup context-window probe (readiness-probe.ts), which reads the same
+ * answer. Only a bounded integer leaves this function — never the provider's text.
+ */
+export function reportedContextWindowTokens(payload: unknown): number | undefined {
+  const signal = errorSignal(payload);
+  for (const pattern of REPORTED_CONTEXT_WINDOW_PATTERNS) {
+    const tokens = Number(pattern.exec(signal)?.[1]);
+    if (
+      Number.isSafeInteger(tokens) &&
+      tokens >= MIN_REPORTED_CONTEXT_WINDOW &&
+      tokens <= MAX_REPORTED_CONTEXT_WINDOW
+    ) {
+      return tokens;
+    }
+  }
+  return undefined;
+}
+
+function contextOverflowError(
+  modelId: string,
+  secrets: readonly string[],
+  payload: unknown,
+): ContextOverflowError {
+  const error = new ContextOverflowError(
+    `provider reported context overflow for '${modelId}'`,
+    secrets,
+  );
+  const reported = reportedContextWindowTokens(payload);
+  if (reported !== undefined) error.reportedContextWindowTokens = reported;
+  return error;
 }
 
 const MODEL_REFUSAL_SIGNAL = /content[_ -]?filter|refus|safety|policy/;
@@ -1070,7 +1124,7 @@ function mapProviderFailure(
   streamed: boolean,
 ): never {
   if (isContextOverflow(status, payload)) {
-    throw new ContextOverflowError(`provider reported context overflow for '${modelId}'`, secrets);
+    throw contextOverflowError(modelId, secrets, payload);
   }
   if (isModelRefusal(payload)) {
     throw new ModelRefusalError(`provider refused the request for '${modelId}'`, secrets);

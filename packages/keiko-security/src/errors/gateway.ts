@@ -83,6 +83,10 @@ export class MalformedToolCallError extends GatewayError {
 export class ContextOverflowError extends GatewayError {
   readonly code = ERROR_CODES.CONTEXT_OVERFLOW;
   readonly retryable = false;
+  // The deployment's total context window as the PROVIDER stated it in its own overflow answer
+  // (vLLM: "maximum context length is N tokens" / "max_model_len=N"). Attached at the throw site,
+  // like requestId; a count, never content. Absent for a local admission refusal.
+  reportedContextWindowTokens?: number;
 }
 
 // A rate limit is always an HTTP 429 by definition (that is the status the provider used to

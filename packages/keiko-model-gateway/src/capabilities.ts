@@ -6,6 +6,7 @@ import { CAPABILITY_DATA } from "./capabilities.data.js";
 import {
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isLikelyRerankModelId,
   isVoiceCapability,
   MODEL_COST_RANK,
   modelSupportsInfilling,
@@ -128,9 +129,18 @@ export const EMBEDDING_ID_PATTERN = new RegExp(
   "i",
 );
 
+// A rerank engine is never an embedding model, whatever family prefix it carries: the pattern above
+// matches "bge-reranker-v2-m3" and "jina-reranker-v2" on "bge"/"jina", which is exactly how a
+// reranker was once bound to every Knowledge Pod as its embedding model.
 export function isLikelyEmbeddingModelId(id: string): boolean {
-  return EMBEDDING_ID_PATTERN.test(id);
+  return EMBEDDING_ID_PATTERN.test(id) && !isLikelyRerankModelId(id);
 }
+
+/** The window an undeclared chat model is stored with until Keiko measures the real one. */
+export const PLACEHOLDER_CHAT_CONTEXT_WINDOW = 4096;
+/** The limitation every runtime-configured placeholder capability carries. */
+export const RUNTIME_CONFIGURED_CAPABILITY_LIMITATION =
+  "Runtime-configured capability; validate against the target endpoint before production use";
 
 export function createDefaultEmbeddingCapability(modelId: string): ModelCapability {
   return {
@@ -148,9 +158,7 @@ export function createDefaultEmbeddingCapability(modelId: string): ModelCapabili
     latencyClass: "fast",
     throughputHint: "runtime-configured embedding endpoint",
     preferredUseCases: ["Embeddings"],
-    knownLimitations: [
-      "Runtime-configured capability; validate against the target endpoint before production use",
-    ],
+    knownLimitations: [RUNTIME_CONFIGURED_CAPABILITY_LIMITATION],
   };
 }
 
@@ -162,10 +170,12 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     // is a degraded sentinel that only surfaces later through disconnected downstream symptoms
     // (GEN-GATE-CONTEXT-001/004). parseModelCapability and buildProviderCapabilityBody now reject
     // chat capabilities with contextWindow<=0 at config-parse time, so this default must be a real
-    // positive number for the setup workflow's unenriched placeholder capabilities to parse. 4096
-    // is the smallest window any modern chat model advertises; discovery and enrichment will
-    // widen it to the true value before the model is actually used.
-    contextWindow: 4096,
+    // positive number for the setup workflow's unenriched placeholder capabilities to parse. The
+    // value is only a floor for surfaces that need a PROVEN window: `contextWindowAssumed` tells
+    // conversation budgeting to plan with the default geometry until discovery, the startup
+    // context-window probe or the provider's own overflow answer supplies the real window.
+    contextWindow: PLACEHOLDER_CHAT_CONTEXT_WINDOW,
+    contextWindowAssumed: true,
     maxOutputTokens: 0,
     // A deployment name is never evidence that its endpoint accepts forced tool calls. Setup and
     // readiness upgrade this only after the live, configuration-bound probe succeeds.
@@ -182,7 +192,7 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     throughputHint: "runtime-configured endpoint",
     preferredUseCases: ["Chat"],
     knownLimitations: [
-      "Runtime-configured capability; validate against the target endpoint before production use",
+      RUNTIME_CONFIGURED_CAPABILITY_LIMITATION,
       "Structured output, response-format enforcement, image input, document input, and workflow eligibility require explicit enrichment",
     ],
   };
