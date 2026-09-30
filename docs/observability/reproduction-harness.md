@@ -8,21 +8,18 @@ records why the underlying fields exist and what each one does and does not prom
 
 ## The recipe: artifact → seed → replay → red/green test
 
-1. **Get the artifact.** Either one raw Activity Log file from `<stateDir>/logs/` (a segment or a
-   legacy file), or a full bundle from `keiko support export --out bundle.jsonl`. The bundle joins
-   every segment in logical order and additionally carries store fingerprints and a manifest; the
-   analyzer auto-detects which kind it was handed. When the correlation id or incident is already
-   known, `keiko support export --correlation-id <id> --out bundle.jsonl` (or `--incident <id>`)
-   writes only that operation's registered causal closure, which keeps a long history small.
-2. **Find the correlation id.** `keiko support analyze bundle.jsonl` prints every timeline in the
-   file; `keiko support analyze bundle.jsonl --correlation-id <id> --json` narrows to one and emits
-   it as a machine-readable `LogTimeline`. See [`README.md`](README.md#worked-example-keiko-support-analyze)
-   for a worked example of this step.
+1. **Receive privately and validate first.** Follow the [support workspace guide](support-workspace.md).
+   Use one canonical report from `keiko support export --incident <id>` or
+   `--correlation-id <id>`. Raw logs and legacy open JSONL bundles are not accepted at this boundary.
+2. **Use only the analyzed machine view.** `keiko support analyze report.json --json` validates
+   every byte before emitting `keiko.support.report-analysis` (schema version 1). Read `selection`
+   and `analysis.sufficiency` first. Its `analysis.timelines` identify the ordered events and
+   failure-site frames; `seed` carries deterministic replay preparation for the incident correlation.
+   Authenticity remains unknown even with valid integrity. Do not give the unvalidated file to an agent.
 3. **Build a reproduction seed.** `buildReproductionSeed(text, correlationId, generatedAt)`
    (`packages/keiko-activity-log/src/reader/support-analyze.ts`) assembles everything reconstructable for that
    correlation id into one `ReproductionSeed`: the ordered `timeline`, a `gatewayScript` when the
-   timeline includes a model-gateway call, an `httpRequest` seed, a `storeFingerprint` (bundle
-   only), an `indexingJob` seed, `stackFrames`/`causeChain`, and — always — a `warnings` array
+   timeline includes a model-gateway call, an `httpRequest` seed, a `storeFingerprint` when a registered event provides one, an `indexingJob` seed, `stackFrames`/`causeChain`, and — always — a `warnings` array
    naming exactly what could _not_ be reconstructed and why (starting with the standing
    by-design warning that no prompt or response body is ever logged). Read `warnings` before
    trusting that a seed is complete; a warning names the actual gap rather than the seed silently
@@ -65,7 +62,7 @@ records why the underlying fields exist and what each one does and does not prom
    }
 
    describe("reconstructed customer failure", () => {
-     it("reproduces the rate-limit-then-success sequence the customer's bundle recorded", async () => {
+     it("reproduces the rate-limit-then-success sequence the validated report recorded", async () => {
        const events: unknown[] = [];
        const clock = createScriptedGatewayClock();
        const gateway = new Gateway(config(), {
@@ -125,7 +122,7 @@ runtime source maps (`sourceMap: false` everywhere; only `declarationMap: true`)
 decision, not a gap, made to protect the CLI's startup budget and package size.
 
 **A frame is only meaningful against the exact tagged product version that wrote it.** The
-support bundle's manifest names that version. To read a frame:
+support report's incident names that version. To read a frame:
 
 1. Check out that exact tag (`git checkout v<version>` against the Keiko repository).
 2. Build it (`npm run build`) so `tsc` reproduces the same `dist/<file>.js` deterministically —

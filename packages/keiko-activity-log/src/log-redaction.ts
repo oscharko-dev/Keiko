@@ -942,3 +942,28 @@ export function closeReasonVocabulary(
 ): string {
   return vocab.has(value) ? value : fallback;
 }
+
+// Received reports cannot inherit the producer-only prose/route escape hatches. Their closed
+// projection preserves these fields as explicit markers, independent of a configured server.
+export function projectSupportLogFields(
+  fields: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([name, value]) => {
+      if (name === "path" || name === "routeTemplate") return [name, REDACTED_PATH];
+      if (name === "clientNote" || name === "diagnosticSummary") return [name, REDACTED_SHAPE];
+      return [name, value];
+    }),
+  );
+}
+
+/** Reuse the owning frame/cause reducers; an untrusted sender cannot claim producer redaction. */
+export function areSupportLogFieldsSafe(fields: Readonly<Record<string, unknown>>): boolean {
+  const projected = projectSupportLogFields(fields);
+  if (!Object.entries(fields).every(([name, value]) => value === projected[name])) return false;
+  return ["frames", "causeChain"].every((name) => {
+    if (fields[name] === undefined) return true;
+    const sanitized = redactAcceptedField(name, fields[name], MAX_LOG_FIELD_DEPTH);
+    return JSON.stringify(sanitized) === JSON.stringify(fields[name]);
+  });
+}

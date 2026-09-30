@@ -36,6 +36,7 @@
 // `support.ts` owns argv parsing, file reads, and stdout/stderr; this file owns everything that
 // can be exercised on an in-memory string.
 
+import { areSupportLogFieldsSafe } from "../log-redaction.js";
 import { createHash } from "node:crypto";
 import {
   readToolCatalogEvidence,
@@ -46,14 +47,10 @@ import {
 } from "./support-tool-catalog.js";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import {
-  ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_COMPATIBILITY_STATES,
-  ACTIVITY_LOG_REGISTRY_VERSION,
-  ACTIVITY_LOG_SCHEMA_DIGEST,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
   ActivityLogEventValidationError,
-  activityLogOperationSchema,
   isActivityLogIdentityDigest,
   isActivityLogInstanceId,
   isActivityLogErrorKind,
@@ -61,7 +58,7 @@ import {
   isActivityLogProcessId,
   isActivityLogProductVersion,
   isActivityLogSequence,
-  validateActivityLogOperationRecord,
+  validateArchivedActivityLogRecord,
   type ActivityLogCompletenessState,
   type ActivityLogEventEnvelope,
   type ActivityLogLossState,
@@ -77,7 +74,10 @@ import {
 } from "./support-analyze-sufficiency.js";
 import { SequenceNumberSet } from "./sequence-number-set.js";
 
+import { CURRENT_SUPPORT_REGISTRY, type SupportReaderRegistry } from "./support-registry.js";
+
 export interface SupportAnalyzeOptions {
+  readonly registry?: SupportReaderRegistry;
   readonly toolLifecycleValidator?: ToolLifecycleValidator;
   readonly toolDiagnosticRedactor?: ToolDiagnosticRedactor;
 }
@@ -531,6 +531,7 @@ function declaredCompatibility(record: Record<string, unknown>): ActivityLogEvid
 
 function registryIdentityClassification(
   record: Record<string, unknown>,
+  registry: SupportReaderRegistry,
 ): ActivityLogEvidenceClassification {
   let present = 0;
   for (const key of ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS) {
@@ -540,9 +541,9 @@ function registryIdentityClassification(
   if (present !== ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.length) return "incomplete";
   if (!validRegistryIdentityShape(record)) return "corrupt";
   if (
-    record.registryVersion !== ACTIVITY_LOG_REGISTRY_VERSION ||
-    record.schemaDigest !== ACTIVITY_LOG_SCHEMA_DIGEST ||
-    record.catalogDigest !== ACTIVITY_LOG_CATALOG_DIGEST
+    record.registryVersion !== registry.registryVersion ||
+    record.schemaDigest !== registry.schemaDigest ||
+    record.catalogDigest !== registry.catalogDigest
   ) {
     return "unsupported";
   }
@@ -567,6 +568,7 @@ function schemaVersionClassification(
 
 function identityClassification(
   record: Record<string, unknown>,
+  registry: SupportReaderRegistry,
 ): ActivityLogEvidenceClassification {
   const identityCount =
     Number(record.pid !== undefined) +
@@ -581,7 +583,7 @@ function identityClassification(
   }
   if (hasInvalidPresentIdentity) return "corrupt";
   if (identityCount < 3) return "incomplete";
-  return registryIdentityClassification(record);
+  return registryIdentityClassification(record, registry);
 }
 
 function registeredFields(
@@ -680,15 +682,16 @@ function registeredRecordClassification(
   record: Record<string, unknown>,
   category: string,
   op: string,
+  registry: SupportReaderRegistry,
 ): ActivityLogEvidenceClassification {
-  const registration = activityLogOperationSchema(op);
+  const registration = registry.operations.get(op);
   if (registration === undefined) return "corrupt";
   const envelope = recordEnvelope(record, registration);
   if (envelope === undefined) return "corrupt";
   if (hasUnknownRegisteredField(record, registration)) return "corrupt";
   try {
-    validateActivityLogOperationRecord(
-      op,
+    validateArchivedActivityLogRecord(
+      registration,
       category,
       envelope,
       registeredFields(record, registration),
@@ -741,9 +744,10 @@ function recordEvidence(
   record: Record<string, unknown>,
   labels: RequiredLineLabels,
   evidence: "supported" | "legacy",
+  registry: SupportReaderRegistry,
 ): ActivityLogEvidenceClassification {
   if (evidence === "supported" && record.registryVersion !== undefined) {
-    return registeredRecordClassification(record, labels.category, labels.op);
+    return registeredRecordClassification(record, labels.category, labels.op, registry);
   }
   return evidence;
 }
@@ -760,12 +764,13 @@ export function classifyLine(
   const record = tryParseJsonObject(raw);
   if (record === undefined) return rejectedLine(invalidJsonEvidence(terminalFragment));
   if (typeof record.$section === "string") return { kind: "section" };
-  const evidence = identityClassification(record);
+  const registry = options.registry ?? CURRENT_SUPPORT_REGISTRY;
+  const evidence = identityClassification(record, registry);
   if (evidence === "unsupported") return rejectedLine(evidence);
   const labels = requiredLineLabels(record);
   if (labels === undefined) return rejectedLine("corrupt");
   if (!acceptedEvidence(evidence)) return rejectedLine(evidence);
-  const recordClassification = recordEvidence(record, labels, evidence);
+  const recordClassification = recordEvidence(record, labels, evidence, registry);
   if (!acceptedEvidence(recordClassification)) return rejectedLine(recordClassification);
   const identity = readIdentity(record);
   return {
@@ -778,6 +783,25 @@ export function classifyLine(
       fileIndex,
     },
   };
+}
+
+/** Closed field validation, independent of evidence completeness; no rendering or IO. */
+export function isSupportReportEvent(
+  record: Record<string, unknown>,
+  registry: SupportReaderRegistry,
+): boolean {
+  const labels = requiredLineLabels(record);
+  return (
+    record.schemaVersion === 2 &&
+    hasValidProcessIdentity(record) &&
+    validRegistryIdentityShape(record) &&
+    record.registryVersion === registry.registryVersion &&
+    record.schemaDigest === registry.schemaDigest &&
+    record.catalogDigest === registry.catalogDigest &&
+    labels !== undefined &&
+    areSupportLogFieldsSafe(record) &&
+    registeredRecordClassification(record, labels.category, labels.op, registry) === "supported"
+  );
 }
 
 function addDirectCorrelation(direct: Map<string, ParsedLine[]>, record: ParsedLine): void {
@@ -1554,10 +1578,14 @@ export function analyzeLogLines(
   for (let next = iterator.next(); next.done !== true; next = iterator.next()) {
     accumulateContentLine(accumulation, next.value, fragments, options);
   }
-  return analyzeParsedLines(kind, accumulation);
+  return analyzeParsedLines(kind, accumulation, options);
 }
 
-function analyzeParsedLines(kind: SourceKind, accumulation: LineAccumulation): AnalyzeAllResult {
+function analyzeParsedLines(
+  kind: SourceKind,
+  accumulation: LineAccumulation,
+  options: SupportAnalyzeOptions,
+): AnalyzeAllResult {
   const { parsedLines, evidenceCounts, malformedLineCount } = accumulation;
   const groups = groupByCorrelationId(parsedLines);
   const timelines = [...groups.entries()].map(([correlationId, group]) =>
@@ -1571,7 +1599,11 @@ function analyzeParsedLines(kind: SourceKind, accumulation: LineAccumulation): A
   const clusters = buildOpClusters(parsedLines);
   const updateAttempts = buildUpdateAttempts(parsedLines);
   const observation = latestObservation(parsedLines);
-  const sufficiency = projectActivityLogSufficiency(parsedLines.map(sufficiencyLine), evidence);
+  const sufficiency = projectActivityLogSufficiency(
+    parsedLines.map(sufficiencyLine),
+    evidence,
+    options.registry,
+  );
   return {
     sourceKind: kind,
     ...observation,
@@ -1591,10 +1623,14 @@ function analyzeParsedLines(kind: SourceKind, accumulation: LineAccumulation): A
 export function timelineSufficiency(
   result: AnalyzeAllResult,
   timeline: LogTimeline,
+  registry: SupportReaderRegistry = CURRENT_SUPPORT_REGISTRY,
 ): ActivityLogSufficiency {
   return restrictActivityLogSufficiency(
     result.sufficiency,
-    activityLogFailureClassesOf(timeline.lines.map((line) => line.op)),
+    activityLogFailureClassesOf(
+      timeline.lines.map((line) => line.op),
+      registry,
+    ),
   );
 }
 
@@ -2417,7 +2453,7 @@ export function buildReproductionSeedFromAnalysis(
     timeline: timeline.lines,
     ...optionalSeedFields(fields),
     ...toolCatalogSeed(fields.toolCatalog),
-    sufficiency: timelineSufficiency(analysis, timeline),
+    sufficiency: timelineSufficiency(analysis, timeline, options.registry),
     warnings: [
       ...toolCatalogWarnings(fields.toolCatalog),
       ...buildSeedWarnings({

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import {
+  projectSupportLogFields,
+  areSupportLogFieldsSafe,
   DROPPED_DEPTH,
   DROPPED_LENGTH,
   MAX_LOG_ARRAY_LENGTH,
@@ -1349,5 +1351,39 @@ describe("production browser frame redaction", () => {
     });
     expect(first).not.toEqual(different);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first).replace(":1:2", ":3:4"));
+  });
+});
+
+describe("closed received-report projection", () => {
+  it("replaces producer-only prose and route hatches with explicit markers", () => {
+    const input = {
+      path: "/customer/private",
+      routeTemplate: "/api/customer/private",
+      clientNote: "customer narrative",
+      diagnosticSummary: "private operator narrative",
+      count: 7,
+    };
+    const projected = projectSupportLogFields(input);
+    expect(projected).toEqual({
+      path: REDACTED_PATH,
+      routeTemplate: REDACTED_PATH,
+      clientNote: REDACTED_SHAPE,
+      diagnosticSummary: REDACTED_SHAPE,
+      count: 7,
+    });
+    expect(areSupportLogFieldsSafe(input)).toBe(false);
+    expect(areSupportLogFieldsSafe(projected)).toBe(true);
+  });
+  it("uses the owning frame and cause reducers for received evidence", () => {
+    expect(
+      areSupportLogFieldsSafe({
+        frames: ["packages/keiko-cli/src/support.ts:10:2"],
+        causeChain: ["TypeError"],
+      }),
+    ).toBe(true);
+    expect(
+      areSupportLogFieldsSafe({ frames: ["packages/keiko-cli/src/../../customer.ts:10:2"] }),
+    ).toBe(false);
+    expect(areSupportLogFieldsSafe({ causeChain: ["customer secret body"] })).toBe(false);
   });
 });

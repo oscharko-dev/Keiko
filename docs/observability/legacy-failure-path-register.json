@@ -494,44 +494,8 @@
       "count": 2
     },
     {
-      "path": "packages/keiko-cli/src/support-export.ts",
-      "owner": "discoverServerLogFiles",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-cli/src/support.ts",
       "owner": "emitSupportInstallLayoutRefusal",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "loadToolAnalysisOptions",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "processIsRunning",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "resolveEvidenceIndexCount",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "resolveExportInstallMode",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "resolveIncludedEvidenceSections",
       "kind": "unregistered-catch",
       "count": 1
     },

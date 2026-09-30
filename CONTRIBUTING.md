@@ -198,3 +198,18 @@ approval. Explicit narrower deployment ceilings and every mode-independent denia
 Do not propagate Coding's availability default to Memory: its absent-configuration ceiling stays
 `governed-assist` for capture, policy projection and maintenance. Regression coverage must exercise
 both production composition and these consumers when changing this wiring.
+
+## Support reports
+
+For local defect evidence, use `keiko support export --incident <id>` or a correlation selector.
+The canonical owner-private report has embedded integrity, a 10 MiB hard ceiling and explicit
+sufficiency. Inclusion flags and legacy raw/open bundle input are retired. Validate a manually
+received file offline with `keiko support analyze FILE --json` before agents use its machine view.
+Follow [the support workspace guide](docs/observability/support-workspace.md); nothing is sent by
+these commands. Issue #3534 records the new-additions/high-priority behavioral release impact,
+supported from the next release after merge. Existing operator scripts remove inclusion flags and
+adopt the versioned report-analysis envelope; published release metadata is not rewritten.
+
+Support report output names always use the fixed product/schema/incident/date class. `--out` now
+selects a private directory, so operator scripts replace their former output filename with its
+private parent directory and discover the reported canonical filename. No user state migrates.

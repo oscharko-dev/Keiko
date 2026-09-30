@@ -94,6 +94,7 @@ export {
   parseSupportIncidentFileName,
   parseSupportIncidentFingerprintClaimFileName,
   parseSupportIncidentRecord,
+  parseSupportIncidentPrivateProjection,
   parseSupportIncidentSlotClaimFileName,
   supportIncidentBuild,
   supportIncidentFileName,
@@ -937,6 +938,20 @@ export function validateActivityLogOperationRecord(
   return registration;
 }
 
+/** Validates a reader record against a trusted archived registration, using the owning validators. */
+export function validateArchivedActivityLogRecord(
+  registration: ActivityLogOperationRegistration,
+  category: string,
+  envelope: ActivityLogEventEnvelope,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  if (registration.category !== category) {
+    throw new ActivityLogEventValidationError("registration-mismatch");
+  }
+  validateActivityLogFields(registration, fields);
+  validateActivityLogEnvelope(registration, envelope);
+}
+
 export const ACTIVITY_LOG_EVENT_REGISTRATION = Symbol.for(
   "@oscharko-dev/keiko-contracts/activity-log-event-registration",
 );
@@ -1306,3 +1321,5 @@ export function activityLogEvent<
     return rejectedActivityLogEvent<Registration>(error);
   }
 }
+
+export * from "./support-report.js";

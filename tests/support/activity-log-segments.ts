@@ -33,6 +33,7 @@ export interface FixtureEventInput {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly errorKind?: ActivityLogErrorKind | undefined;
+  readonly status?: number | undefined;
   readonly level?: "debug" | "info" | "warn" | "error" | undefined;
   readonly fields?: Readonly<Record<string, unknown>> | undefined;
 }
@@ -64,6 +65,7 @@ export function fixtureLine(
         ? {}
         : { parentCorrelationId: input.parentCorrelationId }),
       ...(input.errorKind === undefined ? {} : { errorKind: input.errorKind }),
+      ...(input.status === undefined ? {} : { status: input.status }),
       extra: {
         completeness: "complete",
         loss: "none",

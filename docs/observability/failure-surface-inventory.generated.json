@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d3107a04dffe432326f7ddeb4f6791173d8d7d6c2139e6c8a5a014ae675d07f6"
+    "catalogDigest": "e03a1573f8001cbfc2e5b1b94fc6f7390c39ead9206b3be725fced3840f2f670"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 482,
+    "operationCount": 483,
     "proofCount": 490,
     "resolvedProofCount": 490,
-    "failureClassCount": 326,
+    "failureClassCount": 324,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -629,11 +629,12 @@
         "security.windows-portable-legacy-launcher.system-root-refused",
         "security.windows-shortcut.system-binary-missing",
         "security.windows-shortcut.system-root-refused",
-        "support.analyze.classified",
-        "support.export.publication",
         "support.manifest.rebuilt",
         "support.query.completed",
         "support.query.failed",
+        "support.report.completed",
+        "support.report.failed",
+        "support.report.started",
         "update.candidate.consumed",
         "update.candidate.issued",
         "update.candidate.rejected",
@@ -934,10 +935,7 @@
     "startup-recovery-failed": ["lifecycle-crash.crash"],
     "store-encryption-checkpoint": ["memory-knowledge.dependency-failure"],
     "store-encryption-migration": ["memory-knowledge.dependency-failure"],
-    "support-analysis": ["runtime-packages.dependency-failure"],
     "support-incident": ["lifecycle-crash.loss"],
-    "support-publication": ["runtime-packages.dependency-failure"],
-    "support-publication-acknowledgement": ["runtime-packages.dependency-failure"],
     "task-workspace-lifecycle": ["tools-workflows.dependency-failure"],
     "task-workspace-manifest-reconnect": ["lifecycle-crash.dependency-failure"],
     "task-workspace-repository-registration": ["tools-workflows.rejection"],
@@ -977,7 +975,8 @@
     "workspace-root-denial": ["tools-workflows.rejection"],
     "workspace-script-trust": ["tools-workflows.rejection"],
     "workspace-script-trust-admission": ["tools-workflows.rejection"],
-    "support-query": ["runtime-packages.dependency-failure"]
+    "support-query": ["runtime-packages.dependency-failure"],
+    "support-report": ["runtime-packages.dependency-failure"]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -2166,15 +2165,6 @@
       "packages/keiko-server/src/store/journeyOutcomeMigration.test.ts"
     ],
     "store.opened.identity": ["packages/keiko-server/src/store/db.test.ts"],
-    "support.analyze.classified.classification-evidence": [
-      "packages/keiko-cli/src/support.activity-log-proof.test.ts"
-    ],
-    "support.export.publication.publication-evidence": [
-      "packages/keiko-cli/src/support.activity-log-proof.test.ts"
-    ],
-    "support.export.publication.commit-last": [
-      "packages/keiko-cli/src/support.activity-log-proof.test.ts"
-    ],
     "support.incident.created.emitted-line": [
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
@@ -2198,6 +2188,13 @@
     ],
     "support.query.failed.failure-evidence": [
       "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
+    ],
+    "support.report.completed.report-lifecycle": [
+      "packages/keiko-cli/src/support-report-cli.test.ts"
+    ],
+    "support.report.failed.report-lifecycle": ["packages/keiko-cli/src/support-report-cli.test.ts"],
+    "support.report.started.report-lifecycle": [
+      "packages/keiko-cli/src/support-report-cli.test.ts"
     ],
     "task-workspace.identity.creation-time-probe.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
@@ -2317,6 +2314,7 @@
     "model-gateway.loss": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "model-gateway.rejection": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "runtime-packages.dependency-failure": [
+      "packages/keiko-cli/src/support-report-cli.test.ts",
       "tests/activity-log-scenarios/lifecycle-runtime.test.ts"
     ],
     "runtime-packages.loss": ["tests/activity-log-scenarios/lifecycle-runtime.test.ts"],

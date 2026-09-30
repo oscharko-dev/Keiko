@@ -125,38 +125,6 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "The catch deterministically classifies hostile persisted evidence as incomplete or corrupt.",
   ],
   [
-    "packages/keiko-cli/src/support.ts:supportPublicationErrorKind",
-    "The catch bounds a hostile error-property read to the closed unknown failure kind.",
-  ],
-  [
-    "packages/keiko-cli/src/support.ts:supportPublicationFailure",
-    "The catch returns a closed publication failure consumed by the registered publication event.",
-  ],
-  [
-    "packages/keiko-cli/src/support.ts:publishSupportBundle",
-    "The catch returns a typed failed outcome consumed by the registered publication event.",
-  ],
-  [
-    "packages/keiko-cli/src/support.ts:recoverSupportBundle",
-    "The catch returns a typed recovery failure consumed by the registered publication event.",
-  ],
-  [
-    "packages/keiko-cli/src/support.ts:acknowledgeSupportPublication",
-    "The catch returns a closed acknowledgement failure consumed by the registered publication event.",
-  ],
-  [
-    "packages/keiko-cli/src/support.ts:collectFreshSupportData",
-    "Activity Log construction itself failed; the CLI reports the unavailable capability and stops.",
-  ],
-  [
-    "packages/keiko-cli/src/support.ts:persistSupportAnalysisEvidence",
-    "Activity Log construction itself failed; the CLI reports the unavailable capability and stops.",
-  ],
-  [
-    "packages/keiko-cli/src/support-export.ts:logSkipKind",
-    "A no-follow lstat probe classifies a skipped log file; the manifest attests its name and kind.",
-  ],
-  [
     "packages/keiko-sandbox/src/darwin-git.ts:chooseAttestedDarwinGit",
     "A rejected selected Git retries only the fixed Command Line Tools candidate under identical attestation. The runtime.confinement.spawned line records the chosen closed source; a second refusal still throws.",
   ],

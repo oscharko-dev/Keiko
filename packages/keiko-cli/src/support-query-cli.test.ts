@@ -16,18 +16,16 @@ import {
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   closeFileServerLogSinks,
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-server";
 import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import { loadActivityLog } from "./lazy-modules.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
-import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   fixtureLine,
   fixtureProcess,
@@ -80,21 +78,8 @@ function stateWithHistory(): { readonly stateDir: string; readonly lines: readon
   return { stateDir, lines };
 }
 
-const HEALTHY_AUDIT: AuditResult = {
-  ok: true,
-  stateDir: "/irrelevant/.keiko",
-  classes: [{ id: "creds", title: "Credential references", status: "pass", findings: [] }],
-};
-
 function exportDeps(cwd: string): SupportCliDeps {
-  return {
-    cwd,
-    now: () => new Date("2026-09-18T12:00:00.000Z"),
-    auditDeps: {
-      loadAuditor: () => Promise.resolve({ auditLocalState: () => HEALTHY_AUDIT }),
-    },
-    evidenceStore: createInMemoryEvidenceStore(),
-  };
+  return { cwd };
 }
 
 const AUDIT_ENV = { KEIKO_LOCAL_STATE_AUDITOR: "/opt/keiko/scripts/lib/local-state-audit.mjs" };
@@ -308,58 +293,47 @@ describe("keiko support manifest (#3531)", () => {
   });
 });
 
+function readExportedReport(directory: string): string {
+  const reports = readdirSync(directory).filter((name) => name.startsWith("keiko-support-v1-"));
+  expect(reports).toHaveLength(1);
+  expect(reports[0]).toMatch(/^keiko-support-v1-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u);
+  return readFileSync(join(directory, reports[0] ?? ""), "utf8");
+}
+
 describe("keiko support export with a selector (#3531)", () => {
-  it("exports only the causal closure, byte for byte, with a versioned selection verdict", async () => {
+  it("losslessly reconstructs the causal closure with a validated versioned verdict", async () => {
     const { stateDir, lines } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "selective.jsonl");
     const { io } = makeIo();
 
     const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outPath],
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
       io,
       AUDIT_ENV,
       exportDeps(outDir),
     );
 
     expect(code).toBe(0);
-    const bundle = readFileSync(outPath, "utf8");
-    const bundleLines = bundle.trimEnd().split("\n");
-    const manifest = JSON.parse(bundleLines[0] ?? "{}") as {
-      readonly sourceLogFileLines: readonly { readonly lineCount: number }[];
-      readonly selection: {
-        readonly kind: string;
-        readonly schemaVersion: number;
-        readonly query: {
-          readonly diagnosticSufficiency: { readonly status: string };
-          readonly events?: unknown;
-        };
-      };
-    };
-    const content = bundleLines.filter((line) => !line.startsWith('{"$section"'));
-    expect(content).toEqual(lines.slice(0, 2));
-    expect(bundle).not.toContain(OTHER_ID);
-    expect(manifest.sourceLogFileLines).toEqual([
-      expect.objectContaining({ lineCount: 2, terminalFragment: false }),
-    ]);
-    expect(manifest.selection).toMatchObject({
-      kind: "keiko.support.export-selection",
-      schemaVersion: 1,
-    });
-    expect(manifest.selection.query.events).toBeUndefined();
-    const analysis = analyzeLogText(bundle);
-    expect(analysis.sourceKind).toBe("bundle");
-    expect(analysis.evidence).toMatchObject({
-      classification: "supported",
-      supportedLineCount: 2,
-      corruptLineCount: 0,
-    });
+    const text = readExportedReport(outDir);
+    const report = parseSupportReport(text);
+    const analysis = analyzeSupportReport(text).analysis;
+    const selected = analysis.timelines
+      .filter((timeline) => timeline.correlationId === ROOT_ID)
+      .flatMap((timeline) => timeline.lines);
+    expect(selected).toHaveLength(2);
+    const decoded = JSON.stringify(analysis);
+    expect(decoded).not.toContain(OTHER_ID);
+    expect(report.selection.status).toBe("complete");
+    expect(analysis.evidence.corruptLineCount).toBe(0);
+    for (const original of lines.slice(0, 2)) {
+      const record = JSON.parse(original) as { correlationId: string; seq: number };
+      expect(selected).toContainEqual(expect.objectContaining({ seq: record.seq }));
+    }
   });
 
   it("writes nothing and exits 1 when the closure does not fit the budget", async () => {
     const { stateDir } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "too-small.jsonl");
     const { io, err } = makeIo();
 
     const code = await runSupportCli(
@@ -370,7 +344,7 @@ describe("keiko support export with a selector (#3531)", () => {
         "--correlation-id",
         ROOT_ID,
         "--out",
-        outPath,
+        outDir,
         "--max-bytes",
         "100",
       ],
@@ -380,15 +354,14 @@ describe("keiko support export with a selector (#3531)", () => {
     );
 
     expect(code).toBe(1);
-    expect(existsSync(outPath)).toBe(false);
-    expect(err()).toContain("insufficient (report-budget-exceeded)");
+    expect(readdirSync(outDir)).toEqual([]);
+    expect(err()).toContain("report-budget-exceeded");
   });
 
-  it("writes nothing and exits 1 when the selection is not retained", async () => {
+  it("writes an explicitly insufficient validated report when the selection is not retained", async () => {
     const { stateDir } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "missing.jsonl");
-    const { io, err } = makeIo();
+    const { io } = makeIo();
 
     const code = await runSupportCli(
       [
@@ -398,41 +371,44 @@ describe("keiko support export with a selector (#3531)", () => {
         "--correlation-id",
         "corr-cli-absent-0001",
         "--out",
-        outPath,
+        outDir,
       ],
       io,
       AUDIT_ENV,
       exportDeps(outDir),
     );
 
-    expect(code).toBe(1);
-    expect(existsSync(outPath)).toBe(false);
-    expect(err()).toContain("insufficient (evidence-not-retained)");
+    expect(code).toBe(0);
+    const report = parseSupportReport(readExportedReport(outDir));
+    expect(report.selection.status).toBe("insufficient");
+    expect(report.selection.reasons).toContain("evidence-not-retained");
+    expect(analyzeSupportReport(readExportedReport(outDir)).selection.status).toBe("insufficient");
   });
 
   // Audit (#3531/#3533): a user-reported incident's window is never empty — it always captures at
   // least its own support.incident.created line — but when the window holds no REGISTERED FAILURE,
   // the selection is `insufficient` with the closed instrumentation-gap reason `no-registered-failure`
   // (support-analyze-sufficiency.ts). That reason was never asserted end-to-end through export.
-  it("writes nothing and exits 1 for a user-reported incident with no registered failure", async () => {
+  it("never claims complete for a user-reported incident with no registered failure", async () => {
     const stateDir = makeRoot("keiko-query-cli-no-failure-");
     const created = recordUserReportedIncident(stateDir, {
       correlationId: "corr-cli-no-failure-01",
     });
     if (created.status === "rejected") throw new Error(`incident rejected: ${created.reason}`);
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "no-failure.jsonl");
-    const { io, err } = makeIo();
+    const { io } = makeIo();
 
     const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--incident", created.incidentId, "--out", outPath],
+      ["export", "--state-dir", stateDir, "--incident", created.incidentId, "--out", outDir],
       io,
       AUDIT_ENV,
       exportDeps(outDir),
     );
 
-    expect(code).toBe(1);
-    expect(existsSync(outPath)).toBe(false);
-    expect(err()).toContain("insufficient (no-registered-failure)");
+    expect(code).toBe(0);
+    const report = parseSupportReport(readExportedReport(outDir));
+    expect(report.selection.status).toBe("insufficient");
+    expect(report.selection.reasons).toContain("no-registered-failure");
+    expect(analyzeSupportReport(readExportedReport(outDir)).selection.status).toBe("insufficient");
   });
 });

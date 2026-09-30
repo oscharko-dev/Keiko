@@ -39,7 +39,7 @@
 // instead of guessing. Adding a new closed surface, operation, or errorKind value is NOT an
 // algorithm change: it only extends the input domain.
 
-import { ACTIVITY_LOG_PIN_ID_PATTERN } from "./activity-log-files.js";
+import { parseActivityLogSegmentId, ACTIVITY_LOG_PIN_ID_PATTERN } from "./activity-log-files.js";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_FAILURE_SURFACES,
@@ -49,6 +49,8 @@ import {
 // Only hoisted function declarations are imported as values from observability.ts: that module
 // re-exports this one, so a `const` binding read here could still be uninitialized.
 import {
+  DIAGNOSTIC_SUFFICIENCY_REASONS,
+  diagnosticSufficiencyStatus,
   isActivityLogCorrelationId,
   isActivityLogErrorKind,
   isActivityLogIdentityDigest,
@@ -648,4 +650,142 @@ export function supportIncidentPrivateProjection(
     createdAtMs: incident.createdAtMs,
     expiresAtMs: incident.expiresAtMs,
   };
+}
+
+const PRIVATE_PROJECTION_KEYS = [
+  "schemaVersion",
+  "incidentId",
+  "defectFingerprint",
+  "fingerprintAlgorithm",
+  "trigger",
+  "productVersion",
+  "platformClass",
+  "surface",
+  "op",
+  "errorKind",
+  "sufficiencyStatus",
+  "integrity",
+  "completeness",
+  "loss",
+  "state",
+  "frameCount",
+  "build",
+  "correlation",
+  "window",
+  "pin",
+  "segments",
+  "lineCount",
+  "sufficiencyReasons",
+  "coverage",
+  "createdAtMs",
+  "expiresAtMs",
+] as const;
+
+function projectionRecord(value: PlainObject): SupportIncidentRecord | undefined {
+  return parseSupportIncidentRecord({
+    schemaVersion: value.schemaVersion,
+    incidentId: value.incidentId,
+    trigger: value.trigger,
+    state: value.state,
+    fingerprint: {
+      algorithm: value.fingerprintAlgorithm,
+      defectFingerprint: value.defectFingerprint,
+      surface: value.surface,
+      op: value.op,
+      errorKind: value.errorKind,
+      frameCount: value.frameCount,
+    },
+    build: value.build,
+    correlation: value.correlation,
+    window: value.window,
+    pin: value.pin,
+    slotIndex: 0,
+    createdAtMs: value.createdAtMs,
+    expiresAtMs: value.expiresAtMs,
+  });
+}
+
+function validProjectionSegments(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= 4096 &&
+    value.every(
+      (segment: unknown) =>
+        isPlainObject(segment) &&
+        hasOnlyKeys(segment, ["segmentId", "state", "sizeBytes"]) &&
+        typeof segment.segmentId === "string" &&
+        parseActivityLogSegmentId(segment.segmentId) !== undefined &&
+        (segment.state === "active" || segment.state === "sealed") &&
+        isCount(segment.sizeBytes),
+    )
+  );
+}
+
+function validProjectionCoverage(value: unknown): boolean {
+  const keys = [
+    "requiredClassCount",
+    "presentClassCount",
+    "completeClassCount",
+    "degradedClassCount",
+    "insufficientClassCount",
+  ] as const;
+  return (
+    isPlainObject(value) &&
+    hasOnlyKeys(value, keys) &&
+    keys.every((key) => isCount(value[key])) &&
+    validCoverageCounts(value)
+  );
+}
+
+function validCoverageCounts(value: PlainObject): boolean {
+  const present = Number(value.presentClassCount);
+  const sum =
+    Number(value.completeClassCount) +
+    Number(value.degradedClassCount) +
+    Number(value.insufficientClassCount);
+  return (
+    present <= Number(value.requiredClassCount) && present === sum && Number.isSafeInteger(sum)
+  );
+}
+
+function validProjectionEvidence(value: PlainObject): boolean {
+  return (
+    isOneOf(SUPPORT_INCIDENT_EVIDENCE_INTEGRITY, value.integrity) &&
+    isOneOf(["complete", "partial", "unknown"], value.completeness) &&
+    isOneOf(
+      ["none", "event-dropped", "event-location-unknown", "publication-unavailable"],
+      value.loss,
+    ) &&
+    isOneOf(["complete", "degraded", "insufficient"], value.sufficiencyStatus) &&
+    Array.isArray(value.sufficiencyReasons) &&
+    value.sufficiencyReasons.length <= 64 &&
+    value.sufficiencyReasons.every(
+      (reason: unknown) =>
+        typeof reason === "string" &&
+        DIAGNOSTIC_SUFFICIENCY_REASONS.includes(reason as DiagnosticSufficiencyReason),
+    ) &&
+    validProjectionSegments(value.segments) &&
+    isCount(value.lineCount) &&
+    validProjectionCoverage(value.coverage)
+  );
+}
+
+/** Shared closed validator for the private projection crossing the offline support boundary. */
+export function parseSupportIncidentPrivateProjection(
+  value: unknown,
+): SupportIncidentPrivateProjection | undefined {
+  if (!isPlainObject(value) || !hasOnlyKeys(value, PRIVATE_PROJECTION_KEYS)) return undefined;
+  const record = projectionRecord(value);
+  if (record === undefined || !validProjectionEvidence(value)) return undefined;
+  if (
+    diagnosticSufficiencyStatus(value.sufficiencyReasons as DiagnosticSufficiencyReason[]) !==
+    value.sufficiencyStatus
+  )
+    return undefined;
+  if (
+    record.build.productVersion !== value.productVersion ||
+    record.build.platformClass !== value.platformClass
+  )
+    return undefined;
+  return value as unknown as SupportIncidentPrivateProjection;
 }

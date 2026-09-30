@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
 import * as lazyModules from "../../../keiko-cli/src/lazy-modules.js";
 import { runSupportCli } from "../../../keiko-cli/src/support.js";
+import { fixtureLine, fixtureProcess } from "../../../../tests/support/activity-log-segments.js";
 import type { ToolCatalogLogEvidence } from "./support-tool-catalog.js";
 import { defaultServerDiagnosticSink } from "@oscharko-dev/keiko-server/diagnostics-log";
 import { createCatalogToolBinder } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolDispatch";
@@ -344,19 +345,48 @@ async function analyzeThroughCli(
   args: readonly string[],
 ): Promise<{ code: number; output: string; errors: string }> {
   const directory = mkdtempSync(join(tmpdir(), "keiko-tool-cli-"));
-  const file = join(directory, "server.log");
+  const stateDir = join(directory, "state");
+
   const output: string[] = [];
   const errors: string[] = [];
   try {
-    writeFileSync(file, text, "utf8");
-    const code = await runSupportCli(["analyze", file, ...args], {
-      out: (line): void => {
-        output.push(line);
+    mkdirSync(join(stateDir, "logs"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "logs", "server.log"), text, { mode: 0o600 });
+    const exported = await runSupportCli(
+      [
+        "export",
+        "--state-dir",
+        stateDir,
+        "--correlation-id",
+        text.includes("correlation-1") ? "correlation-1" : "request-1",
+        "--out",
+        directory,
+      ],
+      {
+        out: (): void => undefined,
+        err: (line): void => {
+          errors.push(line);
+        },
       },
-      err: (line): void => {
-        errors.push(line);
+      {},
+      { cwd: directory },
+    );
+    if (exported !== 0) throw new Error(`Report fixture failed: ${errors.join("")}`);
+    const filename = readdirSync(directory).find((name) => name.startsWith("keiko-support-v1-"));
+    if (filename === undefined) throw new TypeError("missing canonical report");
+    const code = await runSupportCli(
+      ["analyze", join(directory, filename), ...args],
+      {
+        out: (line): void => {
+          output.push(line);
+        },
+        err: (line): void => {
+          errors.push(line);
+        },
       },
-    });
+      {},
+      { cwd: directory, controlActivityStateDir: join(directory, "control") },
+    );
     return { code, output: output.join(""), errors: errors.join("") };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -389,10 +419,19 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
 
   it("does not load the lifecycle graph for ordinary HTTP logs, with or without --clusters", async () => {
     const load = vi.spyOn(lazyModules, "loadToolLifecycle");
-    const http = formatServerLogLine(
-      { category: "http", op: "request", correlationId: "request-1", status: 204 },
-      GENERATED,
-    );
+    const http =
+      fixtureLine(fixtureProcess(4242, "aabbccdd"), GENERATED.getTime(), {
+        op: "request",
+        correlationId: "request-1",
+        status: 204,
+        fields: {
+          method: "GET",
+          path: "/api/health",
+          queryParamNames: [],
+          responseBytes: 0,
+          aborted: false,
+        },
+      }) + "\n";
     const ordinary = await analyzeThroughCli(http, ["--json"]);
     expect(ordinary.code).toBe(0);
     expect(ordinary.output).toMatch(/"status":\s*204/u);
@@ -423,10 +462,11 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
     expect(clusters.code).toBe(0);
     expect(load).toHaveBeenCalledOnce();
     const parsed = JSON.parse(clusters.output) as {
-      readonly op: string;
-      readonly errorKind: string | null;
-    }[];
-    const settled = parsed.filter((cluster) => cluster.op === "tool-catalog.invocation-settled");
+      analysis: { clusters: { readonly op: string; readonly errorKind: string | null }[] };
+    };
+    const settled = parsed.analysis.clusters.filter(
+      (cluster) => cluster.op === "tool-catalog.invocation-settled",
+    );
     expect(settled).toHaveLength(1);
     expect(settled[0]?.errorKind).not.toBeNull();
     expect(clusters.output).not.toMatch(/secret-ack/u);
@@ -443,10 +483,9 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
       "--correlation-id",
       "correlation-1",
     ]);
-    expect(result.code).toBe(0);
-    expect(result.errors).toContain("lifecycle validator unavailable — TypeError");
-    expect(result.output).toContain("lifecycle-validator-unavailable");
-    expect(result.output).not.toContain("budgetDisposition");
+    expect(result.code).toBe(1);
+    expect(result.errors).toContain("internal");
+    expect(result.output).toBe("");
     expect(result.output + result.errors).not.toContain("private-import-token");
   });
 

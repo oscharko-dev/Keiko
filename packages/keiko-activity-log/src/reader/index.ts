@@ -16,3 +16,12 @@ export * from "./support-segment-manifest-names.js";
 export * from "./support-segment-scan.js";
 export * from "./support-selective-export.js";
 export * from "./support-tool-catalog.js";
+export {
+  analyzeSupportReport,
+  buildSupportReport,
+  parseSupportReport,
+  prepareSupportReportSeed,
+  serializeSupportReport,
+  SupportReportError,
+  type AnalyzedSupportReport,
+} from "./support-report.js";
