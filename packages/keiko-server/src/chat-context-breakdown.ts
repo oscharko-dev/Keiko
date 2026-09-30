@@ -11,8 +11,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 
-/** Automatic compaction starts at this share of the usable input (chat-prompt-budget.ts). */
-export const AUTOMATIC_COMPACTION_THRESHOLD = 0.9;
+import { AUTOMATIC_COMPACTION_THRESHOLD } from "./chat-compaction-thresholds.js";
 
 export interface ConversationShare {
   readonly systemTokens: number;
@@ -76,14 +75,27 @@ function usedSegments(input: ContextBreakdownInput): readonly ChatContextSegment
   ];
 }
 
-// Scales the used shares down proportionally when they exceed the usable input: a request never
-// carries more (the send path compacts and trims), so the bar never runs past its budget.
+function tokensOf(segments: readonly ChatContextSegmentWire[]): number {
+  return segments.reduce((sum, segment) => sum + segment.tokens, 0);
+}
+
+// A request never carries more than the usable input: the send path compacts the conversation and
+// trims the sources by rank. The sources are the share that gives way — they are trimmed per
+// question, so a share recorded under a larger window shrinks to what is left beside the exactly
+// known system and conversation shares (PR #3678 review). Only a conversation that alone exceeds
+// the budget, which the compaction projection prevents, falls back to proportional scaling.
 function fittedToBudget(
   segments: readonly ChatContextSegmentWire[],
   budget: number,
 ): readonly ChatContextSegmentWire[] {
-  const total = segments.reduce((sum, segment) => sum + segment.tokens, 0);
+  const total = tokensOf(segments);
   if (total <= budget || total === 0) return segments;
+  const fixed = tokensOf(segments.filter((segment) => segment.id !== "knowledge"));
+  if (fixed <= budget) {
+    return segments.map((segment) =>
+      segment.id === "knowledge" ? { ...segment, tokens: budget - fixed } : segment,
+    );
+  }
   let remaining = budget;
   return segments.map((segment, index) => {
     const tokens =
@@ -95,12 +107,28 @@ function fittedToBudget(
   });
 }
 
+// Automatic compaction watches the conversation. In a grounded question the conversation has its
+// own lane beside the sources, so compaction starts once the conversation reaches the threshold of
+// that lane — not of the whole budget, which the sources may fill without anything to compact.
+function autoCompactionAt(
+  input: ContextBreakdownInput,
+  used: readonly ChatContextSegmentWire[],
+): number {
+  const budget = input.profile.effectiveInputBudget;
+  if (input.grounded === undefined) return Math.floor(budget * AUTOMATIC_COMPACTION_THRESHOLD);
+  const beside = tokensOf(
+    used.filter((segment) => segment.id === "system" || segment.id === "knowledge"),
+  );
+  const lane = Math.floor(input.grounded.historyLaneTokens * AUTOMATIC_COMPACTION_THRESHOLD);
+  return Math.min(budget, beside + lane);
+}
+
 export function contextBreakdown(input: ContextBreakdownInput): ContextBreakdown {
   const { profile } = input;
   const budget = profile.effectiveInputBudget;
-  const autoCompactionAtTokens = Math.floor(budget * AUTOMATIC_COMPACTION_THRESHOLD);
   const used = fittedToBudget(usedSegments(input), budget);
-  const usedTokens = used.reduce((sum, segment) => sum + segment.tokens, 0);
+  const usedTokens = tokensOf(used);
+  const autoCompactionAtTokens = autoCompactionAt(input, used);
   const free = Math.max(0, autoCompactionAtTokens - usedTokens);
   return {
     usedTokens,

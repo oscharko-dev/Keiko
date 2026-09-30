@@ -24,17 +24,17 @@ export interface SentGroundedPrompt {
 /**
  * The share a sent grounded prompt took: the whole request, its excerpts and its instructions,
  * estimated with the admission accounting, and the provider-measured prompt when the answer
- * reported one.
+ * reported one. The profile is the answering model's; its window stamps the counts.
  */
 export function sentPromptContext(
   prompt: SentGroundedPrompt,
   measuredPromptTokens: number,
-  accounting: ContextProfile["tokenAccounting"] | undefined,
+  profile: Pick<ContextProfile, "tokenAccounting" | "maxInputTokens"> | undefined,
 ): GroundedPromptContextWire {
   const share = knowledgePromptShare(
     { messages: prompt.messages },
     { messages: prompt.withoutSources },
-    accounting,
+    profile?.tokenAccounting,
   );
   const measured = measuredPromptTokens > 0;
   return {
@@ -45,5 +45,6 @@ export function sentPromptContext(
     sourceTokens: share.sourceTokens,
     sentReferenceCount: prompt.sentReferenceCount,
     availableReferenceCount: prompt.availableReferenceCount,
+    ...(profile === undefined ? {} : { contextWindowTokens: profile.maxInputTokens }),
   };
 }

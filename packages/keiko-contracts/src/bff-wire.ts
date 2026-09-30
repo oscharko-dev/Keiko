@@ -1615,6 +1615,12 @@ export interface GroundedPromptContextWire {
   readonly sourceTokens: number;
   readonly sentReferenceCount: number;
   readonly availableReferenceCount: number;
+  /**
+   * The model window the request was planned for. A context reading under another window (a model
+   * switch, an adopted window) treats the counts as history, not as the current request's shape.
+   * Absent from answers that predate it.
+   */
+  readonly contextWindowTokens?: number | undefined;
 }
 
 export type GroundedAnswer = (

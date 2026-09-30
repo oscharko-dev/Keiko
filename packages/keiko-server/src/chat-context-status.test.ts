@@ -11,7 +11,10 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import type { ChatContextSegmentId } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatContextSegmentId,
+  GroundedPromptContextWire,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,58 +120,66 @@ function projectionNotes(): string {
   ).join("\n");
 }
 
+const GROUNDED_SCOPES = [
+  { kind: "capsule" as const, capsuleId: "capsule-1" as KnowledgeCapsuleId, connectedAtMs: 1 },
+];
+
+function seedGroundedAnswer(
+  deps: UiHandlerDeps,
+  chatId: string,
+  promptContext: GroundedPromptContextWire,
+): void {
+  const user = currentMessage(deps, chatId, "Welche Kontoarten gibt es?");
+  deps.store.createMessage({
+    chatId,
+    role: "assistant",
+    content: "Privatgirokonto, Basiskonto und P-Konto [1].",
+    timestamp: user.timestamp + 1,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+    groundedAnswer: {
+      groundingKind: "local-knowledge",
+      userMessageId: user.id,
+      assistantMessageId: "pending",
+      content: "Privatgirokonto, Basiskonto und P-Konto [1].",
+      citations: [],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 10,
+      noEvidence: false,
+      contextPack: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: "lk-1",
+        scopeLabel: "test",
+        capsuleCount: 1,
+        sourceCount: 1,
+        citationCount: 1,
+      },
+      promptContext,
+    } as unknown as NonNullable<ChatMessage["groundedAnswer"]>,
+  });
+}
+
 // Field report 1.1.13: a grounded chat's meter showed only the conversation, although the retrieved
 // sources were the largest share of every request. The status now carries that share from the
 // latest grounded answer's body-free prompt context.
 describe("grounded context status", () => {
   it("shows the latest grounded request's source share and size while the chat is grounded", () => {
     const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
-    const user = currentMessage(deps, chatId, "Welche Kontoarten gibt es?");
-    deps.store.createMessage({
-      chatId,
-      role: "assistant",
-      content: "Privatgirokonto, Basiskonto und P-Konto [1].",
-      timestamp: user.timestamp + 1,
-      runId: undefined,
-      workflowId: undefined,
-      workflowStatus: undefined,
-      shortResult: undefined,
-      taskType: undefined,
-      groundedAnswer: {
-        groundingKind: "local-knowledge",
-        userMessageId: user.id,
-        assistantMessageId: "pending",
-        content: "Privatgirokonto, Basiskonto und P-Konto [1].",
-        citations: [],
-        uncertainty: [],
-        omittedCount: 0,
-        elapsedMs: 10,
-        noEvidence: false,
-        contextPack: {
-          kind: "local-knowledge",
-          scopeKind: "capsule",
-          scopeId: "lk-1",
-          scopeLabel: "test",
-          capsuleCount: 1,
-          sourceCount: 1,
-          citationCount: 1,
-        },
-        promptContext: {
-          promptTokens: 5_901,
-          promptTokensMeasured: true,
-          estimatedPromptTokens: 6_420,
-          instructionTokens: 310,
-          sourceTokens: 4_100,
-          sentReferenceCount: 4,
-          availableReferenceCount: 16,
-        },
-      } as unknown as NonNullable<ChatMessage["groundedAnswer"]>,
+    seedGroundedAnswer(deps, chatId, {
+      promptTokens: 5_901,
+      promptTokensMeasured: true,
+      estimatedPromptTokens: 6_420,
+      instructionTokens: 310,
+      sourceTokens: 4_100,
+      sentReferenceCount: 4,
+      availableReferenceCount: 16,
     });
-    deps.store.updateChat(chatId, {
-      localKnowledgeScopes: [
-        { kind: "capsule", capsuleId: "capsule-1" as KnowledgeCapsuleId, connectedAtMs: 1 },
-      ],
-    });
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
     const status = readChatContextStatus(deps, chatId, "fixture");
     expect(status.knowledgeSources).toEqual({
       tokens: 4_100,
@@ -190,6 +201,60 @@ describe("grounded context status", () => {
       status.contextWindowTokens,
     );
     expect(status.estimatedInputTokens).toBeGreaterThanOrEqual(4_100);
+  });
+
+  // PR #3678 review: after a model switch or an adopted window, the latest grounded request was
+  // planned for another window. Its counts are history: no "references trimmed" note, no "last
+  // request", while the source share stays in the breakdown, fitted to the current budget.
+  it("treats a grounded request planned for another window as history", () => {
+    const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
+    seedGroundedAnswer(deps, chatId, {
+      promptTokens: 90_000,
+      promptTokensMeasured: true,
+      instructionTokens: 310,
+      sourceTokens: 80_000,
+      sentReferenceCount: 4,
+      availableReferenceCount: 16,
+      contextWindowTokens: 128_000,
+    });
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const status = readChatContextStatus(deps, chatId, "fixture");
+    expect(status.lastRequest).toBeUndefined();
+    expect(status.knowledgeSources).toBeUndefined();
+    expect(segmentOf(status, "knowledge").tokens).toBeGreaterThan(0);
+    expect(status.estimatedInputTokens).toBeLessThanOrEqual(status.inputBudgetTokens);
+  });
+
+  it("does not present a grounded request as the last one once the chat is no longer grounded", () => {
+    const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
+    seedGroundedAnswer(deps, chatId, {
+      promptTokens: 41_000,
+      promptTokensMeasured: true,
+      instructionTokens: 310,
+      sourceTokens: 30_000,
+      sentReferenceCount: 16,
+      availableReferenceCount: 16,
+    });
+    const status = readChatContextStatus(deps, chatId, "fixture");
+    expect(status.lastRequest).toBeUndefined();
+    expect(status.knowledgeSources).toBeUndefined();
+  });
+
+  // PR #3678 review: manual compaction sized its target from the whole reading, sources included,
+  // so a grounded chat with a small history never compacted.
+  it("compacts a grounded chat's own history, not against the sources beside it", () => {
+    const { deps, chatId } = fixture(10);
+    seedGroundedAnswer(deps, chatId, {
+      promptTokens: 21_000,
+      promptTokensMeasured: true,
+      instructionTokens: 310,
+      sourceTokens: 20_000,
+      sentReferenceCount: 16,
+      availableReferenceCount: 16,
+    });
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const after = compactChatContext(deps, chatId, "fixture", "corr-grounded-manual");
+    expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
   });
 
   // PR #3678 review: the grounded send path compacts the conversation inside its lane (at most a

@@ -93,4 +93,39 @@ describe("contextBreakdown", () => {
     expect(total(breakdown)).toBe(16_384);
     expect(breakdown.segments.every((segment) => segment.tokens >= 0)).toBe(true);
   });
+
+  // PR #3678 review: in a grounded question only the conversation lane is compacted. The trigger is
+  // 90 % of that lane beside the system and source shares, not 90 % of the whole budget.
+  it("places a grounded chat's compaction trigger at the conversation lane", () => {
+    const breakdown = contextBreakdown({
+      profile: PROFILE,
+      conversation: CONVERSATION,
+      grounded: { historyLaneTokens: 3_925, lastPrompt: LAST_PROMPT },
+    });
+    const lane = Math.floor(3_925 * 0.9);
+    expect(breakdown.autoCompactionAtTokens).toBe(310 + 4_100 + lane);
+    const free = breakdown.segments.find((segment) => segment.id === "free");
+    // Tokens until compaction are the conversation's room left in its lane.
+    expect(free?.tokens).toBe(lane - 1_200);
+    expect(total(breakdown)).toBe(16_384);
+  });
+
+  // PR #3678 review: a source share recorded under a larger window gives way alone; the exactly
+  // known system and conversation shares are never squeezed.
+  it("fits an oversized source share by trimming only the sources", () => {
+    const breakdown = contextBreakdown({
+      profile: PROFILE,
+      conversation: CONVERSATION,
+      grounded: {
+        historyLaneTokens: 3_925,
+        lastPrompt: { ...LAST_PROMPT, sourceTokens: 80_000 },
+      },
+    });
+    const byId = new Map(breakdown.segments.map((segment) => [segment.id, segment.tokens]));
+    expect(byId.get("system")).toBe(310);
+    expect(byId.get("messages")).toBe(1_200);
+    expect(byId.get("knowledge")).toBe(PROFILE.effectiveInputBudget - 310 - 1_200);
+    expect(breakdown.usedTokens).toBe(PROFILE.effectiveInputBudget);
+    expect(total(breakdown)).toBe(16_384);
+  });
 });

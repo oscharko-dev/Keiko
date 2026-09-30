@@ -1059,13 +1059,7 @@ function createGatewayAnswerer(
   // of the last attempt is kept for the context meter's share of this answer.
   let sent: SentGroundedPrompt | undefined;
   const call = (question: string, pack: ConnectedContextPack): Promise<NormalizedResponse> => {
-    const modelInputTokensMax = groundedPromptInputTokensForCapability(
-      chatCapability(deps, modelId),
-    );
-    const promptOptions = {
-      ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
-      ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
-    };
+    const promptOptions = groundedPromptOptions(deps, modelId, tokenAccounting);
     sent = fittedGroundedGatewayPrompt(question, pack, deps.redactor, promptOptions);
     return model.call(
       { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
@@ -1091,14 +1085,33 @@ function createGatewayAnswerer(
         // GEN-AI-GATEWAY-001 (RB-4): carry the finishReason so a truncated ("length") completion is
         // surfaced by runGroundedExploration instead of being consumed as a complete answer.
         finishReason: response.finishReason,
-        ...(sent === undefined
-          ? {}
-          : {
-              promptContext: sentPromptContext(sent, response.usage.promptTokens, tokenAccounting),
-            }),
+        ...sentPromptContextField(sent, response, currentContextProfileForModel(deps, modelId)),
       };
     },
   };
+}
+
+// The input budget of one attempt, read from the model's current capability.
+function groundedPromptOptions(
+  deps: UiHandlerDeps,
+  modelId: string,
+  tokenAccounting: ContextProfile["tokenAccounting"],
+): GroundedGatewayPromptOptions {
+  const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
+  return {
+    ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
+    ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
+  };
+}
+
+function sentPromptContextField(
+  sent: SentGroundedPrompt | undefined,
+  response: NormalizedResponse,
+  profile: ContextProfile | undefined,
+): Pick<GroundedAnswerResult, "promptContext"> {
+  return sent === undefined
+    ? {}
+    : { promptContext: sentPromptContext(sent, response.usage.promptTokens, profile) };
 }
 
 function resolveGroundedAnswerModel(
@@ -1787,7 +1800,7 @@ function resolveMultiSourceSeam(
       deps.redactor,
       signal,
       correlationId,
-      currentContextProfileForModel(deps, modelId)?.tokenAccounting,
+      currentContextProfileForModel(deps, modelId),
     ),
   };
 }

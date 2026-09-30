@@ -25,11 +25,14 @@ import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import { UiStoreError } from "./store/index.js";
 import { logChatContextFailure, logChatContextManagement } from "./chat-context-log.js";
 import {
-  AUTOMATIC_COMPACTION_THRESHOLD,
   contextBreakdown,
   type ContextBreakdownInput,
   type ConversationShare,
 } from "./chat-context-breakdown.js";
+import {
+  AUTOMATIC_COMPACTION_TARGET,
+  AUTOMATIC_COMPACTION_THRESHOLD,
+} from "./chat-compaction-thresholds.js";
 import { hasGroundingScope } from "./chat-grounding.js";
 import {
   groundedConversationLaneProfile,
@@ -110,10 +113,10 @@ function countHistory(
 }
 
 // The send path compacts proactively once the prompt reaches 90 % of the input budget and then
-// targets 70 % (chat-prompt-budget.ts selectGatewayPromptAssembly). The meter applies the same rule,
-// so it reports what the next request will actually carry instead of the raw stored history — a
-// history larger than the window is never shown as 340 % of it (customer report on 1.1.13).
-const AUTOMATIC_COMPACTION_TARGET = 0.7;
+// targets 70 % (chat-compaction-thresholds.ts, shared with selectGatewayPromptAssembly). The meter
+// applies the same rule, so it reports what the next request will actually carry instead of the raw
+// stored history — a history larger than the window is never shown as 340 % of it (customer report
+// on 1.1.13).
 
 function assumedWindowField(
   deps: UiHandlerDeps,
@@ -216,9 +219,22 @@ function groundedShare(
   return { historyLaneTokens: groundedHistoryLaneTokens(profile), lastPrompt };
 }
 
-function groundedStatusFields(
+// The latest grounded request describes the current request's shape only while the chat is still
+// grounded and the model still plans the window that request was planned for. After a model switch
+// or an adopted window its reference counts and size are history: the meter keeps the source share
+// (fitted to the current budget) but does not present the old request as the last one.
+function currentGroundedRequest(
   lastPrompt: GroundedPromptContextWire | undefined,
   grounded: boolean,
+  profile: ContextProfile,
+): GroundedPromptContextWire | undefined {
+  if (!grounded || lastPrompt === undefined) return undefined;
+  const window = lastPrompt.contextWindowTokens;
+  return window === undefined || window === profile.maxInputTokens ? lastPrompt : undefined;
+}
+
+function groundedStatusFields(
+  lastPrompt: GroundedPromptContextWire | undefined,
 ): Pick<ChatContextStatusWire, "knowledgeSources" | "lastRequest"> {
   if (lastPrompt === undefined) return {};
   return {
@@ -229,15 +245,11 @@ function groundedStatusFields(
         ? { estimatedTokens: lastPrompt.estimatedPromptTokens }
         : {}),
     },
-    ...(grounded
-      ? {
-          knowledgeSources: {
-            tokens: lastPrompt.sourceTokens,
-            sentReferenceCount: lastPrompt.sentReferenceCount,
-            availableReferenceCount: lastPrompt.availableReferenceCount,
-          },
-        }
-      : {}),
+    knowledgeSources: {
+      tokens: lastPrompt.sourceTokens,
+      sentReferenceCount: lastPrompt.sentReferenceCount,
+      availableReferenceCount: lastPrompt.availableReferenceCount,
+    },
   };
 }
 
@@ -272,7 +284,9 @@ export function readChatContextStatus(
     canCompact: counted.messages >= 2,
     ...checkpointSavings(checkpoint, counted),
     ...(pending === undefined ? {} : { pendingCompaction: pending.wire }),
-    ...groundedStatusFields(counted.latestPromptContext, grounded !== undefined),
+    ...groundedStatusFields(
+      currentGroundedRequest(counted.latestPromptContext, grounded !== undefined, profile),
+    ),
     segments: breakdown.segments,
     autoCompactionAtTokens: breakdown.autoCompactionAtTokens,
   };
@@ -314,20 +328,22 @@ function manualCompactionCandidate(
   deps: UiHandlerDeps,
   chatId: string,
   modelId: string,
-  status: ChatContextStatusWire,
   correlationId: string,
 ): ContextCompactionRecord | undefined {
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
+  const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
   const snapshot = captureChatHistory(
     deps.store,
     chatId,
     "",
     profile,
     currentRedactionSecrets(deps),
-    checkpointForProfile(deps, chatId, profile, correlationId),
+    checkpoint,
     { correlationId },
   );
-  const stored = status.pendingCompaction?.tokensBefore ?? status.estimatedInputTokens;
+  // The conversation's own stored size: in a grounded chat the reading also carries the sources,
+  // which compaction never touches (PR #3678 review).
+  const stored = countHistory(deps, chatId, profile, checkpoint).tokens;
   const budget = Math.floor(
     Math.min(profile.effectiveInputBudget, stored) * AUTOMATIC_COMPACTION_TARGET,
   );
@@ -359,7 +375,7 @@ export function compactChatContext(
 ): ChatContextStatusWire {
   const startedAt = Date.now();
   const before = readChatContextStatus(deps, chatId, modelId, correlationId);
-  const compaction = manualCompactionCandidate(deps, chatId, modelId, before, correlationId);
+  const compaction = manualCompactionCandidate(deps, chatId, modelId, correlationId);
   if (compaction === undefined) {
     logChatContextManagement("unchanged", before, 0, correlationId);
     return { ...before, canCompact: false };
@@ -380,14 +396,11 @@ export function compactChatContext(
     logChatContextFailure(error, correlationId);
     throw error;
   }
+  // The compaction record states what the conversation saved; the readings also carry sources.
   logChatContextManagement(
     "compacted",
     after,
-    Math.max(
-      0,
-      (before.pendingCompaction?.tokensBefore ?? before.estimatedInputTokens) -
-        after.estimatedInputTokens,
-    ),
+    Math.max(0, compaction.tokensBefore - compaction.tokensAfter),
     correlationId,
   );
   return after;

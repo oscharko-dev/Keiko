@@ -1678,7 +1678,7 @@ function hybridPromptContext(
       availableReferenceCount: selected.length,
     },
     assistant.usage.promptTokens,
-    ctx.contextProfile?.tokenAccounting,
+    ctx.contextProfile,
   );
 }
 

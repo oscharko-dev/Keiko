@@ -599,7 +599,7 @@ export function createMultiSourceAnswerer(
   redactor: Redactor,
   signal: AbortSignal,
   correlationId: string | undefined,
-  tokenAccounting?: ContextProfile["tokenAccounting"],
+  contextProfile?: ContextProfile,
 ): MultiSourceAnswerer {
   return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
@@ -614,7 +614,7 @@ export function createMultiSourceAnswerer(
     return {
       content,
       usage: { promptTokens, completionTokens },
-      promptContext: sentPromptContext(sent, promptTokens, tokenAccounting),
+      promptContext: sentPromptContext(sent, promptTokens, contextProfile),
     };
   };
 }
