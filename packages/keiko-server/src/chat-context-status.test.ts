@@ -11,6 +11,7 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { ChatContextSegmentId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,6 +98,15 @@ function currentMessage(deps: UiHandlerDeps, chatId: string, content: string): C
     shortResult: undefined,
     taskType: undefined,
   });
+}
+
+function segmentOf(
+  status: ReturnType<typeof readChatContextStatus>,
+  id: ChatContextSegmentId,
+): { readonly tokens: number; readonly count: number } {
+  const segment = status.segments?.find((candidate) => candidate.id === id);
+  if (segment === undefined) throw new Error(`missing ${id} segment`);
+  return { tokens: segment.tokens, count: segment.count ?? 0 };
 }
 
 function projectionNotes(): string {
@@ -203,13 +213,12 @@ describe("grounded context status", () => {
     const status = readChatContextStatus(deps, seeded.chatId, "fixture");
     expect(status.pendingCompaction?.tokensBefore).toBeGreaterThan(status.inputBudgetTokens / 3);
     expect(status.pendingCompaction?.messagesCompacted).toBeGreaterThan(0);
-    const segments = status.segments ?? [];
-    const summary = segments.find((segment) => segment.id === "summary");
-    const messages = segments.find((segment) => segment.id === "messages");
-    expect(summary?.count).toBeGreaterThan(0);
-    expect(summary?.tokens).toBeGreaterThan(0);
-    expect(messages?.count).toBeLessThan(20);
-    expect((summary?.tokens ?? 0) + (messages?.tokens ?? 0)).toBeLessThanOrEqual(
+    const summary = segmentOf(status, "summary");
+    const messages = segmentOf(status, "messages");
+    expect(summary.count).toBeGreaterThan(0);
+    expect(summary.tokens).toBeGreaterThan(0);
+    expect(messages.count).toBeLessThan(20);
+    expect(summary.tokens + messages.tokens).toBeLessThanOrEqual(
       Math.floor(status.inputBudgetTokens / 3),
     );
   });
