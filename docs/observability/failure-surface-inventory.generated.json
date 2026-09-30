@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "29c0aba059f80c9016f867aeaa2bb434fb2f247a2f96c00f1bce036802f57044"
+    "catalogDigest": "e6fd2fca633591542a4d24cd697820e23f01660ad68e156072843afcdf854861"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 492,
-    "proofCount": 500,
-    "resolvedProofCount": 500,
-    "failureClassCount": 333,
+    "operationCount": 493,
+    "proofCount": 501,
+    "resolvedProofCount": 501,
+    "failureClassCount": 334,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -123,6 +123,7 @@
       "ports": ["ServerLogSink"],
       "operations": [
         "client.answer.copied",
+        "client.answer.speech-prepared",
         "client.binding.candidates-offered",
         "client.binding.choice-kept",
         "client.binding.choice-withdrawn",
@@ -690,6 +691,7 @@
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
     "client-git-operation": ["client-diagnostics.dependency-failure"],
     "client-answer-copy": ["client-diagnostics.dependency-failure"],
+    "client-answer-speech": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
@@ -1097,6 +1099,9 @@
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
     "client.answer.copied.line": ["packages/keiko-server/src/client-diagnostics-routes.test.ts"],
+    "client.answer.speech-prepared.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.binding.candidates-offered.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],

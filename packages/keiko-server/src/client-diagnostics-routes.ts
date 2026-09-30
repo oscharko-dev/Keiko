@@ -1043,6 +1043,32 @@ const CLIENT_ANSWER_COPIED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// PR #3678 review: the voice dialogue reads an answer aloud without its grounded citation markers
+// and keeps every other bracket. One line per spoken turn, under the correlation its synthesis
+// request carries: whether the answer was grounded and how many marker groups were removed and
+// kept — never the spoken text. Preparation cannot fail, so it always spends the routine budget.
+const CLIENT_ANSWER_SPEECH_PREPARED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.answer.speech-prepared",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientAnswerSpeech",
+  fields: {
+    grounded: { type: "boolean", dataClass: "closed-enum", required: true },
+    strippedGroupCount: { type: "integer", dataClass: "count", required: true },
+    keptGroupCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-answer-speech"],
+  proofIds: ["client.answer.speech-prepared.line"],
+  releaseImpact: "patch",
+});
+
 // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
 // trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
 // shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
@@ -1581,6 +1607,35 @@ function logClientAnswerCopy(
   return true;
 }
 
+function logClientAnswerSpeech(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const speech = request.answerSpeech;
+  if (speech === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_ANSWER_SPEECH_PREPARED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...speech, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
+// The closed report shapes, each of which owns its own registered line.
+function logClosedClientReport(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  return (
+    logClientSelectDismissed(request, correlationId) ||
+    logClientKnowledgeCatalog(request, correlationId) ||
+    logClientAnswerCopy(request, correlationId) ||
+    logClientAnswerSpeech(request, correlationId)
+  );
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1594,9 +1649,7 @@ function logClientDiagnostic(
     logMarkdownLayout(request, correlationId) ||
     logClientGitOperationSettled(request, correlationId) ||
     logClientComposerActivity(request, correlationId) ||
-    logClientSelectDismissed(request, correlationId) ||
-    logClientKnowledgeCatalog(request, correlationId) ||
-    logClientAnswerCopy(request, correlationId)
+    logClosedClientReport(request, correlationId)
   ) {
     return;
   }
@@ -2074,7 +2127,11 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
 // The closed report shapes: a select dismissal and a catalog picture are routine, and an answer copy
 // spends the failure budget only when it failed.
 function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget | undefined {
-  if (report.selectDismissal !== undefined || report.knowledgeCatalog !== undefined) {
+  if (
+    report.selectDismissal !== undefined ||
+    report.knowledgeCatalog !== undefined ||
+    report.answerSpeech !== undefined
+  ) {
     return "routine";
   }
   if (report.answerCopy === undefined) return undefined;

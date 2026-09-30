@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "29c0aba059f80c9016f867aeaa2bb434fb2f247a2f96c00f1bce036802f57044" as const;
+  "e6fd2fca633591542a4d24cd697820e23f01660ad68e156072843afcdf854861" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2341,6 +2341,47 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["client-answer-copy"],
     proofIds: ["client.answer.copied.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.answer.speech-prepared",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientAnswerSpeech",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      grounded: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      strippedGroupCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      keptGroupCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-answer-speech"],
+    proofIds: ["client.answer.speech-prepared.line"],
     releaseImpact: "patch",
   },
   {
@@ -30059,8 +30100,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 333,
-  completeClassCount: 333,
+  supportedClassCount: 334,
+  completeClassCount: 334,
   completeness: "complete",
   classes: [
     {
@@ -32897,6 +32938,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["client.answer.copied.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-answer-speech",
+      requirementContract: "client-answer-speech",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["client.answer.speech-prepared"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.answer.speech-prepared",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.answer.speech-prepared"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.answer.speech-prepared",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "grounded",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "keptGroupCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "strippedGroupCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.answer.speech-prepared.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -66328,6 +66431,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.uninstall.failed": "runtime-packages",
     "cli.uninstall.started": "runtime-packages",
     "client.answer.copied": "client-diagnostics",
+    "client.answer.speech-prepared": "client-diagnostics",
     "client.binding.candidates-offered": "client-diagnostics",
     "client.binding.choice-kept": "client-diagnostics",
     "client.binding.choice-withdrawn": "client-diagnostics",

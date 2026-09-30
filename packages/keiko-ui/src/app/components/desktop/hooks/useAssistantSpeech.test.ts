@@ -9,6 +9,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import { ApiError, synthesizeAssistantSpeech } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useAssistantSpeech,
   type AssistantSpeechAudioElement,
@@ -27,6 +28,10 @@ import { playbackPhaseToTurnState } from "./voice-dialog-state";
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import("@/lib/api");
   return { ...actual, synthesizeAssistantSpeech: vi.fn() };
+});
+vi.mock("@/lib/client-diagnostics", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("@/lib/client-diagnostics");
+  return { ...actual, reportClientDiagnostic: vi.fn() };
 });
 
 class FakeAudio implements AssistantSpeechAudioElement {
@@ -451,6 +456,7 @@ describe("useAssistantSpeech — Issue #1559 persona routing", () => {
     expect(mockedSynthesize).toHaveBeenCalledWith(
       { text: "The assistant answer.", persona: "male" },
       expect.any(AbortSignal),
+      expect.any(String),
     );
   });
 
@@ -478,12 +484,32 @@ describe("useAssistantSpeech — Issue #1559 persona routing", () => {
       1,
       { text: "Turn text.", persona: "female" },
       expect.any(AbortSignal),
+      expect.any(String),
     );
     expect(mockedSynthesize).toHaveBeenNthCalledWith(
       2,
       { text: "Turn text.", persona: "neutral" },
       expect.any(AbortSignal),
+      expect.any(String),
     );
+  });
+
+  // PR #3678 review: the read-aloud preparation is reported body-free under the correlation the
+  // synthesis request carries, once per spoken turn.
+  it("reports the spoken turn's preparation under its synthesis correlation", async () => {
+    const report = vi.mocked(reportClientDiagnostic);
+    report.mockClear();
+    const preparation = { grounded: true, strippedGroupCount: 1, keptGroupCount: 0 };
+    renderHook(() => useAssistantSpeech(realPathOptions({ preparation })));
+    await flush();
+
+    expect(mockedSynthesize).toHaveBeenCalledTimes(1);
+    const correlationId = mockedSynthesize.mock.calls[0]?.[2];
+    expect(correlationId).toEqual(expect.any(String));
+    const reports = report.mock.calls.filter(([, meta]) => meta?.answerSpeech !== undefined);
+    expect(reports).toEqual([
+      ["Keiko chat answer prepared for speech.", { answerSpeech: preparation, correlationId }],
+    ]);
   });
 });
 
@@ -493,8 +519,10 @@ function makeFakeStreamingSink(engage: boolean): {
   primes: () => number;
   stops: () => number;
   disposes: () => number;
+  correlationIds: () => readonly (string | undefined)[];
 } {
   let captured: AssistantSpeechStreamHandlers | undefined;
+  const correlationIds: (string | undefined)[] = [];
   let primes = 0;
   let stops = 0;
   let disposes = 0;
@@ -503,8 +531,9 @@ function makeFakeStreamingSink(engage: boolean): {
       primeFromUserGesture: (): void => {
         primes += 1;
       },
-      play: (_input, _signal, handlers): Promise<boolean> => {
+      play: (_input, _signal, handlers, correlationId): Promise<boolean> => {
         captured = handlers;
+        correlationIds.push(correlationId);
         return Promise.resolve(engage);
       },
       stop: (): void => {
@@ -519,6 +548,7 @@ function makeFakeStreamingSink(engage: boolean): {
     primes: () => primes,
     stops: () => stops,
     disposes: () => disposes,
+    correlationIds: () => correlationIds,
   };
 }
 
@@ -556,6 +586,23 @@ describe("useAssistantSpeech — streamed PCM playback", () => {
     expect(fake.handlers()).toBeUndefined();
     expect(h.synthCalls).toHaveLength(0);
     expect(h.audios).toHaveLength(0);
+  });
+
+  it("streams under the correlation its preparation was reported with", async () => {
+    const report = vi.mocked(reportClientDiagnostic);
+    report.mockClear();
+    const fake = makeFakeStreamingSink(true);
+    const preparation = { grounded: false, strippedGroupCount: 0, keptGroupCount: 2 };
+    const h = harness({ createStreamingSink: () => fake.sink, preparation });
+    renderHook(() => useAssistantSpeech(h.options));
+    await flush();
+
+    const [correlationId] = fake.correlationIds();
+    expect(correlationId).toEqual(expect.any(String));
+    expect(report).toHaveBeenCalledWith("Keiko chat answer prepared for speech.", {
+      answerSpeech: preparation,
+      correlationId,
+    });
   });
 
   it("uses the streaming sink when it engages and drives the playback lifecycle (no buffered work)", async () => {

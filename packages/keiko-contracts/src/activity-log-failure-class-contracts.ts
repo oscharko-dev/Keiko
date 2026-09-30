@@ -836,6 +836,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-answer-speech",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["client.answer.speech-prepared"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.answer.speech-prepared"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.answer.speech-prepared"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.answer.speech-prepared"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-knowledge-catalog",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

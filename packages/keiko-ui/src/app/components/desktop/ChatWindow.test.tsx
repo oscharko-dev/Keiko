@@ -21,6 +21,7 @@ import {
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
   speakableAnswerText,
+  speechPreparationEvidence,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
   normalizeMemoryBudgetInput,
@@ -4033,6 +4034,30 @@ describe("ChatWindow message copy", () => {
         groundedAnswer: copyTestGroundedAnswer(answer, 1),
       }),
     ).toBe("repositoryParityStatus is defined in [src/repository-parity.ts:2].");
+  });
+
+  it("describes the read-aloud preparation by the same rule, body-free", () => {
+    const answer = "Values are [2, 3] and the path is [src/a.ts:2] [1].";
+    const message = {
+      id: "m4",
+      chatId: "chat-1",
+      role: "assistant" as const,
+      timestamp: 4,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+      content: answer,
+    };
+    expect(
+      speechPreparationEvidence({ ...message, groundedAnswer: copyTestGroundedAnswer(answer, 1) }),
+    ).toEqual({ grounded: true, strippedGroupCount: 1, keptGroupCount: 1 });
+    expect(speechPreparationEvidence(message)).toEqual({
+      grounded: false,
+      strippedGroupCount: 0,
+      keptGroupCount: 2,
+    });
   });
 
   it("keeps brackets that name no reference of the grounded answer", () => {

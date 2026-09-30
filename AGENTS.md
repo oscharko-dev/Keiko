@@ -566,7 +566,8 @@ undecided claim counts, so the displayed "N unsupported claims" is reconstructab
 prompt reports a trim or refusal on `search.prompt.window-fitted` like the Knowledge Pod and hybrid
 prompts. `client.answer.copied` records each chat answer copy (`copied` or `failed` at `warn` with
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
-removed and kept, never the copied text.
+removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
+for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
 
 ### Rule 2 — when you debug, the log is your primary source
 

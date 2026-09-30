@@ -447,6 +447,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -641,7 +642,8 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
     isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
-    isOptional(value.answerCopy, isClientDiagnosticAnswerCopy)
+    isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
+    isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech)
   );
 }
 
@@ -1389,6 +1391,42 @@ export function isClientDiagnosticAnswerCopy(value: unknown): value is ClientDia
   }
   return (
     isSetMember(value.outcome, ANSWER_COPY_OUTCOME_SET) &&
+    typeof value.grounded === "boolean" &&
+    isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)
+  );
+}
+
+// ─── Chat answer read aloud (PR #3678 review) ───────────────────────────────────
+//
+// The voice dialogue reads an answer aloud without its grounded citation markers and keeps every
+// other bracket, a repository path included. Counts only — never the spoken text — reported under
+// the correlation the synthesis request carries, so the spoken turn and its preparation join.
+
+export interface ClientDiagnosticAnswerSpeech {
+  readonly grounded: boolean;
+  /** Citation marker groups removed from the spoken text. */
+  readonly strippedGroupCount: number;
+  /** Numeric bracket groups outside code kept as spoken content. */
+  readonly keptGroupCount: number;
+}
+
+const ANSWER_SPEECH_KEYS: ReadonlySet<string> = new Set([
+  "grounded",
+  "strippedGroupCount",
+  "keptGroupCount",
+]);
+
+/** True for exactly the grounded flag and the two bounded counts. */
+export function isClientDiagnosticAnswerSpeech(
+  value: unknown,
+): value is ClientDiagnosticAnswerSpeech {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== ANSWER_SPEECH_KEYS.size || keys.some((key) => !ANSWER_SPEECH_KEYS.has(key))) {
+    return false;
+  }
+  return (
     typeof value.grounded === "boolean" &&
     isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
     isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)

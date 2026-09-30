@@ -40,7 +40,10 @@ import {
   findCitationMarkerGroups,
   type CitationMarkerGroup,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
-import type { ClientDiagnosticAnswerCopy } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientDiagnosticAnswerCopy,
+  ClientDiagnosticAnswerSpeech,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
@@ -497,6 +500,21 @@ export function copyableMessageText(content: string, citationCeiling = 0): strin
  */
 export function speakableAnswerText(message: ChatMessage): string {
   return stripCitationMarkers(message.content, groundedCitationCeiling(message.groundedAnswer));
+}
+
+/**
+ * The body-free evidence of `speakableAnswerText` by the same rule: whether the answer is grounded
+ * and how many marker groups the spoken text drops and keeps (PR #3678 review). Never the text.
+ */
+export function speechPreparationEvidence(message: ChatMessage): ClientDiagnosticAnswerSpeech {
+  const ceiling = groundedCitationCeiling(message.groundedAnswer);
+  const groups = findCitationMarkerGroups(message.content);
+  const stripped = groups.filter((group) => citesWithin(group, ceiling)).length;
+  return {
+    grounded: message.groundedAnswer !== undefined,
+    strippedGroupCount: stripped,
+    keptGroupCount: groups.length - stripped,
+  };
 }
 
 // The copy's body-free evidence (PR #3678 review): whether it succeeded, whether the answer was
@@ -3297,6 +3315,7 @@ function ComposerCoreImpl({
     // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
     enabled: voiceDialogActive && voiceAnswer !== undefined,
     text: voiceAnswer === undefined ? undefined : speakableAnswerText(voiceAnswer),
+    preparation: voiceAnswer === undefined ? undefined : speechPreparationEvidence(voiceAnswer),
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,
     onSettled: (assistantMessageId) => batchSpeechSettledRef.current?.(assistantMessageId),

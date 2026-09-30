@@ -1239,6 +1239,49 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // PR #3678 review: the read-aloud preparation keeps a bracketed path and drops grounded markers;
+  // its counts land on their own line under the synthesis request's correlation.
+  it("persists a read-aloud preparation as client.answer.speech-prepared", async () => {
+    const sink = captureServerLog();
+    const answerSpeech = { grounded: true, strippedGroupCount: 1, keptGroupCount: 0 };
+    const body = JSON.stringify({
+      message: "Keiko chat answer prepared for speech.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-speech-0001",
+      answerSpeech,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find((candidate) => candidate.op === "client.answer.speech-prepared");
+    expect(event?.level).toBe("info");
+    const record = expectActivityLogProof(
+      "client.answer.speech-prepared.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_answer-speech-0001",
+      ...answerSpeech,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("rejects a read-aloud report with an unknown field or an unbounded count", async () => {
+    for (const answerSpeech of [
+      { grounded: true, strippedGroupCount: 1, keptGroupCount: 0, text: "spoken" },
+      { grounded: true, strippedGroupCount: -1, keptGroupCount: 0 },
+    ]) {
+      const body = JSON.stringify({
+        message: "Keiko chat answer prepared for speech.",
+        clientTs: CLIENT_TS,
+        answerSpeech,
+      });
+      const result = await handleClientDiagnosticIngest(context(body));
+      expect(result.status).toBe(400);
+    }
+  });
+
   it("persists every closed focus location on its own client.select.dismissed line", async () => {
     for (const focus of ["trigger", "search", "option"] as const) {
       const sink = captureServerLog();

@@ -3207,6 +3207,19 @@ describe("synthesizeAssistantSpeech (Issue #1558)", () => {
     );
   });
 
+  // PR #3678 review: the request carries the correlation its read-aloud preparation was reported with.
+  it("sends the caller's correlation so the spoken turn joins its preparation", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ audio: "QUJDRA==", mimeType: "audio/mpeg" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await synthesizeAssistantSpeech({ text: "answer" }, undefined, "ui_speech-turn-0001");
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(new Headers(request?.headers).get("X-Keiko-Correlation-Id")).toBe("ui_speech-turn-0001");
+  });
+
   it("surfaces a content-free VOICE_UNAVAILABLE as an ApiError", async () => {
     const fetchMock = vi
       .fn()
@@ -4999,6 +5012,21 @@ describe("streamAssistantSpeech correlation", () => {
       correlationId: new Headers(request?.headers).get("X-Keiko-Correlation-Id"),
     });
     expect(String(error)).not.toContain("private network detail");
+  });
+
+  it("streams under the caller's correlation when one is given", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError("private network detail"));
+    vi.stubGlobal("fetch", fetchMock);
+    const error = await streamAssistantSpeech(
+      { text: "Synthetic test" },
+      undefined,
+      "ui_speech-turn-0002",
+    ).catch((cause: unknown) => cause);
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(new Headers(request?.headers).get("X-Keiko-Correlation-Id")).toBe("ui_speech-turn-0002");
+    expect(error).toMatchObject({ correlationId: "ui_speech-turn-0002" });
   });
 
   it("preserves cancellation so interruption does not trigger a fallback", async () => {

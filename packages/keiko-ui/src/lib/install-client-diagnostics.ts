@@ -276,6 +276,7 @@ function clientMessagePostBody(
     selectDismissal: meta.selectDismissal,
     knowledgeCatalog: meta.knowledgeCatalog,
     answerCopy: meta.answerCopy,
+    answerSpeech: meta.answerSpeech,
     composerActivity: meta.composerActivity,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
@@ -361,6 +362,7 @@ function closedReportPostBudget(
 ): ClientDiagnosticPostBudget | undefined {
   if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
   if (meta.selectDismissal !== undefined || meta.knowledgeCatalog !== undefined) return "routine";
+  if (meta.answerSpeech !== undefined) return "routine";
   if (meta.answerCopy === undefined) return undefined;
   return meta.answerCopy.outcome === "failed" ? "failure" : "routine";
 }

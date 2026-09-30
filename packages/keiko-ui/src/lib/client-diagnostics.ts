@@ -42,6 +42,7 @@ import {
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticGitClientOperation,
   type ClientDiagnosticAnswerCopy,
+  type ClientDiagnosticAnswerSpeech,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -151,6 +152,9 @@ export interface ClientDiagnosticMeta {
   // A chat answer copy (PR #3678 review): its outcome and the marker groups removed and kept,
   // never the copied text.
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
+  // under the correlation its synthesis request carries, never the spoken text.
+  readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

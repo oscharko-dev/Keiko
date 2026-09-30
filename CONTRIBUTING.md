@@ -98,7 +98,8 @@ undecided claim counts, so the displayed "N unsupported claims" is reconstructab
 prompt reports a trim or refusal on `search.prompt.window-fitted` like the Knowledge Pod and hybrid
 prompts. `client.answer.copied` records each chat answer copy (`copied` or `failed` at `warn` with
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
-removed and kept, never the copied text.
+removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
+for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`

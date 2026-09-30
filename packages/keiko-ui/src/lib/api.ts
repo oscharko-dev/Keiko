@@ -672,15 +672,22 @@ export interface VoiceSpeechResult {
   readonly mimeType: string;
 }
 
+// `correlationId` joins the request to the read-aloud preparation the caller reported under it.
 export async function synthesizeAssistantSpeech(
   input: VoiceSpeechRequest,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<VoiceSpeechResult> {
-  return fetchJson<VoiceSpeechResult>("/api/voice/speak", {
-    method: "POST",
-    body: JSON.stringify(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return fetchJson<VoiceSpeechResult>(
+    "/api/voice/speak",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 // Streaming synthesis: returns the raw Response so the caller can read `response.body` as PCM chunks
@@ -690,8 +697,9 @@ export async function synthesizeAssistantSpeech(
 export async function streamAssistantSpeech(
   input: VoiceSpeechRequest,
   signal?: AbortSignal,
+  requestCorrelationId?: string,
 ): Promise<Response> {
-  const correlationId = newClientCorrelationId();
+  const correlationId = requestCorrelationId ?? newClientCorrelationId();
   const res = await fetch("/api/voice/speak/stream", {
     method: "POST",
     headers: {
