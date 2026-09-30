@@ -485,6 +485,9 @@ function sentOutputTokenField(request: GatewayReadinessChatCompletionRequest): O
 // window. A provider that accepts the allocation (or rejects it without naming a window) reports
 // nothing; the caller then keeps planning with its assumption and learns the window from the
 // provider's first real overflow instead. Transport failures and unreadable rejections throw.
+// The probe streams and drops an accepted answer at its status: a non-streaming request answers only
+// after generation, so a provider that accepts the allocation (Ollama, llama.cpp, LM Studio) would
+// generate until the timeout, and a reasoning model would spend thousands of tokens on it.
 const CONTEXT_WINDOW_PROBE_OUTPUT_TOKENS = 1_000_000_000;
 const CONTEXT_WINDOW_PROBE_TIMEOUT_MS = 30_000;
 
@@ -512,6 +515,7 @@ export async function discoverGatewayContextWindow(
       model: provider.modelId,
       messages: [{ role: "user", content: "Reply with OK." }],
       temperature: 0,
+      stream: true,
       ...providerOutputTokenLimit(CONTEXT_WINDOW_PROBE_OUTPUT_TOKENS, provider),
     }),
     ...(request.fetchImpl === undefined ? {} : { fetchImpl: request.fetchImpl }),

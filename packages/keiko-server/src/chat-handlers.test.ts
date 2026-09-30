@@ -25,6 +25,7 @@ import {
   createHandleGitChangeApplyDescription,
   createHandleGitChangeReviewDescription,
   handleCreateDesktopChat,
+  handleRegenerateDesktopChat,
   handleSendDesktopChat,
   parseClientTurnId,
   parseExpectedGroundingScopeIdentity,
@@ -1810,6 +1811,96 @@ describe("window adoption during prompt preparation", () => {
       // The admitted user turn survives the retry and carries exactly one answer.
       const roles = deps.store.listMessages(chat.id).map((message) => message.role);
       expect(roles).toEqual(["user", "assistant"]);
+    } finally {
+      await deps.dispose?.();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // PR #3678 audit: buffered regeneration called the model without the adoption retry, so the first
+  // regeneration on a model whose overflow taught the real window failed and only the second worked.
+  it("re-plans and retries a regeneration once after the overflow taught the window", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-chat-adopt-regenerate-"));
+    const projectPath = join(root, "repo");
+    const depsRef: { current?: UiHandlerDeps } = {};
+    const { model, calls } = adoptingModel(depsRef);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(root, "evidence"),
+      uiDbPath: join(root, "ui.db"),
+      env: {},
+      modelPortFactory: () => model,
+    });
+    depsRef.current = deps;
+    try {
+      mkdirSync(projectPath);
+      const runtimeConfig = deps.gatewayConfig;
+      if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
+      runtimeConfig.set(
+        parseGatewayConfig({
+          providers: [
+            {
+              modelId: ADOPT_MODEL,
+              baseUrl: "https://provider.example.invalid/v1",
+              apiKey: "fake-test-key",
+              timeoutMs: 5_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 1,
+            },
+          ],
+          capabilities: [
+            {
+              ...createDefaultChatCapability(ADOPT_MODEL),
+              contextWindow: 16_000,
+              maxOutputTokens: 2_000,
+            },
+          ],
+          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+        }),
+        true,
+      );
+      runtimeConfig.recordVerifiedCapability(
+        ADOPT_MODEL,
+        { conversationReady: true },
+        "2026-09-30T00:00:00.000Z",
+        runtimeConfig.generation(),
+      );
+      deps.store.createProject(projectPath, "repo");
+      const chat = deps.store.createChat(projectPath, "Regenerate", ADOPT_MODEL);
+      const stamped = { runId: undefined, workflowId: undefined, workflowStatus: undefined };
+      deps.store.createMessage({
+        chatId: chat.id,
+        role: "user",
+        content: "Wie plane ich die Migration?",
+        timestamp: 1,
+        ...stamped,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const assistant = deps.store.createMessage({
+        chatId: chat.id,
+        role: "assistant",
+        content: "Veraltete Antwort.",
+        timestamp: 2,
+        ...stamped,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const result = await handleRegenerateDesktopChat(
+        requestContext({
+          chatId: chat.id,
+          projectPath,
+          modelId: ADOPT_MODEL,
+          assistantMessageId: assistant.id,
+        }),
+        deps,
+      );
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(calls()).toBe(2);
+      expect(deps.store.findMessageById(assistant.id)).toMatchObject({
+        content: "Kurze Antwort.",
+        responseVersion: 2,
+      });
     } finally {
       await deps.dispose?.();
       rmSync(root, { recursive: true, force: true });

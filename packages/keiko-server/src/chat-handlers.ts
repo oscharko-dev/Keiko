@@ -4025,21 +4025,27 @@ function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmi
   return { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
 }
 
+function resolveRegenerateMemory(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+): Promise<ConversationMemoryResultWire> {
+  const { memoryRequest, memoryContext } = prepared;
+  return memoryContext === undefined
+    ? Promise.resolve(emptyMemoryResult(false))
+    : buildMemoryResult(memoryRequest, deps, memoryContext);
+}
+
 async function buildRegenerateContext(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
   correlationId: string | undefined,
   signal: AbortSignal,
 ): Promise<{
-  readonly memory: ConversationMemoryResultWire;
   readonly messages: readonly GatewayConversationMessage[];
   readonly maxOutputTokens?: number;
 }> {
-  const { modelId, turn, memoryRequest, memoryContext } = prepared;
-  const memory =
-    memoryContext === undefined
-      ? emptyMemoryResult(false)
-      : await buildMemoryResult(memoryRequest, deps, memoryContext);
+  const { modelId, turn, memoryRequest } = prepared;
   const executionRequest = await prepareDesktopChatPrompt(
     deps,
     memoryRequest,
@@ -4057,7 +4063,7 @@ async function buildRegenerateContext(
     turn.beforeAssistant,
     correlationId,
   );
-  return { memory, messages: assembly.messages, ...gatewayAssemblyOutputAllocation(assembly) };
+  return { messages: assembly.messages, ...gatewayAssemblyOutputAllocation(assembly) };
 }
 
 function validateRegenerateCommit(
@@ -4112,39 +4118,59 @@ function commitRegeneratedChatTurn(
   };
 }
 
+// One regeneration attempt: plans the prompt from the CURRENT context profile and calls the model.
+// Re-run as a whole when the provider's overflow answer taught Keiko the deployment's real window.
+async function assembleAndCallRegeneration(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<NormalizedResponse | RouteResult> {
+  const { modelId, executionAdmission } = prepared;
+  const { messages, maxOutputTokens } = await buildRegenerateContext(
+    deps,
+    prepared,
+    memory,
+    correlationId,
+    signal,
+  );
+  if (requestSignalAborted(signal)) return requestCancelledResult();
+  const model = bufferedModelAtProviderBoundary(
+    deps,
+    modelId,
+    executionAdmission,
+    correlationId,
+    "chat.regeneration.rejected",
+  );
+  if (isRouteResult(model)) return model;
+  return model.call(
+    {
+      modelId,
+      messages,
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      stream: false,
+      logContext: { correlationId },
+    },
+    signal,
+  );
+}
+
 async function persistRegeneratedChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { modelId, executionAdmission } = prepared;
+  const { modelId } = prepared;
   try {
-    const { memory, messages, maxOutputTokens } = await buildRegenerateContext(
+    const memory = await resolveRegenerateMemory(deps, prepared);
+    const response = await withAdoptedContextWindowRetry(
       deps,
-      prepared,
-      correlationId,
-      signal,
+      { modelId, surface: "chat-buffered", correlationId },
+      () => assembleAndCallRegeneration(deps, prepared, memory, signal, correlationId),
     );
-    if (requestSignalAborted(signal)) return requestCancelledResult();
-    const model = bufferedModelAtProviderBoundary(
-      deps,
-      modelId,
-      executionAdmission,
-      correlationId,
-      "chat.regeneration.rejected",
-    );
-    if (isRouteResult(model)) return model;
-    const response = await model.call(
-      {
-        modelId,
-        messages,
-        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-        stream: false,
-        logContext: { correlationId },
-      },
-      signal,
-    );
+    if (isRouteResult(response)) return response;
     if (requestSignalAborted(signal)) return requestCancelledResult();
     return commitRegeneratedChatTurn(deps, prepared, memory, response);
   } catch (error) {

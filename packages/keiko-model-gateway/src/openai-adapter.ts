@@ -920,6 +920,11 @@ function assertUsableAssistantResponse(
   throw new ProviderEmptyAnswerError(modelId, secrets);
 }
 
+// A provider error body is untrusted and may be megabytes long (the chat path caps it at 10 MB).
+// Every pattern below reads only the head of it, where a window statement or a failure class sits,
+// so a hostile body can never turn classification into a quadratic scan (PR #3678 audit).
+const ERROR_SIGNAL_MAX_CHARS = 4_096;
+
 function errorSignal(payload: unknown): string {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
   if (!isRecord(error)) {
@@ -927,7 +932,9 @@ function errorSignal(payload: unknown): string {
   }
   return [error.code, error.type, error.message]
     .filter((value): value is string => typeof value === "string")
+    .map((value) => value.slice(0, ERROR_SIGNAL_MAX_CHARS))
     .join(" ")
+    .slice(0, ERROR_SIGNAL_MAX_CHARS)
     .toLowerCase();
 }
 
@@ -935,8 +942,11 @@ function errorSignal(payload: unknown): string {
 // "max_tokens=N cannot be greater than max_model_len=M"; Anthropic says "prompt is too long",
 // llama.cpp "exceeds the available context size", TGI "`max_new_tokens` must be <= N" — each an
 // overflow like any other, and each a form REPORTED_CONTEXT_WINDOW_PATTERNS reads the window from.
+// llama.cpp names the class in `type` (`exceed_context_size_error`) and the window in `n_ctx`. The
+// exceed clause is bounded on one line: an open `.*` rescans the whole remainder from every
+// occurrence of "context".
 const CONTEXT_OVERFLOW_SIGNAL =
-  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len|available context size|max_new_tokens`? must be <=/;
+  /context[_ -]?length[_ -]?exceeded|context window|context[^\n]{0,120}exceed|maximum context|too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len|available context size|exceed_context_size|max_new_tokens`? must be <=/;
 
 function isContextOverflow(status: number, payload: unknown): boolean {
   if (status !== 400 && status !== 413 && status !== 422) {
@@ -952,15 +962,31 @@ function isContextOverflow(status: number, payload: unknown): boolean {
 //   TGI                   : "`inputs` tokens + `max_new_tokens` must be <= 8192. Given: ..."
 //   llama.cpp server      : "... exceeds the available context size (n_ctx = 8192) ..."
 // LiteLLM forwards the upstream text inside its own message, so the same patterns apply behind it.
+// llama.cpp also states it as the numeric `n_ctx` field of the error object, which is read first.
 const REPORTED_CONTEXT_WINDOW_PATTERNS: readonly RegExp[] = [
   /maximum context length is (\d{3,9}) tokens/,
-  /max_model_len\s*=\s*(\d{3,9})/,
-  /\d+ tokens? > (\d{3,9}) maximum/,
+  /max_model_len\s{0,8}=\s{0,8}(\d{3,9})/,
+  /tokens? > (\d{3,9}) maximum/,
   /must be <= (\d{3,9})\. given/,
-  /n_ctx\s*[=:]\s*(\d{3,9})/,
+  /n_ctx\s{0,8}[=:]\s{0,8}(\d{3,9})/,
 ];
 const MIN_REPORTED_CONTEXT_WINDOW = 512;
 const MAX_REPORTED_CONTEXT_WINDOW = 100_000_000;
+
+function plausibleContextWindow(tokens: number): number | undefined {
+  return Number.isSafeInteger(tokens) &&
+    tokens >= MIN_REPORTED_CONTEXT_WINDOW &&
+    tokens <= MAX_REPORTED_CONTEXT_WINDOW
+    ? tokens
+    : undefined;
+}
+
+function structuredContextWindow(payload: unknown): number | undefined {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  return isRecord(error) && typeof error.n_ctx === "number"
+    ? plausibleContextWindow(error.n_ctx)
+    : undefined;
+}
 
 /**
  * The total context window a provider stated in an overflow answer, or undefined when it named
@@ -968,16 +994,12 @@ const MAX_REPORTED_CONTEXT_WINDOW = 100_000_000;
  * answer. Only a bounded integer leaves this function — never the provider's text.
  */
 export function reportedContextWindowTokens(payload: unknown): number | undefined {
+  const structured = structuredContextWindow(payload);
+  if (structured !== undefined) return structured;
   const signal = errorSignal(payload);
   for (const pattern of REPORTED_CONTEXT_WINDOW_PATTERNS) {
-    const tokens = Number(pattern.exec(signal)?.[1]);
-    if (
-      Number.isSafeInteger(tokens) &&
-      tokens >= MIN_REPORTED_CONTEXT_WINDOW &&
-      tokens <= MAX_REPORTED_CONTEXT_WINDOW
-    ) {
-      return tokens;
-    }
+    const tokens = plausibleContextWindow(Number(pattern.exec(signal)?.[1]));
+    if (tokens !== undefined) return tokens;
   }
   return undefined;
 }

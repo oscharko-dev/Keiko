@@ -82,6 +82,46 @@ describe("reportedContextWindowTokens", () => {
     ).toBe(undefined);
     expect(reportedContextWindowTokens("not a payload")).toBe(undefined);
   });
+
+  // llama.cpp states the window as a numeric field of the error object, next to a message that names
+  // no number ({"code":400,"type":"exceed_context_size_error","n_prompt_tokens":20000,"n_ctx":16384}).
+  it("reads llama.cpp's numeric n_ctx field of the error object", () => {
+    const error = {
+      code: 400,
+      type: "exceed_context_size_error",
+      message: "the request exceeds the available context size, try increasing it",
+      n_prompt_tokens: 20_000,
+    };
+    expect(reportedContextWindowTokens({ error: { ...error, n_ctx: 16_384 } })).toBe(16_384);
+    expect(reportedContextWindowTokens({ ...error, n_ctx: 16_384 })).toBe(16_384);
+  });
+
+  it("bounds the n_ctx field like every other source of a window", () => {
+    const named = (n_ctx: unknown): unknown => reportedContextWindowTokens({ error: { n_ctx } });
+    expect(named(511)).toBe(undefined);
+    expect(named(100_000_001)).toBe(undefined);
+    expect(named(16_384.5)).toBe(undefined);
+    expect(named(Number.MAX_SAFE_INTEGER + 2)).toBe(undefined);
+    expect(named("16384")).toBe(undefined);
+    expect(named(512)).toBe(512);
+    expect(named(100_000_000)).toBe(100_000_000);
+  });
+
+  // PR #3678 audit: the digit-run pattern and `context.*exceed` were quadratic, so a 64 KB provider
+  // body stalled the event loop for seconds. The signal is capped and the patterns are bounded.
+  it("answers a long digit run in bounded time", () => {
+    const message = `context window exceeded: ${"7".repeat(64_000)}`;
+    const started = performance.now();
+    expect(reportedContextWindowTokens({ error: { message } })).toBe(undefined);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it("still reads a window that leads a very long answer", () => {
+    const message = `This model's maximum context length is 32768 tokens. ${"9".repeat(200_000)}`;
+    const started = performance.now();
+    expect(reportedContextWindowTokens({ error: { message } })).toBe(32_768);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
 });
 
 describe("OpenAiAdapter overflow mapping", () => {
@@ -149,6 +189,56 @@ describe("OpenAiAdapter overflow mapping", () => {
       expect((error as ContextOverflowError).reportedContextWindowTokens).toBe(tokens);
     },
   );
+});
+
+describe("OpenAiAdapter overflow classification of hostile bodies", () => {
+  async function failureOf(message: string, status = 400): Promise<{ error: unknown; ms: number }> {
+    const adapter = new OpenAiAdapter({
+      requestId: "overflow-hostile",
+      costClass: "medium",
+      fetchImpl: (): Promise<Response> => Promise.resolve(rejection(message, status)),
+    });
+    const started = performance.now();
+    const error: unknown = await adapter
+      .call({ modelId: PROVIDER.modelId, messages: [{ role: "user", content: "hi" }] }, PROVIDER)
+      .catch((caught: unknown) => caught);
+    return { error, ms: performance.now() - started };
+  }
+
+  it("classifies an overflow followed by a huge digit run without stalling", async () => {
+    const { error, ms } = await failureOf(`context window exceeded: ${"7".repeat(64_000)}`);
+    expect(error).toBeInstanceOf(ContextOverflowError);
+    expect((error as ContextOverflowError).reportedContextWindowTokens).toBe(undefined);
+    expect(ms).toBeLessThan(500);
+  });
+
+  it("does not stall on a long run of the word context and stays a provider error", async () => {
+    const { error, ms } = await failureOf("context ".repeat(25_000));
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).not.toBeInstanceOf(ContextOverflowError);
+    expect(ms).toBeLessThan(500);
+  });
+
+  it("classifies the message-less llama.cpp overflow and reads its n_ctx", async () => {
+    const adapter = new OpenAiAdapter({
+      requestId: "overflow-llama",
+      costClass: "medium",
+      fetchImpl: (): Promise<Response> =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: { code: 400, type: "exceed_context_size_error", n_ctx: 8192 },
+            }),
+            { status: 400, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    });
+    const error: unknown = await adapter
+      .call({ modelId: PROVIDER.modelId, messages: [{ role: "user", content: "hi" }] }, PROVIDER)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ContextOverflowError);
+    expect((error as ContextOverflowError).reportedContextWindowTokens).toBe(8_192);
+  });
 });
 
 function assumedConfig(): GatewayConfig {
@@ -273,6 +363,29 @@ describe("assumed context windows", () => {
     expect(marked.providers[0]?.capability.contextWindowAssumed).toBe(true);
   });
 
+  // PR #3678 audit: a 1.1.13 discovery that declared an output limit but no window stored the 4,096
+  // placeholder next to that limit. An output limit larger than the whole window cannot belong to a
+  // declared window, so such a record is a placeholder; a limit that fits stays a declared model.
+  it("marks a placeholder window whose declared output limit exceeds it, and nothing that fits", () => {
+    const withOutput = (id: string, maxOutputTokens: number): Record<string, unknown> => ({
+      ...createDefaultChatCapability(id),
+      maxOutputTokens,
+    });
+    const marked = markAssumedPlaceholderContextWindows({
+      capabilities: [
+        withOutput("partial", 8_192),
+        withOutput("fits", 2_048),
+        withOutput("equal", 4_096),
+        { ...withOutput("reported", 8_192), contextWindowReported: true },
+        { ...withOutput("larger-window", 8_192), contextWindow: 8_192 },
+        { ...withOutput("larger-output", 16_384), contextWindow: 8_192 },
+        { ...withOutput("enriched", 8_192), knownLimitations: ["Operator-reviewed"] },
+      ],
+    }) as { capabilities: Record<string, unknown>[] };
+    const flags = marked.capabilities.map((capability) => capability.contextWindowAssumed);
+    expect(flags).toEqual([true, undefined, undefined, undefined, undefined, undefined, undefined]);
+  });
+
   it("keeps a provider-reported 4,096-token window proven across a reload", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-reported-window-"));
     try {
@@ -336,6 +449,35 @@ describe("discoverGatewayContextWindow", () => {
     >;
     expect(body.max_tokens).toBe(1_000_000_000);
     expect(body.model).toBe(PROVIDER.modelId);
+  });
+
+  // PR #3678 audit: a non-streaming probe answered only after generation, so a provider that accepts
+  // the allocation generated up to the timeout. The probe streams and drops the answer at its status.
+  it("streams the probe and cancels an accepted answer at its status instead of generating", async () => {
+    const cancelled = vi.fn();
+    const fetchImpl = vi.fn<typeof fetch>(() => {
+      const frames = new ReadableStream<Uint8Array>({
+        pull(controller): void {
+          controller.enqueue(new TextEncoder().encode('data: {"choices":[]}\n\n'));
+        },
+        cancel: cancelled,
+      });
+      return Promise.resolve(
+        new Response(frames, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      );
+    });
+    const outcome = await discoverGatewayContextWindow({
+      config: assumedConfig(),
+      provider: PROVIDER,
+      fetchImpl,
+    });
+    expect(outcome).toEqual({ status: "not-reported", httpStatus: 200 });
+    const body = JSON.parse(fetchImpl.mock.calls[0]?.[1]?.body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(body.stream).toBe(true);
+    expect(cancelled).toHaveBeenCalledTimes(1);
   });
 
   it("reports nothing when the provider accepts the allocation", async () => {

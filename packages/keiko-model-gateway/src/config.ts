@@ -1034,10 +1034,13 @@ function migrateChatCapabilityContextWindow(raw: unknown): unknown {
 
 // Configurations persisted before 1.1.14 stored an undeclared chat window as the bare 4,096 setup
 // placeholder, indistinguishable from a declared one, so every conversation surface planned such a
-// model as a 4k model (customer report on 1.1.13). A record that still carries the exact placeholder
-// signature — the placeholder window, no declared output limit, the runtime-configured limitation
-// and no explicit flag — is marked as assumed at the file-load boundary. A wrong guess is safe: the
-// provider's overflow answer or the startup context-window probe replaces it with the real window.
+// model as a 4k model (customer report on 1.1.13). A record that still carries the placeholder
+// signature — the placeholder window, the runtime-configured limitation, no explicit flag, and either
+// no declared output limit or one larger than the whole placeholder window (a discovery that declared
+// an output limit but no window; an output cannot exceed the window it belongs to) — is marked as
+// assumed at the file-load boundary. A limit that fits, including exactly 4,096, may describe a
+// genuinely declared small model and stays declared. A wrong guess is safe: the provider's overflow
+// answer or the startup context-window probe replaces it with the real window.
 // A provider-reported window carries its own provenance and is never reclassified, even when the
 // provider stated exactly 4,096 tokens.
 function markAssumedChatCapability(raw: unknown): unknown {
@@ -1045,10 +1048,18 @@ function markAssumedChatCapability(raw: unknown): unknown {
   if (raw.contextWindowAssumed !== undefined || raw.contextWindowReported !== undefined) return raw;
   const placeholder =
     raw.contextWindow === PLACEHOLDER_CHAT_CONTEXT_WINDOW &&
-    (raw.maxOutputTokens ?? 0) === 0 &&
+    placeholderOutputLimit(raw.maxOutputTokens) &&
     Array.isArray(raw.knownLimitations) &&
     raw.knownLimitations.includes(RUNTIME_CONFIGURED_CAPABILITY_LIMITATION);
   return placeholder ? { ...raw, contextWindowAssumed: true } : raw;
+}
+
+// No declared output limit, or one that cannot fit inside the placeholder window.
+function placeholderOutputLimit(maxOutputTokens: unknown): boolean {
+  const declared = maxOutputTokens ?? 0;
+  return (
+    declared === 0 || (typeof declared === "number" && declared > PLACEHOLDER_CHAT_CONTEXT_WINDOW)
+  );
 }
 
 export function markAssumedPlaceholderContextWindows(raw: unknown): unknown {
