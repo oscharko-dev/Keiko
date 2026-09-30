@@ -66594,6 +66594,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "search.connected-context.completion-details": "memory-knowledge",
     "search.connected-context.failed": "memory-knowledge",
     "search.connected-context.started": "memory-knowledge",
+    "search.entailment.judged": "memory-knowledge",
     "search.index-invalidated-for-capsule": "memory-knowledge",
     "search.native-runtime-resolved": "memory-knowledge",
     "search.prompt.window-fitted": "memory-knowledge",

@@ -128,6 +128,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gitProcessActivity", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "grounded-citation-log", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "knowledge-prompt-window", surface: "memory-knowledge" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "grounded-entailment-stage",
+    surface: "memory-knowledge",
+  },
   { owner: "keiko-server", emitterPrefix: "grounded-orchestrator", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "grounded-rerank-facade", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "harness-context-compactor", surface: "tools-workflows" },

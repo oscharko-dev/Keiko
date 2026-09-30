@@ -442,6 +442,7 @@
         "search.connected-context.completion-details",
         "search.connected-context.failed",
         "search.connected-context.started",
+        "search.entailment.judged",
         "search.index-invalidated-for-capsule",
         "search.native-runtime-resolved",
         "search.prompt.window-fitted",
@@ -875,7 +876,7 @@
     "install-mode-probe-failed": ["ui.dependency-failure"],
     "knowledge-prompt-window": ["memory-knowledge.dependency-failure"],
     "knowledge-citation-reconciliation": ["memory-knowledge.dependency-failure"],
-    "grounded-entailment-verdict": [],
+    "grounded-entailment-verdict": ["memory-knowledge.dependency-failure"],
     "knowledge-store-corruption": ["memory-knowledge.dependency-failure"],
     "knowledge-store-encryption": ["memory-knowledge.rejection"],
     "knowledge-store-reopen": ["memory-knowledge.dependency-failure"],
@@ -2368,12 +2369,5 @@
     "ui.crash": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "ui.dependency-failure": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"]
   },
-  "violations": [
-    {
-      "code": "surface-unmapped",
-      "site": "operations.search.entailment.judged",
-      "detail": "keiko-server:grounded-entailment-stage.logEntailmentVerdict",
-      "correctiveAction": "Map the operation's owner package and emitter module to a product surface."
-    }
-  ]
+  "violations": []
 }
