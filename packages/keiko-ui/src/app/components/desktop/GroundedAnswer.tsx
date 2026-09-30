@@ -664,7 +664,7 @@ function useSupportAwareLabel(label: string, unverified: boolean): string {
 function UnverifiedSupportBadge(): ReactNode {
   const t = useTranslate();
   return (
-    <span className={activityBadgeStyles.citationUnverified}>
+    <span className={activityBadgeStyles.cmpCitationUnverified}>
       {t("grounded.citation.unverified")}
     </span>
   );

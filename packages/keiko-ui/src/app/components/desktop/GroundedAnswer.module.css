@@ -68,7 +68,7 @@
 
 /* PR #3678 review — a citation whose claim shares little wording with its excerpt, while no
    entailment judge verified the answer. Text carries the meaning; the warning tone only repeats it. */
-.citationUnverified {
+.cmpCitationUnverified {
   flex: 0 0 auto;
   margin-left: 6px;
   color: var(--feedback-warning);
