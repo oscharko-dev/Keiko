@@ -696,6 +696,7 @@ describe("ConnectorGraph — localized row actions", () => {
     expect(
       within(actions).getByRole("button", { name: "Knowledge Pod Fachkonzept trennen" }),
     ).toHaveTextContent("Trennen");
+    expect(screen.getByText("Indexiert")).toBeInTheDocument();
   });
 });
 

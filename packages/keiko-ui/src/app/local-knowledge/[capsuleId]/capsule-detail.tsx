@@ -43,7 +43,7 @@ import {
   type I18nTranslate,
 } from "../local-knowledge-i18n";
 import Link from "next/link";
-import { STATUS_LABELS } from "../connector-graph-types";
+import { STATUS_LABEL_KEYS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
 import { CapsuleActions } from "./capsule-actions";
 import { HtmlManualPodRefresh } from "../html-manual-pod-refresh";
@@ -632,10 +632,10 @@ function OverviewSection({ data }: { readonly data: CapsuleDetailData }): ReactN
               className="lk-badge"
               data-state={capsule.lifecycleState}
               aria-label={t("localKnowledge.detail.overview.statusAria", {
-                status: STATUS_LABELS[capsule.lifecycleState],
+                status: t(STATUS_LABEL_KEYS[capsule.lifecycleState]),
               })}
             >
-              {STATUS_LABELS[capsule.lifecycleState]}
+              {t(STATUS_LABEL_KEYS[capsule.lifecycleState])}
             </output>
           }
         />

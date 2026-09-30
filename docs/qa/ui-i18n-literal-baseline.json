@@ -182,19 +182,8 @@
       "Reject"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.tsx": [
-      "— choose a Knowledge Pod source —",
-      "${set.displayName} (${String(set.capsuleCount)} pods)",
-      "Available Knowledge Pod sources",
-      "Create a Knowledge Pod",
-      "Create or manage Knowledge Pods",
       "Knowledge Pod Sets",
-      "Knowledge Pod Sets could not be loaded.",
-      "Knowledge Pods",
-      "Loading Knowledge Pods…",
-      "Local Knowledge Pod",
-      "Manage",
-      "Select Knowledge Pod source",
-      "Try again"
+      "Knowledge Pods"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorBreadcrumbBar.tsx": [
       "Editor breadcrumbs"
@@ -712,15 +701,10 @@
     "packages/keiko-ui/src/app/local-knowledge/capsule-set-compose.tsx": ["Creating..."],
     "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
     "packages/keiko-ui/src/app/local-knowledge/connector-graph.tsx": [
-      "Actions for Knowledge Pod",
-      "Add Knowledge Pod to workspace",
       "Attach a source before indexing this Knowledge Pod.",
       "Attach a source before indexing.",
       "Cancel indexing for Knowledge Pod",
       "Cancelling…",
-      "Details",
-      "Disconnect Knowledge Pod",
-      "Disconnecting…",
       "Index",
       "Indexing…",
       "Knowledge Pod guidance:",
@@ -728,7 +712,6 @@
       "Knowledge Pod Set:",
       "Knowledge Pods",
       "Last refresh",
-      "Open details for Knowledge Pod",
       "Pods",
       "Removed pages could not be detected this run (the crawl reached its page limit).",
       "Start indexing Knowledge Pod"

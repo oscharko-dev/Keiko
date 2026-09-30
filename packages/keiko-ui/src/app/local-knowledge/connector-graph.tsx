@@ -50,7 +50,7 @@ import type {
   ConnectorGraphProps,
   RowActionKind,
 } from "./connector-graph-types";
-import { STATUS_LABELS } from "./connector-graph-types";
+import { STATUS_LABEL_KEYS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
 import { HtmlManualPodCreate } from "./html-manual-pod-create";
@@ -688,13 +688,14 @@ function DeleteCapsuleSetConfirmDialog({
 // ---------------------------------------------------------------------------
 
 function StatusBadge({ state }: { readonly state: CapsuleLifecycleState }): ReactNode {
+  const t = useTranslate();
   // Static text on purpose: a per-row role="status" live region (inside the
   // formerly aria-live section) made screen readers re-announce the whole list
   // on every reload — the page-level summary line announces changes instead
   // (uiux-fix F032, C226).
   return (
     <span className="lk-badge" data-state={state}>
-      {STATUS_LABELS[state]}
+      {t(STATUS_LABEL_KEYS[state])}
     </span>
   );
 }
@@ -1324,7 +1325,7 @@ function CapsuleRow({
               </span>
               <span className="lk-connector-drag-ghost-copy">
                 <span>{dragGhost.label}</span>
-                <small>{STATUS_LABELS[dragGhost.state]}</small>
+                <small>{t(STATUS_LABEL_KEYS[dragGhost.state])}</small>
               </span>
             </div>,
             document.body,

@@ -333,6 +333,46 @@ describe("ConnectorPickerWidget", () => {
     expect(onManageConnectors).toHaveBeenCalledTimes(1);
   });
 
+  it("localizes the picker and its options when German is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    defaultMocks();
+    const user = userEvent.setup();
+    render(
+      <I18nProvider>
+        <ConnectorPickerWidget onSelect={vi.fn()} />
+      </I18nProvider>,
+    );
+    const combobox = await screen.findByRole("combobox", {
+      name: "Knowledge-Pod-Quelle auswählen",
+    });
+    expect(combobox).toHaveTextContent("— Knowledge-Pod-Quelle wählen —");
+    expect(
+      screen.getByRole("button", { name: "Knowledge Pods erstellen oder verwalten" }),
+    ).toBeInTheDocument();
+    await user.click(combobox);
+    expect(screen.getByRole("option", { name: /My Docs \(Bereit\)/u })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /All Sources \(2 Pods\)/u })).toBeInTheDocument();
+  });
+
+  it("localizes the connector node when German is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <ConnectorPickerWidget
+          presentation="node"
+          selectedKind="capsule"
+          selectedId="cap-abc"
+          selectedLabel="First KC"
+          selectedState="stale"
+          onSelect={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText("Veraltet")).toBeInTheDocument();
+    expect(screen.getByText("Lokaler Knowledge Pod")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Verwalten" })).toBeInTheDocument();
+  });
+
   it("localizes the empty, loading and failure states when German is selected", async () => {
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
     mockFetchCapsules.mockResolvedValue({ capsules: [] });

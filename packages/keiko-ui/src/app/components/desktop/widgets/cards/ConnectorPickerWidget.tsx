@@ -25,7 +25,12 @@ import {
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
-import { useLocalKnowledgeTranslate } from "@/app/local-knowledge/local-knowledge-i18n";
+import {
+  useLocalKnowledgeTranslate,
+  type I18nTranslate as LocalKnowledgeTranslate,
+  type LocalKnowledgeMessageKey,
+} from "@/app/local-knowledge/local-knowledge-i18n";
+import { STATUS_LABEL_KEYS } from "@/app/local-knowledge/connector-graph-types";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
@@ -55,14 +60,17 @@ export interface ConnectorPickerWidgetProps {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function lifecycleLabel(state: CapsuleListEntry["lifecycleState"]): string {
+function lifecycleLabel(
+  t: LocalKnowledgeTranslate,
+  state: CapsuleListEntry["lifecycleState"],
+): string {
   switch (state) {
     case "ready":
-      return "Ready";
+      return t("localKnowledge.picker.state.ready");
     case "indexing":
-      return "Indexing…";
+      return t("localKnowledge.picker.state.indexing");
     case "error":
-      return "Failed";
+      return t("localKnowledge.picker.state.error");
     default:
       return state;
   }
@@ -243,21 +251,18 @@ function pickerOptionGuidance(entry: KnowledgePodPickerEntry): {
   };
 }
 
-function connectorNodeStateLabel(state: string | undefined): string {
-  switch (state) {
-    case "ready":
-      return "Indexed";
-    case "draft":
-      return "Draft";
-    case "indexing":
-      return "Indexing";
-    case "stale":
-      return "Stale";
-    case "error":
-      return "Failed";
-    default:
-      return "Local Knowledge";
-  }
+// The lifecycle states a connector node names; anything else reads as the unselected node.
+const CONNECTOR_NODE_STATE_KEYS: ReadonlyMap<string, LocalKnowledgeMessageKey> = new Map([
+  ["ready", STATUS_LABEL_KEYS.ready],
+  ["draft", STATUS_LABEL_KEYS.draft],
+  ["indexing", STATUS_LABEL_KEYS.indexing],
+  ["stale", STATUS_LABEL_KEYS.stale],
+  ["error", STATUS_LABEL_KEYS.error],
+]);
+
+function connectorNodeStateLabel(t: LocalKnowledgeTranslate, state: string | undefined): string {
+  const key = state === undefined ? undefined : CONNECTOR_NODE_STATE_KEYS.get(state);
+  return t(key ?? "localKnowledge.node.unselected");
 }
 
 function KnowledgeConnectorNode({
@@ -269,6 +274,7 @@ function KnowledgeConnectorNode({
   readonly selectedState: string | undefined;
   readonly onManageConnectors: () => void;
 }): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   const label =
     selectedLabel !== undefined && selectedLabel.trim().length > 0
       ? selectedLabel.trim()
@@ -279,16 +285,16 @@ function KnowledgeConnectorNode({
         <ServerIcon size={42} />
       </div>
       <div className="connector-node-copy">
-        <p className="connector-node-kicker">{connectorNodeStateLabel(selectedState)}</p>
+        <p className="connector-node-kicker">{connectorNodeStateLabel(t, selectedState)}</p>
         {/* Non-heading element: this compact Knowledge Pod node is a leaf card with no
             sectioning context, so a real <h2> was an orphan heading (GEN-UI-A11Y-018). */}
         <p className="connector-node-title" title={label}>
           {label}
         </p>
-        <p className="connector-node-meta">Local Knowledge Pod</p>
+        <p className="connector-node-meta">{t("localKnowledge.node.meta")}</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
-        Manage
+        {t("localKnowledge.node.manage")}
       </button>
     </div>
   );
@@ -306,6 +312,7 @@ export function ConnectorPickerWidget({
   onManageConnectors = () => undefined,
 }: ConnectorPickerWidgetProps): ReactNode {
   const t = useTranslate();
+  const lkT = useLocalKnowledgeTranslate();
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -415,13 +422,13 @@ export function ConnectorPickerWidget({
         selectedId={selectedId}
       />
 
-      <div className="connector-picker-label">Select Knowledge Pod source</div>
+      <div className="connector-picker-label">{lkT("localKnowledge.picker.label")}</div>
       <KeikoSelect
         triggerClassName="connector-picker-select"
         value={currentValue}
-        ariaLabel="Select Knowledge Pod source"
-        placeholder="— choose a Knowledge Pod source —"
-        menuTitle="Available Knowledge Pod sources"
+        ariaLabel={lkT("localKnowledge.picker.label")}
+        placeholder={lkT("localKnowledge.picker.placeholder")}
+        menuTitle={lkT("localKnowledge.picker.menuTitle")}
         sections={[
           ...(hasCapsules
             ? [
@@ -429,7 +436,7 @@ export function ConnectorPickerWidget({
                   label: "Knowledge Pods",
                   options: capsules.map((cap) => ({
                     value: `capsule:${cap.id}`,
-                    label: `${cap.displayName} (${lifecycleLabel(cap.lifecycleState)})`,
+                    label: `${cap.displayName} (${lifecycleLabel(lkT, cap.lifecycleState)})`,
                     ...pickerOptionGuidance(cap),
                   })),
                 },
@@ -441,7 +448,10 @@ export function ConnectorPickerWidget({
                   label: "Knowledge Pod Sets",
                   options: capsuleSets.map((set) => ({
                     value: `capsule-set:${set.id}`,
-                    label: `${set.displayName} (${String(set.capsuleCount)} pods)`,
+                    label: lkT("localKnowledge.picker.setOption", {
+                      name: set.displayName,
+                      count: String(set.capsuleCount),
+                    }),
                     ...pickerOptionGuidance(set),
                   })),
                 },
@@ -455,7 +465,7 @@ export function ConnectorPickerWidget({
 
       {setsFailed ? (
         <output className="connector-picker-notice" style={NATIVE_BLOCK_STYLE}>
-          Knowledge Pod Sets could not be loaded.
+          {lkT("localKnowledge.picker.setsFailed")}
         </output>
       ) : null}
 
@@ -467,7 +477,7 @@ export function ConnectorPickerWidget({
 
       <div className="connector-picker-footer">
         <button type="button" className="connector-picker-create-link" onClick={onManageConnectors}>
-          Create or manage Knowledge Pods
+          {lkT("localKnowledge.picker.manage")}
         </button>
       </div>
     </div>

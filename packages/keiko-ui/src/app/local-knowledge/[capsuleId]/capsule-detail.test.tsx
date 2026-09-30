@@ -260,7 +260,7 @@ describe("CapsuleDetail — overview section", () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
     await openAdvanced(user);
 
-    // STATUS_LABELS maps "ready" → "Indexed" — same terminology as the
+    // STATUS_LABEL_KEYS maps "ready" → "Indexed" — same terminology as the
     // connector-graph capsule list (uiux-fix F033, C006).
     await waitFor(() => {
       const badge = screen.getByRole("status", { name: /Status: Indexed/i });
