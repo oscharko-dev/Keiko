@@ -1541,7 +1541,11 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("option", { name: "Knowledge Pod: Fresh knowledge" })).toBeVisible();
     expect(screen.queryByRole("option", { name: "Knowledge Pod: Stale knowledge" })).toBeNull();
-    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeDisabled();
+    // The bound pod is listed but no longer ready: it keeps its name and its real state, and is
+    // not selectable. Only a pod the catalog does not list at all reads as "(unavailable)".
+    expect(
+      screen.getByRole("option", { name: "Knowledge Pod: Stale knowledge (indexing)" }),
+    ).toBeDisabled();
 
     await user.keyboard("{Escape}");
     await openCombobox(user, "Grounding mode");
@@ -1611,6 +1615,143 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       ).toBeVisible();
     });
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("names a bound pod that is not ready with its real state instead of its id", async () => {
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("87251961-0000-4000-8000-000000000001");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "test",
+          lifecycleState: "indexing",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: 1 }],
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Knowledge Pod: test (indexing)",
+      );
+    });
+    // The scope chip names the pod and its state; the raw id never reaches the person.
+    expect(screen.getByLabelText("test (indexing)")).toBeInTheDocument();
+    expect(screen.queryByText(/87251961/u)).toBeNull();
+    await openCombobox(user, "Grounding mode");
+    expect(screen.getByRole("option", { name: "Knowledge Pod: test (indexing)" })).toBeDisabled();
+    expect(screen.queryByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeNull();
+  });
+
+  it("shows a failed bound pod as failed by name, never as unavailable or by id", async () => {
+    const capsuleId = makeCapsuleId("87251961-0000-4000-8000-000000000002");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "test",
+          lifecycleState: "error",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: 1 }],
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Knowledge Pod: test (failed)",
+      );
+    });
+    expect(screen.getByLabelText("test (failed)")).toBeInTheDocument();
+    expect(screen.queryByText(/87251961/u)).toBeNull();
+  });
+
+  it("reports a failed catalog load as retryable instead of as an empty catalog", async () => {
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("cap-after-retry");
+    fetchCapsulesMock.mockRejectedValueOnce(new Error("knowledge catalog offline"));
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("knowledge catalog offline");
+    });
+    // A failed load is not "no ready pods": the empty-catalog hint must stay hidden.
+    expect(screen.queryByText("No ready Knowledge Pods or Pod Sets are available.")).toBeNull();
+
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "After retry",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 2,
+        },
+      ],
+    });
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await openCombobox(user, "Grounding mode");
+    expect(await screen.findByRole("option", { name: "Knowledge Pod: After retry" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
+  it("says no ready pods only after a successful load", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    expect(
+      await screen.findByText("No ready Knowledge Pods or Pod Sets are available."),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
+  it("refreshes on the first picker open once the mount-time snapshot has aged", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const user = userEvent.setup();
+      fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] }).mockResolvedValueOnce({
+        capsules: [
+          {
+            id: makeCapsuleId("cap-reindexed"),
+            displayName: "Reindexed since mount",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+        ],
+      });
+      renderWindow(makeSession({ activeChat: makeChat() }));
+      await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+      await screen.findByText("No ready Knowledge Pods or Pod Sets are available.");
+
+      vi.setSystemTime(Date.now() + 6_000);
+      await openCombobox(user, "Grounding mode");
+
+      expect(
+        await screen.findByRole("option", { name: "Knowledge Pod: Reindexed since mount" }),
+      ).toBeVisible();
+      expect(fetchCapsulesMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shares the capsule catalog request across mounted chat windows", async () => {
@@ -3616,6 +3757,15 @@ describe("ChatWindow message copy", () => {
         "Check [packages/keiko-harness/src/context.ts:49-58] [source: api] packages/keiko-harness/src/context.ts:49-58 【1】.",
       ),
     ).toBe("Check packages/keiko-harness/src/context.ts:49-58.");
+  });
+
+  it("removes grouped citation markers from copied answers like single ones", () => {
+    expect(copyableMessageText("Java 17 wird verwendet [1, 7, 8]. Maven [2]; 【3, 4】.")).toBe(
+      "Java 17 wird verwendet. Maven;.",
+    );
+    expect(copyableMessageText("Not a marker [1, x] and [note].")).toBe(
+      "Not a marker [1, x] and [note].",
+    );
   });
 
   it("removes standalone source labels without corrupting answer spacing", () => {

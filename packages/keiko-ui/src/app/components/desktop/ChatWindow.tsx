@@ -35,6 +35,7 @@ import {
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { findCitationMarkerGroups } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useChatSessionCatalog,
@@ -149,14 +150,13 @@ import { MarkdownComposer } from "./composer/MarkdownComposer";
 import type { ComposerInputHandle, ComposerKeyEvent } from "./composer/composer-editor-types";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
+import type { CapsuleListEntry, CapsuleSetListEntry } from "@/lib/local-knowledge-api";
 import {
-  capsulesForKnowledgePodUi,
-  capsuleSetsForKnowledgePodUi,
-  fetchCapsules,
-  fetchCapsuleSets,
-  type CapsuleListEntry,
-  type CapsuleSetListEntry,
-} from "@/lib/local-knowledge-api";
+  capsuleNameWithState,
+  isReadyCapsule,
+  useKnowledgeCatalog,
+  type KnowledgeCatalog,
+} from "./knowledge-catalog";
 import type {
   Chat,
   ChatMessage,
@@ -424,36 +424,34 @@ function modelList(models: readonly ModelCapability[]): readonly ModelCapability
   return models.filter((model) => model.kind === "chat");
 }
 
-// uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], CJK
-// lenticular 【n】, fullwidth ［n］ — mirroring citation-attacher's tolerance) are
-// stripped together with their leading whitespace so copied prose stays clean.
+// uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], grouped [1, 7, 8], CJK
+// lenticular 【n】, fullwidth ［n］ — the one grammar shared with the citation attacher and the
+// answer renderer via keiko-contracts) are stripped together with their leading whitespace so
+// copied prose stays clean.
 //
-// The marker atom is matched WITHOUT a leading `\s*` on purpose (SonarCloud S8786):
-// an unbounded quantifier directly followed by a mandatory, rarely-occurring atom is
-// the classic super-linear backtracking shape — for a long run of whitespace that
-// never resolves into a marker, a backtracking engine retries the whole run from
-// every offset inside it, which is O(n^2). Leading whitespace is instead trimmed by
-// a bounded backward scan in stripCitationMarkers below, which cannot backtrack.
-const CITATION_MARKER_PATTERN = /[[【［]\d+[\]】］]/g;
+// Leading whitespace is trimmed by a bounded backward scan in stripCitationMarkers below rather
+// than by a `\s*` in front of a marker pattern (SonarCloud S8786): an unbounded quantifier directly
+// followed by a mandatory, rarely-occurring atom is the classic super-linear backtracking shape —
+// for a long run of whitespace that never resolves into a marker, a backtracking engine retries the
+// whole run from every offset inside it, which is O(n^2).
 const CITATION_MARKER_WHITESPACE = /\s/u;
 const COLLAPSIBLE_ANSWER_MIN_CHARS = 1800;
 const COLLAPSIBLE_ANSWER_MIN_LINES = 32;
 const QUESTION_MAP_PREVIEW_MAX = 76;
 
-// Equivalent to `text.replace(/\s*<marker>/g, "")`, but as a single forward pass
-// (matchAll) plus a bounded backward whitespace scan per marker, so total work
-// stays O(n) regardless of how much whitespace precedes a marker.
+// Equivalent to removing every marker group together with the whitespace before it, but as a single
+// forward pass plus a bounded backward whitespace scan per marker, so total work stays O(n)
+// regardless of how much whitespace precedes a marker.
 function stripCitationMarkers(text: string): string {
   let result = "";
   let cursor = 0;
-  for (const match of text.matchAll(CITATION_MARKER_PATTERN)) {
-    const matchStart = match.index ?? 0;
-    let markerStart = matchStart;
+  for (const group of findCitationMarkerGroups(text)) {
+    let markerStart = group.start;
     while (markerStart > cursor && CITATION_MARKER_WHITESPACE.test(text.charAt(markerStart - 1))) {
       markerStart -= 1;
     }
     result += text.slice(cursor, markerStart);
-    cursor = matchStart + match[0].length;
+    cursor = group.end;
   }
   return result + text.slice(cursor);
 }
@@ -3860,9 +3858,38 @@ interface ScopeOption {
 const UNAVAILABLE_CAPSULE_LABEL = "Knowledge Pod";
 const UNAVAILABLE_CAPSULE_SET_LABEL = "Knowledge Pod Set";
 
+// The bound Knowledge Pod that is not a selectable option (not ready, or hidden while the catalog
+// refreshes) keeps its name and real state whenever the catalog lists it; only a pod the catalog
+// does not list at all reads as unavailable.
+function boundCapsuleOption(
+  selectedValue: string,
+  knownCapsules: readonly CapsuleListEntry[],
+  t: I18nTranslate,
+): ScopeOption {
+  const known = knownCapsules.find((capsule) => `capsule:${capsule.id}` === selectedValue);
+  if (known === undefined) {
+    return {
+      value: selectedValue,
+      // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
+      // suffix; two different words previously named the same state.
+      label: t("chat.grounding.unavailable", {
+        label: UNAVAILABLE_CAPSULE_LABEL,
+      }),
+      disabled: true,
+    };
+  }
+  return {
+    value: selectedValue,
+    label: capsuleNameWithState(known, t, (name) => t("chat.grounding.capsule", { name })),
+    disabled: true,
+  };
+}
+
+// `capsules` are the selectable (ready) pods; `knownCapsules` is every listed pod in any state.
 function capsuleOptions(
   chat: Chat,
   capsules: readonly CapsuleListEntry[],
+  knownCapsules: readonly CapsuleListEntry[],
   t: I18nTranslate,
 ): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
@@ -3882,18 +3909,7 @@ function capsuleOptions(
   if (options.some((option) => option.value === selectedValue)) {
     return options;
   }
-  return [
-    ...options,
-    {
-      value: selectedValue,
-      // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
-      // suffix; two different words previously named the same state.
-      label: t("chat.grounding.unavailable", {
-        label: UNAVAILABLE_CAPSULE_LABEL,
-      }),
-      disabled: true,
-    },
-  ];
+  return [...options, boundCapsuleOption(selectedValue, knownCapsules, t)];
 }
 
 function capsuleSetOptions(
@@ -3931,153 +3947,9 @@ function capsuleSetOptions(
 }
 
 // uiux-fix F041 (C172) — the capsule/set catalog is loaded ONCE at the scope-header level and
-// shared by the grounding select.
-interface KnowledgeCatalog {
-  readonly capsules: readonly CapsuleListEntry[];
-  readonly capsuleSets: readonly CapsuleSetListEntry[];
-  readonly loading: boolean;
-  readonly loadError: string | null;
-  readonly refresh: () => void;
-}
-
-interface KnowledgeCatalogSnapshot {
-  readonly capsules: readonly CapsuleListEntry[];
-  readonly capsuleSets: readonly CapsuleSetListEntry[];
-  readonly loadError: unknown;
-}
-
-const EMPTY_KNOWLEDGE_CATALOG: KnowledgeCatalogSnapshot = {
-  capsules: [],
-  capsuleSets: [],
-  loadError: null,
-};
-const KNOWLEDGE_CATALOG_TTL_MS = 30_000;
-const KNOWLEDGE_CATALOG_ERROR_TTL_MS = 5_000;
-let knowledgeCatalogCache:
-  | {
-      readonly expiresAt: number;
-      readonly snapshot: KnowledgeCatalogSnapshot;
-    }
-  | undefined;
-let knowledgeCatalogPending: Promise<KnowledgeCatalogSnapshot> | undefined;
-
-function cachedKnowledgeCatalogSnapshot(now: number): KnowledgeCatalogSnapshot | undefined {
-  if (knowledgeCatalogCache === undefined || knowledgeCatalogCache.expiresAt <= now) {
-    return undefined;
-  }
-  return knowledgeCatalogCache.snapshot;
-}
-
-async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
-  const now = Date.now();
-  const cached = cachedKnowledgeCatalogSnapshot(now);
-  if (cached !== undefined) return cached;
-  if (knowledgeCatalogPending !== undefined) return knowledgeCatalogPending;
-
-  knowledgeCatalogPending = Promise.allSettled([
-    fetchCapsules({ includeKnowledgePods: true }),
-    fetchCapsuleSets({ includeKnowledgePods: true }),
-  ])
-    .then(([capsuleResult, capsuleSetResult]) => {
-      if (capsuleResult.status !== "fulfilled") {
-        return {
-          ...EMPTY_KNOWLEDGE_CATALOG,
-          loadError: capsuleResult.reason,
-        };
-      }
-      const capsules = capsulesForKnowledgePodUi(capsuleResult.value).filter(
-        (entry) => entry.lifecycleState === "ready",
-      );
-      const capsuleSets =
-        capsuleSetResult.status === "fulfilled"
-          ? capsuleSetsForKnowledgePodUi(capsuleSetResult.value)
-          : [];
-      const snapshot: KnowledgeCatalogSnapshot = {
-        capsules,
-        capsuleSets,
-        loadError: capsuleSetResult.status === "fulfilled" ? null : capsuleSetResult.reason,
-      };
-      return snapshot;
-    })
-    .then((snapshot) => {
-      const ttl =
-        snapshot.loadError === null ? KNOWLEDGE_CATALOG_TTL_MS : KNOWLEDGE_CATALOG_ERROR_TTL_MS;
-      knowledgeCatalogCache = { expiresAt: Date.now() + ttl, snapshot };
-      return snapshot;
-    })
-    .finally(() => {
-      knowledgeCatalogPending = undefined;
-    });
-  return knowledgeCatalogPending;
-}
-
-// A grounding-picker reopen is a deliberate catalog lifecycle event, distinct from gateway
-// configuration changes. It bypasses only this read-only catalog's TTL; simultaneous chat windows
-// still share the in-flight request above.
-function refreshKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
-  knowledgeCatalogCache = undefined;
-  return loadKnowledgeCatalogSnapshot();
-}
-
-export function clearKnowledgeCatalogCacheForTests(): void {
-  knowledgeCatalogCache = undefined;
-  knowledgeCatalogPending = undefined;
-}
-
-function useKnowledgeCatalog(): KnowledgeCatalog {
-  const t = useTranslate();
-  const initialSnapshotRef = useRef<KnowledgeCatalogSnapshot | undefined>(
-    cachedKnowledgeCatalogSnapshot(Date.now()),
-  );
-  const mountedRef = useRef(true);
-  const requestGenerationRef = useRef(0);
-  const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
-    initialSnapshotRef.current ?? EMPTY_KNOWLEDGE_CATALOG,
-  );
-  const [loading, setLoading] = useState(initialSnapshotRef.current === undefined);
-
-  const applyCatalogSnapshot = useCallback(
-    (load: () => Promise<KnowledgeCatalogSnapshot>): void => {
-      const requestGeneration = requestGenerationRef.current + 1;
-      requestGenerationRef.current = requestGeneration;
-      setLoading(true);
-      // Do not present a cached catalog as current while a deliberate reopen is resolving. Any
-      // active scope is retained by capsuleOptions/capsuleSetOptions as a disabled unavailable row.
-      setSnapshot(EMPTY_KNOWLEDGE_CATALOG);
-      void load().then((next) => {
-        if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) return;
-        setSnapshot(next);
-        setLoading(false);
-      });
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (initialSnapshotRef.current !== undefined) return;
-    applyCatalogSnapshot(loadKnowledgeCatalogSnapshot);
-  }, [applyCatalogSnapshot]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      requestGenerationRef.current += 1;
-    };
-  }, []);
-
-  const refresh = useCallback((): void => {
-    applyCatalogSnapshot(refreshKnowledgeCatalogSnapshot);
-  }, [applyCatalogSnapshot]);
-
-  return {
-    capsules: snapshot.capsules,
-    capsuleSets: snapshot.capsuleSets,
-    loading,
-    loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
-    refresh,
-  };
-}
+// shared by the grounding select and the connector pills; its cache, refresh policy and
+// diagnostics live in ./knowledge-catalog.
+export { clearKnowledgeCatalogCacheForTests } from "./knowledge-catalog";
 
 const SELECTABLE_CAPSULE_SET_READINESS: ReadonlySet<string> = new Set(["ready", "degraded"]);
 
@@ -4276,11 +4148,14 @@ function GroundingCatalogStatus({
   loading,
   empty,
   error,
+  onRetry,
   t,
 }: {
   readonly loading: boolean;
   readonly empty: boolean;
   readonly error: string | null;
+  /** Present only when the catalog itself failed to load: a failed load is retryable, not empty. */
+  readonly onRetry: (() => void) | undefined;
   readonly t: I18nTranslate;
 }): ReactNode {
   return (
@@ -4298,8 +4173,42 @@ function GroundingCatalogStatus({
           {error}
         </span>
       ) : null}
+      {onRetry !== undefined ? (
+        <button type="button" className="scope-connect-btn" onClick={onRetry}>
+          {t("chat.grounding.catalogRetry")}
+        </button>
+      ) : null}
     </>
   );
+}
+
+interface KnowledgeScopeChoices {
+  readonly capsuleChoices: readonly ScopeOption[];
+  readonly capsuleSetChoices: readonly ScopeOption[];
+  readonly catalogEmpty: boolean;
+}
+
+// While a deliberate refresh resolves, no cached pod reads as selectable: only the bound scope
+// stays visible (by name and real state) as a disabled row.
+function knowledgeScopeChoices(
+  chat: Chat,
+  catalog: KnowledgeCatalog,
+  t: I18nTranslate,
+): KnowledgeScopeChoices {
+  const { capsules, capsuleSets, loading, loadError } = catalog;
+  const readyCapsules = loading ? [] : capsules.filter(isReadyCapsule);
+  const selectableSets = loading ? [] : capsuleSets.filter(isSelectableGroundingCapsuleSet);
+  const capsuleSetChoices = capsuleSetOptions(chat, selectableSets, t);
+  return {
+    capsuleChoices: capsuleOptions(chat, readyCapsules, capsules, t),
+    capsuleSetChoices,
+    // "No ready pods" is only true when the load succeeded: a failed load is an error, not empty.
+    catalogEmpty:
+      !loading &&
+      loadError === null &&
+      capsules.every((capsule) => !isReadyCapsule(capsule)) &&
+      selectableSets.length === 0,
+  };
 }
 
 function LocalKnowledgeScopeControl({
@@ -4314,10 +4223,9 @@ function LocalKnowledgeScopeControl({
   readonly connected: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const { capsules, capsuleSets, loading, loadError, refresh } = catalog;
+  const { loading, refresh, refreshOnPickerOpen } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hasOpenedRef = useRef(false);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -4332,23 +4240,19 @@ function LocalKnowledgeScopeControl({
   }
 
   const value = groundedModeValue(chat);
-  const capsuleChoices = capsuleOptions(chat, capsules, t);
-  const capsuleSetChoices = capsuleSetOptions(
+  const { capsuleChoices, capsuleSetChoices, catalogEmpty } = knowledgeScopeChoices(
     chat,
-    capsuleSets.filter(isSelectableGroundingCapsuleSet),
+    catalog,
     t,
   );
   // Audit F-12 — a disabled option must say why: without a connected Files source the reason
   // for the greyed-out "Live Files context" entry is otherwise undiscoverable.
   const liveFilesAvailable = hasFolderGroundingScope(chat);
-  // C172 — a catalog load failure surfaces here too; an update error wins.
-  const displayedError = error ?? loadError;
-  const catalogEmpty = !loading && capsules.length === 0 && capsuleSetChoices.length === 0;
+  // C172 — a catalog load failure surfaces here too, with a retry; an update error wins.
+  const loadFailure =
+    catalog.loadError === null ? null : formatScopeUpdateError(catalog.loadError, t);
+  const displayedError = error ?? loadFailure;
   const controlsDisabled = busy || loading;
-  const handlePickerOpen = (): void => {
-    if (hasOpenedRef.current) refresh();
-    hasOpenedRef.current = true;
-  };
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
@@ -4362,12 +4266,18 @@ function LocalKnowledgeScopeControl({
         capsuleChoices={capsuleChoices}
         capsuleSetChoices={capsuleSetChoices}
         t={t}
-        onOpen={handlePickerOpen}
+        onOpen={refreshOnPickerOpen}
         onValueChange={(next) => {
           void handleChange(next);
         }}
       />
-      <GroundingCatalogStatus loading={loading} empty={catalogEmpty} error={displayedError} t={t} />
+      <GroundingCatalogStatus
+        loading={loading}
+        empty={catalogEmpty}
+        error={displayedError}
+        onRetry={error === null && loadFailure !== null ? refresh : undefined}
+        t={t}
+      />
     </div>
   );
 }
@@ -4375,9 +4285,15 @@ function LocalKnowledgeScopeControl({
 // uiux-fix F041 (C172) — the same catalog load that feeds the grounding select's option lists
 // also names the connector pills, so a connected capsule/capsule-set shows its display name
 // instead of a raw id (ConnectorScopePill falls back to the id when a key is absent).
-function connectorScopeLabels(catalog: KnowledgeCatalog): ReadonlyMap<string, string> {
+// A pod that is listed but not ready keeps its name and shows its real state.
+function connectorScopeLabels(
+  catalog: KnowledgeCatalog,
+  t: I18nTranslate,
+): ReadonlyMap<string, string> {
   const labels = new Map<string, string>();
-  for (const capsule of catalog.capsules) labels.set(`capsule:${capsule.id}`, capsule.displayName);
+  for (const capsule of catalog.capsules) {
+    labels.set(`capsule:${capsule.id}`, capsuleNameWithState(capsule, t));
+  }
   for (const capsuleSet of catalog.capsuleSets) {
     labels.set(`set:${capsuleSet.id}`, capsuleSet.displayName);
   }
@@ -4397,7 +4313,8 @@ function ChatScopeHeaderImpl({
 }): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
-  const catalog = useKnowledgeCatalog();
+  const t = useTranslate();
+  const catalog = useKnowledgeCatalog(currentConnectorScopes(chat));
   // uiux-fix F041 (C178/C179) — layout moved from inline styles to the
   // .chat-scope-header rule in globals.css (16px inset, themeable).
   const pendingGitChanges = pendingGitChangeComparisons ?? [];
@@ -4414,7 +4331,7 @@ function ChatScopeHeaderImpl({
       <ConnectorScopePill
         chat={chat}
         onDisconnect={onChatChanged}
-        labels={connectorScopeLabels(catalog)}
+        labels={connectorScopeLabels(catalog, t)}
       />
       {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
           Chat" action renders here, alongside the grounding scope control, so its current /

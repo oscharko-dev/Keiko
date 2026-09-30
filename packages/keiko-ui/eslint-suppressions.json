@@ -30,7 +30,7 @@
   },
   "src/app/components/desktop/ChatWindow.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 6
+      "count": 5
     },
     "complexity": {
       "count": 5
@@ -75,7 +75,7 @@
   },
   "src/app/components/desktop/GroundedAnswer.tsx": {
     "complexity": {
-      "count": 2
+      "count": 1
     },
     "max-lines-per-function": {
       "count": 3

@@ -742,7 +742,6 @@ export const EN_MESSAGES = {
   "chat.grounding.withState": "{label} ({state})",
   "chat.grounding.state.draft": "not indexed",
   "chat.grounding.state.indexing": "indexing",
-  "chat.grounding.state.ready": "indexed",
   "chat.grounding.state.stale": "stale",
   "chat.grounding.state.deleting": "deleting",
   "chat.grounding.state.error": "failed",

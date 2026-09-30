@@ -950,7 +950,8 @@ export class Gateway {
         { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
       );
     } catch (error) {
-      this.failCall(ids, route, elapsed(), error);
+      this.settleFailedCall(ids, route, elapsed(), error);
+      throw error;
     }
     this.logCallCompleted(ids, route, result, elapsed());
     return {
@@ -1159,11 +1160,15 @@ export class Gateway {
 
   // RB-6: stamp the gateway request id onto the thrown error so a FAILED buffered call is traceable
   // to the gateway record (previously requestId was attached only on success/usage).
-  private failCall(ids: CallIds, route: RoutedCall, durationMs: number, error: unknown): never {
+  private settleFailedCall(
+    ids: CallIds,
+    route: RoutedCall,
+    durationMs: number,
+    error: unknown,
+  ): void {
     attachGatewayRequestId(error, ids.requestId);
     this.logCallFailed(ids, route, durationMs, error);
     this.reportContextWindow(route, ids, error);
-    throw error;
   }
 
   // Hands a provider-stated window to the host before the overflow is rethrown.

@@ -1,6 +1,6 @@
 import {
   COST_RANK,
-  createDefaultChatCapability,
+  assumedChatCapability,
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   isCompleteRealtimeVoiceCapability,
@@ -37,6 +37,7 @@ import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gatewa
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   codingWorkbenchModelEligibility,
+  conversationDefaultRank,
   isToolCallingVerificationFresh,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 const voiceCapabilityCache = new WeakMap<
@@ -126,7 +127,7 @@ function defaultCapabilityForConfiguredModel(
   }
   return isLikelyEmbeddingModelId(modelId)
     ? createDefaultEmbeddingCapability(modelId)
-    : createDefaultChatCapability(modelId);
+    : assumedChatCapability(modelId);
 }
 
 export function findConfiguredCapability(
@@ -177,6 +178,26 @@ export function listSafeConfiguredCapabilities(
   return projectSafeCapabilities(listConfiguredCapabilities(config));
 }
 
+// Chat selection shares the conversation-default preference (keiko-contracts
+// `conversationDefaultRank`), so a background caller — commit drafts, PR descriptions, the
+// context-profile default — can never elect what the chat picker would refuse: a mode-less OCR,
+// speech, reranking or guard engine that answered one warm probe. The rank is a PREFERENCE tier
+// ahead of cost and configured order, never an eligibility gate: a gateway whose only chat-listed
+// model is special-purpose still resolves to it. Every other kind has no such ranking.
+function selectionTier(capability: ModelCapability, query: ModelSelectionQuery): number {
+  return query.kind === "chat" ? conversationDefaultRank(capability) : 0;
+}
+
+function outranksForSelection(
+  candidate: ModelCapability,
+  best: ModelCapability,
+  query: ModelSelectionQuery,
+): boolean {
+  const tierDelta = selectionTier(candidate, query) - selectionTier(best, query);
+  if (tierDelta !== 0) return tierDelta < 0;
+  return COST_RANK[candidate.costClass] < COST_RANK[best.costClass];
+}
+
 export function selectConfiguredModel(
   config: ConfiguredCapabilitySource,
   query: ModelSelectionQuery,
@@ -186,7 +207,7 @@ export function selectConfiguredModel(
     if (!matches(capability, query)) {
       continue;
     }
-    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+    if (best === undefined || outranksForSelection(capability, best, query)) {
       best = capability;
     }
   }

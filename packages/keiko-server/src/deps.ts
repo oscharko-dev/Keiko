@@ -17,7 +17,7 @@ import {
 
 import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
-  createDefaultChatCapability,
+  assumedChatCapability,
   findConfiguredCapability,
   hasConfiguredEnvModelProvider,
   loadConfigFromFile,
@@ -1359,7 +1359,7 @@ function resolveEnvOnlyConfig(env: EnvSource): GatewayConfig | undefined {
     modelId,
     baseUrl: "",
     apiKey: "",
-    capability: createDefaultChatCapability(modelId),
+    capability: assumedChatCapability(modelId),
   }));
   if (providers.length === 0) {
     return undefined;

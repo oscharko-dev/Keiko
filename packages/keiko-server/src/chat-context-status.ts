@@ -177,6 +177,9 @@ function compactionProjection(
       effectiveInputBudget: budget,
       earlierCompaction: snapshot.earlierCompaction,
       redactionSecrets: currentRedactionSecrets(deps),
+      // The stored history holds no current request: like the send path's history prefix, even
+      // its newest turn may be summarized — an answer larger than the window must not pin it.
+      preserveNewestTurn: false,
     });
   } catch (error) {
     if (error instanceof ContextOverflowError) return undefined;
@@ -211,6 +214,7 @@ function manualCompactionCandidate(
       effectiveInputBudget: budget,
       earlierCompaction: snapshot.earlierCompaction,
       redactionSecrets: currentRedactionSecrets(deps),
+      preserveNewestTurn: false,
     });
     const record = stampHistoryRevision(
       outcome.compaction,

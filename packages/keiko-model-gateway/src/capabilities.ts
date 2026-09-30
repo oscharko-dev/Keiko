@@ -171,11 +171,11 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     // (GEN-GATE-CONTEXT-001/004). parseModelCapability and buildProviderCapabilityBody now reject
     // chat capabilities with contextWindow<=0 at config-parse time, so this default must be a real
     // positive number for the setup workflow's unenriched placeholder capabilities to parse. The
-    // value is only a floor for surfaces that need a PROVEN window: `contextWindowAssumed` tells
-    // conversation budgeting to plan with the default geometry until discovery, the startup
-    // context-window probe or the provider's own overflow answer supplies the real window.
+    // value is only a floor for surfaces that need a PROVEN window. A caller that stores this
+    // factory for a model whose window nobody declared marks it with `assumedChatCapability`, so
+    // conversation budgeting plans the default geometry until the provider states the real window;
+    // a caller that overrides `contextWindow` gets exactly that window.
     contextWindow: PLACEHOLDER_CHAT_CONTEXT_WINDOW,
-    contextWindowAssumed: true,
     maxOutputTokens: 0,
     // A deployment name is never evidence that its endpoint accepts forced tool calls. Setup and
     // readiness upgrade this only after the live, configuration-bound probe succeeds.
@@ -196,6 +196,14 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
       "Structured output, response-format enforcement, image input, document input, and workflow eligibility require explicit enrichment",
     ],
   };
+}
+
+/**
+ * The default chat capability of a model whose context window nobody declared: the placeholder
+ * window flagged `contextWindowAssumed` (customer report on 1.1.13).
+ */
+export function assumedChatCapability(modelId: string): ModelCapability {
+  return { ...createDefaultChatCapability(modelId), contextWindowAssumed: true };
 }
 
 // Every requested boolean capability (when true) must be advertised by the model.

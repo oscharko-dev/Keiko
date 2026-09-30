@@ -398,10 +398,16 @@ describe("composer context status and manual maintenance", () => {
     };
     const original = deps.store.listMessages(chatId);
     const before = readChatContextStatus(deps, chatId, "fixture");
-    expect(before.estimatedInputTokens).toBeGreaterThan(before.inputBudgetTokens);
+    // The stored history is larger than the whole input budget, yet the meter reports what the next
+    // request carries after automatic compaction — never more than the budget (customer, 1.1.13:
+    // a stored history shown as 340 % of the window).
+    expect(before.pendingCompaction?.tokensBefore).toBeGreaterThan(before.inputBudgetTokens);
+    expect(before.estimatedInputTokens).toBeLessThanOrEqual(before.inputBudgetTokens);
     expect(before.canCompact).toBe(true);
     const after = compactChatContext(deps, chatId, "fixture", "corr-first-pair-maintenance");
-    expect(after.estimatedInputTokens).toBeLessThan(before.estimatedInputTokens);
+    expect(after.estimatedInputTokens).toBeLessThan(before.pendingCompaction?.tokensBefore ?? 0);
+    expect(after.estimatedInputTokens).toBeLessThanOrEqual(after.inputBudgetTokens);
+    expect(after.pendingCompaction).toBeUndefined();
     expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
     expect(deps.store.listMessages(chatId)).toEqual(original);
   });

@@ -70,6 +70,7 @@ export {
 
 export {
   CAPABILITY_REGISTRY,
+  assumedChatCapability,
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   EMBEDDING_ID_PATTERN,
