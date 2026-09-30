@@ -130,3 +130,29 @@ export function fitKnowledgePrompt<T extends GatewayPromptTokenInput>(
   logPromptWindowFit("trimmed", available, count, profile.effectiveInputBudget, correlationId);
   return { prompt: render(count), referenceCount: count };
 }
+
+/**
+ * The estimated size of a rendered prompt, the share its source excerpts take (the difference to
+ * the same prompt rendered without references) and the share of its system instructions. Counted
+ * with the admission's own accounting.
+ */
+export function knowledgePromptShare(
+  prompt: GatewayPromptTokenInput,
+  withoutSources: GatewayPromptTokenInput,
+  accounting: ContextProfile["tokenAccounting"],
+): {
+  readonly estimatedTokens: number;
+  readonly sourceTokens: number;
+  readonly instructionTokens: number;
+} {
+  const estimatedTokens = countGatewayPromptTokens(prompt, accounting);
+  const instructions = prompt.messages.filter((message) => message.role === "system");
+  return {
+    estimatedTokens,
+    sourceTokens: Math.max(
+      0,
+      estimatedTokens - countGatewayPromptTokens(withoutSources, accounting),
+    ),
+    instructionTokens: countGatewayPromptTokens({ messages: instructions }, accounting),
+  };
+}

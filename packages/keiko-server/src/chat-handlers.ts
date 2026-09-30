@@ -1,4 +1,5 @@
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { hasGroundingScope } from "./chat-grounding.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 // Desktop chat BFF routes for the Keiko canvas UI. These routes intentionally keep the model call
@@ -2117,15 +2118,6 @@ function latestRegenerableTurn(
     };
   }
   return { assistant, user: previousUser, beforeAssistant: messages.slice(0, targetIndex) };
-}
-
-function hasGroundingScope(chat: Chat): boolean {
-  return (
-    chat.connectedScope !== undefined ||
-    (chat.connectedScopes?.length ?? 0) > 0 ||
-    chat.localKnowledgeScope !== undefined ||
-    (chat.localKnowledgeScopes?.length ?? 0) > 0
-  );
 }
 
 function groundedRegenerateResult(): RouteResult {

@@ -1,4 +1,7 @@
-import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatContextStatusWire,
+  GroundedPromptContextWire,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import { findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -21,6 +24,14 @@ import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import { UiStoreError } from "./store/index.js";
 import { logChatContextFailure, logChatContextManagement } from "./chat-context-log.js";
+import {
+  AUTOMATIC_COMPACTION_THRESHOLD,
+  contextBreakdown,
+  type ContextBreakdownInput,
+  type ConversationShare,
+} from "./chat-context-breakdown.js";
+import { hasGroundingScope } from "./chat-grounding.js";
+import { groundedHistoryLaneTokens } from "./grounded-conversation-continuity.js";
 
 function checkpointForProfile(
   deps: UiHandlerDeps,
@@ -40,30 +51,42 @@ function checkpointForProfile(
     : undefined;
 }
 
+interface CountedHistory {
+  readonly tokens: number;
+  readonly systemTokens: number;
+  readonly messageTokens: number;
+  readonly messages: number;
+  readonly checkpointUsed: boolean;
+  readonly checkpointTokens: number;
+  readonly latestPromptContext: GroundedPromptContextWire | undefined;
+}
+
 function countHistory(
   deps: UiHandlerDeps,
   chatId: string,
   profile: ContextProfile,
   checkpoint: ContextCompactionRecord | undefined,
-): { tokens: number; messages: number; checkpointUsed: boolean; checkpointTokens: number } {
-  let tokens = countGatewayPromptTokens(
+): CountedHistory {
+  const systemTokens = countGatewayPromptTokens(
     { messages: [{ role: "system", content: CONVERSATION_SYSTEM_PROMPT }] },
     profile.tokenAccounting,
   );
+  let messageTokens = 0;
   let messages = 0;
   let checkpointUsed = false;
   let checkpointTokens = 0;
+  let latestPromptContext: GroundedPromptContextWire | undefined;
   const empty = countGatewayPromptTokens({ messages: [] }, profile.tokenAccounting);
   deps.store.visitGatewayMessageUnits(chatId, "", (unit) => {
     for (const message of [...unit].reverse()) {
+      latestPromptContext ??= message.groundedAnswer?.promptContext;
       if (message.id === checkpoint?.conversationCoverage?.throughMessageId) {
         checkpointTokens = countConversationCheckpointTokens(checkpoint, profile.tokenAccounting);
-        tokens += checkpointTokens;
         checkpointUsed = true;
         return false;
       }
       if (message.role !== "user" && message.role !== "assistant") continue;
-      tokens +=
+      messageTokens +=
         countGatewayPromptTokens(
           { messages: [{ role: message.role, content: message.content }] },
           profile.tokenAccounting,
@@ -72,14 +95,21 @@ function countHistory(
     }
     return undefined;
   });
-  return { tokens, messages, checkpointUsed, checkpointTokens };
+  return {
+    tokens: systemTokens + checkpointTokens + messageTokens,
+    systemTokens,
+    messageTokens,
+    messages,
+    checkpointUsed,
+    checkpointTokens,
+    latestPromptContext,
+  };
 }
 
 // The send path compacts proactively once the prompt reaches 90 % of the input budget and then
 // targets 70 % (chat-prompt-budget.ts selectGatewayPromptAssembly). The meter applies the same rule,
 // so it reports what the next request will actually carry instead of the raw stored history — a
 // history larger than the window is never shown as 340 % of it (customer report on 1.1.13).
-const AUTOMATIC_COMPACTION_THRESHOLD = 0.9;
 const AUTOMATIC_COMPACTION_TARGET = 0.7;
 
 function assumedWindowField(
@@ -106,28 +136,102 @@ function checkpointSavings(
   };
 }
 
+interface PendingProjection {
+  readonly wire: NonNullable<ChatContextStatusWire["pendingCompaction"]>;
+  readonly conversation: ConversationShare;
+}
+
+// The first projected message is the system message carrying the continuity summary; everything
+// after it is carried verbatim.
+function projectedConversation(
+  outcome: ConversationCompactionOutcome,
+  systemTokens: number,
+  accounting: ContextProfile["tokenAccounting"],
+): ConversationShare {
+  const [first, ...rest] = outcome.messages;
+  const firstTokens =
+    first === undefined ? 0 : countGatewayPromptTokens({ messages: [first] }, accounting);
+  const total = countGatewayPromptTokens({ messages: outcome.messages }, accounting);
+  return {
+    systemTokens,
+    summaryTokens: Math.max(0, firstTokens - systemTokens),
+    summaryCount: outcome.compaction?.itemsBefore ?? 0,
+    messageTokens: Math.max(0, total - firstTokens),
+    messageCount: rest.length,
+  };
+}
+
 function pendingCompaction(
   deps: UiHandlerDeps,
   chatId: string,
   profile: ContextProfile,
-  storedTokens: number,
+  counted: CountedHistory,
   correlationId: string | undefined,
-): Pick<ChatContextStatusWire, "pendingCompaction"> {
-  if (storedTokens < profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD) return {};
+): PendingProjection | undefined {
+  if (counted.tokens < profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD)
+    return undefined;
   const target = Math.floor(profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET);
   const outcome = compactionProjection(deps, chatId, profile, target, correlationId);
-  if (outcome === undefined) return {};
+  if (outcome === undefined) return undefined;
   const tokensAfter = countGatewayPromptTokens(
     { messages: outcome.messages },
     profile.tokenAccounting,
   );
-  if (tokensAfter >= storedTokens) return {};
+  if (tokensAfter >= counted.tokens) return undefined;
   return {
-    pendingCompaction: {
-      tokensBefore: storedTokens,
+    wire: {
+      tokensBefore: counted.tokens,
       tokensAfter,
       messagesCompacted: outcome.compaction?.itemsBefore ?? 0,
     },
+    conversation: projectedConversation(outcome, counted.systemTokens, profile.tokenAccounting),
+  };
+}
+
+function storedConversation(
+  counted: CountedHistory,
+  checkpoint: ContextCompactionRecord | undefined,
+): ConversationShare {
+  return {
+    systemTokens: counted.systemTokens,
+    summaryTokens: counted.checkpointTokens,
+    summaryCount: counted.checkpointUsed ? (checkpoint?.itemsBefore ?? 0) : 0,
+    messageTokens: counted.messageTokens,
+    messageCount: counted.messages,
+  };
+}
+
+// While the chat is grounded, its next question carries sources beside the conversation lane.
+function groundedShare(
+  deps: UiHandlerDeps,
+  chatId: string,
+  profile: ContextProfile,
+  lastPrompt: GroundedPromptContextWire | undefined,
+): ContextBreakdownInput["grounded"] {
+  const chat = deps.store.findChatById(chatId);
+  if (chat === undefined || !hasGroundingScope(chat)) return undefined;
+  return { historyLaneTokens: groundedHistoryLaneTokens(profile), lastPrompt };
+}
+
+function groundedStatusFields(
+  lastPrompt: GroundedPromptContextWire | undefined,
+  grounded: boolean,
+): Pick<ChatContextStatusWire, "knowledgeSources" | "lastRequest"> {
+  if (lastPrompt === undefined) return {};
+  return {
+    lastRequest: {
+      promptTokens: lastPrompt.promptTokens,
+      measured: lastPrompt.promptTokensMeasured,
+    },
+    ...(grounded
+      ? {
+          knowledgeSources: {
+            tokens: lastPrompt.sourceTokens,
+            sentReferenceCount: lastPrompt.sentReferenceCount,
+            availableReferenceCount: lastPrompt.availableReferenceCount,
+          },
+        }
+      : {}),
   };
 }
 
@@ -140,7 +244,13 @@ export function readChatContextStatus(
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
   const counted = countHistory(deps, chatId, profile, checkpoint);
-  const pending = pendingCompaction(deps, chatId, profile, counted.tokens, correlationId);
+  const pending = pendingCompaction(deps, chatId, profile, counted, correlationId);
+  const grounded = groundedShare(deps, chatId, profile, counted.latestPromptContext);
+  const breakdown = contextBreakdown({
+    profile,
+    conversation: pending?.conversation ?? storedConversation(counted, checkpoint),
+    grounded,
+  });
   return {
     modelId,
     contextWindowTokens: profile.maxInputTokens,
@@ -148,10 +258,13 @@ export function readChatContextStatus(
     inputBudgetTokens: profile.effectiveInputBudget,
     reservedOutputTokens: profile.reservedOutputTokens,
     safetyMarginTokens: profile.safetyMarginTokens,
-    estimatedInputTokens: pending.pendingCompaction?.tokensAfter ?? counted.tokens,
+    estimatedInputTokens: breakdown.usedTokens,
     canCompact: counted.messages >= 2,
     ...checkpointSavings(checkpoint, counted),
-    ...pending,
+    ...(pending === undefined ? {} : { pendingCompaction: pending.wire }),
+    ...groundedStatusFields(counted.latestPromptContext, grounded !== undefined),
+    segments: breakdown.segments,
+    autoCompactionAtTokens: breakdown.autoCompactionAtTokens,
   };
 }
 

@@ -106,6 +106,85 @@ function projectionNotes(): string {
   ).join("\n");
 }
 
+// Field report 1.1.13: a grounded chat's meter showed only the conversation, although the retrieved
+// sources were the largest share of every request. The status now carries that share from the
+// latest grounded answer's body-free prompt context.
+describe("grounded context status", () => {
+  it("shows the latest grounded request's source share and size while the chat is grounded", () => {
+    const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
+    const user = currentMessage(deps, chatId, "Welche Kontoarten gibt es?");
+    deps.store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "Privatgirokonto, Basiskonto und P-Konto [1].",
+      timestamp: user.timestamp + 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+      groundedAnswer: {
+        groundingKind: "local-knowledge",
+        userMessageId: user.id,
+        assistantMessageId: "pending",
+        content: "Privatgirokonto, Basiskonto und P-Konto [1].",
+        citations: [],
+        uncertainty: [],
+        omittedCount: 0,
+        elapsedMs: 10,
+        noEvidence: false,
+        contextPack: {
+          kind: "local-knowledge",
+          scopeKind: "capsule",
+          scopeId: "lk-1",
+          scopeLabel: "test",
+          capsuleCount: 1,
+          sourceCount: 1,
+          citationCount: 1,
+        },
+        promptContext: {
+          promptTokens: 5_901,
+          promptTokensMeasured: true,
+          instructionTokens: 310,
+          sourceTokens: 4_100,
+          sentReferenceCount: 4,
+          availableReferenceCount: 16,
+        },
+      } as unknown as NonNullable<ChatMessage["groundedAnswer"]>,
+    });
+    deps.store.updateChat(chatId, {
+      localKnowledgeScopes: [{ kind: "capsule", capsuleId: "capsule-1", connectedAtMs: 1 }],
+    });
+    const status = readChatContextStatus(deps, chatId, "fixture");
+    expect(status.knowledgeSources).toEqual({
+      tokens: 4_100,
+      sentReferenceCount: 4,
+      availableReferenceCount: 16,
+    });
+    expect(status.lastRequest).toEqual({ promptTokens: 5_901, measured: true });
+    const segments = status.segments ?? [];
+    expect(segments.find((segment) => segment.id === "knowledge")).toEqual({
+      id: "knowledge",
+      tokens: 4_100,
+      count: 4,
+    });
+    expect(segments.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(
+      status.contextWindowTokens,
+    );
+    expect(status.estimatedInputTokens).toBeGreaterThanOrEqual(4_100);
+  });
+
+  it("keeps a model-only chat free of a source share", () => {
+    const { deps, chatId } = fixture(2);
+    const status = readChatContextStatus(deps, chatId, "fixture");
+    expect(status.knowledgeSources).toBeUndefined();
+    expect(status.segments?.some((segment) => segment.id === "knowledge")).toBe(false);
+    expect((status.segments ?? []).reduce((sum, segment) => sum + segment.tokens, 0)).toBe(
+      status.contextWindowTokens,
+    );
+  });
+});
+
 describe("composer context status and manual maintenance", () => {
   it.each([
     "inspected",

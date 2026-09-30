@@ -126,13 +126,19 @@ function assembleContinuity(
   });
 }
 
+/**
+ * The conversation lane of a grounded question: at most a third of the model's input budget (and
+ * at most 8,000 tokens), compacted inside that lane. The remaining budget belongs to the retrieved
+ * sources, which are never compacted — they are fetched fresh per question and trimmed by rank.
+ */
+export function groundedHistoryLaneTokens(modelProfile: ContextProfile): number {
+  return Math.max(512, Math.min(8_000, Math.floor(modelProfile.effectiveInputBudget / 3)));
+}
+
 function continuityProfile(deps: UiHandlerDeps, modelId: string): ContextProfile {
   const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   return deriveContextProfile({
-    maxInputTokens: Math.max(
-      512,
-      Math.min(8_000, Math.floor(modelProfile.effectiveInputBudget / 3)),
-    ),
+    maxInputTokens: groundedHistoryLaneTokens(modelProfile),
     reservedOutputTokens: 0,
     safetyMarginTokens: 0,
     tokenAccounting: modelProfile.tokenAccounting,

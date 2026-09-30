@@ -28,6 +28,7 @@ import type {
   ChatMessage,
   GroundedRerankerDiagnostics,
   GroundedAnswer,
+  GroundedPromptContextWire,
   GroundedUncertainty,
   HtmlManualCitationMetadata,
   HtmlManualCitationOpenEligibility,
@@ -80,7 +81,7 @@ import {
   currentRedactionSecrets,
 } from "./deps.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
-import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
+import { fitKnowledgePrompt, knowledgePromptShare } from "./knowledge-prompt-window.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -696,9 +697,19 @@ interface AnswerGeneratorContext {
   readonly correlationId: string | undefined;
 }
 
+interface RenderedPromptShare {
+  readonly estimatedTokens: number;
+  readonly sourceTokens: number;
+  readonly instructionTokens: number;
+  readonly sentReferenceCount: number;
+  readonly availableReferenceCount: number;
+}
+
 class StoreBackedAnswerGenerator implements AnswerGenerator {
   private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
   private sentReferences: readonly RetrievalReference[] = [];
+  private renderedShare: RenderedPromptShare | undefined;
+  private measuredPromptTokens = 0;
 
   public constructor(
     private readonly model: ModelPort,
@@ -732,6 +743,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         occurredAt,
       });
     }
+    this.measuredPromptTokens = response.usage.promptTokens;
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
@@ -739,6 +751,21 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
 
   public numericEntailmentEvidence(): readonly NumericEntailmentEvidence[] {
     return this.renderedNumericEvidence;
+  }
+
+  /** Counts of the last request this generator sent; undefined before the first call. */
+  public promptContext(): GroundedPromptContextWire | undefined {
+    const share = this.renderedShare;
+    if (share === undefined) return undefined;
+    const measured = this.measuredPromptTokens > 0;
+    return {
+      promptTokens: measured ? this.measuredPromptTokens : share.estimatedTokens,
+      promptTokensMeasured: measured,
+      instructionTokens: share.instructionTokens,
+      sourceTokens: share.sourceTokens,
+      sentReferenceCount: share.sentReferenceCount,
+      availableReferenceCount: share.availableReferenceCount,
+    };
   }
 
   private callWithinWindow(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
@@ -751,14 +778,16 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         this.redactExcerpt,
         this.limits,
       );
-    const fitted = fitKnowledgePrompt(
-      available,
-      render,
-      currentContextProfileForModel(this.context.deps, this.modelId),
-      this.context.correlationId,
-    );
+    const profile = currentContextProfileForModel(this.context.deps, this.modelId);
+    const fitted = fitKnowledgePrompt(available, render, profile, this.context.correlationId);
     this.renderedNumericEvidence = fitted.prompt.numericEvidence;
     this.sentReferences = input.references.slice(0, fitted.referenceCount);
+    this.renderedShare = {
+      ...knowledgePromptShare(fitted.prompt, render(0), profile?.tokenAccounting),
+      sentReferenceCount: fitted.referenceCount,
+      availableReferenceCount: input.references.length,
+    };
+    this.measuredPromptTokens = 0;
     return this.model.call(
       {
         modelId: this.modelId,
@@ -2337,6 +2366,7 @@ interface PersistScopedGroundedAnswerInput {
   readonly startedAt: number;
   readonly context: ScopedGroundedAnswerContext & { readonly modelId: string };
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
+  readonly promptContext?: GroundedPromptContextWire | undefined;
 }
 
 async function persistScopedGroundedAnswer(
@@ -2366,7 +2396,7 @@ async function persistScopedGroundedAnswer(
     sourceLookup,
     deps,
   });
-  const finalAnswer = await appendLocalKnowledgeNumericEntailment(
+  const entailed = await appendLocalKnowledgeNumericEntailment(
     answer,
     result,
     numericEvidence,
@@ -2374,6 +2404,8 @@ async function persistScopedGroundedAnswer(
     context,
     deps,
   );
+  const { promptContext } = persistedInput;
+  const finalAnswer = promptContext === undefined ? entailed : { ...entailed, promptContext };
   attachGroundedAnswerWithPreviewCitations(
     deps,
     env,
@@ -2479,6 +2511,7 @@ async function runScopedGroundedAnswer(
     startedAt,
     context: { ...context, modelId },
     numericEvidence: generator.numericEntailmentEvidence(),
+    promptContext: generator.promptContext(),
   });
 }
 

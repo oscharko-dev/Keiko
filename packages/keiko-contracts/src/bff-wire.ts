@@ -439,6 +439,35 @@ export interface ChatsResponse {
 }
 
 /** Body-free projection of the selected model's usable conversation window. */
+/**
+ * One share of the model's context window, in stacking order. The set is closed per contract
+ * version and grows additively (MCP tools and other tool catalogs are planned as new ids):
+ *   system            — Keiko's system instructions for the chat's mode
+ *   summary           — compacted earlier conversation (a checkpoint or the pending compaction)
+ *   messages          — the conversation messages the next request carries verbatim
+ *   knowledge         — retrieved Knowledge Pod / folder excerpts (never compacted; trimmed by rank)
+ *   free              — room left before automatic compaction starts
+ *   compaction-buffer — the usable input above the 90 % automatic-compaction threshold
+ *   output-reserve    — tokens reserved for the answer
+ *   safety-margin     — estimation headroom that is never planned for input
+ */
+export type ChatContextSegmentId =
+  | "system"
+  | "summary"
+  | "messages"
+  | "knowledge"
+  | "free"
+  | "compaction-buffer"
+  | "output-reserve"
+  | "safety-margin";
+
+export interface ChatContextSegmentWire {
+  readonly id: ChatContextSegmentId;
+  readonly tokens: number;
+  /** Items behind the share: messages, compacted messages, or references sent. */
+  readonly count?: number | undefined;
+}
+
 export interface ChatContextStatusWire {
   readonly modelId: string;
   readonly contextWindowTokens: number;
@@ -472,6 +501,27 @@ export interface ChatContextStatusWire {
         readonly messagesCompacted: number;
       }
     | undefined;
+  /**
+   * The retrieved-source share of the chat's latest grounded request. While the chat is grounded,
+   * `estimatedInputTokens` includes `tokens` as the expected share of the next question (the
+   * request itself trims sources to fit, so the estimate is capped at the input budget).
+   */
+  readonly knowledgeSources?:
+    | {
+        readonly tokens: number;
+        readonly sentReferenceCount: number;
+        readonly availableReferenceCount: number;
+      }
+    | undefined;
+  /** The complete size of the chat's latest grounded request, provider-measured when reported. */
+  readonly lastRequest?: { readonly promptTokens: number; readonly measured: boolean } | undefined;
+  /**
+   * The whole window broken down into its shares; the tokens sum to `contextWindowTokens`.
+   * Absent from servers that predate the breakdown.
+   */
+  readonly segments?: readonly ChatContextSegmentWire[] | undefined;
+  /** Input tokens at which Keiko compacts automatically before the next request (90 %). */
+  readonly autoCompactionAtTokens?: number | undefined;
 }
 
 export interface ChatResponse {
@@ -1533,10 +1583,28 @@ export interface HybridGroundedAnswer {
   readonly retrievalActivity?: KnowledgePodRetrievalActivity | undefined;
 }
 
+/**
+ * How much of the model's context the grounded answer's request occupied — counts only, never an
+ * excerpt. `promptTokens` is the provider's usage when it reported one, else Keiko's admission
+ * estimate; `sourceTokens` is the estimated share of the retrieved excerpts in that prompt.
+ * `sentReferenceCount < availableReferenceCount` means references were left out to fit the model's
+ * window. The context meter shows this and plans the next grounded question with it.
+ */
+export interface GroundedPromptContextWire {
+  readonly promptTokens: number;
+  readonly promptTokensMeasured: boolean;
+  /** Estimated tokens of the grounded system instructions of that prompt. */
+  readonly instructionTokens: number;
+  readonly sourceTokens: number;
+  readonly sentReferenceCount: number;
+  readonly availableReferenceCount: number;
+}
+
 export type GroundedAnswer = (
   ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer | HybridGroundedAnswer
 ) & {
   readonly memory?: ConversationMemoryResultWire | undefined;
+  readonly promptContext?: GroundedPromptContextWire | undefined;
 };
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
