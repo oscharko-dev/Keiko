@@ -157,14 +157,22 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   segmentation, the answer renderer and the copy stripper all use it; four private one-integer
   regexes that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
   markers (`[0-9]`, `[2020-2024]`).
-- **Token overlap is a soft signal, never a filter.** `attachCitationsToAnswer` keeps every in-range
-  marker attached; a weak claim/excerpt overlap only flags the entry (`lexicalSupport: "weak"`) and
-  is counted on the `search.citations.reconciled` activity line. Whether a citation supports its
-  claim is this stage's question, answered by the judge.
+- **Token overlap is a soft signal, never a filter — and never a confirmation.**
+  `attachCitationsToAnswer` keeps every in-range marker attached so the reader can open its source.
+  A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the
+  `search.citations.reconciled` activity line. The numeric judge reads only numeric claims, so the
+  Knowledge Pod answer that carries a weak citation also carries the fail-closed
+  `entailment-unavailable` caveat. A weakly supported citation is never presented as confirmed
+  support (`withWeakCitationCaveat`).
+- **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
+  highest-ranked references under their original numbers. The generator reports the references it
+  sent (`AnswerGenerator.promptReferences`), and a marker beyond them is out of range, never attached.
 - **`uncited-answer` is a third additive kind.** An answer with source-backed claims and no supported
   marker used to reuse `unsupported-citation`, which the UI reads as "references sources that were not
   in the retrieved evidence" — false for a merely uncited answer. A refusal (one shared detector,
-  `runtime/no-evidence-answer`) makes no claim and carries neither kind.
+  `runtime/no-evidence-answer`) makes no claim and carries neither kind. A negated verb ("does not
+  contain", "nicht erwähnt") counts as a refusal only when the text names the evidence it searched.
+  Otherwise "The API does not provide authentication." is a negative fact, not a refusal.
 - **The judge is sized per evidence item.** `maxExcerptChars` bounds each cited item, a numeric
   evidence block gets a framing allowance for its `[n] label` header and code fence, and one claim may
   cite up to `ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM` distinct items. Before this, the rendered block
