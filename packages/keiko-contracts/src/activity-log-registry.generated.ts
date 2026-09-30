@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b73024ad893d9470f76d039def1fde10347e98497f94178d1de18b4ad517469a" as const;
+  "2f35e3d205d014d9744f8df51e6b2fdb2724709b831ba6f58c424221e93a101e" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -973,6 +973,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      storedHistoryTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectedHistoryTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectedMessagesCompacted: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      knowledgeSourceTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      contextWindowAssumed: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
       },
     },
     causal: "correlation",
@@ -12204,7 +12229,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
     },
-    causal: "correlation",
+    causal: "parent-correlation",
     lifecycle: "state",
     analyzerProjection: "timeline",
     failureClasses: ["gateway-context-window-adoption"],
@@ -24482,6 +24507,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      promptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -31586,6 +31616,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "contextWindowAssumed",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "inputBudget",
               type: "integer",
               dataClass: "count",
@@ -31598,10 +31634,34 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "knowledgeSourceTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "projectedHistoryTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "projectedMessagesCompacted",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "storedHistoryTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "tokensSaved",
@@ -45613,7 +45673,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "gateway.context-window.probe",
-          mode: "correlation",
+          mode: "parent-correlation",
         },
         {
           op: "gateway.context-window.retry",
@@ -45687,7 +45747,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "gateway",
           lifecycle: "state",
-          causal: "correlation",
+          causal: "parent-correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
             {
@@ -54782,6 +54842,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           safeContextFields: [
             {
               name: "inputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "promptTokens",
               type: "integer",
               dataClass: "count",
               required: true,
