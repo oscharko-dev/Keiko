@@ -120,3 +120,67 @@ export function logCitationReconciliation(
     ),
   );
 }
+
+// Why a Knowledge Pod answer does or does not carry the "support could not be verified" caveat,
+// settled after the entailment stage: the citation line above is written before that decision, so
+// two answers with identical citation counts could end with and without the caveat and the log
+// could not tell them apart (PR #3678 review).
+//   judge-undecided   — the entailment judge left a claim undecided (unavailable, over budget, or
+//                       carrying bracketed prose it never read), and its own marker is the caveat;
+//   no-judge          — a weakly supported citation and no entailment judge at all;
+//   unjudged-citation — a weakly supported citation whose claim no judge call read.
+export type CitationSupportCaveat = "none" | "judge-undecided" | "no-judge" | "unjudged-citation";
+
+const SEARCH_CITATIONS_SUPPORT_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.citations.support-settled",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-citation-log.logCitationSupport",
+  fields: {
+    supportCaveat: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "judge-undecided", "no-judge", "unjudged-citation"],
+    },
+    weakCitationCount: { type: "integer", dataClass: "count", required: true },
+    hiddenProseClaimCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["knowledge-citation-reconciliation"],
+  proofIds: ["search.citations.support-settled.line"],
+  releaseImpact: "patch",
+});
+
+export interface CitationSupportEvidence {
+  readonly supportCaveat: CitationSupportCaveat;
+  readonly weakCitationCount: number;
+  // Cited claims whose bracketed prose the claim stripper removed before judging.
+  readonly hiddenProseClaimCount: number;
+}
+
+/** Emit the settled support caveat of one Knowledge Pod answer. */
+export function logCitationSupport(
+  evidence: CitationSupportEvidence,
+  correlationId: string | undefined,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      SEARCH_CITATIONS_SUPPORT_SETTLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        supportCaveat: evidence.supportCaveat,
+        weakCitationCount: evidence.weakCitationCount,
+        hiddenProseClaimCount: evidence.hiddenProseClaimCount,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}

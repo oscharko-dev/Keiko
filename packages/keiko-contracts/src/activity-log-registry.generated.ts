@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d4ef0d3c03acc35d8b53c4b08bdf0d0e397b1418c977ea5979af024a6e950197" as const;
+  "29c0aba059f80c9016f867aeaa2bb434fb2f247a2f96c00f1bce036802f57044" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -23821,6 +23821,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "search.citations.support-settled",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "grounded-citation-log.logCitationSupport",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      supportCaveat: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["none", "judge-undecided", "no-judge", "unjudged-citation"],
+      },
+      weakCitationCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      hiddenProseClaimCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["knowledge-citation-reconciliation"],
+    proofIds: ["search.citations.support-settled.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "search.connected-context.completed",
     category: "search",
     owner: "keiko-server",
@@ -24588,6 +24630,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       unavailableClaimCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      hiddenProseClaimCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -54039,6 +54086,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "hiddenProseClaimCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "judgedClaimCount",
               type: "integer",
               dataClass: "count",
@@ -55247,7 +55300,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleOperations: {
         start: [],
         state: [],
-        end: ["search.citations.reconciled"],
+        end: ["search.citations.reconciled", "search.citations.support-settled"],
         failure: [],
         loss: [],
       },
@@ -55256,9 +55309,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "search.citations.reconciled",
           mode: "correlation",
         },
+        {
+          op: "search.citations.support-settled",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["search.citations.reconciled"],
+      resourceSignals: ["search.citations.reconciled", "search.citations.support-settled"],
       replayReferences: [],
       operations: [
         {
@@ -55312,6 +55369,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["search.citations.reconciled.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "search.citations.support-settled",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "hiddenProseClaimCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "supportCaveat",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "weakCitationCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["search.citations.support-settled.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -66590,6 +66683,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "runtime.confinement.spawned": "tools-workflows",
     "runtime.confinement.unavailable": "tools-workflows",
     "search.citations.reconciled": "memory-knowledge",
+    "search.citations.support-settled": "memory-knowledge",
     "search.connected-context.completed": "memory-knowledge",
     "search.connected-context.completion-details": "memory-knowledge",
     "search.connected-context.failed": "memory-knowledge",

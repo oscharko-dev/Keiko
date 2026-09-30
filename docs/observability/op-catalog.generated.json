@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d4ef0d3c03acc35d8b53c4b08bdf0d0e397b1418c977ea5979af024a6e950197",
+    "catalogDigest": "29c0aba059f80c9016f867aeaa2bb434fb2f247a2f96c00f1bce036802f57044",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24986,6 +24986,50 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "search.citations.support-settled",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "grounded-citation-log.logCitationSupport",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "supportCaveat": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["none", "judge-undecided", "no-judge", "unjudged-citation"]
+          },
+          "weakCitationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "hiddenProseClaimCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["knowledge-citation-reconciliation"],
+        "proofIds": ["search.citations.support-settled.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:134",
+        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:174"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "search.connected-context.completed",
         "category": "search",
         "owner": "keiko-server",
@@ -25764,6 +25808,11 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "hiddenProseClaimCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
           }
         },
         "causal": "correlation",
@@ -25773,7 +25822,7 @@
         "proofIds": ["search.entailment.judged.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/grounded-entailment-stage.ts:60",
-        "emitterSites": ["packages/keiko-server/src/grounded-entailment-stage.ts:87"]
+        "emitterSites": ["packages/keiko-server/src/grounded-entailment-stage.ts:88"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37459,15 +37508,24 @@
         "requiredLifecycleOperations": {
           "start": [],
           "state": [],
-          "end": ["search.citations.reconciled"],
+          "end": ["search.citations.reconciled", "search.citations.support-settled"],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["search.citations.reconciled"],
+        "requiredCausalOperations": [
+          "search.citations.reconciled",
+          "search.citations.support-settled"
+        ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["search.citations.reconciled"],
+        "requiredProofOperations": [
+          "search.citations.reconciled",
+          "search.citations.support-settled"
+        ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["search.citations.reconciled"],
+        "requiredResourceOperations": [
+          "search.citations.reconciled",
+          "search.citations.support-settled"
+        ],
         "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
@@ -64887,6 +64945,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "hiddenProseClaimCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "judgedClaimCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -66113,7 +66177,7 @@
           "lifecycleOperations": {
             "start": [],
             "state": [],
-            "end": ["search.citations.reconciled"],
+            "end": ["search.citations.reconciled", "search.citations.support-settled"],
             "failure": [],
             "loss": []
           },
@@ -66121,10 +66185,14 @@
             {
               "op": "search.citations.reconciled",
               "mode": "correlation"
+            },
+            {
+              "op": "search.citations.support-settled",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["search.citations.reconciled"],
+          "resourceSignals": ["search.citations.reconciled", "search.citations.support-settled"],
           "replayReferences": [],
           "operations": [
             {
@@ -66178,6 +66246,42 @@
                 "causeChain": false
               },
               "proofIds": ["search.citations.reconciled.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "search.citations.support-settled",
+              "owner": "keiko-server",
+              "category": "search",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "hiddenProseClaimCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "supportCaveat",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "weakCitationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["search.citations.support-settled.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -78903,7 +79007,7 @@
     {
       "op": "<dynamic>",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-entailment-stage.ts:101",
+      "site": "packages/keiko-server/src/grounded-entailment-stage.ts:103",
       "package": "keiko-server"
     },
     {
@@ -80995,7 +81099,7 @@
     {
       "op": "grounded.entailment",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-entailment-stage.ts:164",
+      "site": "packages/keiko-server/src/grounded-entailment-stage.ts:166",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -81386,7 +81490,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2206",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2211",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -81412,6 +81516,12 @@
       "op": "search.citations.reconciled",
       "category": "search",
       "site": "packages/keiko-server/src/grounded-citation-log.ts:27",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.citations.support-settled",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:137",
       "package": "keiko-server"
     },
     {
@@ -82518,6 +82628,7 @@
     "runtime.confinement.spawned",
     "runtime.confinement.unavailable",
     "search.citations.reconciled",
+    "search.citations.support-settled",
     "search.connected-context.completed",
     "search.connected-context.completion-details",
     "search.connected-context.failed",

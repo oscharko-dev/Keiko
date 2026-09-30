@@ -14,6 +14,7 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   logCitationReconciliation,
+  logCitationSupport,
   summarizeCitationReconciliation,
   type CitationReconciliationEvidence,
 } from "./grounded-citation-log.js";
@@ -120,6 +121,34 @@ describe("logCitationReconciliation", () => {
     const serialized = sink.lines().join("\n");
     expect(serialized).not.toContain("Java 17");
     expect(serialized).not.toContain("[1, 7, 8]");
+  });
+
+  // PR #3678 review: the caveat is decided after the citation line, so its reason has its own line.
+  it("resolves the search.citations.support-settled Activity Log proof body-free", () => {
+    const sink = capture();
+
+    logCitationSupport(
+      { supportCaveat: "judge-undecided", weakCitationCount: 1, hiddenProseClaimCount: 1 },
+      "citation-support-proof-0001",
+    );
+
+    const [event] = sink.events;
+    expect(event?.op).toBe("search.citations.support-settled");
+    expect(
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBeDefined();
+    const persisted = expectActivityLogProof(
+      "search.citations.support-settled.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "citation-support-proof-0001",
+      supportCaveat: "judge-undecided",
+      weakCitationCount: 1,
+      hiddenProseClaimCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   it("falls back to the sanctioned unknown correlation id", () => {

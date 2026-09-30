@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d4ef0d3c03acc35d8b53c4b08bdf0d0e397b1418c977ea5979af024a6e950197"
+    "catalogDigest": "29c0aba059f80c9016f867aeaa2bb434fb2f247a2f96c00f1bce036802f57044"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 491,
-    "proofCount": 499,
-    "resolvedProofCount": 499,
+    "operationCount": 492,
+    "proofCount": 500,
+    "resolvedProofCount": 500,
     "failureClassCount": 333,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -438,6 +438,7 @@
         "memory.embedding.store-rejected",
         "repository.fingerprint-diff.completed",
         "search.citations.reconciled",
+        "search.citations.support-settled",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
         "search.connected-context.failed",
@@ -2066,6 +2067,9 @@
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],
     "search.citations.reconciled.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
+    "search.citations.support-settled.line": [
+      "packages/keiko-server/src/grounded-citation-log.test.ts"
+    ],
     "search.connected-context.completed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
     ],

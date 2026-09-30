@@ -842,6 +842,7 @@ describe("weakly supported citations", () => {
     answerText: string,
     capsuleSuffix: string,
     judgeVerdict?: "supported" | "unsupported",
+    correlationId?: string,
   ): Promise<GroundedAnswer> {
     const embeddingModelId = "text-embedding-3-small";
     const knowledgeStore = openKnowledgeStore({
@@ -916,6 +917,8 @@ describe("weakly supported citations", () => {
       { chatId: chat.id, content: "What does the release checklist cover?", modelId: "chat-model" },
       deps,
       new AbortController().signal,
+      undefined,
+      correlationId,
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     return result.body as GroundedAnswer;
@@ -979,6 +982,55 @@ describe("weakly supported citations", () => {
 
     expect(lexicalSupports(answer)).toEqual([undefined, "weak"]);
     expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
+  // PR #3678 review (P1): hidden claim text is undecidable at the entailment layer whatever the
+  // lexical overlap. The TLS half shares the excerpt's wording, so [1] is not weak, yet the judge
+  // would read only that half; the bracketed MFA assertion keeps the answer unverified. The settled
+  // reason and the hidden-claim count are on the log (PR #3678 review, P2).
+  it("keeps an answer unverified when a strongly cited claim hides bracketed prose", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload [MFA is mandatory for every release] [1].",
+        "judged-hidden-strong",
+        "supported",
+        "corr-hidden-prose",
+      );
+
+      expect(lexicalSupports(answer)).toEqual([undefined]);
+      expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+      const judged = sink.events.find((event) => event.op === "search.entailment.judged");
+      expect(judged?.extra).toMatchObject({ judgedClaimCount: 0, hiddenProseClaimCount: 1 });
+      const settled = sink.events.find((event) => event.op === "search.citations.support-settled");
+      expect(settled?.extra).toMatchObject({
+        supportCaveat: "judge-undecided",
+        weakCitationCount: 0,
+        hiddenProseClaimCount: 1,
+      });
+      expect(judged?.correlationId).toBe("corr-hidden-prose");
+      expect(settled?.correlationId).toBe("corr-hidden-prose");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("records a supported answer as settled without a caveat", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      await askWith(
+        "The release checklist covers signing, notarization and upload [1].",
+        "judged-clean",
+        "supported",
+      );
+
+      const settled = sink.events.find((event) => event.op === "search.citations.support-settled");
+      expect(settled?.extra).toMatchObject({ supportCaveat: "none", hiddenProseClaimCount: 0 });
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("adds no caveat when the claim shares its wording with the cited excerpt", async () => {

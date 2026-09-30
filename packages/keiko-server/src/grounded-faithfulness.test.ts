@@ -653,7 +653,7 @@ describe("numeric citation entailment", () => {
   it("flags a claim whose stripped brackets held prose the judge never reads", () => {
     expect(
       segmentNumericCitedClaims(
-        "TLS is used [1, 2]. TLS is used [src/tls.ts:4] [1]. TLS [The repository enforces MFA] [1]. See the [guide](docs/g.md) [2].",
+        "TLS is used [1, 2]. TLS is used [src/tls.ts:4][src/tls.ts:9] [1]. TLS [The repository enforces MFA] [1]. See the [guide](docs/g.md) [2].",
       ),
     ).toEqual([
       { claimText: "TLS is used .", markers: [1, 2] },
@@ -891,6 +891,39 @@ describe("reconcileClaimEntailment", () => {
     expect(result.unentailed).toHaveLength(1);
     expect(result.unentailed[0]?.citedPaths).toEqual(["src/a.ts"]);
     expect(result.judgedClaims).toBe(1);
+  });
+
+  // PR #3678 review (P1): a claim the judge would read only in part is never judged, however well
+  // its visible half matches the excerpt; it counts as undecided and names why.
+  it("never judges a claim whose bracketed prose the stripper hides", async () => {
+    const calls: string[] = [];
+    const judge: EntailmentJudge = {
+      judge: (input: EntailmentJudgeInput): Promise<EntailmentVerdict> => {
+        calls.push(input.claimText);
+        return Promise.resolve("supported");
+      },
+    };
+    const path = await reconcileClaimEntailment(
+      "The retention period is 30 days [MFA is mandatory] [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      judgeFixturePack("retention period: 30 days"),
+      judge,
+    );
+    const numeric = await reconcileNumericClaimEntailment(
+      "The retention period is 30 days [MFA is mandatory] [1].",
+      [{ marker: 1, excerptText: "retention period: 30 days" }],
+      judge,
+    );
+
+    for (const result of [path, numeric]) {
+      expect(result).toEqual({
+        unentailed: [],
+        judgedClaims: 0,
+        unavailableClaims: 1,
+        hiddenProseClaims: 1,
+      });
+    }
+    expect(calls).toEqual([]);
   });
 
   it("passes a claim whose excerpt supports it (no false positive)", async () => {

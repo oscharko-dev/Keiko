@@ -203,10 +203,13 @@ const EVIDENCE_REFERENT_PATTERN = anyWord([
 // An attribution names the evidence as the source of a statement, not as the place that lacks it:
 // "The API does not provide authentication according to the documentation." is a documented
 // negative fact (PR #3678 review). Attribution phrases are removed before the referent test.
-// A source word may carry a possessive, a version or a hyphen ("the project's documentation", "the
-// v2 documentation", "the end-user documentation"); stopping at those left the referent behind.
+// The attributed source runs to the end of its clause: "According to the current API reference
+// documentation, …", "according to the v2.0 documentation" and "the project's documentation" are
+// whole source phrases, and a word-count bound left their referent behind (PR #3678 review). The
+// clause ends at a comma, semicolon, colon or the sentence end; the run is bounded, so matching
+// stays linear. Removing more than the source only ever removes referents, never adds a refusal.
 const LEADING_ATTRIBUTION_PATTERN =
-  /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+(?:[\p{L}\p{N}’'-]+\s+){0,3}[\p{L}\p{N}’'-]+/giu;
+  /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s[^,;:!?]{1,160}/giu;
 
 // "den bereitgestellten Dokumenten zufolge": up to three whitespace-separated letter runs before a
 // "zufolge" name the source; the earliest may end a token that starts with punctuation ("„den").

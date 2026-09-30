@@ -174,6 +174,19 @@ describe("findCitationMarkerGroups", () => {
     expect(citationMarkerIndices(`${"> ".repeat(50_000)}TLS [1]`)).toEqual([1]);
   });
 
+  // PR #3678 review (P1): code blocks are the renderer's, in both directions. An indented closing
+  // fence closes, so a fabricated [9] after it stays visible to reconciliation; an indented or
+  // quoted opening fence holds code, so an array literal inside it never cites.
+  it("reads fenced code exactly where the chat renderer shows it", () => {
+    const indentedClose =
+      "The API uses TLS [1].\n```\nconst example = true;\n    ```\nThe repository enforces MFA [9].";
+    expect(citationMarkerIndices(indentedClose)).toEqual([1, 9]);
+    expect(
+      citationMarkerIndices("Intro [1]\n    ```\n    const a = [2];\n    ```\nAfter [3]"),
+    ).toEqual([1, 3]);
+    expect(citationMarkerIndices("> ```\n> const a = [1];\n> ```\nTLS [2].")).toEqual([2]);
+  });
+
   it("runs an unclosed fence to the end of the text, like the Markdown renderer", () => {
     expect(citationMarkerIndices("Intro [1]\n```\nconst a = [2];\nstill code [3]")).toEqual([1]);
   });

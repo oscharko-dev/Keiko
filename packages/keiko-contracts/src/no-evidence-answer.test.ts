@@ -101,6 +101,9 @@ describe("isNoEvidenceAnswerText", () => {
     "The API does not provide authentication according to the project’s documentation.",
     "The API does not provide authentication according to the v2 documentation.",
     "The API does not provide authentication as described in the end-user documentation.",
+    "According to the current API reference documentation, the API does not provide authentication. Requests are anonymous.",
+    "The API does not provide authentication according to the v2.0 documentation.",
+    "Gemäß der Dokumentation v2.0 des Projekts bietet die API keine Authentifizierung an.",
     // The audit's exact false-positive probes.
     "Für diesen Endpunkt sind keine Angaben zum Benutzer erforderlich.",
     "The endpoint requires no details about the user.",

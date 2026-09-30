@@ -32,6 +32,12 @@ describe("citation markers follow the rendered Markdown blocks", () => {
     ["table rows", "| a ` | b |\n| --- | :-: |\n| TLS [1] | c ` |"],
     ["table cells", "| a ` | TLS [1] | c ` |\n|---|---|---|"],
     ["a fence", "Tick ` here [1]\n```\ncode\n```\nand ` there [2]."],
+    [
+      "an indented closing fence",
+      "The API uses TLS [1].\n```\nconst example = true;\n    ```\nThe repository enforces MFA [9].",
+    ],
+    ["an indented opening fence", "Intro [1]\n    ```\n    const a = [2];\n    ```\nAfter [3]"],
+    ["a quoted fence", "> ```\n> const a = [1];\n> ```\nTLS [2]."],
     ["a paragraph continuation", "A ` tick\n1) item [1] ` end [2]"],
     ["a setext-like underline", "A ` tick\n===\nitem [1] ` end [2]"],
     ["quoted lines of one paragraph", "> A ` tick\n> item [1] ` end [2]"],

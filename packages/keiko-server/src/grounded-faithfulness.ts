@@ -507,6 +507,8 @@ export interface EntailmentJudge {
 export interface CitedClaim {
   readonly claimText: string;
   readonly citations: readonly ParsedInlineCitation[];
+  /** Present when the stripper removed bracketed prose from the claim (see NumericCitedClaim). */
+  readonly hidesProse?: true;
 }
 
 /** Per-answer bounds so the judge is never invoked unboundedly. */
@@ -607,8 +609,9 @@ export function stripInlineCitations(text: string): string {
     .trim();
 }
 
-function isPathCitationBracket(span: string, match: RegExpMatchArray): boolean {
-  if (isMarkdownLink(span, match)) return false;
+// A bracket whose every part is a path citation hides no prose, whatever follows it: adjacent
+// citations `[a.ts:1][b.ts:2]` are two citations, not a reference-style link.
+function isPathCitationBracket(match: RegExpMatchArray): boolean {
   const inner = match[0].slice(1, -1);
   return inner.split(",").every((part) => parseCitationToken(part.trim()) !== undefined);
 }
@@ -618,7 +621,7 @@ function isPathCitationBracket(span: string, match: RegExpMatchArray): boolean {
 function hidesBracketedProse(span: string): boolean {
   const markerStarts = new Set(findCitationMarkerGroups(span).map((group) => group.start));
   return [...span.matchAll(CLAIM_BRACKET_RE)].some(
-    (match) => !markerStarts.has(match.index) && !isPathCitationBracket(span, match),
+    (match) => !markerStarts.has(match.index) && !isPathCitationBracket(match),
   );
 }
 
@@ -628,7 +631,12 @@ export function segmentCitedClaims(answerText: string): readonly CitedClaim[] {
   for (const span of splitClaimSpans(answerText)) {
     const citations = parseInlineCitations(span);
     if (citations.length > 0) {
-      claims.push({ claimText: stripInlineCitations(span), citations });
+      const claimText = stripInlineCitations(span);
+      claims.push(
+        hidesBracketedProse(span)
+          ? { claimText, citations, hidesProse: true }
+          : { claimText, citations },
+      );
     }
   }
   return claims;
@@ -695,6 +703,9 @@ export interface EntailmentReconciliation {
   readonly judgedClaims: number;
   // Count of claims the judge could not decide (verdict `unavailable`).
   readonly unavailableClaims: number;
+  // Of those, the claims never sent to the judge because the claim stripper removed bracketed prose
+  // the reader sees: the judge would read only part of the claim (PR #3678 review, P1). Absent at 0.
+  readonly hiddenProseClaims?: number;
 }
 
 /** Resolve the bounded excerpt text for a membership-valid citation, or `undefined` if none. */
@@ -716,6 +727,19 @@ interface EntailmentClaimEvidence {
 interface EntailmentClaim {
   readonly claimText: string;
   readonly evidence: readonly EntailmentClaimEvidence[];
+  readonly hidesProse?: true;
+}
+
+// A claim the judge would read only in part is undecidable, whatever its lexical overlap: it is
+// counted unavailable and never judged (fail closed), so `The API uses TLS [MFA mandatory] [1]`
+// cannot pass on its TLS half.
+function claimForJudge(
+  claimText: string,
+  evidence: readonly EntailmentClaimEvidence[],
+  hidesProse: true | undefined,
+): readonly EntailmentClaim[] {
+  if (evidence.length === 0) return [];
+  return [hidesProse === true ? { claimText, evidence, hidesProse } : { claimText, evidence }];
 }
 
 interface CollectedExcerptText {
@@ -862,9 +886,15 @@ async function reconcileEntailmentClaims(
     maxClaims: Math.min(options.maxClaims, budget.remainingClaims),
   };
   const unentailed: UnentailedClaim[] = [];
-  const scheduledClaims = scheduleClaimJudges(claims, judge, boundedOptions, budget.signal);
+  const hiddenProseClaims = claims.filter((claim) => claim.hidesProse === true).length;
+  const scheduledClaims = scheduleClaimJudges(
+    claims.filter((claim) => claim.hidesProse !== true),
+    judge,
+    boundedOptions,
+    budget.signal,
+  );
   budget.remainingClaims -= scheduledClaims.scheduled.length;
-  let unavailableClaims = scheduledClaims.unavailableClaims;
+  let unavailableClaims = scheduledClaims.unavailableClaims + hiddenProseClaims;
   const { scheduled } = scheduledClaims;
   const outcomes = await Promise.all(scheduled.map(({ verdict }) => verdict));
   for (const [index, outcome] of outcomes.entries()) {
@@ -876,7 +906,12 @@ async function reconcileEntailmentClaims(
       unavailableClaims += 1;
     }
   }
-  return { unentailed, judgedClaims: scheduled.length, unavailableClaims };
+  return {
+    unentailed,
+    judgedClaims: scheduled.length,
+    unavailableClaims,
+    ...(hiddenProseClaims > 0 ? { hiddenProseClaims } : {}),
+  };
 }
 
 function inlineEntailmentClaims(
@@ -892,7 +927,7 @@ function inlineEntailmentClaims(
         citedPath: citation.scopePath,
         excerptText: resolveExcerptText(citation),
       }));
-    return evidence.length === 0 ? [] : [{ claimText: claim.claimText, evidence }];
+    return claimForJudge(claim.claimText, evidence, claim.hidesProse);
   });
 }
 
@@ -947,7 +982,7 @@ export async function reconcileNumericClaimEntailment(
               },
             ];
       });
-      return evidence.length === 0 ? [] : [{ claimText: claim.claimText, evidence }];
+      return claimForJudge(claim.claimText, evidence, claim.hidesProse);
     },
   );
   return reconcileEntailmentClaims(claims, judge, options, signal, executionBudget);

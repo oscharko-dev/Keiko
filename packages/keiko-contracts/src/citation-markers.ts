@@ -17,7 +17,9 @@
 //     more often a character class or a year span in the answer prose than a citation.
 //   * Anything else inside the brackets (`[note]`, `[a.ts:1-2]`, `[1, x]`) is NOT a marker.
 //   * Markdown code is never scanned: a fenced block (``` or ~~~) or an inline code span holds
-//     code such as `const a = [1, 2, 3];`, never a citation (PR #3678 review).
+//     code such as `const a = [1, 2, 3];`, never a citation (PR #3678 review). Fenced blocks are
+//     the renderer's: a fence at any indentation or inside a quote opens one, and any-indented
+//     closing fence ends it.
 //   * The marker scan is a single forward pass with no regular expression. The block pre-pass reads
 //     each line with anchored patterns, once per quote level up to the renderer's nesting cap, so
 //     the whole scan stays linear in the text length however many brackets or spaces it holds.
@@ -128,38 +130,6 @@ function runLength(text: string, from: number, character: string): number {
   return end - from;
 }
 
-// True when only up to three spaces precede `position` on its line: where a code fence may open.
-function atFenceIndent(text: string, position: number): boolean {
-  let start = position;
-  while (start > 0 && position - start <= 3 && text.charAt(start - 1) === " ") start -= 1;
-  return position - start <= 3 && (start === 0 || text.charAt(start - 1) === "\n");
-}
-
-function lineEndOf(text: string, from: number): number {
-  const end = text.indexOf("\n", from);
-  return end === -1 ? text.length : end;
-}
-
-// True when the line starting at `lineStart` closes a fence of `length` `fence` characters: up to
-// three spaces, at least as long a run of the same character, then only whitespace.
-function closesFence(text: string, lineStart: number, fence: string, length: number): boolean {
-  let first = lineStart;
-  while (first - lineStart < 3 && text.charAt(first) === " ") first += 1;
-  const run = runLength(text, first, fence);
-  return run >= length && text.slice(first + run, lineEndOf(text, first)).trim() === "";
-}
-
-// The end of a fenced block opened at `position`: the end of its closing fence line, or the text
-// end for a fence that never closes (CommonMark runs it to the end of the document).
-function fencedBlockEnd(text: string, position: number, fence: string, length: number): number {
-  let lineEnd = lineEndOf(text, position);
-  while (lineEnd < text.length) {
-    if (closesFence(text, lineEnd + 1, fence, length)) return lineEndOf(text, lineEnd + 1);
-    lineEnd = lineEndOf(text, lineEnd + 1);
-  }
-  return text.length;
-}
-
 // Where an inline code span must end. The chat renderer (keiko-ui `safe-markdown.ts`) parses inline
 // Markdown per paragraph, heading, list item, table cell and quoted paragraph, so an unmatched
 // backtick in one of them cannot pair with one in the next and swallow the cited prose between them
@@ -180,6 +150,19 @@ interface InlineBreakScan {
   readonly joined: Set<number>;
   /** Breaks inside a line: table cell pipes. */
   readonly inline: number[];
+  /** The fenced code blocks the renderer shows as code, in document order. */
+  readonly code: TextRange[];
+}
+
+interface TextRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Where the renderer ends inline contexts, and where it shows fenced code. */
+interface RenderedLayout {
+  readonly breaks: readonly number[];
+  readonly code: readonly TextRange[];
 }
 
 // The renderer's quote nesting cap (safe-markdown MAX_MARKDOWN_DEPTH): deeper quoted text becomes one
@@ -240,6 +223,23 @@ function afterRenderedFence(lines: readonly MarkdownLine[], index: number, fence
     if (closer.startsWith(fence.charAt(0)) && closer.length >= fence.length) return next + 1;
   }
   return lines.length;
+}
+
+// A fence at any indentation, in a quote too, opens code the renderer never scans for markers; it
+// runs to its closing fence line, or to the end of its container when it never closes.
+function scanRenderedFence(
+  lines: readonly MarkdownLine[],
+  index: number,
+  fence: string,
+  scan: InlineBreakScan,
+): number {
+  const next = afterRenderedFence(lines, index, fence);
+  const first = lines[index];
+  const last = lines[next - 1];
+  if (first !== undefined && last !== undefined) {
+    scan.code.push({ start: first.start, end: last.start + last.text.length });
+  }
+  return next;
 }
 
 function pushPipes(line: MarkdownLine, scan: InlineBreakScan): void {
@@ -316,7 +316,7 @@ function scanRenderedBlock(
   const line = lines[index]?.text ?? "";
   const trimmed = line.trim();
   const fence = FENCE_OPEN.exec(trimmed)?.[1];
-  if (fence !== undefined) return afterRenderedFence(lines, index, fence);
+  if (fence !== undefined) return scanRenderedFence(lines, index, fence, scan);
   if (isBlankHeadingOrRule(trimmed)) return index + 1;
   if (isQuoteLine(line)) return scanQuote(lines, index, depth, scan);
   if (startsTable(lines, index, trimmed)) return scanTable(lines, index, scan);
@@ -333,15 +333,19 @@ function scanRenderedBlocks(
   while (index < lines.length) index = scanRenderedBlock(lines, index, depth, scan);
 }
 
-// Every offset where the renderer ends an inline context, in document order.
-function renderedInlineBreaks(text: string): readonly number[] {
+// Every offset where the renderer ends an inline context, and every fenced code block, in
+// document order.
+function renderedLayout(text: string): RenderedLayout {
   const lines = markdownLines(text);
-  const scan: InlineBreakScan = { joined: new Set(), inline: [] };
+  const scan: InlineBreakScan = { joined: new Set(), inline: [], code: [] };
   scanRenderedBlocks(lines, 0, scan);
   const newlines = lines
     .map((line) => line.newlineBefore)
     .filter((newline) => newline >= 0 && !scan.joined.has(newline));
-  return [...newlines, ...scan.inline].sort((left, right) => left - right);
+  return {
+    breaks: [...newlines, ...scan.inline].sort((left, right) => left - right),
+    code: [...scan.code].sort((left, right) => left.start - right.start),
+  };
 }
 
 // Every backtick run of the text, grouped by run length in document order, so an inline code span
@@ -353,7 +357,7 @@ class BacktickRuns {
   private readonly blockBreaks: readonly number[];
   private breakCursor = 0;
 
-  constructor(text: string) {
+  constructor(text: string, blockBreaks: readonly number[]) {
     let next = text.indexOf("`");
     while (next !== -1) {
       const length = runLength(text, next, "`");
@@ -362,7 +366,7 @@ class BacktickRuns {
       this.startsByLength.set(length, starts);
       next = text.indexOf("`", next + length);
     }
-    this.blockBreaks = renderedInlineBreaks(text);
+    this.blockBreaks = blockBreaks;
   }
 
   /** The end of the span a run of `length` opens at `position`, or undefined when none closes it. */
@@ -386,18 +390,37 @@ class BacktickRuns {
 }
 
 /**
- * Where the scan resumes after the backtick or tilde run at `position`: past the fenced block or
- * code span it opens, or past the run itself when it is literal text. Undefined when no run starts.
+ * Where the scan resumes after the backtick run at `position`: past the inline code span it opens,
+ * or past the run itself when it is literal text. Undefined when no backtick run starts there.
  */
 function afterCodeRun(text: string, position: number, runs: BacktickRuns): number | undefined {
-  const character = text.charAt(position);
-  if (character !== "`" && character !== "~") return undefined;
-  const length = runLength(text, position, character);
-  if (length >= 3 && atFenceIndent(text, position)) {
-    return fencedBlockEnd(text, position, character, length);
-  }
-  if (character === "~") return position + length;
+  if (text.charAt(position) !== "`") return undefined;
+  const length = runLength(text, position, "`");
   return runs.closingEnd(position, length) ?? position + length;
+}
+
+// The renderer's fenced code blocks in document order; the scan cursor only moves forward, so each
+// block is passed once.
+class FencedBlocks {
+  private readonly ranges: readonly TextRange[];
+  private next = 0;
+
+  constructor(ranges: readonly TextRange[]) {
+    this.ranges = ranges;
+  }
+
+  /** The end of the fenced block the scan has reached at `cursor`, or undefined outside one. */
+  endAt(cursor: number): number | undefined {
+    for (
+      let block = this.ranges[this.next];
+      block !== undefined && cursor >= block.start;
+      block = this.ranges[this.next]
+    ) {
+      this.next += 1;
+      if (block.end > cursor) return block.end;
+    }
+    return undefined;
+  }
 }
 
 /**
@@ -407,10 +430,12 @@ function afterCodeRun(text: string, position: number, runs: BacktickRuns): numbe
  */
 export function findCitationMarkerGroups(text: string): readonly CitationMarkerGroup[] {
   const groups: CitationMarkerGroup[] = [];
-  const runs = new BacktickRuns(text);
+  const layout = renderedLayout(text);
+  const runs = new BacktickRuns(text, layout.breaks);
+  const fenced = new FencedBlocks(layout.code);
   let cursor = 0;
   while (cursor < text.length) {
-    const code = afterCodeRun(text, cursor, runs);
+    const code = fenced.endAt(cursor) ?? afterCodeRun(text, cursor, runs);
     if (code !== undefined) {
       cursor = code;
       continue;

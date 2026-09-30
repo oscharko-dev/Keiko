@@ -47,6 +47,7 @@ import type {
   KnowledgePodRetrievalActivityState,
   KnowledgeSourceId,
   RetrievalReference,
+  UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
 import { citationMarkerIndices } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { classifyDocumentationTarget } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
@@ -110,7 +111,11 @@ import {
   type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
-import { logCitationReconciliation } from "./grounded-citation-log.js";
+import {
+  logCitationReconciliation,
+  logCitationSupport,
+  type CitationSupportCaveat,
+} from "./grounded-citation-log.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import {
   assertConversationReadinessAdmission,
@@ -2283,13 +2288,13 @@ async function appendLocalKnowledgeNumericEntailment(
   selected: SelectedLocalKnowledgeScope,
   context: ScopedGroundedAnswerContext & { readonly modelId: string },
   deps: UiHandlerDeps,
-): Promise<GroundedAnswer> {
+): Promise<SettledCitationSupport | undefined> {
   if (
     result.noEvidence ||
     result.answerOnlyContextUsed === true ||
     result.references.length === 0
   ) {
-    return answer;
+    return undefined;
   }
   const stage = createEntailmentStage(
     deps,
@@ -2301,7 +2306,7 @@ async function appendLocalKnowledgeNumericEntailment(
     },
     context.signal,
   );
-  if (stage === undefined) return withWeakCitationCaveat(answer, result);
+  if (stage === undefined) return settleWithoutJudge(answer, result);
   const markers = await stage.evaluateNumeric(result.answer, numericEvidence, Date.now());
   if (context.signal.aborted) {
     throw new CancelledError("grounded request cancelled");
@@ -2319,10 +2324,78 @@ async function appendLocalKnowledgeNumericEntailment(
             })),
           ],
         };
-  // A stage that ran is no verdict on a weak citation whose claim it could not read: the claim
-  // stripper leaves no text for `[The repository enforces MFA] [1]`, so no judge call covers [1]
-  // (PR #3678 review, P1). Such a citation keeps the fail-closed caveat.
-  return weakCitationsJudged(result) ? judged : withWeakCitationCaveat(judged, result);
+  return settleAfterJudge(judged, result, markers);
+}
+
+// The answer with its settled support caveat and the reason for it, recorded on
+// search.citations.support-settled once the caveat is decided (PR #3678 review).
+interface SettledCitationSupport {
+  readonly answer: GroundedAnswer;
+  readonly caveat: CitationSupportCaveat;
+}
+
+function settleWithoutJudge(
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+): SettledCitationSupport {
+  const caveated = withWeakCitationCaveat(answer, result);
+  return { answer: caveated, caveat: caveated === answer ? "none" : "no-judge" };
+}
+
+// A stage that ran is no verdict on a weak citation whose claim it could not read: the claim
+// stripper leaves no text for `[The repository enforces MFA] [1]`, so no judge call covers [1]
+// (PR #3678 review, P1). Such a citation keeps the fail-closed caveat.
+function settleAfterJudge(
+  judged: GroundedAnswer,
+  result: ScopedGroundedResult,
+  markers: readonly UncertaintyMarker[],
+): SettledCitationSupport {
+  if (markers.some((marker) => marker.kind === "entailment-unavailable")) {
+    return { answer: judged, caveat: "judge-undecided" };
+  }
+  if (weakCitationsJudged(result)) return { answer: judged, caveat: "none" };
+  const caveated = withWeakCitationCaveat(judged, result);
+  return { answer: caveated, caveat: caveated === judged ? "none" : "unjudged-citation" };
+}
+
+// Judges the answer's numeric citations and records the settled caveat once it is decided.
+async function settleScopedCitationSupport(
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+  numericEvidence: readonly NumericEntailmentEvidence[],
+  selected: SelectedLocalKnowledgeScope,
+  context: ScopedGroundedAnswerContext & { readonly modelId: string },
+  deps: UiHandlerDeps,
+): Promise<GroundedAnswer> {
+  const settled = await appendLocalKnowledgeNumericEntailment(
+    answer,
+    result,
+    numericEvidence,
+    selected,
+    context,
+    deps,
+  );
+  if (settled === undefined) return answer;
+  logScopedCitationSupport(result, settled.caveat, context.correlationId);
+  return settled.answer;
+}
+
+// The settled caveat of a Knowledge Pod answer, logged after the entailment decision.
+function logScopedCitationSupport(
+  result: ScopedGroundedResult,
+  caveat: CitationSupportCaveat,
+  correlationId: string | undefined,
+): void {
+  logCitationSupport(
+    {
+      supportCaveat: caveat,
+      weakCitationCount: result.weakCitationCount ?? 0,
+      hiddenProseClaimCount: segmentNumericCitedClaims(result.answer).filter(
+        (claim) => claim.hidesProse === true,
+      ).length,
+    },
+    correlationId,
+  );
 }
 
 function countByIndex(indices: readonly number[]): ReadonlyMap<number, number> {
@@ -2465,7 +2538,7 @@ async function persistScopedGroundedAnswer(
     sourceLookup,
     deps,
   });
-  const entailed = await appendLocalKnowledgeNumericEntailment(
+  const entailed = await settleScopedCitationSupport(
     answer,
     result,
     numericEvidence,

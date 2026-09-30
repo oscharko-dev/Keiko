@@ -559,7 +559,10 @@ counts: stored and projected history, knowledge-source tokens, the sent and avai
 counts, the last knowledge request (measured and estimated), the system, summary and message shares,
 the automatic-compaction trigger, and the assumed-window and pending-probe flags.
 `search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
-undecided claim counts, so the displayed "N unsupported claims" is reconstructable. The multi-source
+undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
+`hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
+`search.citations.support-settled` records the settled caveat of a Knowledge Pod answer (`none`,
+`judge-undecided`, `no-judge`, `unjudged-citation`) with its weak-citation and hidden-claim counts. The multi-source
 prompt reports a trim or refusal on `search.prompt.window-fitted` like the Knowledge Pod and hybrid
 prompts. `client.answer.copied` records each chat answer copy (`copied` or `failed` at `warn` with
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy

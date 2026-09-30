@@ -158,7 +158,8 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   segmentation, the answer renderer and the copy stripper all use it; the
   private one-integer grammars that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
   markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
-  scanned, so `const a = [1, 2, 3];` cites nothing; an inline code span ends wherever the chat
+  scanned, so `const a = [1, 2, 3];` cites nothing. A fenced block is read where the renderer
+  shows one: its fences may be indented or quoted. An inline code span ends wherever the chat
   renderer (`safe-markdown.ts`) ends an inline context: at every newline it does not join into one
   paragraph (a blank line, a fence, a heading, a thematic break, a list item, a table row, a block
   quote) and at every table cell pipe. Past the renderer's 16-level quote cap, which renders the
@@ -182,6 +183,13 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   that prose, `NumericCitedClaim.hidesProse`), the Knowledge Pod answer carries the fail-closed
   `entailment-unavailable` caveat and the citation chip reads "unverified". A weakly supported
   citation is never presented as confirmed support (`withWeakCitationCaveat`).
+- **A claim the judge would read only in part is undecidable.** The claim stripper removes every
+  bracket, so `The API uses TLS [MFA is mandatory] [1]` reaches the judge as its TLS half. Whatever
+  its lexical overlap, such a claim (path or numeric) is never judged: it counts as unavailable and
+  the answer carries `entailment-unavailable`. `search.entailment.judged` records the count as
+  `hiddenProseClaimCount`, and `search.citations.support-settled` records why a Knowledge Pod
+  answer did or did not end with the caveat (`none`, `judge-undecided`, `no-judge`,
+  `unjudged-citation`), once that decision is made.
 - **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
   highest-ranked references under their original numbers. The generator reports the references it
   sent (`AnswerGenerator.promptReferences`), and a marker beyond them is out of range, never attached.
