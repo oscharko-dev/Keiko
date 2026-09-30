@@ -37,7 +37,11 @@ import {
   type AnalyzedSupportReport,
   type SupportAnalyzeOptions,
 } from "@oscharko-dev/keiko-activity-log/reader";
-import { cliTargetIsAtOrBelow, resolveCliControlStateDir } from "./cli-control-state.js";
+import {
+  cliControlStateConflictsWithTarget,
+  cliTargetIsAtOrBelow,
+  resolveCliControlStateDir,
+} from "./cli-control-state.js";
 import { resolveStateDir } from "./state-paths.js";
 import { loadActivityLog, loadToolLifecycle } from "./lazy-modules.js";
 import { collectSupportReportQuery } from "./support-selective-export.js";
@@ -221,19 +225,27 @@ function reportRejectedDestination(
   deps: SupportCliDeps,
   correlationId: string,
   maxBytes: number | undefined,
+  stateDir: string,
 ): number {
   try {
-    const sink = createFileServerLogSink(analysisControlState(deps), { env });
-    return reportSupportReportFailure(
-      {
-        io,
-        sink,
-        correlationId,
-        surface: "export",
-        maxBytes: maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
-      },
-      error,
-    );
+    const controlStateDir = analysisControlState(deps);
+    if (cliControlStateConflictsWithTarget(controlStateDir, stateDir))
+      return reportFailure(error, io);
+    const sink = createFileServerLogSink(controlStateDir, { env });
+    try {
+      return reportSupportReportFailure(
+        {
+          io,
+          sink,
+          correlationId,
+          surface: "export",
+          maxBytes: maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
+        },
+        error,
+      );
+    } finally {
+      sink.close?.();
+    }
   } catch (sinkError) {
     reportServerLogFailure(sinkError, {
       op: "support.report.failed",
@@ -256,7 +268,7 @@ function reportExportDestinationFailure(
     assertReportDestination(reportOutputDirectory(cwd, args.out, stateDir), stateDir);
     return undefined;
   } catch (error) {
-    return reportRejectedDestination(error, io, env, deps, randomUUID(), args.maxBytes);
+    return reportRejectedDestination(error, io, env, deps, randomUUID(), args.maxBytes, stateDir);
   }
 }
 

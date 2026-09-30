@@ -75694,13 +75694,13 @@
     {
       "op": "support.report.failed",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-report-cli.ts:161",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:165",
       "package": "keiko-cli"
     },
     {
       "op": "support.report.failed",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-report-cli.ts:239",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:251",
       "package": "keiko-cli"
     },
     {
@@ -75712,13 +75712,13 @@
     {
       "op": "support.report.started",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-report-cli.ts:279",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:291",
       "package": "keiko-cli"
     },
     {
       "op": "support.report.started",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-report-cli.ts:460",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:472",
       "package": "keiko-cli"
     },
     {

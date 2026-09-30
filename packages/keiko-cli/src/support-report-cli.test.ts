@@ -383,9 +383,25 @@ describe("support report CLI and private publication", () => {
       const forbidden = join(stateDir, "logs", tail);
       const before = readdirSync(join(stateDir, "logs"));
       expect(
-        await runSupportCli(["export", "--state-dir", stateDir, "--out", forbidden], result.io),
+        await runSupportCli(
+          ["export", "--state-dir", stateDir, "--out", forbidden],
+          result.io,
+          {},
+          { cwd: root, controlActivityStateDir: controlStateDir },
+        ),
       ).toBe(1);
       expect(readdirSync(join(stateDir, "logs"))).toEqual(before);
+      const [line] = persistedActivityLogLines(
+        readPersistedActivityLog(controlStateDir),
+        "support.report.failed",
+      );
+      expect(
+        expectActivityLogProof("support.report.failed.report-lifecycle", line ?? ""),
+      ).toMatchObject({
+        surface: "export",
+        errorKind: "unsafe-target",
+      });
+      expect(result.errors.join("")).not.toContain(forbidden);
     },
   );
 
@@ -396,11 +412,61 @@ describe("support report CLI and private publication", () => {
     for (const target of [alias, join(alias, "nested", "report")]) {
       const result = capture();
       expect(
-        await runSupportCli(["export", "--state-dir", stateDir, "--out", target], result.io),
+        await runSupportCli(
+          ["export", "--state-dir", stateDir, "--out", target],
+          result.io,
+          {},
+          { cwd: root, controlActivityStateDir: controlStateDir },
+        ),
       ).toBe(1);
       expect(readdirSync(join(stateDir, "logs"))).toEqual(before);
       expect(existsSync(join(alias, "nested"))).toBe(false);
     }
+  });
+
+  it.each(["equal", "parent", "child"])(
+    "keeps overlapping control state %s out of a refused target",
+    async (relation) => {
+      const control =
+        relation === "equal"
+          ? stateDir
+          : relation === "parent"
+            ? root
+            : join(stateDir, "nested-control");
+      const result = capture();
+      const forbidden = join(stateDir, "logs");
+      const before = readdirSync(forbidden);
+      expect(
+        await runSupportCli(
+          ["export", "--state-dir", stateDir, "--out", forbidden],
+          result.io,
+          {},
+          { cwd: root, controlActivityStateDir: control },
+        ),
+      ).toBe(1);
+      expect(result.output).toEqual([]);
+      expect(readdirSync(forbidden)).toEqual(before);
+      expect(existsSync(join(stateDir, "nested-control"))).toBe(false);
+      expect(existsSync(join(root, "logs"))).toBe(false);
+    },
+  );
+
+  it("fails closed without report output when rejection evidence cannot be persisted", async () => {
+    writeFileSync(controlStateDir, "not-a-directory");
+    const result = capture();
+    const forbidden = join(stateDir, "logs");
+    const before = readdirSync(forbidden);
+    expect(
+      await runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", forbidden],
+        result.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      ),
+    ).toBe(1);
+    expect(result.output).toEqual([]);
+    expect(result.errors.join("")).toBe("keiko support: unsafe-target\n");
+    expect(readdirSync(forbidden)).toEqual(before);
   });
 
   it.each([
