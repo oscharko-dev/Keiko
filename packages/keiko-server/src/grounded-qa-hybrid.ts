@@ -1732,10 +1732,15 @@ function assembleHybridAnswer(
   };
 }
 
+// A deterministic abstention sends no prompt and reports none. An answer-only request (governed
+// memory context, no source evidence) does call the model, so its prompt is reported like every
+// other grounded request (PR #3678 review).
 function hybridPromptContextField(
   input: AssembleHybridAnswerInput,
 ): Pick<GroundedAnswer, "promptContext"> {
-  if (input.sourceEvidenceAvailable === false) return {};
+  const modelInvoked =
+    input.sourceEvidenceAvailable !== false || input.ctx.answerOnlyContextAvailable === true;
+  if (!modelInvoked) return {};
   return { promptContext: hybridPromptContext(input.ctx, input.selected, input.assistant) };
 }
 

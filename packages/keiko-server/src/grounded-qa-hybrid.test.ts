@@ -1372,6 +1372,8 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
     // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
     expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    // A deterministic abstention sent no prompt, so it reports no prompt context.
+    expect((result.body as GroundedAnswer).promptContext).toBeUndefined();
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -1442,6 +1444,11 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.evidenceRunIds).toEqual([]);
     expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
+    // PR #3678 review: the answer-only request reached the model, so the context meter must see
+    // the prompt it sent, like the Knowledge Pod and folder paths report theirs.
+    const { promptContext } = result.body as GroundedAnswer;
+    expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
+    expect(promptContext?.sentReferenceCount).toBe(0);
   });
 });
 
