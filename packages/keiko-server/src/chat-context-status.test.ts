@@ -10,6 +10,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -154,7 +155,9 @@ describe("grounded context status", () => {
       } as unknown as NonNullable<ChatMessage["groundedAnswer"]>,
     });
     deps.store.updateChat(chatId, {
-      localKnowledgeScopes: [{ kind: "capsule", capsuleId: "capsule-1", connectedAtMs: 1 }],
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "capsule-1" as KnowledgeCapsuleId, connectedAtMs: 1 },
+      ],
     });
     const status = readChatContextStatus(deps, chatId, "fixture");
     expect(status.knowledgeSources).toEqual({

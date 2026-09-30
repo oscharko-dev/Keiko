@@ -86,6 +86,8 @@ describe("reportedContextWindowTokens", () => {
 describe("OpenAiAdapter overflow mapping", () => {
   it("attaches the provider-stated window to the ContextOverflowError", async () => {
     const adapter = new OpenAiAdapter({
+      requestId: "overflow-mapping",
+      costClass: "medium",
       fetchImpl: (): Promise<Response> =>
         Promise.resolve(
           rejection("This model's maximum context length is 32768 tokens. However, ..."),
@@ -100,6 +102,8 @@ describe("OpenAiAdapter overflow mapping", () => {
 
   it("classifies vLLM's too-large output allocation as an overflow, not a generic 400", async () => {
     const adapter = new OpenAiAdapter({
+      requestId: "overflow-mapping",
+      costClass: "medium",
       fetchImpl: (): Promise<Response> =>
         Promise.resolve(
           rejection("max_tokens=9000 cannot be greater than max_model_len=8192. Please request."),
