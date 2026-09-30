@@ -73,6 +73,9 @@ window with its source (`window-probe`, `provider-overflow`), the previous windo
 assumed. `gateway.context-window.retry` records the single re-planned retry of an admitted turn, with
 its surface and the planned and adopted windows. All three carry the request's correlation id and a
 model digest, never provider text.
+`search.prompt.window-fitted` records a Knowledge Pod answer prompt that dropped trailing references
+to fit the model (`trimmed`) or could not fit a single one (`refused`), with the reference counts and
+the input budget.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`

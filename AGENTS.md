@@ -541,6 +541,9 @@ window with its source (`window-probe`, `provider-overflow`), the previous windo
 assumed. `gateway.context-window.retry` records the single re-planned retry of an admitted turn, with
 its surface and the planned and adopted windows. All three carry the request's correlation id and a
 model digest, never provider text.
+`search.prompt.window-fitted` records a Knowledge Pod answer prompt that dropped trailing references
+to fit the model (`trimmed`) or could not fit a single one (`refused`), with the reference counts and
+the input budget.
 
 ### Rule 2 — when you debug, the log is your primary source
 

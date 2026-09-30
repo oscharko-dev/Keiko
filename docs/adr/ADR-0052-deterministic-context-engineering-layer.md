@@ -170,6 +170,39 @@ history, so a history larger than the window can no longer read as 340 % of it. 
 and manual compaction may summarize the newest stored turn, like the send path's history prefix.
 The current request is never shortened.
 
+**Provider-reported windows are re-checked (amended for the 1.1.13 field report).** A window adopted
+from a provider statement is persisted with `contextWindowReported`. A deployment can be redeployed
+with a different `max_model_len`, so the first context reading in each process probes such a model
+once more, exactly like an assumed one, and adopts the answer in either direction. A declared window
+is never probed.
+
+**Knowledge Pod prompts fit the window (amended for the 1.1.13 field report).** The Knowledge Pod
+answer prompt keeps the highest-ranked references that fit the input budget, counted with the
+admission's own accounting. Kept references keep their numbering, so their `[n]` markers still
+resolve. When not even one reference fits, the question is refused locally with
+`ContextOverflowError` rather than answered without evidence. Like the other grounded surfaces, the
+generator re-plans once after an adopted window. `search.prompt.window-fitted` records a trimmed or
+refused prompt body-free: reference counts and the input budget.
+
+**The context window breakdown (amended for the 1.1.13 field report).** The context status breaks the
+whole window into shares that sum to `contextWindowTokens`:
+
+- system instructions, the compaction summary, messages and retrieved knowledge sources;
+- free input up to the automatic-compaction threshold, and the compaction buffer above it;
+- the output reserve and the safety margin.
+
+Every used share is counted with the admission estimate — the unit compaction decides with — and
+the used shares are capped at the input budget. The segment ids are a closed wire vocabulary
+(`ChatContextSegmentId`). A future share, such as MCP tool definitions, becomes a new id rather than
+a second meter.
+
+While a chat is grounded, the next question is planned with the source share of its latest grounded
+request. The conversation then receives at most min(8,000, one third of the input budget) tokens
+(`groundedHistoryLaneTokens`). Retrieved sources are fetched fresh for every question and are never
+compacted. Compaction summarizes only the conversation lane; sources give way only by rank inside
+their own prompt. The latest grounded request is shown as the provider measured it, together with
+Keiko's estimate when the two differ.
+
 ### D3 — Eight-lane taxonomy with a fixed allocation order
 
 We will encode exactly eight lanes via `ContextLaneId`:
