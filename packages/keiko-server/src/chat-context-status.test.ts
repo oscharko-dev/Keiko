@@ -332,6 +332,47 @@ describe("composer context status and manual maintenance", () => {
         ?.lines.some((entry) => entry.op === "chat.context.management"),
     ).toBe(true);
   });
+  // PR #3678 review: the inspected line must let an agent rebuild the meter reading: the trigger,
+  // the last knowledge request, the reference trim, the known shares and a pending probe.
+  it("records the meter reading's trigger, knowledge request and shares on the inspected line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    logChatContextManagement(
+      "inspected",
+      {
+        estimatedInputTokens: 9_000,
+        inputBudgetTokens: 20_000,
+        autoCompactionAtTokens: 12_400,
+        knowledgeSources: { tokens: 6_000, sentReferenceCount: 4, availableReferenceCount: 16 },
+        lastRequest: { promptTokens: 8_800, measured: true, estimatedTokens: 9_100 },
+        segments: [
+          { id: "system", tokens: 700 },
+          { id: "summary", tokens: 300 },
+          { id: "messages", tokens: 2_000, count: 6 },
+          { id: "knowledge", tokens: 6_000, count: 4 },
+        ],
+        contextWindowProbePending: true,
+      },
+      0,
+      "corr-inspected-reading",
+    );
+
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    expect(expectActivityLogProof("chat.context.management.line", line)).toMatchObject({
+      correlationId: "corr-inspected-reading",
+      autoCompactionAtTokens: 12_400,
+      knowledgeSourceTokens: 6_000,
+      sentReferenceCount: 4,
+      availableReferenceCount: 16,
+      lastRequestTokens: 8_800,
+      lastRequestMeasured: true,
+      lastRequestEstimatedTokens: 9_100,
+      systemTokens: 700,
+      summaryTokens: 300,
+      messageTokens: 2_000,
+      contextWindowProbePending: true,
+    });
+  });
   it.each([
     "Was kostet das Modell Qwen?",
     "Wie groß ist dieses Kontextfenster von Mistral?",
@@ -578,6 +619,50 @@ describe("composer context status and manual maintenance", () => {
     expect(snapshot.earlierCompaction).toBeUndefined();
     expect(readChatContextStatus(modelDeps, chatId, "fixture").compaction).toBeUndefined();
   });
+  // PR #3678 review: the meter filtered a checkpoint the window outgrew before capturing, so its
+  // capture line read `none`; it now captures exactly like the send path and names the cause.
+  it("logs a checkpoint the window outgrew as window-expanded when the meter captures history", () => {
+    const { deps, chatId } = fixture();
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        safetyMarginTokens: 4_000,
+      }),
+    };
+    const current = deps.store.createMessage({
+      chatId,
+      role: "user",
+      content: "What does this mean?",
+      timestamp: 1_700_000_000_100,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const continuity = groundedConversationContinuity(modelDeps, current, "fixture");
+    persistChatCompactionEvidence(modelDeps, {
+      compaction: continuity.compaction,
+      chatId,
+      modelId: "fixture",
+      messageCount: 80,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    compactChatContext(modelDeps, chatId, "fixture", "corr-window-expanded");
+
+    const capture = sink.events.find(
+      (event) =>
+        event.op === "chat.continuity.capture" && event.correlationId === "corr-window-expanded",
+    );
+    expect(capture?.extra?.checkpointDisposition).toBe("window-expanded");
+  });
+
   it("enables quiet maintenance after the first oversized original prompt and answer", () => {
     const seeded = fixture(1, "We review the documentation together. ".repeat(1200));
     const { chatId } = seeded;

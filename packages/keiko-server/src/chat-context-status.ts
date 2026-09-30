@@ -57,6 +57,37 @@ function checkpointForProfile(
     : undefined;
 }
 
+// The stored history exactly as the send path captures it (chat-handlers, grounded continuity): the
+// checkpoint unfiltered, with its load disposition, so a checkpoint the window outgrew is logged as
+// `window-expanded` and a projection restores the same checkpoint the next send restores (PR #3678
+// review: the meter filtered it first and logged `none`).
+function capturedStoredHistory(
+  deps: UiHandlerDeps,
+  chatId: string,
+  profile: ContextProfile,
+  correlationId: string | undefined,
+): ReturnType<typeof captureChatHistory> {
+  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
+  const checkpoint = loadChatContinuityCheckpoint(
+    deps.evidenceStore,
+    chatId,
+    deps.store.chatHistoryRevision(chatId),
+    correlationId,
+    (disposition) => {
+      checkpointDisposition = disposition;
+    },
+  );
+  return captureChatHistory(
+    deps.store,
+    chatId,
+    "",
+    profile,
+    currentRedactionSecrets(deps),
+    checkpoint,
+    { correlationId, checkpointDisposition },
+  );
+}
+
 interface CountedHistory {
   readonly tokens: number;
   readonly systemTokens: number;
@@ -299,15 +330,7 @@ function compactionProjection(
   budget: number,
   correlationId: string | undefined,
 ): ConversationCompactionOutcome | undefined {
-  const snapshot = captureChatHistory(
-    deps.store,
-    chatId,
-    "",
-    profile,
-    currentRedactionSecrets(deps),
-    checkpointForProfile(deps, chatId, profile, correlationId),
-    correlationId === undefined ? {} : { correlationId },
-  );
+  const snapshot = capturedStoredHistory(deps, chatId, profile, correlationId);
   try {
     return conversationForGatewayWithCompaction(snapshot.history, {
       contextProfile: profile,
@@ -331,18 +354,10 @@ function manualCompactionCandidate(
   correlationId: string,
 ): ContextCompactionRecord | undefined {
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
-  const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
-  const snapshot = captureChatHistory(
-    deps.store,
-    chatId,
-    "",
-    profile,
-    currentRedactionSecrets(deps),
-    checkpoint,
-    { correlationId },
-  );
+  const snapshot = capturedStoredHistory(deps, chatId, profile, correlationId);
   // The conversation's own stored size: in a grounded chat the reading also carries the sources,
   // which compaction never touches (PR #3678 review).
+  const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
   const stored = countHistory(deps, chatId, profile, checkpoint).tokens;
   const budget = Math.floor(
     Math.min(profile.effectiveInputBudget, stored) * AUTOMATIC_COMPACTION_TARGET,
