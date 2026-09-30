@@ -1,5 +1,5 @@
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
-import { renderedSourcePromptContext } from "./grounded-prompt-context.js";
+import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 import { logChatResponseMessage } from "./chat-activity.js";
 import {
@@ -62,9 +62,7 @@ import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ConversationMemoryResultWire,
   type GroundedAnswer,
-  type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
-  type GroundedPromptContextWire,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
@@ -836,17 +834,24 @@ export function withPromptExcerptBudget(
   return withPromptExcerptTotalByteBudget(pack, totalExcerptBytes);
 }
 
-function promptBudgetedMessages(
+type GroundedPromptBuilder = (
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
-  build: (
-    question: string,
-    pack: ConnectedContextPack,
-    redactor: Redactor,
-  ) => readonly GatewayChatMessage[],
+) => readonly GatewayChatMessage[];
+
+interface FittedPromptPack {
+  readonly messages: readonly GatewayChatMessage[];
+  readonly pack: ConnectedContextPack;
+}
+
+function fitGroundedPrompt(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  build: GroundedPromptBuilder,
   options: GroundedGatewayPromptOptions = {},
-): readonly GatewayChatMessage[] {
+): FittedPromptPack {
   const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
   const fits = (candidate: readonly GatewayChatMessage[]): boolean =>
@@ -854,7 +859,7 @@ function promptBudgetedMessages(
     countGatewayPromptTokens({ messages: candidate }, options.tokenAccounting) <=
       budgetedPack.budget.modelInputTokensMax;
   const messages = build(question, budgetedPack, redactor);
-  if (fits(messages)) return messages;
+  if (fits(messages)) return { messages, pack: budgetedPack };
 
   const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
@@ -869,22 +874,73 @@ function promptBudgetedMessages(
   }
   let low = 0;
   let high = Math.max(0, limit - overheadBytes);
-  let best = emptyMessages;
+  let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack };
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
-    const candidate = build(
-      question,
-      withPromptExcerptBudget(budgetedPack, totalExcerptBytes),
-      redactor,
-    );
+    const candidatePack = withPromptExcerptBudget(budgetedPack, totalExcerptBytes);
+    const candidate = build(question, candidatePack, redactor);
     if (fits(candidate)) {
-      best = candidate;
+      best = { messages: candidate, pack: candidatePack };
       low = totalExcerptBytes + 1;
     } else {
       high = totalExcerptBytes - 1;
     }
   }
   return best;
+}
+
+function promptBudgetedMessages(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  build: GroundedPromptBuilder,
+  options: GroundedGatewayPromptOptions = {},
+): readonly GatewayChatMessage[] {
+  return fitGroundedPrompt(question, pack, redactor, build, options).messages;
+}
+
+/** Excerpts that carry content: what a rendered folder prompt actually shows the model. */
+export function promptExcerptCount(packs: readonly ConnectedContextPack[]): number {
+  return packs.reduce(
+    (total, pack) =>
+      total +
+      pack.files.reduce(
+        (count, file) =>
+          count + file.excerpts.filter((excerpt) => excerpt.content.length > 0).length,
+        0,
+      ),
+    0,
+  );
+}
+
+/**
+ * The folder prompt exactly as it is sent — fitted to the model's input budget — with the same
+ * prompt rendered without excerpts, so the context meter can count the share the sources took
+ * (grounded-prompt-context.ts).
+ */
+export function fittedGroundedGatewayPrompt(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  options?: GroundedGatewayPromptOptions,
+): SentGroundedPrompt {
+  const fitted = fitGroundedPrompt(
+    question,
+    pack,
+    redactor,
+    buildRawGroundedGatewayMessages,
+    options,
+  );
+  return {
+    messages: fitted.messages,
+    withoutSources: buildRawGroundedGatewayMessages(
+      question,
+      withPromptExcerptBudget(fitted.pack, 0),
+      redactor,
+    ),
+    sentReferenceCount: promptExcerptCount([fitted.pack]),
+    availableReferenceCount: promptExcerptCount([pack]),
+  };
 }
 
 export function packBudgetSummary(pack: ConnectedContextPack): string {
@@ -981,29 +1037,6 @@ function buildRawGroundedGatewayMessages(
   ];
 }
 
-// The context meter's view of a folder prompt: the rendered evidence lines and the grounded
-// instructions, plus the provider-measured prompt (grounded-prompt-context.ts).
-export function packsPromptContext(
-  packs: readonly ConnectedContextPack[],
-  measuredPromptTokens: number,
-  redactor: Redactor,
-  profile: UiHandlerDeps["contextProfile"],
-): GroundedPromptContextWire {
-  return renderedSourcePromptContext(
-    {
-      sourceText: packs.flatMap((pack) => evidenceLines(pack, redactor)).join("\n"),
-      instructions: GROUNDED_SYSTEM_PROMPT,
-      referenceCount: packs.reduce(
-        (total, pack) =>
-          total + pack.files.reduce((count, file) => count + file.excerpts.length, 0),
-        0,
-      ),
-      measuredPromptTokens,
-    },
-    profile?.tokenAccounting,
-  );
-}
-
 export function buildGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
@@ -1022,7 +1055,9 @@ function createGatewayAnswerer(
   tokenAccounting: ContextProfile["tokenAccounting"],
 ): GroundedAnswerer {
   // The input budget is read per attempt, not captured once: when the provider's overflow answer
-  // taught Keiko the model's real window, the retry re-budgets the excerpts to fit it.
+  // taught Keiko the model's real window, the retry re-budgets the excerpts to fit it. The prompt
+  // of the last attempt is kept for the context meter's share of this answer.
+  let sent: SentGroundedPrompt | undefined;
   const call = (question: string, pack: ConnectedContextPack): Promise<NormalizedResponse> => {
     const modelInputTokensMax = groundedPromptInputTokensForCapability(
       chatCapability(deps, modelId),
@@ -1031,13 +1066,9 @@ function createGatewayAnswerer(
       ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
       ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     };
+    sent = fittedGroundedGatewayPrompt(question, pack, deps.redactor, promptOptions);
     return model.call(
-      {
-        modelId,
-        messages: buildGroundedGatewayMessages(question, pack, deps.redactor, promptOptions),
-        stream: false,
-        logContext: { correlationId },
-      },
+      { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
       signal,
     );
   };
@@ -1060,6 +1091,11 @@ function createGatewayAnswerer(
         // GEN-AI-GATEWAY-001 (RB-4): carry the finishReason so a truncated ("length") completion is
         // surfaced by runGroundedExploration instead of being consumed as a complete answer.
         finishReason: response.finishReason,
+        ...(sent === undefined
+          ? {}
+          : {
+              promptContext: sentPromptContext(sent, response.usage.promptTokens, tokenAccounting),
+            }),
       };
     },
   };
@@ -1555,20 +1591,6 @@ function registerSingleGroundedTurn(
   );
 }
 
-function folderPromptContext(
-  workerCtx: AskWorkerCtx,
-  output: OrchestratorOutput,
-  modelInvoked: boolean,
-  contextPack: GroundedAnswerContextPackSummary,
-): Pick<GroundedAnswer, "promptContext"> {
-  if (!modelInvoked) return {};
-  const measured = contextPack.usage.modelInputTokens;
-  const { redactor } = workerCtx.deps;
-  return {
-    promptContext: packsPromptContext([output.pack], measured, redactor, workerCtx.contextProfile),
-  };
-}
-
 // Persists the exchange, projects citations/uncertainty, and assembles the wire answer for a
 // single-source folder ask. Split out of runAsk to keep both under the LOC bound.
 function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
@@ -1610,7 +1632,9 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     omittedCount: output.pack.omitted.length,
     elapsedMs: output.elapsedMs,
     contextPack,
-    ...folderPromptContext(workerCtx, output, modelInvoked, contextPack),
+    ...(modelInvoked && output.promptContext !== undefined
+      ? { promptContext: output.promptContext }
+      : {}),
   };
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {
@@ -1757,7 +1781,14 @@ function resolveMultiSourceSeam(
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
-    answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal, correlationId),
+    answerer: createMultiSourceAnswerer(
+      model,
+      modelId,
+      deps.redactor,
+      signal,
+      correlationId,
+      currentContextProfileForModel(deps, modelId)?.tokenAccounting,
+    ),
   };
 }
 

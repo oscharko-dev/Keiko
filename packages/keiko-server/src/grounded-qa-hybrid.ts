@@ -94,7 +94,7 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
-import { renderedSourcePromptContext } from "./grounded-prompt-context.js";
+import { sentPromptContext } from "./grounded-prompt-context.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   normalizeGroundedAnswerPayload,
@@ -1653,21 +1653,32 @@ interface AssembleHybridAnswerInput {
   readonly sourceEvidenceAvailable?: boolean;
 }
 
-// The context meter's view of a hybrid prompt: the candidate blocks exactly as rendered, the hybrid
-// instructions and the provider-measured prompt (grounded-prompt-context.ts).
+// The context meter's view of a hybrid prompt: the exact system and user messages the answerer sent
+// (the same pure builder over the same selected candidates) and the same prompt without candidates
+// (grounded-prompt-context.ts). The selected set is already capped, so every candidate is sent.
 function hybridPromptContext(
+  ctx: HybridGroundedAskCtx,
   selected: readonly SelectedCandidate<HybridPayload>[],
   assistant: GroundedAnswerResult,
-  profile: UiHandlerDeps["contextProfile"],
 ): GroundedPromptContextWire {
-  return renderedSourcePromptContext(
+  const question = ctx.answerContent ?? ctx.content;
+  const { redactor } = ctx.deps;
+  const system = { role: "system" as const, content: HYBRID_SYSTEM_PROMPT };
+  return sentPromptContext(
     {
-      sourceText: selected.map(renderHybridCandidateBlock).join("\n\n"),
-      instructions: HYBRID_SYSTEM_PROMPT,
-      referenceCount: selected.length,
-      measuredPromptTokens: assistant.usage.promptTokens,
+      messages: [
+        system,
+        { role: "user", content: buildRerankedHybridUserMessage(question, selected, redactor) },
+      ],
+      withoutSources: [
+        system,
+        { role: "user", content: buildRerankedHybridUserMessage(question, [], redactor) },
+      ],
+      sentReferenceCount: selected.length,
+      availableReferenceCount: selected.length,
     },
-    profile?.tokenAccounting,
+    assistant.usage.promptTokens,
+    ctx.contextProfile?.tokenAccounting,
   );
 }
 
@@ -1725,9 +1736,7 @@ function hybridPromptContextField(
   input: AssembleHybridAnswerInput,
 ): Pick<GroundedAnswer, "promptContext"> {
   if (input.sourceEvidenceAvailable === false) return {};
-  return {
-    promptContext: hybridPromptContext(input.selected, input.assistant, input.ctx.contextProfile),
-  };
+  return { promptContext: hybridPromptContext(input.ctx, input.selected, input.assistant) };
 }
 
 interface ResolvedAnswerer {

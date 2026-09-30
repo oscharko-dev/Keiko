@@ -28,6 +28,7 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   buildGroundedAnswerContextPackSummary,
   type ChatConnectedScope,
@@ -35,7 +36,6 @@ import {
   type GroundedAnswerContextSummary,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
-  type GroundedPromptContextWire,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -95,7 +95,7 @@ import {
   mappedWorkspaceError,
   modelInputPromptByteLimit,
   packBudgetSummary,
-  packsPromptContext,
+  promptExcerptCount,
   promptByteLength,
   registerGroundedTurn,
   redactString,
@@ -103,6 +103,7 @@ import {
   withPromptExcerptByteLimit,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 
 export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 
@@ -392,7 +393,7 @@ export function buildMultiSourceGatewayMessages(
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
 ): readonly GatewayChatMessage[] {
-  return budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor);
+  return budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor).messages;
 }
 
 function buildRawMultiSourceGatewayMessages(
@@ -478,18 +479,25 @@ function withMultiSourcePromptExcerptTotalBudget(
   });
 }
 
+interface FittedMultiSourcePrompt {
+  readonly messages: readonly GatewayChatMessage[];
+  readonly packs: readonly LabeledPack[];
+}
+
 function budgetedMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
-): readonly GatewayChatMessage[] {
+): FittedMultiSourcePrompt {
   const limit = modelInputPromptByteLimit(
     labeledPacks.reduce((sum, entry) => sum + entry.pack.budget.modelInputTokensMax, 0),
   );
-  let messages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
-  if (promptByteLength(messages) <= limit) return messages;
-  const excerptCount = multiSourceExcerptCount(labeledPacks);
-  if (excerptCount === 0) return messages;
+  const fullMessages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
+  if (promptByteLength(fullMessages) <= limit)
+    return { messages: fullMessages, packs: labeledPacks };
+  if (multiSourceExcerptCount(labeledPacks) === 0) {
+    return { messages: fullMessages, packs: labeledPacks };
+  }
 
   const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
   const overheadBytes = promptByteLength(
@@ -505,17 +513,39 @@ function budgetedMultiSourceGatewayMessages(
   }
   let totalExcerptBytes = Math.max(0, limit - overheadBytes);
   while (totalExcerptBytes >= 0) {
-    messages = buildRawMultiSourceGatewayMessages(
-      question,
-      withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes),
-      redactor,
-    );
+    const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes);
+    const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor);
     if (promptByteLength(messages) <= limit || totalExcerptBytes === 0) {
-      return messages;
+      return { messages, packs };
     }
     totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
   }
-  return buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor);
+  return {
+    messages: buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor),
+    packs: emptyPacks,
+  };
+}
+
+/**
+ * The merged multi-source prompt exactly as it is sent, with the same prompt rendered without
+ * excerpts, so the context meter can count the share the sources took.
+ */
+export function fittedMultiSourcePrompt(
+  question: string,
+  labeledPacks: readonly LabeledPack[],
+  redactor: Redactor,
+): SentGroundedPrompt {
+  const fitted = budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor);
+  return {
+    messages: fitted.messages,
+    withoutSources: buildRawMultiSourceGatewayMessages(
+      question,
+      withMultiSourcePromptExcerptByteLimit(labeledPacks, 0),
+      redactor,
+    ),
+    sentReferenceCount: promptExcerptCount(fitted.packs.map((entry) => entry.pack)),
+    availableReferenceCount: promptExcerptCount(labeledPacks.map((entry) => entry.pack)),
+  };
 }
 
 // ─── Per-source retrieval seam (test injection) ───────────────────────────────
@@ -569,26 +599,22 @@ export function createMultiSourceAnswerer(
   redactor: Redactor,
   signal: AbortSignal,
   correlationId: string | undefined,
+  tokenAccounting?: ContextProfile["tokenAccounting"],
 ): MultiSourceAnswerer {
   return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
+    const sent = fittedMultiSourcePrompt(question, labeledPacks, redactor);
     const response = await model.call(
-      {
-        modelId,
-        messages: buildMultiSourceGatewayMessages(question, labeledPacks, redactor),
-        stream: false,
-        logContext: { correlationId },
-      },
+      { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
       signal,
     );
     const content = response.content.trim();
     assertUsableAssistantContent(content, modelId);
+    const { promptTokens, completionTokens } = response.usage;
     return {
       content,
-      usage: {
-        promptTokens: response.usage.promptTokens,
-        completionTokens: response.usage.completionTokens,
-      },
+      usage: { promptTokens, completionTokens },
+      promptContext: sentPromptContext(sent, promptTokens, tokenAccounting),
     };
   };
 }
@@ -919,21 +945,10 @@ function assembleMultiSourceAnswer(
     omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
     contextPack: withMergedAssistantUsage(mergedSummary, assistant),
-    ...(modelInvoked ? { promptContext: mergedPromptContext(ctx, sources, assistant) } : {}),
+    ...(modelInvoked && assistant.promptContext !== undefined
+      ? { promptContext: assistant.promptContext }
+      : {}),
   };
-}
-
-function mergedPromptContext(
-  ctx: MultiSourceAskInput,
-  sources: readonly RetrievedSource[],
-  assistant: GroundedAnswerResult,
-): GroundedPromptContextWire {
-  return packsPromptContext(
-    sources.map((src) => src.pack),
-    assistant.usage.promptTokens,
-    ctx.deps.redactor,
-    ctx.contextProfile,
-  );
 }
 
 // Folds the answer's model-token usage into the merged multi-source context-pack summary.

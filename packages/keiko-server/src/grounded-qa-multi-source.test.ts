@@ -37,10 +37,13 @@ import {
   type GroundedRunner,
   type MultiSourceSeam,
 } from "./grounded-qa.js";
+import { sentPromptContext } from "./grounded-prompt-context.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   buildLabeledAnswerCitations,
   buildConnectedScopes,
   buildMultiSourceGatewayMessages,
+  fittedMultiSourcePrompt,
   createMultiSourceAnswerer,
   mergeContextPackSummaries,
   runMultiSourceAsk,
@@ -480,6 +483,19 @@ describe("buildMultiSourceGatewayMessages", () => {
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
     expect(messages[1]?.content).toContain("[source:1|src/file.ts:10-20]");
+    // PR #3678 review: the meter's share is that of the fitted prompt, never the unfitted packs.
+    const sent = fittedMultiSourcePrompt(
+      "explain both",
+      [
+        { label: "api", pack: budgetedA ?? packA },
+        { label: "web", pack: budgetedB ?? packB },
+      ],
+      buildRedactor({}, undefined),
+    );
+    expect(sent.messages).toEqual(messages);
+    const context = sentPromptContext(sent, 0, undefined);
+    expect(context.promptTokens).toBe(countGatewayPromptTokens({ messages }));
+    expect(context.sourceTokens).toBeLessThan(context.promptTokens);
   });
 
   it("throws ContextOverflowError when a 0-byte combined prompt budget cannot fit framing overhead", () => {
@@ -1023,10 +1039,6 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.contextPack.usage.searchCalls).toBe(baseSummary.usage.searchCalls * 2);
     expect(answer.contextPack.budget.filesReadMax).toBe(baseSummary.budget.filesReadMax * 2);
     expect(answer.uncertainty).toHaveLength(2);
-    // PR #3678 review: the merged prompt's excerpt share reaches the meter.
-    const promptContext = (result.body as GroundedAnswer).promptContext;
-    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
-    expect(promptContext?.sentReferenceCount).toBeGreaterThan(0);
   });
 
   it("fails closed when an unqualified path exists in more than one source", async () => {
@@ -1780,5 +1792,12 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     expect(result.content).toBe("multi-source answer");
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-multi-source-answerer-000001");
+    // PR #3678 review: the answer reports the share of the prompt it actually sent.
+    expect(result.promptContext).toMatchObject({
+      promptTokens: 3,
+      promptTokensMeasured: true,
+      sentReferenceCount: 0,
+      availableReferenceCount: 0,
+    });
   });
 });

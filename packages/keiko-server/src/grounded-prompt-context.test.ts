@@ -1,42 +1,49 @@
-// PR #3678 review: folder, multi-source and hybrid answers report the share their rendered excerpts
-// took, so the context meter no longer shows 0 knowledge tokens for those grounded chats.
+// PR #3678 review: folder, multi-source and hybrid answers report the share their SENT prompt took,
+// so the context meter no longer shows 0 knowledge tokens for those grounded chats.
 import { describe, expect, it } from "vitest";
-import { renderedSourcePromptContext } from "./grounded-prompt-context.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { sentPromptContext } from "./grounded-prompt-context.js";
 
-describe("renderedSourcePromptContext", () => {
+describe("sentPromptContext", () => {
+  const system = { role: "system" as const, content: "Answer only from the excerpts." };
   const prompt = {
-    sourceText: "File: src/a.ts\n```ts\nexport const answer = 42;\n```",
-    instructions: "Answer only from the excerpts.",
-    referenceCount: 3,
+    messages: [
+      system,
+      {
+        role: "user" as const,
+        content: "Question: what is the answer?\nFile: src/a.ts\nexport const answer = 42;",
+      },
+    ],
+    withoutSources: [system, { role: "user" as const, content: "Question: what is the answer?" }],
+    sentReferenceCount: 2,
+    availableReferenceCount: 3,
   };
 
-  it("prefers the provider-measured prompt and counts every rendered reference as sent", () => {
-    const context = renderedSourcePromptContext(
-      { ...prompt, measuredPromptTokens: 812 },
-      undefined,
-    );
+  it("prefers the provider-measured prompt and keeps the estimate of the sent request", () => {
+    const context = sentPromptContext(prompt, 812, undefined);
     expect(context).toMatchObject({
       promptTokens: 812,
       promptTokensMeasured: true,
-      sentReferenceCount: 3,
+      estimatedPromptTokens: countGatewayPromptTokens({ messages: prompt.messages }),
+      sentReferenceCount: 2,
       availableReferenceCount: 3,
     });
     expect(context.sourceTokens).toBeGreaterThan(0);
     expect(context.instructionTokens).toBeGreaterThan(0);
   });
 
-  it("falls back to the estimate when the provider reported no usage", () => {
-    const context = renderedSourcePromptContext({ ...prompt, measuredPromptTokens: 0 }, undefined);
+  it("estimates the whole sent request when the provider reported no usage", () => {
+    const context = sentPromptContext(prompt, 0, undefined);
     expect(context.promptTokensMeasured).toBe(false);
-    expect(context.promptTokens).toBe(context.sourceTokens + context.instructionTokens);
+    expect(context.promptTokens).toBe(countGatewayPromptTokens({ messages: prompt.messages }));
   });
 
   it("reports no source share for a prompt without excerpts", () => {
-    const context = renderedSourcePromptContext(
-      { ...prompt, sourceText: "", referenceCount: 0, measuredPromptTokens: 0 },
+    const context = sentPromptContext(
+      { ...prompt, messages: prompt.withoutSources, sentReferenceCount: 0 },
+      0,
       undefined,
     );
     expect(context.sourceTokens).toBe(0);
-    expect(context.sentReferenceCount).toBe(0);
   });
 });

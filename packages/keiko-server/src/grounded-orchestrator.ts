@@ -30,6 +30,7 @@ import {
   type UncertaintyMarkerKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { GroundedPromptContextWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogErrorKindOr,
   activityLogEvent,
@@ -582,6 +583,8 @@ export interface OrchestratorOutput {
   // answer-only context. Citation and entailment checks follow model invocation; evidence
   // persistence follows source availability.
   readonly modelInvoked?: boolean;
+  // The share the answer's sent prompt took, for the context meter. Counts only.
+  readonly promptContext?: GroundedPromptContextWire | undefined;
 }
 
 // Epic #532 — retrieval-only output. The multi-source (1+N) path runs retrieval per connected
@@ -6522,6 +6525,7 @@ async function answerWithAvailableContext(
     assistantContent: answer.content,
     elapsedMs,
     modelInvoked: true,
+    ...(answer.promptContext === undefined ? {} : { promptContext: answer.promptContext }),
     ...(plan === undefined ? {} : { plan }),
     ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
   };
