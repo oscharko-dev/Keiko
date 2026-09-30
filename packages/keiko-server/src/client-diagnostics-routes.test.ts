@@ -1192,6 +1192,53 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per
+  // copy with its outcome and marker counts, and a failed copy with its error kind and frames.
+  it("persists a chat answer copy and its failure as client.answer.copied", async () => {
+    const sink = captureServerLog();
+    const answerCopy = { grounded: true, strippedGroupCount: 2, keptGroupCount: 1 };
+    const copied = JSON.stringify({
+      message: "Keiko chat answer copied.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-copy-0001",
+      answerCopy: { outcome: "copied", ...answerCopy },
+    });
+    const failed = JSON.stringify({
+      message: "Keiko chat answer copy failed.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-copy-0002",
+      errorKind: "unavailable",
+      errorEvidence: { errorClass: "Error", frames: [], causeChain: ["Error"] },
+      answerCopy: { outcome: "failed", ...answerCopy },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(copied))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(await handleClientDiagnosticIngest(context(failed))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const lines = sink.events.filter((candidate) => candidate.op === "client.answer.copied");
+    expect(lines.map((line) => line.level)).toEqual(["info", "warn"]);
+    const record = expectActivityLogProof(
+      "client.answer.copied.line",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_answer-copy-0001",
+      outcome: "copied",
+      ...answerCopy,
+    });
+    expect(lines[1]).toMatchObject({
+      correlationId: "ui_answer-copy-0002",
+      errorKind: "unavailable",
+      extra: { outcome: "failed", errorClass: "Error", causeChain: ["Error"] },
+    });
+  });
+
   it("persists every closed focus location on its own client.select.dismissed line", async () => {
     for (const focus of ["trigger", "search", "option"] as const) {
       const sink = captureServerLog();

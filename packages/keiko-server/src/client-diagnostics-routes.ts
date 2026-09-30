@@ -996,6 +996,53 @@ const CLIENT_KNOWLEDGE_CATALOG_UNAVAILABLE_OPERATION = defineActivityLogOperatio
   releaseImpact: "patch",
 });
 
+// PR #3678 review: the chat copy button strips a grounded answer's in-range citation markers and
+// keeps every other bracket. One line per copy: whether it succeeded, whether the answer was
+// grounded, and how many marker groups were removed and kept — never the copied text. A failed copy
+// carries its closed error kind and the page's reduced frames.
+const CLIENT_ANSWER_COPIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.answer.copied",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientAnswerCopy",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["copied", "failed"],
+    },
+    grounded: { type: "boolean", dataClass: "closed-enum", required: true },
+    strippedGroupCount: { type: "integer", dataClass: "count", required: true },
+    keptGroupCount: { type: "integer", dataClass: "count", required: true },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 128 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+      maxLength: 512,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+      maxLength: 128,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-answer-copy"],
+  proofIds: ["client.answer.copied.line"],
+  releaseImpact: "patch",
+});
+
 // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
 // trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
 // shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
@@ -1497,6 +1544,43 @@ function logClientKnowledgeCatalog(
   return true;
 }
 
+function answerCopyFailureEvidence(
+  request: ClientDiagnosticIngestRequest,
+): Readonly<Record<string, unknown>> {
+  const evidence = request.errorEvidence;
+  return evidence === undefined
+    ? {}
+    : {
+        errorClass: evidence.errorClass,
+        frames: evidence.frames,
+        causeChain: evidence.causeChain,
+      };
+}
+
+function logClientAnswerCopy(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const copy = request.answerCopy;
+  if (copy === undefined) return false;
+  const failed = copy.outcome === "failed";
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  const logger = getServerLogger();
+  const event = activityLogEvent(
+    CLIENT_ANSWER_COPIED_OPERATION,
+    failed ? { ...envelope, errorKind: request.errorKind ?? "unavailable" } : envelope,
+    {
+      ...copy,
+      ...(failed ? answerCopyFailureEvidence(request) : {}),
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+  if (failed) logger.warn(event);
+  else logger.info(event);
+  return true;
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1511,7 +1595,8 @@ function logClientDiagnostic(
     logClientGitOperationSettled(request, correlationId) ||
     logClientComposerActivity(request, correlationId) ||
     logClientSelectDismissed(request, correlationId) ||
-    logClientKnowledgeCatalog(request, correlationId)
+    logClientKnowledgeCatalog(request, correlationId) ||
+    logClientAnswerCopy(request, correlationId)
   ) {
     return;
   }
@@ -1986,11 +2071,20 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
   );
 }
 
-function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
-  if (report.kind === "delivery-loss") return "loss";
+// The closed report shapes: a select dismissal and a catalog picture are routine, and an answer copy
+// spends the failure budget only when it failed.
+function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget | undefined {
   if (report.selectDismissal !== undefined || report.knowledgeCatalog !== undefined) {
     return "routine";
   }
+  if (report.answerCopy === undefined) return undefined;
+  return report.answerCopy.outcome === "failed" ? "failure" : "routine";
+}
+
+function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
+  if (report.kind === "delivery-loss") return "loss";
+  const closed = closedReportBudget(report);
+  if (closed !== undefined) return closed;
   if (report.composerActivity !== undefined || isRoutineVoiceReport(report)) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";

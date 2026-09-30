@@ -1151,6 +1151,28 @@ function folderUncertainty(
   );
 }
 
+// The folder evidence the model was shown: every retrieved folder pack restricted to the excerpts
+// of the sent (reranked and window-fitted) folder candidates. A `[path:line]` citation and its
+// entailment judgment obey the same sent-evidence boundary as a numeric `[n]`; an excerpt the fit or
+// the rerank cap left out of the prompt supports nothing (PR #3678 review).
+function sentFolderPacks(
+  folders: readonly RetrievedFolder[],
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly ConnectedContextPack[] {
+  const sent = new Set(
+    selected.filter(isFolderCandidate).map((candidate) => candidate.payload.stableId),
+  );
+  return folders.map(({ pack }) => ({
+    ...pack,
+    files: pack.files
+      .map((file) => ({
+        ...file,
+        excerpts: file.excerpts.filter((excerpt) => sent.has(excerpt.atom.stableId)),
+      }))
+      .filter((file) => file.excerpts.length > 0),
+  }));
+}
+
 // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the hybrid answer's inline `[path:line]` citations
 // against the FOLDER evidence packs the model actually received. Connector citations use marker
 // labels rather than repo paths, so path-shaped inline references are validated against folder
@@ -1165,7 +1187,7 @@ function hybridReconciliationUncertainty(
   const nowMs = Date.now();
   const reconciliation = reconcileInlineCitations(
     assistant.content,
-    buildPackCitationIndex(folders.map((f) => f.pack)),
+    buildPackCitationIndex(sentFolderPacks(folders, selected)),
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const supportedNumericMarkers = new Set(selected.map((candidate) => candidate.marker));
@@ -1243,10 +1265,11 @@ async function applyHybridEntailment(
   if (stage === undefined) {
     return answer;
   }
+  const sentPacks = sentFolderPacks(folders, selected);
   if (stage.evaluateHybrid !== undefined) {
     const markers = await stage.evaluateHybrid(
       answerContent,
-      folders.map((folder) => folder.pack),
+      sentPacks,
       numericEntailmentEvidence(selected),
       Date.now(),
     );
@@ -1256,7 +1279,7 @@ async function applyHybridEntailment(
     answer,
     stage,
     answerContent,
-    folders.map((folder) => folder.pack),
+    sentPacks,
     ctx.deps.redactor,
   );
   return appendGroundedAnswerNumericEntailment(

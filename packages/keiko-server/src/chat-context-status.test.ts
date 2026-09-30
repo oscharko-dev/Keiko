@@ -352,6 +352,49 @@ describe("grounded context status", () => {
     expect(compacted?.extra?.tokensSaved).toBe(after.compaction?.tokensSaved);
   });
 
+  // PR #3678 review: the send path compares the complete assembly — history plus the empty
+  // current-user scaffold — with the threshold. A history just below the meter's old history-only
+  // count compacted on send while the meter reported free tokens.
+  it("predicts the grounded send path's compaction at the threshold boundary", () => {
+    const { deps, chatId } = fixture(0);
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 16_384,
+        reservedOutputTokens: 4_096,
+        safetyMarginTokens: 512,
+      }),
+    };
+    for (const [role, content] of [
+      ["user", "Fact: alpha ".repeat(962)],
+      ["assistant", "Acknowledged."],
+    ] as const) {
+      deps.store.createMessage({
+        chatId,
+        role,
+        content,
+        timestamp: Date.now(),
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+
+    const status = readChatContextStatus(modelDeps, chatId, "fixture");
+    const sent = groundedConversationContinuity(
+      modelDeps,
+      currentMessage(deps, chatId, "Next question?"),
+      "fixture",
+    );
+
+    // The meter and the send path agree on whether this history compacts.
+    expect(sent.compaction).toBeDefined();
+    expect(status.pendingCompaction).toBeDefined();
+  });
+
   it("keeps a model-only chat free of a source share", () => {
     const { deps, chatId } = fixture(2);
     const status = readChatContextStatus(deps, chatId, "fixture");

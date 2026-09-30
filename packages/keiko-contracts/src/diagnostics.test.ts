@@ -392,6 +392,28 @@ describe("isClientDiagnosticIngestRequest", () => {
   });
 });
 
+// PR #3678 review: a chat answer copy reports a closed outcome, the grounded flag and two bounded
+// counts, never the copied text and never another field.
+describe("client answer copy evidence", () => {
+  it("accepts only the closed copy outcome, the grounded flag and two bounded counts", () => {
+    const copy = { outcome: "copied", grounded: true, strippedGroupCount: 3, keptGroupCount: 1 };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), answerCopy: copy })).toBe(true);
+    for (const invalid of [
+      { ...copy, outcome: "pasted" },
+      { ...copy, grounded: "yes" },
+      { ...copy, strippedGroupCount: -1 },
+      { ...copy, keptGroupCount: 1.5 },
+      { ...copy, text: "The API uses TLS." },
+      { outcome: "copied", grounded: true, strippedGroupCount: 3 },
+      "copied",
+    ]) {
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), answerCopy: invalid })).toBe(
+        false,
+      );
+    }
+  });
+});
+
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`) rides this closed,
 // free-text-free shape instead of the failure-shaped message report above.
 describe("isClientStageIngestRequest", () => {

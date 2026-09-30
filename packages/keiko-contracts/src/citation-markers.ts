@@ -159,12 +159,19 @@ function fencedBlockEnd(text: string, position: number, fence: string, length: n
   return text.length;
 }
 
+// Where a Markdown block ends: a blank line or a fence line. An inline code span never reaches across
+// one (CommonMark), so an unmatched backtick in one paragraph cannot pair with one in the next and
+// swallow the cited prose between them (PR #3678 review).
+const BLOCK_BREAK = /\n[ \t]*\n|\n {0,3}(?:`{3}|~{3})/gu;
+
 // Every backtick run of the text, grouped by run length in document order, so an inline code span
-// finds its closing run without rescanning the text: the per-length cursor only moves forward, so
-// the whole scan stays linear however many unmatched runs the text holds.
+// finds its closing run without rescanning the text: the per-length cursors and the block-break
+// cursor only move forward, so the whole scan stays linear however many unmatched runs it holds.
 class BacktickRuns {
   private readonly startsByLength = new Map<number, number[]>();
   private readonly cursorByLength = new Map<number, number>();
+  private readonly blockBreaks: readonly number[];
+  private breakCursor = 0;
 
   constructor(text: string) {
     let next = text.indexOf("`");
@@ -175,6 +182,7 @@ class BacktickRuns {
       this.startsByLength.set(length, starts);
       next = text.indexOf("`", next + length);
     }
+    this.blockBreaks = [...text.matchAll(BLOCK_BREAK)].map((match) => match.index);
   }
 
   /** The end of the span a run of `length` opens at `position`, or undefined when none closes it. */
@@ -184,7 +192,16 @@ class BacktickRuns {
     while (cursor < starts.length && (starts[cursor] ?? 0) <= position) cursor += 1;
     this.cursorByLength.set(length, cursor);
     const close = starts[cursor];
-    return close === undefined ? undefined : close + length;
+    if (close === undefined || this.blockBreakBetween(position, close)) return undefined;
+    return close + length;
+  }
+
+  // Callers ask in increasing `from` order (the scan cursor), so the break cursor never moves back.
+  private blockBreakBetween(from: number, to: number): boolean {
+    while ((this.blockBreaks[this.breakCursor] ?? Number.POSITIVE_INFINITY) < from) {
+      this.breakCursor += 1;
+    }
+    return (this.blockBreaks[this.breakCursor] ?? Number.POSITIVE_INFINITY) < to;
   }
 }
 
@@ -243,23 +260,24 @@ export function citationMarkerIndices(text: string): readonly number[] {
 // The server folds every dangling citation (or every unentailed claim) of one answer into ONE
 // uncertainty marker whose claim lists at most CITATION_FINDING_LIST_MAX of them. The UI counts the
 // findings from that claim, so a count read from the listed items alone capped at 8, and a claim
-// naming paths or claims (no numeric index) counted as one (PR #3678 review). A marker that stands
-// for more than one finding therefore carries its total in a fixed suffix, written and read only
-// here.
+// naming paths or claims (no numeric index) counted as one (PR #3678 review). Every such marker
+// therefore ENDS with its total, written and read only here. The listed paths are untrusted model
+// output and may contain the same syntax, so only the terminal suffix counts: the producer always
+// appends its own, which a listed path can never follow.
 
 /** The most findings one aggregated marker's claim lists by name. */
 export const CITATION_FINDING_LIST_MAX = 8;
 
-const CITATION_FINDING_TOTAL_PATTERN = / \((\d{1,7}) in total\)/u;
+const CITATION_FINDING_TOTAL_PATTERN = / \((\d{1,7}) in total\)$/u;
 
-/** The claim suffix stating how many findings a marker stands for; empty for a single finding. */
+/** The suffix that ends an aggregated marker's claim with its total; empty for no finding. */
 export function citationFindingTotalSuffix(total: number): string {
-  return Number.isSafeInteger(total) && total > 1 ? ` (${String(total)} in total)` : "";
+  return Number.isSafeInteger(total) && total > 0 ? ` (${String(total)} in total)` : "";
 }
 
-/** The total a marker claim states through `citationFindingTotalSuffix`, if it states one. */
+/** The total a marker claim ends with (`citationFindingTotalSuffix`), if it ends with one. */
 export function citationFindingTotal(claim: string): number | undefined {
   const match = CITATION_FINDING_TOTAL_PATTERN.exec(claim);
   const total = match?.[1] === undefined ? Number.NaN : Number.parseInt(match[1], 10);
-  return Number.isSafeInteger(total) && total > 1 ? total : undefined;
+  return Number.isSafeInteger(total) && total > 0 ? total : undefined;
 }

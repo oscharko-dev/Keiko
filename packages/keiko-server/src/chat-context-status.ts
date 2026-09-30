@@ -13,7 +13,7 @@ import {
   currentRedactionSecrets,
   type UiHandlerDeps,
 } from "./deps.js";
-import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
 import {
   conversationForGatewayWithCompaction,
   countConversationCheckpointTokens,
@@ -198,6 +198,17 @@ function projectedConversation(
   };
 }
 
+// The send path assembles the next request with its current user message, whose empty scaffold
+// alone is already part of the prompt it compares with the threshold and compacts to the target
+// (selectGatewayPromptAssembly; grounded continuity assembles exactly that empty request). The
+// meter counts the same scaffold, so a history just below the threshold is not reported as fitting
+// while the send path compacts it (PR #3678 review). A draft only adds to it when sent.
+function currentRequestScaffoldTokens(accounting: ContextProfile["tokenAccounting"]): number {
+  const empty = countGatewayPromptTokens({ messages: [] }, accounting);
+  const scaffold = { role: "user" as const, content: composeConversationPrompt("", []) };
+  return countGatewayPromptTokens({ messages: [scaffold] }, accounting) - empty;
+}
+
 function pendingCompaction(
   deps: UiHandlerDeps,
   chatId: string,
@@ -205,9 +216,10 @@ function pendingCompaction(
   counted: CountedHistory,
   correlationId: string | undefined,
 ): PendingProjection | undefined {
-  if (counted.tokens < profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD)
+  const scaffold = currentRequestScaffoldTokens(profile.tokenAccounting);
+  if (counted.tokens + scaffold < profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD)
     return undefined;
-  const target = Math.floor(profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET);
+  const target = Math.floor(profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET) - scaffold;
   const outcome = compactionProjection(deps, chatId, profile, target, correlationId);
   if (outcome === undefined) return undefined;
   const tokensAfter = countGatewayPromptTokens(

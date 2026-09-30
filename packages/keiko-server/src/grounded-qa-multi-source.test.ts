@@ -59,6 +59,14 @@ import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.j
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { adoptReportedContextWindow } from "./gateway-context-window.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
@@ -522,13 +530,45 @@ describe("buildMultiSourceGatewayMessages", () => {
         },
       };
     });
-    const sent = fittedMultiSourcePrompt("explain all", labeledPacks, buildRedactor({}), {
-      modelInputTokensMax: 6_000,
-    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const sent = fittedMultiSourcePrompt(
+      "explain all",
+      labeledPacks,
+      buildRedactor({}),
+      { modelInputTokensMax: 6_000 },
+      "corr-ms-window-fit",
+    );
 
     expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(6_000);
     expect(sent.availableReferenceCount).toBe(3);
     expect(JSON.stringify(sent.messages)).toContain("a evidence");
+    // The fit decision lands on the existing window-fit port, on the request's correlation.
+    const trimmed = expectActivityLogProof(
+      "search.prompt.window-fitted.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(trimmed).toMatchObject({
+      correlationId: "corr-ms-window-fit",
+      state: "trimmed",
+      referenceCount: 3,
+      sentReferenceCount: sent.sentReferenceCount,
+      inputBudget: 6_000,
+    });
+    expect(() =>
+      fittedMultiSourcePrompt(
+        "explain all",
+        labeledPacks,
+        buildRedactor({}),
+        { modelInputTokensMax: 16 },
+        "corr-ms-window-refused",
+      ),
+    ).toThrow(ContextOverflowError);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "corr-ms-window-refused",
+      extra: { state: "refused", sentReferenceCount: 0, inputBudget: 16 },
+    });
+    resetServerLogger();
   });
 
   it("throws ContextOverflowError when a 0-byte combined prompt budget cannot fit framing overhead", () => {
@@ -691,6 +731,38 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  // PR #3678 review: a local window refusal reached the error mapping without the request's
+  // correlation, so its structured diagnostic fell back to the unknown correlation.
+  it("joins an answer overflow's diagnostic to the ask's correlation", async () => {
+    const scopes: ChatConnectedScope[] = [
+      { kind: "directory", relativePaths: ["src/a.ts"], connectedAtMs: NOW, root: tempRoot("x") },
+      { kind: "directory", relativePaths: ["src/b.ts"], connectedAtMs: NOW, root: tempRoot("y") },
+    ];
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new Error("chat fixture missing");
+    const records: ServerDiagnosticRecord[] = [];
+    const packs = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.8, "a")],
+      ["src/b.ts", scopePack("src/b.ts", 0.7, "b")],
+    ]);
+
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Where is the handler?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([], { diagnostics: { record: (record) => records.push(record) } }),
+      retriever: packPerScope(packs),
+      answerer: () => Promise.reject(new ContextOverflowError("prompt overhead exceeds the limit")),
+      signal: new AbortController().signal,
+      correlationId: "corr-ms-overflow",
+    });
+
+    expect(result.status).toBeGreaterThanOrEqual(400);
+    expect(records.map((record) => record.correlationId)).toContain("corr-ms-overflow");
+  });
+
   it("keeps answer-only memory context out of every source retrieval query", async () => {
     const scopes: ChatConnectedScope[] = [
       {

@@ -86,6 +86,11 @@ describe("isNoEvidenceAnswerText", () => {
     // A failed search or answer by the subject, not by Keiko over its evidence.
     "Maven could not find the dependency.",
     "The server cannot answer requests while it restarts.",
+    // A negative fact that attributes itself to the evidence (PR #3678 review).
+    "The API does not provide authentication according to the documentation. Requests are anonymous.",
+    "According to the provided documents, the API does not include a retry policy.",
+    "Laut der Dokumentation enthält die API keine Authentifizierung.",
+    "Den Unterlagen zufolge wird Java 17 nicht mehr unterstützt und nicht erwähnt.",
     // The audit's exact false-positive probes.
     "Für diesen Endpunkt sind keine Angaben zum Benutzer erforderlich.",
     "The endpoint requires no details about the user.",

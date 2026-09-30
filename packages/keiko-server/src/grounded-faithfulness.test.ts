@@ -423,21 +423,34 @@ describe("numeric citation reconciliation", () => {
     expect(citationMarkerIndices(numeric?.claim ?? "")).toHaveLength(CITATION_FINDING_LIST_MAX);
     expect(citationFindingTotal(numeric?.claim ?? "")).toBe(12);
     expect(citationFindingTotal(claims?.claim ?? "")).toBe(3);
-    expect(citationFindingTotal(unsupportedNumericCitationMarker([9], NOW)?.claim ?? "")).toBe(
-      undefined,
-    );
+    expect(citationFindingTotal(unsupportedNumericCitationMarker([9], NOW)?.claim ?? "")).toBe(1);
   });
 
-  it("does not report a grouped bracket that names no reference as a dangling citation", () => {
+  // PR #3678 review: listed paths are untrusted model output; a count syntax inside one must never
+  // be read as the marker's total.
+  it("reads the producer's terminal total, never one written inside a cited path", () => {
+    const unsupported = parseInlineCitations("Claim [src/ (999 in total)/a.ts] and [b.ts].");
+    const marker = unsupportedCitationMarker(unsupported, NOW);
+
+    expect(unsupported).toHaveLength(2);
+    expect(citationFindingTotal(marker?.claim ?? "")).toBe(2);
+    const single = unsupportedCitationMarker(
+      parseInlineCitations("Claim [src/ (999 in total)/a.ts]."),
+      NOW,
+    );
+    expect(citationFindingTotal(single?.claim ?? "")).toBe(1);
+  });
+
+  // PR #3678 review (P1): a grouped marker whose every index is fabricated is a dangling source
+  // attribution and must keep its warning; only Markdown code never cites.
+  it("reports fabricated grouped markers and never reads code as a citation", () => {
     const numeric = reconcileNumericCitations(
-      "Open ports [80, 443] for the years [2020; 2024]; see [1] and [1, 9], not [7].",
-      new Set([1, 2]),
+      "The API uses TLS [1]. The repository enforces MFA [9, 10].",
+      new Set([1]),
     );
 
-    // Grouped content brackets are not citations; a lone [7] and the 9 next to a cited 1 still
-    // dangle, and code never cites.
     expect([...numeric.citedMarkers]).toEqual([1]);
-    expect(numeric.unsupportedMarkers).toEqual([9, 7]);
+    expect(numeric.unsupportedMarkers).toEqual([9, 10]);
     expect(
       reconcileNumericCitations("Use `a = [5]` and\n```\nb = [6, 7]\n```\n[1].", new Set([1]))
         .unsupportedMarkers,

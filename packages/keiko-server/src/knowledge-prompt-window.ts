@@ -56,18 +56,21 @@ const KNOWLEDGE_PROMPT_WINDOW_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-interface PromptWindowFit {
+export interface PromptWindowFit {
   readonly state: "trimmed" | "refused";
   readonly referenceCount: number;
   readonly sentReferenceCount: number;
   readonly promptTokens: number;
+  /** The input budget the prompt was fitted to. */
+  readonly inputBudget: number;
 }
 
-function logPromptWindowFit(
-  fit: PromptWindowFit,
-  profile: ContextProfile,
-  correlationId: string | undefined,
-): void {
+/**
+ * Records a grounded prompt that was trimmed or refused to fit the model. The Knowledge Pod and
+ * hybrid prompts report through `fitKnowledgePrompt`; the multi-source prompt, which trims excerpt
+ * bytes instead of references, reports here directly (PR #3678 review).
+ */
+export function logPromptWindowFit(fit: PromptWindowFit, correlationId: string | undefined): void {
   getServerLogger().info(
     activityLogEvent(
       KNOWLEDGE_PROMPT_WINDOW_OPERATION,
@@ -75,12 +78,7 @@ function logPromptWindowFit(
         correlationId: correlationIdOrUnknown(correlationId),
         ...(fit.state === "refused" ? { errorKind: "invalid-request" } : {}),
       },
-      {
-        ...fit,
-        inputBudget: profile.effectiveInputBudget,
-        completeness: "complete",
-        loss: "none",
-      },
+      { ...fit, completeness: "complete", loss: "none" },
     ),
   );
 }
@@ -168,8 +166,8 @@ export function fitKnowledgePrompt<T extends GatewayPromptTokenInput>(
         referenceCount: available,
         sentReferenceCount: 0,
         promptTokens: smallest,
+        inputBudget: profile.effectiveInputBudget,
       },
-      profile,
       context.correlationId,
     );
     throw refusal(context);
@@ -181,8 +179,8 @@ export function fitKnowledgePrompt<T extends GatewayPromptTokenInput>(
       referenceCount: available,
       sentReferenceCount: count,
       promptTokens: promptTokens(prompt, profile),
+      inputBudget: profile.effectiveInputBudget,
     },
-    profile,
     context.correlationId,
   );
   return { prompt, referenceCount: count };

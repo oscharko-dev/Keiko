@@ -77,6 +77,18 @@ const NEGATED_VERB_PATTERNS: readonly RegExp[] = [
 const EVIDENCE_REFERENT_PATTERN =
   /\b(?:documents?|documentation|sources?|context|excerpts?|materials?|knowledge\s+base|provided|retrieved|repositor(?:y|ies)|code\s?base|folders?|dokument(?:e|en|s|ation)?|quellen?|unterlagen|kontext|auszüge?n?|bereitgestellt\p{L}*|wissensbasis|vorliegend\p{L}*|repositorys?|codebasis|ordnern?)\b/iu;
 
+// An attribution names the evidence as the source of a statement, not as the place that lacks it:
+// "The API does not provide authentication according to the documentation." is a documented
+// negative fact (PR #3678 review). Attribution phrases are removed before the referent test.
+const ATTRIBUTION_PATTERNS: readonly RegExp[] = [
+  /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+(?:\p{L}+\s+){0,3}\p{L}+/giu,
+  /(?:\p{L}+\s+){1,3}zufolge\b/giu,
+];
+
+function withoutAttributions(sentence: string): string {
+  return ATTRIBUTION_PATTERNS.reduce((text, pattern) => text.replace(pattern, " "), sentence);
+}
+
 // A contrast after an absence statement turns it into a partial answer that still says something.
 const CONTRAST_PATTERN =
   /\b(?:aber|jedoch|allerdings|sondern|dagegen|außer|however|but|although|whereas|except)\b/iu;
@@ -104,7 +116,7 @@ export function isNoEvidenceAnswerText(answer: string): boolean {
 // noun, a search outcome: "The API does not provide authentication. Documentation is public." states
 // a fact and mentions documentation separately (PR #3678 review).
 function isEvidenceAbsenceSentence(sentence: string): boolean {
-  const namesEvidence = EVIDENCE_REFERENT_PATTERN.test(sentence);
+  const namesEvidence = EVIDENCE_REFERENT_PATTERN.test(withoutAttributions(sentence));
   if (namesEvidence && NEGATED_VERB_PATTERNS.some((pattern) => pattern.test(sentence))) return true;
   return (
     INFORMATION_ABSENCE_PATTERNS.some((pattern) => pattern.test(sentence)) &&

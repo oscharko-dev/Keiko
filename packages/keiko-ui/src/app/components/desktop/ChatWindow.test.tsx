@@ -27,6 +27,7 @@ import {
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { I18N_STORAGE_KEY, I18nProvider, translate, type I18nTranslate } from "@/lib/i18n";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
 import type {
@@ -3792,6 +3793,70 @@ describe("ChatWindow message copy", () => {
     });
     expect(await screen.findByText("Answer copied")).toBeInTheDocument();
 
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  // PR #3678 review: every copy leaves body-free evidence — outcome, grounded flag and the marker
+  // groups removed and kept — and a failed copy its error kind; never the copied text.
+  it("reports each copy's outcome and marker counts without the copied text", async () => {
+    const reports: { readonly message: string; readonly meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("clipboard denied"));
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const content = "Paris [1] is the capital [80, 443].";
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer(content, 2),
+          },
+        ],
+      }),
+    );
+
+    const copyButton = screen.getByRole("button", { name: "Copy answer" });
+    fireEvent.click(copyButton);
+    await waitFor(() => {
+      expect(reports.some((report) => report.message === "Keiko chat answer copied.")).toBe(true);
+    });
+    fireEvent.click(copyButton);
+    await waitFor(() => {
+      expect(reports.some((report) => report.message === "Keiko chat answer copy failed.")).toBe(
+        true,
+      );
+    });
+
+    const copyReports = reports.filter((report) => report.message.includes("answer cop"));
+    expect(copyReports.map((report) => report.meta)).toEqual([
+      {
+        answerCopy: { outcome: "copied", grounded: true, strippedGroupCount: 1, keptGroupCount: 1 },
+      },
+      expect.objectContaining({
+        answerCopy: { outcome: "failed", grounded: true, strippedGroupCount: 1, keptGroupCount: 1 },
+        errorKind: "unavailable",
+      }),
+    ]);
+    expect(JSON.stringify(copyReports)).not.toContain("Paris");
+    resetClientDiagnosticWriter();
     if (clipboardDescriptor !== undefined) {
       Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
     }

@@ -646,6 +646,73 @@ function asLocalKnowledge(answer: GroundedAnswer): LocalKnowledgeGroundedAnswer 
   return answer as LocalKnowledgeGroundedAnswer;
 }
 
+// ─── Window fit: a folder path the prompt left out supports nothing ───────────
+
+describe("hybrid grounded ask — folder evidence the window fit left out", () => {
+  // PR #3678 review: path citations and their judgment used every retrieved folder excerpt, so a
+  // `[path:line]` could cite an excerpt the fitted prompt never carried and raise no warning.
+  it("reports a path citation to a folder excerpt the fitted prompt did not carry", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Window Folder Docs");
+    // A fresh chat per ask, so the second prompt carries no history of the first.
+    const newChat = (): string =>
+      makeHybridChat(
+        ["alpha", "beta"].map((name) => ({
+          kind: "directory" as const,
+          relativePaths: [`src/${name}.ts`],
+          connectedAtMs: NOW,
+          root: tempRoot(`${name}-window-repo`),
+        })),
+        [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+      );
+    const packMap = new Map([
+      ["src/alpha.ts", folderPack("src/alpha.ts", 0.9, "alpha-window")],
+      ["src/beta.ts", folderPack("src/beta.ts", 0.8, "beta-window")],
+    ]);
+    const ask = (
+      deps: UiHandlerDeps,
+      answer: (user: string) => string,
+    ): ReturnType<typeof handleGroundedAsk> =>
+      handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId: newChat(), content: "What do alpha and beta do?" })),
+        deps,
+        undefined,
+        undefined,
+        {
+          folderRetriever: folderRetrieverFor(packMap),
+          connectorRetrieve: singleConnectorRetrieve(capId),
+          answer: (system: string, user: string): Promise<string> =>
+            Promise.resolve(answer(`${system}\u0000${user}`)),
+        },
+      );
+    let fullTokens = 0;
+    await ask(hybridDeps(), (prompt) => {
+      const [system = "", user = ""] = prompt.split("\u0000");
+      fullTokens = countGatewayPromptTokens({
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      });
+      return "Nothing.";
+    });
+    const window = deriveContextProfile({
+      maxInputTokens: fullTokens - 1 + 512 + 64,
+      reservedOutputTokens: 512,
+      safetyMarginTokens: 64,
+    });
+
+    const result = await ask(hybridDeps({ contextProfileForModel: () => window }), (prompt) => {
+      const omitted = ["src/alpha.ts", "src/beta.ts"].find((path) => !prompt.includes(path));
+      return `The service does this [${omitted ?? "src/none.ts"}:1-5].`;
+    });
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.content).not.toContain("src/none.ts");
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("unsupported-citation");
+  });
+});
+
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
@@ -1270,13 +1337,15 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
   it("keeps the highest-ranked candidates that fit the model's input budget", async () => {
     const { capsuleId: capA } = await seedReadyCapsule("Window Beta Docs");
     const { capsuleId: capB } = await seedReadyCapsule("Window Gamma Docs");
-    const chatId = makeHybridChat(
-      [],
-      [
-        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
-        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
-      ],
-    );
+    // A fresh chat per ask, so the second prompt carries no history of the first.
+    const newChat = (): string =>
+      makeHybridChat(
+        [],
+        [
+          { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+          { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+        ],
+      );
     const manyReferences: ConnectorRetrieve = (_store, scope): Promise<RetrievalResult> => {
       const cid = scope.kind === "capsule" ? scope.capsuleId : capA;
       const base = cid === capA ? 10 : 20;
@@ -1290,7 +1359,7 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     const prompts: string[] = [];
     const ask = (deps: UiHandlerDeps): ReturnType<typeof handleGroundedAsk> =>
       handleGroundedAsk(
-        routeCtx(JSON.stringify({ chatId, content: "What is beta and gamma?" })),
+        routeCtx(JSON.stringify({ chatId: newChat(), content: "What is beta and gamma?" })),
         deps,
         undefined,
         undefined,

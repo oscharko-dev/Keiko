@@ -1549,9 +1549,9 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     const chips = unverified.container.querySelectorAll(".grounded-citation");
     expect(chips).toHaveLength(2);
     expect(within(unverified.container).getAllByText("unverified")).toHaveLength(1);
-    expect([...chips].find((chip) => chip.textContent.includes("alpha.md"))?.textContent).toContain(
-      "unverified",
-    );
+    expect(
+      [...chips].find((chip) => chip.textContent?.includes("alpha.md"))?.textContent,
+    ).toContain("unverified");
     unverified.unmount();
 
     const verified = render(
@@ -1572,14 +1572,14 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
               kind: "unsupported-citation",
               claim:
                 "The answer cited evidence markers not present in the retrieved evidence: " +
-                `${listed.map((index) => `[${String(index)}]`).join(", ")}` +
-                `${citationFindingTotalSuffix(12)}. Treat the affected claims as unverified.`,
+                `${listed.map((index) => `[${String(index)}]`).join(", ")}. Treat the affected ` +
+                `claims as unverified.${citationFindingTotalSuffix(12)}`,
             },
             {
               kind: "unsupported-claim",
               claim:
                 "The answer made claims that the cited sources do not appear to support: [1], [2]" +
-                `${citationFindingTotalSuffix(3)}. Treat those statements as unverified.`,
+                `. Treat those statements as unverified.${citationFindingTotalSuffix(3)}`,
             },
           ],
         }}

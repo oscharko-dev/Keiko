@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4feb482480762adc93e45f0f4e824dc7c980910c52ea7b3ccb80f1146aa563c2" as const;
+  "52b8aeb3aa856fd6c72f14521ea989f14b3a240c1627b22491e691a7aac251f0" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2274,6 +2274,73 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["cli-uninstall"],
     proofIds: ["cli.uninstall.started.persisted"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.answer.copied",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientAnswerCopy",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["copied", "failed"],
+      },
+      grounded: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      strippedGroupCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      keptGroupCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      errorClass: {
+        type: "string",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxItems: 8,
+        maxLength: 512,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxItems: 5,
+        maxLength: 128,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-answer-copy"],
+    proofIds: ["client.answer.copied.line"],
     releaseImpact: "patch",
   },
   {
@@ -24495,6 +24562,47 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "search.entailment.judged",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "grounded-entailment-stage.logEntailmentVerdict",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      judgedClaimCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      unsupportedClaimCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      unavailableClaimCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["grounded-entailment-verdict"],
+    proofIds: ["search.entailment.judged.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "search.index-invalidated-for-capsule",
     category: "search",
     owner: "keiko-local-knowledge",
@@ -29904,8 +30012,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 331,
-  completeClassCount: 331,
+  supportedClassCount: 333,
+  completeClassCount: 333,
   completeness: "complete",
   classes: [
     {
@@ -32649,6 +32757,99 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["cli.uninstall.started.persisted"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-answer-copy",
+      requirementContract: "client-answer-copy",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["client.answer.copied"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.answer.copied",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.answer.copied"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.answer.copied",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "errorClass",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "grounded",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "keptGroupCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "strippedGroupCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["client.answer.copied.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -53808,6 +54009,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "grounded-entailment-verdict",
+      requirementContract: "grounded-entailment-verdict",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["search.entailment.judged"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "search.entailment.judged",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["search.entailment.judged"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "search.entailment.judged",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "judgedClaimCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "unavailableClaimCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "unsupportedClaimCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["search.entailment.judged.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "harness-context-compaction",
       requirementContract: "harness-context-compaction",
       productSurfaces: ["keiko-server"],
@@ -65971,6 +66234,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.uninstall.completed": "runtime-packages",
     "cli.uninstall.failed": "runtime-packages",
     "cli.uninstall.started": "runtime-packages",
+    "client.answer.copied": "client-diagnostics",
     "client.binding.candidates-offered": "client-diagnostics",
     "client.binding.choice-kept": "client-diagnostics",
     "client.binding.choice-withdrawn": "client-diagnostics",

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4feb482480762adc93e45f0f4e824dc7c980910c52ea7b3ccb80f1146aa563c2"
+    "catalogDigest": "52b8aeb3aa856fd6c72f14521ea989f14b3a240c1627b22491e691a7aac251f0"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 489,
-    "proofCount": 497,
-    "resolvedProofCount": 497,
-    "failureClassCount": 331,
+    "operationCount": 491,
+    "proofCount": 499,
+    "resolvedProofCount": 499,
+    "failureClassCount": 333,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -122,6 +122,7 @@
       "owners": ["keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "client.answer.copied",
         "client.binding.candidates-offered",
         "client.binding.choice-kept",
         "client.binding.choice-withdrawn",
@@ -686,6 +687,7 @@
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
     "client-git-operation": ["client-diagnostics.dependency-failure"],
+    "client-answer-copy": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
@@ -873,6 +875,7 @@
     "install-mode-probe-failed": ["ui.dependency-failure"],
     "knowledge-prompt-window": ["memory-knowledge.dependency-failure"],
     "knowledge-citation-reconciliation": ["memory-knowledge.dependency-failure"],
+    "grounded-entailment-verdict": [],
     "knowledge-store-corruption": ["memory-knowledge.dependency-failure"],
     "knowledge-store-encryption": ["memory-knowledge.rejection"],
     "knowledge-store-reopen": ["memory-knowledge.dependency-failure"],
@@ -1091,6 +1094,7 @@
     "cli.uninstall.started.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
+    "client.answer.copied.line": ["packages/keiko-server/src/client-diagnostics-routes.test.ts"],
     "client.binding.candidates-offered.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
@@ -2073,6 +2077,9 @@
     "search.connected-context.started.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
     ],
+    "search.entailment.judged.line": [
+      "packages/keiko-server/src/grounded-entailment-stage.test.ts"
+    ],
     "search.index-invalidated-for-capsule.digest": [
       "packages/keiko-local-knowledge/src/retrieval/local-vector-index-port.test.ts"
     ],
@@ -2080,6 +2087,7 @@
       "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-resolved-logging.test.ts"
     ],
     "search.prompt.window-fitted.line": [
+      "packages/keiko-server/src/grounded-qa-multi-source.test.ts",
       "packages/keiko-server/src/knowledge-prompt-window.test.ts"
     ],
     "search.rerank.completed.line": ["packages/keiko-server/src/grounded-rerank-facade.test.ts"],
@@ -2360,5 +2368,12 @@
     "ui.crash": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "ui.dependency-failure": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"]
   },
-  "violations": []
+  "violations": [
+    {
+      "code": "surface-unmapped",
+      "site": "operations.search.entailment.judged",
+      "detail": "keiko-server:grounded-entailment-stage.logEntailmentVerdict",
+      "correctiveAction": "Map the operation's owner package and emitter module to a product surface."
+    }
+  ]
 }

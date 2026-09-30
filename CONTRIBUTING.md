@@ -90,6 +90,12 @@ counts. The `inspected` `chat.context.management` line also carries the meter re
 counts: stored and projected history, knowledge-source tokens, the sent and available reference
 counts, the last knowledge request (measured and estimated), the system, summary and message shares,
 the automatic-compaction trigger, and the assumed-window and pending-probe flags.
+`search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
+undecided claim counts, so the displayed "N unsupported claims" is reconstructable. The multi-source
+prompt reports a trim or refusal on `search.prompt.window-fitted` like the Knowledge Pod and hybrid
+prompts. `client.answer.copied` records each chat answer copy (`copied` or `failed` at `warn` with
+its error kind and frames), whether the answer was grounded, and how many marker groups the copy
+removed and kept, never the copied text.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`

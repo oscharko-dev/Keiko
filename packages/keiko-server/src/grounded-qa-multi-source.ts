@@ -107,6 +107,7 @@ import {
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
+import { logPromptWindowFit } from "./knowledge-prompt-window.js";
 
 export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 
@@ -491,15 +492,22 @@ interface FittedMultiSourcePrompt {
 // budget, counted in bytes and with the admission token accounting, like the folder prompt
 // (fitGroundedPrompt). The packs' budgets add up per source, so on their own they let three sources
 // send three windows' worth of excerpts to one model (PR #3678 review).
-function multiSourcePromptFit(
+function multiSourceInputTokens(
   labeledPacks: readonly LabeledPack[],
   options: GroundedGatewayPromptOptions,
-): { readonly limit: number; readonly fits: (m: readonly GatewayChatMessage[]) => boolean } {
+): number {
   const packTokens = labeledPacks.reduce(
     (sum, entry) => sum + entry.pack.budget.modelInputTokensMax,
     0,
   );
-  const tokensMax = Math.min(packTokens, options.modelInputTokensMax ?? packTokens);
+  return Math.min(packTokens, options.modelInputTokensMax ?? packTokens);
+}
+
+function multiSourcePromptFit(
+  labeledPacks: readonly LabeledPack[],
+  options: GroundedGatewayPromptOptions,
+): { readonly limit: number; readonly fits: (m: readonly GatewayChatMessage[]) => boolean } {
+  const tokensMax = multiSourceInputTokens(labeledPacks, options);
   const limit = modelInputPromptByteLimit(tokensMax);
   return {
     limit,
@@ -549,6 +557,40 @@ function budgetedMultiSourceGatewayMessages(
   };
 }
 
+// The fit decision on the existing `search.prompt.window-fitted` port, like the Knowledge Pod and
+// hybrid prompts (PR #3678 review): a trim records the excerpts kept and the prompt sent, a refusal
+// the smallest prompt refused, both on the request's correlation.
+function loggedMultiSourceFit(
+  question: string,
+  labeledPacks: readonly LabeledPack[],
+  redactor: Redactor,
+  options: GroundedGatewayPromptOptions,
+  correlationId: string | undefined,
+): FittedMultiSourcePrompt {
+  const referenceCount = promptExcerptCount(labeledPacks.map((entry) => entry.pack));
+  const inputBudget = multiSourceInputTokens(labeledPacks, options);
+  const tokens = (messages: readonly GatewayChatMessage[]): number =>
+    countGatewayPromptTokens({ messages }, options.tokenAccounting);
+  let fitted: FittedMultiSourcePrompt;
+  try {
+    fitted = budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor, options);
+  } catch (error) {
+    if (error instanceof ContextOverflowError) {
+      const empty = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
+      const promptTokens = tokens(buildRawMultiSourceGatewayMessages(question, empty, redactor));
+      const fit = { referenceCount, sentReferenceCount: 0, promptTokens, inputBudget };
+      logPromptWindowFit({ state: "refused", ...fit }, correlationId);
+    }
+    throw error;
+  }
+  if (fitted.packs !== labeledPacks) {
+    const sentReferenceCount = promptExcerptCount(fitted.packs.map((entry) => entry.pack));
+    const fit = { referenceCount, sentReferenceCount, promptTokens: tokens(fitted.messages) };
+    logPromptWindowFit({ state: "trimmed", ...fit, inputBudget }, correlationId);
+  }
+  return fitted;
+}
+
 /**
  * The merged multi-source prompt exactly as it is sent, with the same prompt rendered without
  * excerpts, so the context meter can count the share the sources took.
@@ -558,8 +600,9 @@ export function fittedMultiSourcePrompt(
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
   options: GroundedGatewayPromptOptions = {},
+  correlationId?: string,
 ): SentGroundedPrompt {
-  const fitted = budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor, options);
+  const fitted = loggedMultiSourceFit(question, labeledPacks, redactor, options, correlationId);
   return {
     messages: fitted.messages,
     withoutSources: buildRawMultiSourceGatewayMessages(
@@ -636,7 +679,13 @@ export function createMultiSourceAnswerer(
       () => {
         const tokenAccounting = currentContextProfileForModel(deps, modelId)?.tokenAccounting;
         const options = groundedPromptOptions(deps, modelId, tokenAccounting);
-        sent = fittedMultiSourcePrompt(question, labeledPacks, deps.redactor, options);
+        sent = fittedMultiSourcePrompt(
+          question,
+          labeledPacks,
+          deps.redactor,
+          options,
+          correlationId,
+        );
         return model.call(
           { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
           signal,
@@ -699,6 +748,8 @@ export interface MultiSourceAskInput {
   // Upfront-skipped sources (inaccessible/denied at canonicalization time). Merged into the
   // `source-skipped` uncertainty entries so the caller sees which folders were omitted.
   readonly preSkipped?: readonly { readonly label: string; readonly message: string }[];
+  /** The request's correlation, joined by every diagnostic of this ask. */
+  readonly correlationId?: string | undefined;
   /** Test seam (KEIKO-0237): supply the entailment stage instead of building it from `deps`. */
   readonly entailmentStageFactory?: EntailmentStageFactory;
 }
@@ -1114,7 +1165,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   try {
     outcome = await retrieveAllSources(ctx, query, perScopeBudgets, labels);
   } catch (error) {
-    return mapMultiSourceError(error, ctx.deps);
+    return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
   }
   if (isRouteResult(outcome)) {
     return outcome;
@@ -1176,17 +1227,22 @@ async function answerMultiSource(
     ensureNotCancelled(ctx.signal);
     return assistant;
   } catch (error) {
-    return mapMultiSourceError(error, ctx.deps);
+    return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
   }
 }
 
-function mapMultiSourceError(error: unknown, deps: UiHandlerDeps): RouteResult {
+function mapMultiSourceError(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult {
   if (error instanceof ClarificationNeededError) {
     return clarificationRequest(clarificationUserMessage(error));
   }
   const workspaceResult = mappedWorkspaceError(error);
   if (workspaceResult !== undefined) return workspaceResult;
-  const gatewayResult = mappedGatewayError(error, deps);
+  // The request's correlation, so a local refusal's diagnostic joins the ask (PR #3678 review).
+  const gatewayResult = mappedGatewayError(error, deps, correlationId);
   if (gatewayResult !== undefined) return gatewayResult;
   throw error;
 }

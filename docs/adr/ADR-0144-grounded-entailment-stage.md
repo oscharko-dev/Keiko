@@ -158,18 +158,20 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   segmentation, the answer renderer, the copy stripper and the read-aloud text all use it; the
   private one-integer grammars that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
   markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
-  scanned, so `const a = [1, 2, 3];` cites nothing. A grouped bracket none of whose indices names a
-  supported reference (`[80, 443]`) is content, not a dangling citation; a lone `[9]` or the 9 in
-  `[1, 9]` still dangles. The copy stripper removes only a grounded answer's groups whose every
-  index names one of its references and leaves an ordinary answer's brackets untouched.
+  scanned, so `const a = [1, 2, 3];` cites nothing; an inline code span never reaches across a
+  blank line or a fence. Outside code, every index of every group is reconciled: a fabricated
+  `[9, 10]` beside a real `[1]` dangles, because failing closed beats a quiet source attribution.
+  The copy stripper removes only a grounded answer's groups whose every index names one of its
+  references and leaves an ordinary answer's brackets untouched.
 - **Token overlap is a soft signal, never a filter — and never a confirmation.**
   `attachCitationsToAnswer` keeps every in-range marker attached so the reader can open its source.
   A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the
-  `search.citations.reconciled` activity line. When the numeric judge runs, it reads every cited
-  claim against its excerpt, and its verdict (`unsupported-claim`, or its own
-  `entailment-unavailable` on failure) decides. When no judge is available, a Knowledge Pod answer
-  that carries a weak citation carries the fail-closed `entailment-unavailable` caveat instead. A
-  weakly supported citation is never presented as confirmed support (`withWeakCitationCaveat`).
+  `search.citations.reconciled` activity line. When the numeric judge reads a weak citation's
+  claim, its verdict (`unsupported-claim`, or its own `entailment-unavailable` on failure) decides.
+  When no judge is available, or the judge read no claim for that marker (a bracketed claim leaves
+  no text after the claim stripper), the Knowledge Pod answer carries the fail-closed
+  `entailment-unavailable` caveat and the citation chip reads "unverified". A weakly supported
+  citation is never presented as confirmed support (`withWeakCitationCaveat`).
 - **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
   highest-ranked references under their original numbers. The generator reports the references it
   sent (`AnswerGenerator.promptReferences`), and a marker beyond them is out of range, never attached.

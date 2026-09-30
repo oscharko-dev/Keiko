@@ -823,6 +823,12 @@ describe("window-fitted Knowledge Pod prompt", () => {
 
 // PR #3678 review (the SOC2 pin): an in-range marker whose claim shares no wording with its excerpt
 // stays attached for navigation, but the answer must not present it as confirmed support.
+function firstLexicalSupport(answer: GroundedAnswer): "weak" | undefined {
+  if (answer.groundingKind !== "local-knowledge")
+    throw new TypeError("expected a Knowledge Pod answer");
+  return answer.citations[0]?.lexicalSupport;
+}
+
 describe("weakly supported citations", () => {
   // `judgeVerdict` configures a structured-output chat model, so the numeric entailment stage runs
   // and its judge answers every claim with that verdict.
@@ -914,7 +920,7 @@ describe("weakly supported citations", () => {
     expect(answer.citations).toHaveLength(1);
     expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
     // The citation itself says which source the caveat is about.
-    expect(answer.citations[0]?.lexicalSupport).toBe("weak");
+    expect(firstLexicalSupport(answer)).toBe("weak");
   });
 
   it("leaves the verdict to the entailment judge when it ran", async () => {
@@ -934,6 +940,15 @@ describe("weakly supported citations", () => {
     expect(unsupported.uncertainty.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
   });
 
+  // PR #3678 review (P1): a stage that ran is no verdict on a weak citation whose claim it could
+  // not read — the claim stripper leaves nothing of a bracketed claim, so no judge call covers [1].
+  it("keeps the caveat for a weak citation whose claim the judge never read", async () => {
+    const answer = await askWith("[The repository enforces MFA] [1]", "judged-unread", "supported");
+
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
   it("adds no caveat when the claim shares its wording with the cited excerpt", async () => {
     const answer = await askWith(
       "The release checklist covers signing, notarization and upload [1].",
@@ -941,7 +956,7 @@ describe("weakly supported citations", () => {
     );
     expect(answer.citations).toHaveLength(1);
     expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("entailment-unavailable");
-    expect(answer.citations[0]?.lexicalSupport).toBeUndefined();
+    expect(firstLexicalSupport(answer)).toBeUndefined();
   });
 });
 

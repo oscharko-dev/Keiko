@@ -41,6 +41,7 @@ import {
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticGitClientOperation,
+  type ClientDiagnosticAnswerCopy,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -147,6 +148,9 @@ export interface ClientDiagnosticMeta {
   // The chat's Knowledge Pod picker offered no usable pod (PR #3678 review): counts only, sent as
   // structured evidence rather than folded into the message the server reduces to a digest.
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  // A chat answer copy (PR #3678 review): its outcome and the marker groups removed and kept,
+  // never the copied text.
+  readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

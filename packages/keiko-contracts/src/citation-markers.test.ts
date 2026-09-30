@@ -116,6 +116,23 @@ describe("findCitationMarkerGroups", () => {
     expect(citationMarkerIndices(text)).toEqual([1, 2]);
   });
 
+  // PR #3678 review: an inline code span never reaches across a paragraph or a fence, so literal
+  // unmatched backticks in two paragraphs do not hide the cited prose between them.
+  it("never pairs backticks across a blank line or a fence", () => {
+    const paragraphs = [
+      "An unmatched ` appears here.",
+      "",
+      "The API uses TLS [1].",
+      "",
+      "Another unmatched ` appears here.",
+    ].join("\n");
+    const fenced = "Tick ` here [1]\n```\ncode\n```\nand ` there [2].";
+
+    expect(citationMarkerIndices(paragraphs)).toEqual([1]);
+    expect(citationMarkerIndices(fenced)).toEqual([1, 2]);
+    expect(citationMarkerIndices("One `[1]\nstill one span` [2].")).toEqual([2]);
+  });
+
   it("runs an unclosed fence to the end of the text, like the Markdown renderer", () => {
     expect(citationMarkerIndices("Intro [1]\n```\nconst a = [2];\nstill code [3]")).toEqual([1]);
   });

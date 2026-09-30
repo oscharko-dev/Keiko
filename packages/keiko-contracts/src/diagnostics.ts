@@ -446,6 +446,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -639,7 +640,8 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
-    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog)
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    isOptional(value.answerCopy, isClientDiagnosticAnswerCopy)
   );
 }
 
@@ -1349,6 +1351,47 @@ export function isClientDiagnosticKnowledgeCatalog(
     (key) =>
       KNOWLEDGE_CATALOG_COUNT_KEYS.has(key) &&
       isBoundedNonNegativeInteger(value[key], CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX),
+  );
+}
+
+// ─── Chat answer copy (PR #3678 review) ─────────────────────────────────────────
+//
+// The copy button removes a grounded answer's in-range citation markers and keeps every other
+// bracket (code, an ordinary answer, an index beyond the references). Counts only — never the
+// copied text — so the log shows that the path ran, what it removed and kept, and a failure.
+
+export const CLIENT_ANSWER_COPY_OUTCOMES = ["copied", "failed"] as const;
+export type ClientAnswerCopyOutcome = (typeof CLIENT_ANSWER_COPY_OUTCOMES)[number];
+
+export interface ClientDiagnosticAnswerCopy {
+  readonly outcome: ClientAnswerCopyOutcome;
+  readonly grounded: boolean;
+  /** Citation marker groups removed from the copied text. */
+  readonly strippedGroupCount: number;
+  /** Numeric bracket groups outside code kept as content. */
+  readonly keptGroupCount: number;
+}
+
+const ANSWER_COPY_OUTCOME_SET: ReadonlySet<string> = new Set(CLIENT_ANSWER_COPY_OUTCOMES);
+const ANSWER_COPY_KEYS: ReadonlySet<string> = new Set([
+  "outcome",
+  "grounded",
+  "strippedGroupCount",
+  "keptGroupCount",
+]);
+
+/** True for exactly the closed copy outcome, the grounded flag and the two bounded counts. */
+export function isClientDiagnosticAnswerCopy(value: unknown): value is ClientDiagnosticAnswerCopy {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== ANSWER_COPY_KEYS.size || keys.some((key) => !ANSWER_COPY_KEYS.has(key))) {
+    return false;
+  }
+  return (
+    isSetMember(value.outcome, ANSWER_COPY_OUTCOME_SET) &&
+    typeof value.grounded === "boolean" &&
+    isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)
   );
 }
 

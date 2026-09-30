@@ -104,6 +104,7 @@ import {
   entailmentUnavailableMarker,
   missingCitationMarkerFor,
   reconcileNumericCitations,
+  segmentNumericCitedClaims,
   unsupportedNumericCitationMarker,
   type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
@@ -2304,22 +2305,42 @@ async function appendLocalKnowledgeNumericEntailment(
   if (context.signal.aborted) {
     throw new CancelledError("grounded request cancelled");
   }
-  if (markers.length === 0) return answer;
-  return {
-    ...answer,
-    uncertainty: [
-      ...answer.uncertainty,
-      ...markers.map((marker) => ({ kind: marker.kind, claim: redactText(deps, marker.claim) })),
-    ],
-  };
+  const judged =
+    markers.length === 0
+      ? answer
+      : {
+          ...answer,
+          uncertainty: [
+            ...answer.uncertainty,
+            ...markers.map((marker) => ({
+              kind: marker.kind,
+              claim: redactText(deps, marker.claim),
+            })),
+          ],
+        };
+  // A stage that ran is no verdict on a weak citation whose claim it could not read: the claim
+  // stripper leaves no text for `[The repository enforces MFA] [1]`, so no judge call covers [1]
+  // (PR #3678 review, P1). Such a citation keeps the fail-closed caveat.
+  return weakCitationsJudged(result) ? judged : withWeakCitationCaveat(judged, result);
+}
+
+// Every weakly supported citation belongs to a claim the numeric judge actually reads: the same
+// segmentation the stage judges (segmentNumericCitedClaims) names its marker.
+function weakCitationsJudged(result: ScopedGroundedResult): boolean {
+  const weak = result.citations.filter((citation) => citation.lexicalSupport === "weak");
+  if (weak.length === 0) return true;
+  const judged = new Set(
+    segmentNumericCitedClaims(result.answer).flatMap((claim) => claim.markers),
+  );
+  return weak.every((citation) => judged.has(citation.index));
 }
 
 // Weak lexical overlap is not a verdict. An in-range marker stays attached so the reader can open
-// its source. When no entailment judge is available, nothing confirmed that the source supports
-// the claim, so the answer carries the fail-closed "support could not be verified" caveat instead
-// of presenting the citation as confirmed support (PR #3678 review; the unrelated-evidence pins in
-// citation-attacher.test.ts). When the judge ran, it read every cited claim against its excerpt and
-// its verdict (or its own unavailable marker) replaces the caveat.
+// its source. When no entailment judge read the claim, nothing confirmed that the source supports
+// it, so the answer carries the fail-closed "support could not be verified" caveat instead of
+// presenting the citation as confirmed support (PR #3678 review; the unrelated-evidence pins in
+// citation-attacher.test.ts). When the judge read every weak citation's claim, its verdict (or its
+// own unavailable marker) replaces the caveat.
 function withWeakCitationCaveat(
   answer: GroundedAnswer,
   result: ScopedGroundedResult,

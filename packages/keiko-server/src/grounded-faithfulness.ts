@@ -30,7 +30,6 @@ import {
   CITATION_FINDING_LIST_MAX,
   citationFindingTotalSuffix,
   citationMarkerIndices,
-  findCitationMarkerGroups,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
@@ -205,23 +204,6 @@ function parseNumericCitations(answerText: string): readonly number[] {
   return citationMarkerIndices(answerText).filter((marker) => marker > 0);
 }
 
-// The indices of the marker groups that cite at all. A grouped bracket none of whose indices names
-// a supported reference (`[80, 443]`, `[2020, 2024]`) is answer content, never a citation, so it
-// must not surface as a dangling one (PR #3678 review). A lone out-of-range marker (`[9]`) and an
-// out-of-range index next to a supported one (`[1, 9]`) remain dangling citations.
-function citingMarkerIndices(
-  answerText: string,
-  supportedMarkers: ReadonlySet<number>,
-): readonly number[] {
-  return findCitationMarkerGroups(answerText)
-    .filter(
-      (group) =>
-        group.indices.length === 1 || group.indices.some((index) => supportedMarkers.has(index)),
-    )
-    .flatMap((group) => group.indices)
-    .filter((marker) => marker > 0);
-}
-
 /** Reconcile hybrid `[n]` markers against the exact selected evidence marker set. */
 export function reconcileNumericCitations(
   answerText: string,
@@ -230,7 +212,10 @@ export function reconcileNumericCitations(
   const citedMarkers = new Set<number>();
   const unsupportedMarkers: number[] = [];
   const seenUnsupported = new Set<number>();
-  for (const marker of citingMarkerIndices(answerText, supportedMarkers)) {
+  // Every index of every marker group outside Markdown code counts, a grouped one included: a
+  // fabricated `[9, 10]` beside a real `[1]` is a dangling source attribution, never content
+  // (PR #3678 review, P1).
+  for (const marker of parseNumericCitations(answerText)) {
     if (supportedMarkers.has(marker)) {
       citedMarkers.add(marker);
     } else if (!seenUnsupported.has(marker)) {
@@ -387,8 +372,9 @@ export function unsupportedCitationMarker(
     kind: "unsupported-citation",
     claim:
       `The answer cited ${paths.length === 1 ? "a source" : "sources"} not present in the ` +
-      `retrieved evidence: ${paths.join(", ")}${citationFindingTotalSuffix(allPaths.length)}. ` +
-      `Treat ${paths.length === 1 ? "that claim" : "those claims"} as unverified.`,
+      `retrieved evidence: ${paths.join(", ")}. ` +
+      `Treat ${paths.length === 1 ? "that claim" : "those claims"} as unverified.` +
+      citationFindingTotalSuffix(allPaths.length),
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -408,8 +394,8 @@ export function unsupportedNumericCitationMarker(
     kind: "unsupported-citation",
     claim:
       `The answer cited ${markers.length === 1 ? "an evidence marker" : "evidence markers"} ` +
-      `not present in the retrieved evidence: ${markers.join(", ")}` +
-      `${citationFindingTotalSuffix(distinct.length)}. Treat the affected claims as unverified.`,
+      `not present in the retrieved evidence: ${markers.join(", ")}. Treat the affected claims ` +
+      `as unverified.${citationFindingTotalSuffix(distinct.length)}`,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -961,8 +947,9 @@ export function unsupportedClaimMarker(
     claim:
       `The answer made ${single ? "a claim" : "claims"} that the cited ` +
       `${paths.length === 1 ? "source does" : "sources do"} not appear to support: ` +
-      `${paths.join(", ")}${citationFindingTotalSuffix(unentailed.length)}. ` +
-      `Treat ${single ? "that statement" : "those statements"} as unverified.`,
+      `${paths.join(", ")}. ` +
+      `Treat ${single ? "that statement" : "those statements"} as unverified.` +
+      citationFindingTotalSuffix(unentailed.length),
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };

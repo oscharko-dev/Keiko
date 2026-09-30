@@ -38,7 +38,10 @@ import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-
 import {
   citationMarkerIndices,
   findCitationMarkerGroups,
+  type CitationMarkerGroup,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import type { ClientDiagnosticAnswerCopy } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useChatSessionCatalog,
@@ -457,11 +460,15 @@ const QUESTION_MAP_PREVIEW_MAX = 76;
 // Equivalent to removing every marker group together with the whitespace before it, but as a single
 // forward pass plus a bounded backward whitespace scan per marker, so total work stays O(n)
 // regardless of how much whitespace precedes a marker.
+function citesWithin(group: CitationMarkerGroup, citationCeiling: number): boolean {
+  return group.indices.every((index) => index >= 1 && index <= citationCeiling);
+}
+
 function stripCitationMarkers(text: string, citationCeiling: number): string {
   let result = "";
   let cursor = 0;
   for (const group of findCitationMarkerGroups(text)) {
-    if (!group.indices.every((index) => index >= 1 && index <= citationCeiling)) continue;
+    if (!citesWithin(group, citationCeiling)) continue;
     let markerStart = group.start;
     while (markerStart > cursor && CITATION_MARKER_WHITESPACE.test(text.charAt(markerStart - 1))) {
       markerStart -= 1;
@@ -478,6 +485,38 @@ function stripCitationMarkers(text: string, citationCeiling: number): string {
  */
 export function copyableMessageText(content: string, citationCeiling = 0): string {
   return stripCitationMarkers(sanitizeRepositoryEvidenceText(content), citationCeiling);
+}
+
+// The copy's body-free evidence (PR #3678 review): whether it succeeded, whether the answer was
+// grounded, and how many marker groups the copy removed and kept — by the same rule as the copy
+// itself. Never the copied text.
+function answerCopyEvidence(
+  content: string,
+  citationCeiling: number,
+  outcome: ClientDiagnosticAnswerCopy["outcome"],
+): ClientDiagnosticAnswerCopy {
+  const groups = findCitationMarkerGroups(sanitizeRepositoryEvidenceText(content));
+  const stripped = groups.filter((group) => citesWithin(group, citationCeiling)).length;
+  return {
+    outcome,
+    grounded: citationCeiling > 0,
+    strippedGroupCount: stripped,
+    keptGroupCount: groups.length - stripped,
+  };
+}
+
+function reportAnswerCopy(content: string, citationCeiling: number, error?: unknown): void {
+  if (error === undefined) {
+    reportClientDiagnostic("Keiko chat answer copied.", {
+      answerCopy: answerCopyEvidence(content, citationCeiling, "copied"),
+    });
+    return;
+  }
+  reportClientDiagnostic("Keiko chat answer copy failed.", {
+    answerCopy: answerCopyEvidence(content, citationCeiling, "failed"),
+    errorKind: "unavailable",
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 function highestCitedMarker(markers: readonly (string | number | undefined)[]): number {
@@ -535,6 +574,7 @@ function MessageCopyButton({
   const handleCopy = useCallback(() => {
     void copyTextToClipboard(copyableMessageText(content, citationCeiling)).then(
       () => {
+        reportAnswerCopy(content, citationCeiling);
         setCopyState("copied");
         setStatus(t("chat.copy.copiedStatus"));
         setTimeout(() => {
@@ -542,7 +582,8 @@ function MessageCopyButton({
           setStatus("");
         }, 1500);
       },
-      () => {
+      (error: unknown) => {
+        reportAnswerCopy(content, citationCeiling, error);
         setCopyState("failed");
         setStatus(t("chat.copy.failedStatus"));
       },

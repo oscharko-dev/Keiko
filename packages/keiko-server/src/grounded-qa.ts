@@ -1839,6 +1839,7 @@ async function dispatchMultiSourceAsk(
       ? { entailmentStageFactory: seam.entailmentStageFactory }
       : {}),
     preSkipped: skippedFolders.map((s) => ({ label: s.label, message: s.message })),
+    correlationId: args.correlationId,
   });
 }
 
