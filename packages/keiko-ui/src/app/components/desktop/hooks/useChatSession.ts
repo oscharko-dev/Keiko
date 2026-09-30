@@ -60,6 +60,7 @@ import {
 import { sortProjects } from "@/lib/sidebar-sort";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary } from "@/lib/client-error-summary";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -2285,6 +2286,13 @@ function handleStreamUngroundedTransportFailure(
   setError: Dispatch<SetStateAction<string | undefined>>,
   resolve: (outcome: SendAttemptOutcome) => void,
 ): void {
+  // A stalled stream leaves no server-side failure line of its own: record it body-free so the
+  // Activity Log shows why the turn stopped (field report 1.1.13).
+  if (caught instanceof ApiError && caught.code === "DESKTOP_CHAT_STREAM_STALLED") {
+    reportClientDiagnostic("[keiko] chat stream stalled: no byte within the idle limit", {
+      errorKind: "timeout",
+    });
+  }
   setError(errorMessage(caught));
   resolve({ status: "failed" });
 }

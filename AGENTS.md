@@ -534,6 +534,14 @@ candidates. `counterSource` identifies a winning retained floor as `retained-mea
 `imageAccounting` uses that disposition when only the retained positive measurement replaces the
 image reserve. Neither retained value is presented as a new provider observation.
 
+A chat model whose window nobody declared is planned as `contextWindowAssumed` until the provider
+states it. `gateway.context-window.probe` records the one-per-deployment window probe (`reported`,
+`not-reported`, `failed`, `skipped-spend-budget`) and `gateway.context-window.adoption` the adopted
+window with its source (`window-probe`, `provider-overflow`), the previous window and whether it was
+assumed. `gateway.context-window.retry` records the single re-planned retry of an admitted turn, with
+its surface and the planned and adopted windows. All three carry the request's correlation id and a
+model digest, never provider text.
+
 ### Rule 2 — when you debug, the log is your primary source
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product

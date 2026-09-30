@@ -66,6 +66,14 @@ candidates. `counterSource` identifies a winning retained floor as `retained-mea
 `imageAccounting` uses that disposition when only the retained positive measurement replaces the
 image reserve. Neither retained value is presented as a new provider observation.
 
+A chat model whose window nobody declared is planned as `contextWindowAssumed` until the provider
+states it. `gateway.context-window.probe` records the one-per-deployment window probe (`reported`,
+`not-reported`, `failed`, `skipped-spend-budget`) and `gateway.context-window.adoption` the adopted
+window with its source (`window-probe`, `provider-overflow`), the previous window and whether it was
+assumed. `gateway.context-window.retry` records the single re-planned retry of an admitted turn, with
+its surface and the planned and adopted windows. All three carry the request's correlation id and a
+model digest, never provider text.
+
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
 events. Neither path records customer diffs or generated text.

@@ -78,6 +78,7 @@ import {
   requestEditorSymbols,
   saveFilesContent,
   sendDesktopChatStream,
+  DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS,
   fetchWorkspaceSummary,
   transcribeDictation,
   synthesizeAssistantSpeech,
@@ -2732,6 +2733,71 @@ function makeSseResponse(stream: ReadableStream<Uint8Array>): Response {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
+
+// Field report 1.1.13: when the process serving a streamed turn ended, the UI showed "Receiving
+// response" indefinitely. A stream silent for longer than four keep-alive intervals fails closed.
+describe("sendDesktopChatStream — stalled stream watchdog", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("fails with DESKTOP_CHAT_STREAM_STALLED when no byte arrives within the idle limit", async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(encoder.encode('event: token\ndata: {"text":"Hallo"}\n\n'));
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    const outcome = expect(pending).rejects.toMatchObject({ code: "DESKTOP_CHAT_STREAM_STALLED" });
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS + 1);
+    await outcome;
+    expect(handlers.onToken).toHaveBeenCalledTimes(1);
+    expect(cancelled).toBe(true);
+  });
+
+  it("keeps a stream alive while keep-alive comments arrive", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controllerRef = controller;
+      },
+    });
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    for (let beat = 0; beat < 6; beat += 1) {
+      await vi.advanceTimersByTimeAsync(15_000);
+      controllerRef?.enqueue(encoder.encode(": keep-alive\n\n"));
+    }
+    controllerRef?.enqueue(
+      encoder.encode(
+        `event: done\ndata: ${JSON.stringify({ chat: { id: "c1" }, messages: [] })}\n\n`,
+      ),
+    );
+    controllerRef?.close();
+    await expect(pending).resolves.toBeUndefined();
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
   afterEach(() => {

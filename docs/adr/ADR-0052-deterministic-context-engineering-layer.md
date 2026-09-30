@@ -139,6 +139,37 @@ cost, so their token savings agree with the difference between the pre/post-comp
 The optional LiteLLM counter may still report a higher count and refuse admission; local assembly
 and gateway admission use the same local fallback, not a claim of provider-exact counting.
 
+**Undeclared windows (amended for the 1.1.13 field report).** A chat capability whose window nobody
+declared — a LiteLLM `hosted_vllm` deployment without `max_input_tokens`, a mode-less discovered
+model, an Azure deployment set up without discovery, or an env-only provider — carries the 4,096
+setup placeholder flagged `contextWindowAssumed`. The placeholder is a floor only for surfaces that
+need a proven window (the Coding Workbench). `deriveContextProfileFromCapability` plans an assumed
+window with the default geometry (128,000 / 8,000 / 4,000), because the 1.1.12 admission otherwise
+refused every grounded question against 2,944 usable tokens. Configurations persisted before the flag
+existed are marked at the file-load boundary when a record carries the exact placeholder signature.
+The real window replaces the assumption from the provider's own statement, never from a guess:
+
+- When the context meter first shows an assumed model, one probe per deployment sends a
+  one-token request with an output allocation larger than any window. vLLM validates that allocation
+  before generation and names its `max_model_len`; the status reading waits up to three seconds
+  for it.
+- Every provider overflow answer that names the window ("maximum context length is N tokens",
+  "max_model_len=N", and the Anthropic, TGI and llama.cpp forms) is attached to the
+  `ContextOverflowError` and reported by the Gateway to its configuration source.
+- The window is adopted exactly, in either direction, persisted, and applied as a configuration
+  refinement without a generation bump. The admitted turn whose overflow reported it re-plans
+  from the current profile and is sent once more: buffered chat, streamed chat before its first
+  token, and grounded answers. A second overflow propagates.
+
+`gateway.context-window.probe`, `.adoption` and `.retry` record the evidence body-free.
+
+**The meter reports the next request (amended for the 1.1.13 field report).** The context status
+applies the send path's rule: at 90 % of the input budget, compaction to 70 % precedes the next
+request. It therefore reports the projected history (`pendingCompaction`), never the raw stored
+history, so a history larger than the window can no longer read as 340 % of it. Status projection
+and manual compaction may summarize the newest stored turn, like the send path's history prefix.
+The current request is never shortened.
+
 ### D3 — Eight-lane taxonomy with a fixed allocation order
 
 We will encode exactly eight lanes via `ContextLaneId`:

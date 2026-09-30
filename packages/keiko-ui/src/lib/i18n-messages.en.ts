@@ -586,6 +586,11 @@ export const EN_MESSAGES = {
     "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
   "chat.error.gatewayOutputExhausted.remediation":
     "Raise the model's max output tokens in Settings, or switch to a model with a smaller reasoning share, then retry.",
+  "chat.error.streamStalled.title": "Connection to the answer interrupted",
+  "chat.error.streamStalled.message":
+    "The connection to Keiko delivered nothing for a minute. The answer was stopped.",
+  "chat.error.streamStalled.remediation":
+    "Send the message again. If it keeps happening, check the network, the proxy, or whether Keiko restarted.",
   "chat.error.contextOverflow.title": "Request larger than the context window",
   "chat.error.contextOverflow.message":
     "The request does not fit the model's context window. Keiko adopts the window the provider reports automatically and compacts the history on the next send.",

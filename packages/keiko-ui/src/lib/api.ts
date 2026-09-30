@@ -1512,6 +1512,42 @@ function processSseLines(
   return current;
 }
 
+// The BFF writes a keep-alive comment every 15 s while a turn streams (keiko-server sse.ts). A
+// stream that delivers no byte for four intervals is a dead connection — the server process ended
+// or a proxy holds a half-open socket — not a slow model, so the turn fails with a clear error
+// instead of showing "Receiving response" forever.
+export const DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS = 60_000;
+
+function stalledDesktopChatStreamError(): ApiError {
+  return new ApiError(
+    "DESKTOP_CHAT_STREAM_STALLED",
+    "The connection to Keiko stopped delivering the answer. Retry the request.",
+    504,
+  );
+}
+
+async function readWithinIdleLimit(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(stalledDesktopChatStreamError());
+    }, DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS);
+  });
+  try {
+    return await Promise.race([reader.read(), stalled]);
+  } catch (error) {
+    // Closing the half-open body lets the server observe the disconnect and settle the turn.
+    if (error instanceof ApiError && error.code === "DESKTOP_CHAT_STREAM_STALLED") {
+      void reader.cancel();
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Reads `response.body` as a text/event-stream, buffering partial lines across
 // reads. Dispatches typed events to `handlers`. Respects the passed `signal` —
 // when aborted it stops reading without dispatching further events.
@@ -1528,7 +1564,7 @@ async function consumeSseStream(
 
   try {
     while (!signal.aborted) {
-      const read = await reader.read();
+      const read = await readWithinIdleLimit(reader);
       if (read.done) {
         reachedEof = true;
         break;

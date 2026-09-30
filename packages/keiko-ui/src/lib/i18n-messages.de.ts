@@ -602,6 +602,11 @@ export const DE_MESSAGES = {
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
   "chat.error.gatewayOutputExhausted.remediation":
     "Erhöhe in den Einstellungen die maximalen Ausgabe-Tokens des Modells oder wechsle zu einem Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
+  "chat.error.streamStalled.title": "Verbindung zur Antwort unterbrochen",
+  "chat.error.streamStalled.message":
+    "Die Verbindung zu Keiko hat eine Minute lang nichts mehr geliefert. Die Antwort wurde abgebrochen.",
+  "chat.error.streamStalled.remediation":
+    "Sende die Nachricht erneut. Tritt es wiederholt auf, prüfe Netzwerk, Proxy oder ob Keiko neu gestartet wurde.",
   "chat.error.contextOverflow.title": "Anfrage größer als das Kontextfenster",
   "chat.error.contextOverflow.message":
     "Die Anfrage passt nicht in das Kontextfenster des Modells. Keiko übernimmt das vom Anbieter gemeldete Fenster automatisch und kompaktiert den Verlauf beim nächsten Senden.",
