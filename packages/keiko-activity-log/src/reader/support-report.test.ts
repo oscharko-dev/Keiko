@@ -279,6 +279,28 @@ describe("hostile report admission", () => {
   afterEach(() => {
     rmSync(stateDir, { recursive: true, force: true });
   });
+  it("refuses a newer minimum analyzer version even with a known schema and valid integrity", () => {
+    const report = fixture().report;
+    const hostile = sealSupportReport(report.incident, report.selection, report.evidence, "9.0.0");
+    expect(() => parseSupportReport(serializeSupportReport(hostile))).toThrow(
+      expect.objectContaining({ reason: "unsupported-report", minimumAnalyzerVersion: "9.0.0" }),
+    );
+  });
+  it.each(["01.1.13", "1.1.13-alpha.01", `${"9".repeat(129)}.1.13`])(
+    "refuses a malformed minimum analyzer version before rendering: %s",
+    (minimum) => {
+      const report = fixture().report;
+      const hostile = sealSupportReport(
+        report.incident,
+        report.selection,
+        report.evidence,
+        minimum,
+      );
+      expect(() => parseSupportReport(serializeSupportReport(hostile))).toThrow(
+        expect.objectContaining({ reason: "unsafe-report" }),
+      );
+    },
+  );
   it("refuses a newer schema with a bounded minimum analyzer version", () => {
     const report = fixture().report;
     const text =

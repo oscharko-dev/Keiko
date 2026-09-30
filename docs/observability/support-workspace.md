@@ -45,8 +45,10 @@ Choose a fresh private output directory only after preserving and inspecting the
 
 3. Require exit status 0 before using the generated machine view. A rejected input produces no
    analyzed report data; keep the closed failure reason as the finding. An unsupported schema or
-   catalog names its declared minimum analyzer version. Obtain a trusted supported analyzer through
-   the normal governed update process; the report cannot supply a schema, binary or installation
+   catalog names its declared minimum analyzer version. The declared minimum is also enforced for
+   a known schema and catalog; product-version comparison is bounded, rejects malformed versions
+   and uses numeric release/prerelease precedence. Obtain a trusted supported analyzer through the
+   normal governed update process; the report cannot supply a schema, binary or installation
    command. Legacy raw logs/open JSONL bundles are refused: ask for regeneration on the originating
    installation, without importing their config/evidence sections.
 4. Give an authorized agent only `analyzed-report.json`, the versioned

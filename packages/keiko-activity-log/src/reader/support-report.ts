@@ -21,7 +21,10 @@ import {
   type SupportReportSelection,
   type DiagnosticSufficiencyReason,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import {
+  KEIKO_PRODUCT_VERSION,
+  compareProductVersions,
+} from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   analyzeLogText,
   buildReproductionSeedFromAnalysis,
@@ -104,6 +107,7 @@ export function sealSupportReport(
   incident: SupportIncidentPrivateProjection,
   selection: SupportReportSelection,
   evidence: SupportReportEvidence,
+  minimumAnalyzerVersion: string = KEIKO_PRODUCT_VERSION,
 ): SupportReport {
   const integrity = {
     algorithm: "sha256" as const,
@@ -115,7 +119,7 @@ export function sealSupportReport(
   const unsigned = {
     kind: SUPPORT_REPORT_KIND as typeof SUPPORT_REPORT_KIND,
     schemaVersion: SUPPORT_REPORT_SCHEMA_VERSION as typeof SUPPORT_REPORT_SCHEMA_VERSION,
-    minimumAnalyzerVersion: KEIKO_PRODUCT_VERSION,
+    minimumAnalyzerVersion,
     incident,
     selection,
     evidence,
@@ -217,10 +221,21 @@ function readHeader(value: unknown): Record<string, unknown> {
     throw new SupportReportError("unsafe-report");
   if (!isActivityLogProductVersion(value.minimumAnalyzerVersion))
     throw new SupportReportError("unsafe-report");
+  validateMinimumAnalyzerVersion(value.minimumAnalyzerVersion);
   if (value.kind !== SUPPORT_REPORT_KIND || value.schemaVersion !== SUPPORT_REPORT_SCHEMA_VERSION) {
     throw new SupportReportError("unsupported-report", value.minimumAnalyzerVersion);
   }
   return value;
+}
+
+function validateMinimumAnalyzerVersion(version: string): void {
+  let comparison: number;
+  try {
+    comparison = compareProductVersions(version, KEIKO_PRODUCT_VERSION);
+  } catch {
+    throw new SupportReportError("unsafe-report");
+  }
+  if (comparison > 0) throw new SupportReportError("unsupported-report", version);
 }
 
 function validSelection(value: unknown): value is SupportReportSelection {
