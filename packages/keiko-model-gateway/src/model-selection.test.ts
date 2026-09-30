@@ -575,6 +575,39 @@ describe("COST_RANK single source of truth (GEN-DUP-EXACT-002)", () => {
   });
 });
 
+describe("coding profile of an assumed window", () => {
+  // PR #3678 review (P1): conversations plan an undeclared window with the default geometry, but
+  // a coding run needs a proven one. The Workbench profile must read the stored window.
+  it("plans a coding run with the stored window, never the conversation assumption", () => {
+    const configValue = sidecarConfig(
+      [
+        {
+          modelId: "hosted-vllm-coder",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      [
+        {
+          ...codingSidecarCapability("hosted-vllm-coder"),
+          contextWindow: 4_096,
+          maxOutputTokens: 0,
+          contextWindowAssumed: true,
+        },
+      ],
+    );
+    const result = resolveCodingSafeSidecarGatewayProfile(configValue, {
+      modelId: "hosted-vllm-coder",
+    });
+    expect(result).toMatchObject({ status: "available" });
+    if (result.status !== "available") throw new Error("expected an available profile");
+    expect(result.runMetadata.maxPromptTokens).toBe(4_096);
+  });
+});
+
 describe("resolveCodingSafeSidecarGatewayProfile", () => {
   it("honours the concrete coding model selected for the run", () => {
     const configValue = sidecarConfig(

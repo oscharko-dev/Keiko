@@ -220,11 +220,21 @@ function codingSidecarUnavailable(
   return { status: "unavailable", reason };
 }
 
+// A coding run needs a PROVEN window. An assumed window is planned with the default geometry for
+// conversations, but the Workbench reads the stored window — the placeholder, or the floor the
+// long-context proof raised it to — so an undeclared model is verified before a run relies on it
+// (PR #3678 review).
+function provenWindowCapability(capability: ModelCapability): ModelCapability {
+  if (capability.contextWindowAssumed !== true) return capability;
+  const { contextWindowAssumed: _assumed, ...proven } = capability;
+  return proven;
+}
+
 function codingSidecarProjection(
   capability: ModelCapability,
   verification: GatewayVerificationState,
 ): CodingWorkbenchSidecarGatewayProjection {
-  const contextProfile = deriveContextProfileFromCapability(capability);
+  const contextProfile = deriveContextProfileFromCapability(provenWindowCapability(capability));
   return {
     status: "available",
     profileId: "coding-safe-openai-compatible",
