@@ -28,7 +28,6 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   buildGroundedAnswerContextPackSummary,
   type ChatConnectedScope,
@@ -41,7 +40,9 @@ import {
 
 import type { RouteResult } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentRedactionSecrets } from "./deps.js";
+import { currentContextProfileForModel, currentRedactionSecrets } from "./deps.js";
+import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -88,7 +89,9 @@ import {
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
   groundedEvidenceRunId,
+  groundedPromptOptions,
   groundedScopeWorkspaceFs,
+  type GroundedGatewayPromptOptions,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -484,17 +487,37 @@ interface FittedMultiSourcePrompt {
   readonly packs: readonly LabeledPack[];
 }
 
+// The merged prompt fits the smaller of the packs' own budgets and the answering model's input
+// budget, counted in bytes and with the admission token accounting, like the folder prompt
+// (fitGroundedPrompt). The packs' budgets add up per source, so on their own they let three sources
+// send three windows' worth of excerpts to one model (PR #3678 review).
+function multiSourcePromptFit(
+  labeledPacks: readonly LabeledPack[],
+  options: GroundedGatewayPromptOptions,
+): { readonly limit: number; readonly fits: (m: readonly GatewayChatMessage[]) => boolean } {
+  const packTokens = labeledPacks.reduce(
+    (sum, entry) => sum + entry.pack.budget.modelInputTokensMax,
+    0,
+  );
+  const tokensMax = Math.min(packTokens, options.modelInputTokensMax ?? packTokens);
+  const limit = modelInputPromptByteLimit(tokensMax);
+  return {
+    limit,
+    fits: (messages) =>
+      promptByteLength(messages) <= limit &&
+      countGatewayPromptTokens({ messages }, options.tokenAccounting) <= tokensMax,
+  };
+}
+
 function budgetedMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
+  options: GroundedGatewayPromptOptions = {},
 ): FittedMultiSourcePrompt {
-  const limit = modelInputPromptByteLimit(
-    labeledPacks.reduce((sum, entry) => sum + entry.pack.budget.modelInputTokensMax, 0),
-  );
+  const { limit, fits } = multiSourcePromptFit(labeledPacks, options);
   const fullMessages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
-  if (promptByteLength(fullMessages) <= limit)
-    return { messages: fullMessages, packs: labeledPacks };
+  if (fits(fullMessages)) return { messages: fullMessages, packs: labeledPacks };
   if (multiSourceExcerptCount(labeledPacks) === 0) {
     return { messages: fullMessages, packs: labeledPacks };
   }
@@ -506,7 +529,7 @@ function budgetedMultiSourceGatewayMessages(
   // When overhead alone (system prompt + question + framing for all sources) exceeds the limit,
   // no amount of excerpt trimming can bring the prompt within budget. Throw instead of sending
   // an over-limit prompt to the provider which would result in an opaque 400 context-window error.
-  if (overheadBytes > limit) {
+  if (!fits(buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor))) {
     throw new ContextOverflowError(
       `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
@@ -515,7 +538,7 @@ function budgetedMultiSourceGatewayMessages(
   while (totalExcerptBytes >= 0) {
     const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes);
     const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor);
-    if (promptByteLength(messages) <= limit || totalExcerptBytes === 0) {
+    if (fits(messages) || totalExcerptBytes === 0) {
       return { messages, packs };
     }
     totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
@@ -534,8 +557,9 @@ export function fittedMultiSourcePrompt(
   question: string,
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
+  options: GroundedGatewayPromptOptions = {},
 ): SentGroundedPrompt {
-  const fitted = budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor);
+  const fitted = budgetedMultiSourceGatewayMessages(question, labeledPacks, redactor, options);
   return {
     messages: fitted.messages,
     withoutSources: buildRawMultiSourceGatewayMessages(
@@ -593,28 +617,42 @@ export type MultiSourceAnswerer = (
   labeledPacks: readonly LabeledPack[],
 ) => Promise<GroundedAnswerPayload>;
 
+// Like the folder answerer (createGatewayAnswerer): each attempt fits the prompt to the model's
+// current input budget, and a provider overflow that states the real window re-fits and sends once
+// more (withAdoptedContextWindowRetry). The prompt of the last attempt is the one reported.
 export function createMultiSourceAnswerer(
+  deps: UiHandlerDeps,
   model: ModelPort,
   modelId: string,
-  redactor: Redactor,
   signal: AbortSignal,
   correlationId: string | undefined,
-  contextProfile?: ContextProfile,
 ): MultiSourceAnswerer {
   return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
-    const sent = fittedMultiSourcePrompt(question, labeledPacks, redactor);
-    const response = await model.call(
-      { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
-      signal,
+    let sent: SentGroundedPrompt | undefined;
+    const response = await withAdoptedContextWindowRetry(
+      deps,
+      { modelId, surface: "grounded", correlationId },
+      () => {
+        const tokenAccounting = currentContextProfileForModel(deps, modelId)?.tokenAccounting;
+        const options = groundedPromptOptions(deps, modelId, tokenAccounting);
+        sent = fittedMultiSourcePrompt(question, labeledPacks, deps.redactor, options);
+        return model.call(
+          { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
+          signal,
+        );
+      },
     );
     const content = response.content.trim();
     assertUsableAssistantContent(content, modelId);
     const { promptTokens, completionTokens } = response.usage;
+    const profile = currentContextProfileForModel(deps, modelId);
     return {
       content,
       usage: { promptTokens, completionTokens },
-      promptContext: sentPromptContext(sent, promptTokens, contextProfile),
+      ...(sent === undefined
+        ? {}
+        : { promptContext: sentPromptContext(sent, promptTokens, profile) }),
     };
   };
 }

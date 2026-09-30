@@ -1092,7 +1092,7 @@ function createGatewayAnswerer(
 }
 
 // The input budget of one attempt, read from the model's current capability.
-function groundedPromptOptions(
+export function groundedPromptOptions(
   deps: UiHandlerDeps,
   modelId: string,
   tokenAccounting: ContextProfile["tokenAccounting"],
@@ -1794,14 +1794,7 @@ function resolveMultiSourceSeam(
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
-    answerer: createMultiSourceAnswerer(
-      model,
-      modelId,
-      deps.redactor,
-      signal,
-      correlationId,
-      currentContextProfileForModel(deps, modelId),
-    ),
+    answerer: createMultiSourceAnswerer(deps, model, modelId, signal, correlationId),
   };
 }
 

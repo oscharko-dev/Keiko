@@ -498,6 +498,36 @@ describe("buildMultiSourceGatewayMessages", () => {
     expect(context.sourceTokens).toBeLessThan(context.promptTokens);
   });
 
+  // PR #3678 review: per-source budgets add up, so three sources could send three windows' worth
+  // of excerpts to one model. The merged prompt must also fit the answering model's input budget.
+  it("fits the merged prompt to the model's input budget, not the summed pack budgets", () => {
+    const labeledPacks = ["a", "b", "c"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.5, name);
+      return {
+        label: name,
+        pack: {
+          ...pack,
+          budget: { ...pack.budget, modelInputTokensMax: 64_000 },
+          files: pack.files.map((file) => ({
+            ...file,
+            excerpts: file.excerpts.map((excerpt) => ({
+              ...excerpt,
+              content: `${name} evidence `.repeat(4_000),
+              contentBytes: 44_000,
+            })),
+          })),
+        },
+      };
+    });
+    const sent = fittedMultiSourcePrompt("explain all", labeledPacks, buildRedactor({}), {
+      modelInputTokensMax: 6_000,
+    });
+
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(6_000);
+    expect(sent.availableReferenceCount).toBe(3);
+    expect(JSON.stringify(sent.messages)).toContain("a evidence");
+  });
+
   it("throws ContextOverflowError when a 0-byte combined prompt budget cannot fit framing overhead", () => {
     const baseA = scopePack("src/a.ts", 0.3, "low");
     const baseB = scopePack("src/b.ts", 0.9, "high");
@@ -1776,9 +1806,9 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     };
 
     const answerer = createMultiSourceAnswerer(
+      recordingDeps([], { redactor: buildRedactor({}) }),
       recordingModel,
       "example-chat-model",
-      buildRedactor({}),
       new AbortController().signal,
       "cid-multi-source-answerer-000001",
     );

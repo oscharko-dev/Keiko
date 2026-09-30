@@ -48,6 +48,8 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
@@ -1261,6 +1263,70 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     // mutation: returning the same label for both → uniqueLabels.size === 1
     const uniqueLabels = new Set(kciLabels);
     expect(uniqueLabels.size).toBe(2);
+  });
+
+  // PR #3678 review: the hybrid prompt was sent without fitting it to the model's window. The
+  // highest-ranked candidates that fit are kept, and the prompt share reports the trim.
+  it("keeps the highest-ranked candidates that fit the model's input budget", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Window Beta Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Window Gamma Docs");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+    const manyReferences: ConnectorRetrieve = (_store, scope): Promise<RetrievalResult> => {
+      const cid = scope.kind === "capsule" ? scope.capsuleId : capA;
+      const base = cid === capA ? 10 : 20;
+      return Promise.resolve({
+        references: Array.from({ length: 4 }, (_, i) =>
+          connectorReference(cid, base + i, `doc-${String(base + i)}-${"x".repeat(200)}`),
+        ),
+        noEvidence: false,
+      });
+    };
+    const prompts: string[] = [];
+    const ask = (deps: UiHandlerDeps): ReturnType<typeof handleGroundedAsk> =>
+      handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId, content: "What is beta and gamma?" })),
+        deps,
+        undefined,
+        undefined,
+        {
+          connectorRetrieve: manyReferences,
+          answer: (system: string, user: string): Promise<string> => {
+            prompts.push(user);
+            return Promise.resolve(
+              countGatewayPromptTokens({
+                messages: [
+                  { role: "system", content: system },
+                  { role: "user", content: user },
+                ],
+              }).toString(),
+            );
+          },
+        },
+      );
+    const full = await ask(hybridDeps());
+    const fullTokens = Number((full.body as GroundedAnswer).content);
+    const window = deriveContextProfile({
+      maxInputTokens: fullTokens - 1 + 512 + 64,
+      reservedOutputTokens: 512,
+      safetyMarginTokens: 64,
+    });
+
+    const trimmed = await ask(hybridDeps({ contextProfileForModel: () => window }));
+
+    expect(trimmed.status, JSON.stringify(trimmed.body)).toBe(200);
+    const answer = trimmed.body as GroundedAnswer;
+    expect(Number(answer.content)).toBeLessThanOrEqual(window.effectiveInputBudget);
+    expect(prompts[1]?.length).toBeLessThan(prompts[0]?.length ?? 0);
+    const sent = answer.promptContext?.sentReferenceCount ?? 0;
+    expect(sent).toBeGreaterThan(0);
+    expect(sent).toBeLessThan(answer.promptContext?.availableReferenceCount ?? 0);
+    expect(asHybrid(answer).knowledgeCitations.length).toBeLessThanOrEqual(sent);
   });
 
   it("redacts an unsafe connector display name from the hybrid knowledge scope label", async () => {

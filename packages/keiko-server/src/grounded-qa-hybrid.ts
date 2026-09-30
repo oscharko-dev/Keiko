@@ -63,7 +63,14 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGroundingLimits,
+  currentRedactionSecrets,
+} from "./deps.js";
+import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import type { GatewayPromptTokenInput } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
 import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -1651,6 +1658,8 @@ interface AssembleHybridAnswerInput {
   readonly reranker: GroundedRerankerDiagnostics;
   readonly ids: { readonly userMessageId: string; readonly assistantMessageId: string };
   readonly sourceEvidenceAvailable?: boolean;
+  /** Candidates before the window fit; defaults to `selected.length` (nothing trimmed). */
+  readonly availableReferenceCount?: number;
 }
 
 // The context meter's view of a hybrid prompt: the exact system and user messages the answerer sent
@@ -1660,6 +1669,7 @@ function hybridPromptContext(
   ctx: HybridGroundedAskCtx,
   selected: readonly SelectedCandidate<HybridPayload>[],
   assistant: GroundedAnswerResult,
+  availableReferenceCount: number,
 ): GroundedPromptContextWire {
   const question = ctx.answerContent ?? ctx.content;
   const { redactor } = ctx.deps;
@@ -1675,10 +1685,10 @@ function hybridPromptContext(
         { role: "user", content: buildRerankedHybridUserMessage(question, [], redactor) },
       ],
       sentReferenceCount: selected.length,
-      availableReferenceCount: selected.length,
+      availableReferenceCount,
     },
     assistant.usage.promptTokens,
-    ctx.contextProfile,
+    currentContextProfileForModel(ctx.deps, ctx.modelId),
   );
 }
 
@@ -1741,7 +1751,10 @@ function hybridPromptContextField(
   const modelInvoked =
     input.sourceEvidenceAvailable !== false || input.ctx.answerOnlyContextAvailable === true;
   if (!modelInvoked) return {};
-  return { promptContext: hybridPromptContext(input.ctx, input.selected, input.assistant) };
+  const available = input.availableReferenceCount ?? input.selected.length;
+  return {
+    promptContext: hybridPromptContext(input.ctx, input.selected, input.assistant, available),
+  };
 }
 
 interface ResolvedAnswerer {
@@ -1789,14 +1802,9 @@ async function noEvidenceAssistant(
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const user = buildRerankedHybridUserMessage(
-    ctx.answerContent ?? ctx.content,
-    selected,
-    ctx.deps.redactor,
-  );
-  const answer = normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
+  const { assistant } = await answerHybridWithinWindow(ctx, answerer, selected);
   ensureNotCancelled(ctx.signal);
-  return answer;
+  return assistant;
 }
 
 function noEvidenceSources(meta: AnswerMeta): RetrievedSources {
@@ -2122,18 +2130,13 @@ async function answerAndAssemble(
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const user = buildRerankedHybridUserMessage(
-    ctx.answerContent ?? ctx.content,
-    selected,
-    ctx.deps.redactor,
-  );
-  const assistant = normalizeGroundedAnswerPayload(
-    await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
-  );
+  const { assistant, sent } = await answerHybridWithinWindow(ctx, answerer, selected);
   ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistHybridGroundedExchange(ctx, assistant.content);
+  // Citations and the prompt share follow the candidates the model was actually shown.
   return finalizeHybridAnswer(ctx, store, meta, {
-    selected,
+    selected: sent,
+    availableReferenceCount: selected.length,
     limits,
     assistant,
     reranker,
@@ -2141,8 +2144,67 @@ async function answerAndAssemble(
   });
 }
 
+// The highest-ranked candidates whose prompt fits the model's current input budget. Candidates keep
+// their markers, so a prefix keeps `[1]..[n]` consistent with the citations derived from it.
+function hybridCandidatesWithinWindow(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly SelectedCandidate<HybridPayload>[] {
+  const question = ctx.answerContent ?? ctx.content;
+  const render = (count: number): GatewayPromptTokenInput => ({
+    messages: [
+      { role: "system", content: HYBRID_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: buildRerankedHybridUserMessage(
+          question,
+          selected.slice(0, count),
+          ctx.deps.redactor,
+        ),
+      },
+    ],
+  });
+  const fitted = fitKnowledgePrompt(
+    selected.length,
+    render,
+    currentContextProfileForModel(ctx.deps, ctx.modelId),
+    { correlationId: ctx.correlationId, diagnostics: ctx.deps.diagnostics },
+  );
+  return selected.slice(0, fitted.referenceCount);
+}
+
+// Like the folder, multi-source and Knowledge Pod answerers: each attempt fits the candidates to the
+// model's current input budget, and a provider overflow that states the real window re-fits and
+// sends once more (withAdoptedContextWindowRetry, PR #3678 review).
+async function answerHybridWithinWindow(
+  ctx: HybridGroundedAskCtx,
+  answerer: ResolvedAnswerer,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): Promise<{
+  readonly assistant: GroundedAnswerResult;
+  readonly sent: readonly SelectedCandidate<HybridPayload>[];
+}> {
+  let sent = selected;
+  const assistant = await withAdoptedContextWindowRetry(
+    ctx.deps,
+    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
+    async () => {
+      sent = hybridCandidatesWithinWindow(ctx, selected);
+      const user = buildRerankedHybridUserMessage(
+        ctx.answerContent ?? ctx.content,
+        sent,
+        ctx.deps.redactor,
+      );
+      return normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
+    },
+  );
+  return { assistant, sent };
+}
+
 interface HybridFinalizeInput {
   readonly selected: readonly SelectedCandidate<HybridPayload>[];
+  /** Candidates selected before the window fit; more than `selected` means the window trimmed. */
+  readonly availableReferenceCount: number;
   readonly limits: ReturnType<typeof currentGroundingLimits>;
   readonly assistant: GroundedAnswerResult;
   readonly reranker: GroundedRerankerDiagnostics;
@@ -2157,7 +2219,7 @@ async function finalizeHybridAnswer(
   meta: AnswerMeta,
   input: HybridFinalizeInput,
 ): Promise<RouteResult> {
-  const { selected, limits, assistant, reranker, ids } = input;
+  const { selected, availableReferenceCount, limits, assistant, reranker, ids } = input;
   const folders = meta.folderResult.retrieved;
   const answer = assembleHybridAnswer({
     ctx,
@@ -2171,6 +2233,7 @@ async function finalizeHybridAnswer(
     },
     store,
     selected,
+    availableReferenceCount,
     limits,
     assistant,
     reranker,
