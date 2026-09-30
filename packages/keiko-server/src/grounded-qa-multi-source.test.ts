@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -57,7 +57,8 @@ import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contr
 import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
-import type { UiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { adoptReportedContextWindow } from "./gateway-context-window.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
@@ -67,7 +68,9 @@ import {
   WorkspaceNotFoundError,
 } from "@oscharko-dev/keiko-workspace";
 import {
+  assumedChatCapability,
   ContextOverflowError,
+  parseGatewayConfig,
   type GatewayCallRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -1829,5 +1832,103 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       sentReferenceCount: 0,
       availableReferenceCount: 0,
     });
+  });
+
+  // PR #3678 review: the multi-source answer never re-planned after the provider's overflow taught
+  // Keiko the real window. The second attempt must be re-fitted to the adopted window.
+  it("re-fits and sends once more after the provider's overflow taught Keiko the real window", async () => {
+    const root = realpathSync(tmp);
+    const built = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(root, "evidence"),
+      uiDbPath: join(root, "ui.db"),
+      env: {},
+    });
+    const holder = built.gatewayConfig;
+    if (holder === undefined) throw new Error("expected a runtime gateway config");
+    holder.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "assumed-chat",
+            baseUrl: "https://litellm.example.invalid/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 5_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 1,
+          },
+        ],
+        capabilities: [assumedChatCapability("assumed-chat")],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      }),
+      true,
+    );
+    const labeledPacks = ["a", "b"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.5, name);
+      return {
+        label: name,
+        pack: {
+          ...pack,
+          budget: { ...pack.budget, modelInputTokensMax: 64_000 },
+          files: pack.files.map((file) => ({
+            ...file,
+            excerpts: file.excerpts.map((excerpt) => ({
+              ...excerpt,
+              content: `${name} evidence `.repeat(3_000),
+              contentBytes: 33_000,
+            })),
+          })),
+        },
+      };
+    });
+    const sentTokens: number[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        sentTokens.push(countGatewayPromptTokens({ messages: request.messages }));
+        if (sentTokens.length === 1) {
+          adoptReportedContextWindow(
+            built,
+            { modelId: "assumed-chat", contextWindowTokens: 8_192, correlationId: "corr-ms-retry" },
+            "provider-overflow",
+          );
+          const error = new ContextOverflowError("provider reported context overflow");
+          error.reportedContextWindowTokens = 8_192;
+          return Promise.reject(error);
+        }
+        return Promise.resolve({
+          modelId: "assumed-chat",
+          content: "answer",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "r",
+            promptTokens: 0,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+
+    try {
+      const answerer = createMultiSourceAnswerer(
+        built,
+        model,
+        "assumed-chat",
+        new AbortController().signal,
+        "corr-ms-retry",
+      );
+      const result = normalizeGroundedAnswerPayload(await answerer("explain", labeledPacks));
+
+      expect(result.content).toBe("answer");
+      expect(sentTokens).toHaveLength(2);
+      expect(sentTokens[1]).toBeLessThan(sentTokens[0] ?? 0);
+      expect(sentTokens[1]).toBeLessThanOrEqual(8_192);
+      expect(result.promptContext?.contextWindowTokens).toBe(8_192);
+    } finally {
+      await built.dispose?.();
+    }
   });
 });
