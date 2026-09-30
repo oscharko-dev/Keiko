@@ -6,7 +6,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { ConnectorPickerWidget } from "./ConnectorPickerWidget";
 import type {
   CapsuleListEntry,
@@ -40,6 +41,10 @@ const mockFetchCapsuleSets = vi.mocked(fetchCapsuleSets);
 beforeEach(() => {
   mockFetchCapsules.mockReset();
   mockFetchCapsuleSets.mockReset();
+});
+
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -326,6 +331,41 @@ describe("ConnectorPickerWidget", () => {
     );
     await user.click(screen.getByRole("button", { name: /Create a Knowledge Pod/i }));
     expect(onManageConnectors).toHaveBeenCalledTimes(1);
+  });
+
+  it("localizes the empty, loading and failure states when German is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    mockFetchCapsules.mockResolvedValue({ capsules: [] });
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
+    const { unmount } = render(
+      <I18nProvider>
+        <ConnectorPickerWidget onSelect={vi.fn()} />
+      </I18nProvider>,
+    );
+    expect(
+      await screen.findByRole("button", { name: "Knowledge Pod erstellen" }),
+    ).toBeInTheDocument();
+    unmount();
+
+    mockFetchCapsules.mockReturnValue(new Promise(() => undefined));
+    const loading = render(
+      <I18nProvider>
+        <ConnectorPickerWidget onSelect={vi.fn()} />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText("Knowledge Pods werden geladen…")).toBeInTheDocument();
+    loading.unmount();
+
+    mockFetchCapsules.mockRejectedValue("offline");
+    render(
+      <I18nProvider>
+        <ConnectorPickerWidget onSelect={vi.fn()} />
+      </I18nProvider>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Knowledge Pods konnten nicht geladen werden.",
+    );
+    expect(screen.getByRole("button", { name: "Erneut versuchen" })).toBeInTheDocument();
   });
 
   it("shows a 'Create or manage Knowledge Pods' action in normal state", async () => {

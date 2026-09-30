@@ -25,6 +25,7 @@ import {
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
+import { useLocalKnowledgeTranslate } from "@/app/local-knowledge/local-knowledge-i18n";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
@@ -94,20 +95,27 @@ function isSelectableKnowledgePodSet(set: CapsuleSetListEntry): boolean {
   return readiness === undefined || SELECTABLE_SET_READINESS.has(readiness);
 }
 
-function formatLoadError(error: unknown): string {
+// A load failure keeps the server's message; without one, ErrorState states the failure in the
+// user's language.
+interface LoadFailure {
+  readonly message: string | undefined;
+}
+
+function loadFailure(error: unknown): LoadFailure {
   // uiux-fix F018 C124: lead with the human message; the machine code follows as a
   // parenthesised detail instead of a bold "INTERNAL:" prefix.
-  if (error instanceof ApiError) return `${error.message} (${error.code})`;
-  if (error instanceof Error) return error.message;
-  return "Failed to load Knowledge Pods.";
+  if (error instanceof ApiError) return { message: `${error.message} (${error.code})` };
+  if (error instanceof Error) return { message: error.message };
+  return { message: undefined };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function LoadingState(): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   return (
     <div className="connector-picker-status" role="status" aria-live="polite">
-      Loading Knowledge Pods…
+      {t("localKnowledge.picker.loading")}
     </div>
   );
 }
@@ -116,14 +124,15 @@ function ErrorState({
   message,
   onRetry,
 }: {
-  readonly message: string;
+  readonly message: string | undefined;
   readonly onRetry: () => void;
 }): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   return (
     <div className="connector-picker-error" role="alert">
-      <p>{message}</p>
+      <p>{message ?? t("localKnowledge.picker.loadFailed")}</p>
       <button type="button" className="connector-picker-retry" onClick={onRetry}>
-        Try again
+        {t("localKnowledge.picker.retry")}
       </button>
     </div>
   );
@@ -134,6 +143,7 @@ function EmptyState({
 }: {
   readonly onManageConnectors: () => void;
 }): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   return (
     <div className="connector-picker-empty">
       <button
@@ -141,7 +151,7 @@ function EmptyState({
         className="lk-btn lk-btn-primary connector-picker-create-link"
         onClick={onManageConnectors}
       >
-        Create a Knowledge Pod
+        {t("localKnowledge.picker.create")}
       </button>
     </div>
   );
@@ -299,7 +309,7 @@ export function ConnectorPickerWidget({
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LoadFailure | null>(null);
   // Sets that loaded fine but cannot ground an answer. Counted rather than silently dropped: a set
   // the user just composed must not simply disappear from the picker with no explanation.
   const [withheldSetCount, setWithheldSetCount] = useState(0);
@@ -333,7 +343,7 @@ export function ConnectorPickerWidget({
             capsulesForKnowledgePodUi(capsuleResult.value).filter(isSelectableKnowledgePod),
           );
         } else {
-          setError(formatLoadError(capsuleResult.reason));
+          setError(loadFailure(capsuleResult.reason));
         }
         if (capsuleSetResult.status === "fulfilled") {
           const loaded = capsuleSetsForKnowledgePodUi(capsuleSetResult.value);
@@ -344,7 +354,7 @@ export function ConnectorPickerWidget({
           setSetsFailed(true);
         }
       } catch (caught) {
-        if (!cancelled) setError(formatLoadError(caught));
+        if (!cancelled) setError(loadFailure(caught));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -369,7 +379,7 @@ export function ConnectorPickerWidget({
   if (error !== null) {
     return (
       <ErrorState
-        message={error}
+        message={error.message}
         onRetry={() => {
           setReloadToken((t) => t + 1);
         }}

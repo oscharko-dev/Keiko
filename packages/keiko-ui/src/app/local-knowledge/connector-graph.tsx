@@ -1022,7 +1022,7 @@ function CapsuleRowActions({
   const { id, displayName } = capsule;
   return (
     <fieldset
-      aria-label={`Actions for Knowledge Pod ${displayName}`}
+      aria-label={t("localKnowledge.row.actionsLabel", { name: displayName })}
       className="lk-capsule-actions"
       style={NATIVE_FIELDSET_RESET_STYLE}
     >
@@ -1036,7 +1036,7 @@ function CapsuleRowActions({
       <button
         type="button"
         disabled={busy}
-        aria-label={`Add Knowledge Pod ${displayName} to workspace`}
+        aria-label={t("localKnowledge.row.addToWorkspaceLabel", { name: displayName })}
         onClick={() => {
           onAddToWorkspace(id);
         }}
@@ -1047,25 +1047,27 @@ function CapsuleRowActions({
       <button
         type="button"
         disabled={busy}
-        aria-label={`Open details for Knowledge Pod ${displayName}`}
+        aria-label={t("localKnowledge.row.detailsLabel", { name: displayName })}
         onClick={() => {
           onHealth(id);
         }}
         className="lk-btn lk-btn-ghost"
       >
-        Details
+        {t("localKnowledge.row.details")}
       </button>
       <button
         type="button"
         disabled={busy}
         aria-busy={busyKind === "disconnect"}
-        aria-label={`Disconnect Knowledge Pod ${displayName}`}
+        aria-label={t("localKnowledge.row.disconnectLabel", { name: displayName })}
         onClick={() => {
           onDisconnect(id);
         }}
         className="lk-btn lk-btn-danger"
       >
-        {busyKind === "disconnect" ? "Disconnecting…" : t("localKnowledge.disconnect.confirm")}
+        {busyKind === "disconnect"
+          ? t("localKnowledge.row.disconnecting")
+          : t("localKnowledge.disconnect.confirm")}
       </button>
     </fieldset>
   );

@@ -672,6 +672,33 @@ describe("ConnectorGraph — with capsules", () => {
   });
 });
 
+describe("ConnectorGraph — localized row actions", () => {
+  it("names every Knowledge Pod row action in German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const capsule = makeCapsule({ id: makeCapsuleId("de-row"), displayName: "Fachkonzept" });
+    render(
+      <I18nProvider>
+        <ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />
+      </I18nProvider>,
+    );
+
+    const actions = await screen.findByRole("group", {
+      name: "Aktionen für Knowledge Pod Fachkonzept",
+    });
+    expect(
+      within(actions).getByRole("button", {
+        name: "Knowledge Pod Fachkonzept zum Arbeitsbereich hinzufügen",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(actions).getByRole("button", { name: "Details zu Knowledge Pod Fachkonzept öffnen" }),
+    ).toHaveTextContent("Details");
+    expect(
+      within(actions).getByRole("button", { name: "Knowledge Pod Fachkonzept trennen" }),
+    ).toHaveTextContent("Trennen");
+  });
+});
+
 describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
   it("dispatches the connector drop event when 'Add to workspace' is clicked (keyboard path)", async () => {
     const capsule = makeCapsule({ id: makeCapsuleId("kbdrop"), displayName: "KB Capsule" });
