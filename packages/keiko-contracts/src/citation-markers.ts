@@ -18,8 +18,9 @@
 //   * Anything else inside the brackets (`[note]`, `[a.ts:1-2]`, `[1, x]`) is NOT a marker.
 //   * Markdown code is never scanned: a fenced block (``` or ~~~) or an inline code span holds
 //     code such as `const a = [1, 2, 3];`, never a citation (PR #3678 review).
-//   * The scan is a single forward pass with no regular expression, so it stays linear in the text
-//     length however many brackets or spaces the input holds.
+//   * The marker scan is a single forward pass with no regular expression. The block pre-pass reads
+//     each line with anchored patterns, once per quote level up to the renderer's nesting cap, so
+//     the whole scan stays linear in the text length however many brackets or spaces it holds.
 
 /** One cited reference index inside a marker group, with the literal that names it on its own. */
 export interface CitationMarkerEntry {
@@ -159,12 +160,189 @@ function fencedBlockEnd(text: string, position: number, fence: string, length: n
   return text.length;
 }
 
-// Where a Markdown block ends: a blank line, or a line that starts a block of its own — a fence, an
-// ATX heading, a list item or a block quote. An inline code span never reaches across one
-// (CommonMark), so an unmatched backtick in one block cannot pair with one in the next and swallow
-// the cited prose between them (PR #3678 review).
-const BLOCK_BREAK =
-  /\n[ \t]*\n|\n {0,3}(?:`{3}|~{3}|#{1,6}(?=[ \t\n])|[-*+][ \t]|\d{1,9}[.)][ \t]|>)/gu;
+// Where an inline code span must end. The chat renderer (keiko-ui `safe-markdown.ts`) parses inline
+// Markdown per paragraph, heading, list item, table cell and quoted paragraph, so an unmatched
+// backtick in one of them cannot pair with one in the next and swallow the cited prose between them
+// (PR #3678 review). The breaks are every newline the renderer does not join into one paragraph and
+// every cell pipe of a table row; the line rules below mirror the renderer's block dispatch, so a
+// thematic break, a table row or an indented list item ends a span exactly where it ends there.
+
+interface MarkdownLine {
+  readonly text: string;
+  /** Offset of the line's first character in the scanned text. */
+  readonly start: number;
+  /** Offset of the newline that precedes the line, or -1 for the first line. */
+  readonly newlineBefore: number;
+}
+
+interface InlineBreakScan {
+  /** Newlines the renderer joins into one paragraph: no break. */
+  readonly joined: Set<number>;
+  /** Breaks inside a line: table cell pipes. */
+  readonly inline: number[];
+}
+
+// The renderer's quote nesting cap (safe-markdown MAX_MARKDOWN_DEPTH): deeper quoted text becomes one
+// text node, whose lines the marker scan reads as one paragraph. The cap also bounds this recursion
+// on hostile `> > > …` input.
+const RENDERED_QUOTE_DEPTH = 16;
+const FENCE_OPEN = /^(`{3,}|~{3,})/u;
+const FENCE_CLOSE = /^(`{3,}|~{3,})\s*$/u;
+const HEADING_LINE = /^#{1,6} .+$/u;
+const HEADING_START = /^#{1,6} /u;
+const THEMATIC_BREAK = /^(?:-{3,}|\*{3,}|_{3,})$/u;
+const LIST_ITEM = /^ *(?:[*+-]|\d{1,9}\.) /u;
+const QUOTE_PREFIX = /^ *> ?/u;
+const SEPARATOR_CELL = /^-+$/u;
+
+function markdownLines(text: string): MarkdownLine[] {
+  const lines: MarkdownLine[] = [];
+  let start = 0;
+  let end = text.indexOf("\n");
+  while (end !== -1) {
+    lines.push({ text: text.slice(start, end), start, newlineBefore: start - 1 });
+    start = end + 1;
+    end = text.indexOf("\n", start);
+  }
+  lines.push({ text: text.slice(start), start, newlineBefore: start - 1 });
+  return lines;
+}
+
+function isQuoteLine(line: string): boolean {
+  return line.trimStart().startsWith("> ") || line.trim() === ">";
+}
+
+// The renderer's paragraph rule: a paragraph ends before a line that starts a block of its own.
+function startsRenderedBlock(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    trimmed === "" ||
+    HEADING_START.test(trimmed) ||
+    line.trimStart().startsWith("> ") ||
+    FENCE_OPEN.test(trimmed) ||
+    LIST_ITEM.test(line) ||
+    THEMATIC_BREAK.test(trimmed)
+  );
+}
+
+function isSeparatorRow(line: string): boolean {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|")) row = row.slice(0, -1);
+  return row
+    .split("|")
+    .every((cell) => SEPARATOR_CELL.test(cell.trim().replace(/^:/u, "").replace(/:$/u, "")));
+}
+
+function afterRenderedFence(lines: readonly MarkdownLine[], index: number, fence: string): number {
+  for (let next = index + 1; next < lines.length; next += 1) {
+    const closer = FENCE_CLOSE.exec(lines[next]?.text.trim() ?? "")?.[1] ?? "";
+    if (closer.startsWith(fence.charAt(0)) && closer.length >= fence.length) return next + 1;
+  }
+  return lines.length;
+}
+
+function pushPipes(line: MarkdownLine, scan: InlineBreakScan): void {
+  let pipe = line.text.indexOf("|");
+  while (pipe !== -1) {
+    scan.inline.push(line.start + pipe);
+    pipe = line.text.indexOf("|", pipe + 1);
+  }
+}
+
+function scanTable(lines: readonly MarkdownLine[], index: number, scan: InlineBreakScan): number {
+  const header = lines[index];
+  if (header !== undefined) pushPipes(header, scan);
+  let next = index + 2;
+  for (let row = lines[next]; row !== undefined; row = lines[next]) {
+    const trimmed = row.text.trim();
+    if (trimmed === "" || !trimmed.includes("|")) break;
+    pushPipes(row, scan);
+    next += 1;
+  }
+  return next;
+}
+
+function scanParagraph(
+  lines: readonly MarkdownLine[],
+  index: number,
+  scan: InlineBreakScan,
+): number {
+  let next = index + 1;
+  for (let line = lines[next]; line !== undefined; line = lines[next]) {
+    if (startsRenderedBlock(line.text)) break;
+    scan.joined.add(line.newlineBefore);
+    next += 1;
+  }
+  return next;
+}
+
+function scanQuote(
+  lines: readonly MarkdownLine[],
+  index: number,
+  depth: number,
+  scan: InlineBreakScan,
+): number {
+  const inner: MarkdownLine[] = [];
+  let next = index;
+  for (let line = lines[next]; line !== undefined && isQuoteLine(line.text); line = lines[next]) {
+    const prefix = QUOTE_PREFIX.exec(line.text)?.[0].length ?? 0;
+    inner.push({ ...line, text: line.text.slice(prefix), start: line.start + prefix });
+    next += 1;
+  }
+  if (depth < RENDERED_QUOTE_DEPTH) {
+    scanRenderedBlocks(inner, depth + 1, scan);
+    return next;
+  }
+  for (const line of inner.slice(1)) scan.joined.add(line.newlineBefore);
+  return next;
+}
+
+function startsTable(lines: readonly MarkdownLine[], index: number, trimmed: string): boolean {
+  return trimmed.includes("|") && isSeparatorRow(lines[index + 1]?.text ?? "");
+}
+
+function isBlankHeadingOrRule(trimmed: string): boolean {
+  return trimmed === "" || HEADING_LINE.test(trimmed) || THEMATIC_BREAK.test(trimmed);
+}
+
+// One block of the renderer's dispatch order: fence, heading, rule, quote, table, list, paragraph.
+function scanRenderedBlock(
+  lines: readonly MarkdownLine[],
+  index: number,
+  depth: number,
+  scan: InlineBreakScan,
+): number {
+  const line = lines[index]?.text ?? "";
+  const trimmed = line.trim();
+  const fence = FENCE_OPEN.exec(trimmed)?.[1];
+  if (fence !== undefined) return afterRenderedFence(lines, index, fence);
+  if (isBlankHeadingOrRule(trimmed)) return index + 1;
+  if (isQuoteLine(line)) return scanQuote(lines, index, depth, scan);
+  if (startsTable(lines, index, trimmed)) return scanTable(lines, index, scan);
+  if (LIST_ITEM.test(line)) return index + 1;
+  return scanParagraph(lines, index, scan);
+}
+
+function scanRenderedBlocks(
+  lines: readonly MarkdownLine[],
+  depth: number,
+  scan: InlineBreakScan,
+): void {
+  let index = 0;
+  while (index < lines.length) index = scanRenderedBlock(lines, index, depth, scan);
+}
+
+// Every offset where the renderer ends an inline context, in document order.
+function renderedInlineBreaks(text: string): readonly number[] {
+  const lines = markdownLines(text);
+  const scan: InlineBreakScan = { joined: new Set(), inline: [] };
+  scanRenderedBlocks(lines, 0, scan);
+  const newlines = lines
+    .map((line) => line.newlineBefore)
+    .filter((newline) => newline >= 0 && !scan.joined.has(newline));
+  return [...newlines, ...scan.inline].sort((left, right) => left - right);
+}
 
 // Every backtick run of the text, grouped by run length in document order, so an inline code span
 // finds its closing run without rescanning the text: the per-length cursors and the block-break
@@ -184,7 +362,7 @@ class BacktickRuns {
       this.startsByLength.set(length, starts);
       next = text.indexOf("`", next + length);
     }
-    this.blockBreaks = [...text.matchAll(BLOCK_BREAK)].map((match) => match.index);
+    this.blockBreaks = renderedInlineBreaks(text);
   }
 
   /** The end of the span a run of `length` opens at `position`, or undefined when none closes it. */

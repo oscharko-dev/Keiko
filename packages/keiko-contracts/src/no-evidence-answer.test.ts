@@ -95,6 +95,12 @@ describe("isNoEvidenceAnswerText", () => {
     "The API does not provide authentication according to the [documentation](docs/auth.md). Requests are anonymous.",
     "The API does not provide authentication according to the **documentation**.",
     "Den Unterlagen zufolge wird Java 17 nicht mehr unterstützt und nicht erwähnt.",
+    // The whole attributed source phrase, possessives, versions and compounds included (PR #3678
+    // review).
+    "The API does not provide authentication according to the project's [documentation](docs/auth.md). Requests are anonymous.",
+    "The API does not provide authentication according to the project’s documentation.",
+    "The API does not provide authentication according to the v2 documentation.",
+    "The API does not provide authentication as described in the end-user documentation.",
     // The audit's exact false-positive probes.
     "Für diesen Endpunkt sind keine Angaben zum Benutzer erforderlich.",
     "The endpoint requires no details about the user.",

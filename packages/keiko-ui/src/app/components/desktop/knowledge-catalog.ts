@@ -133,12 +133,12 @@ function settleCatalogList<Response, Entry>(
   }
   try {
     return { failed: false, entries: toEntries(result.value) };
-  } catch (malformed) {
+  } catch (error_) {
     // The mapping error carries no correlation of its own; the response it failed on does, so the
-    // report still names the request whose body was malformed (PR #3678 review).
+    // report still names the request whose body was error_ (PR #3678 review).
     const correlationId = responseCorrelationIdOf(result.value);
-    reportCatalogLoadFailure(list, malformed, "validation-failed", correlationId);
-    return { failed: true, reason: malformed };
+    reportCatalogLoadFailure(list, error_, "validation-failed", correlationId);
+    return { failed: true, reason: error_ };
   }
 }
 

@@ -143,6 +143,37 @@ describe("findCitationMarkerGroups", () => {
     }
   });
 
+  // PR #3678 review: the breaks follow the renderer's blocks, so a thematic break, a table row, an
+  // indented list item and a line after a heading end a span exactly where they end in the chat.
+  it("ends a code span wherever the chat renderer ends an inline context", () => {
+    const tick = "An unmatched ` appears here.";
+    const between = (block: string): string => `${tick}\n${block}\nAnother unmatched \` appears.`;
+
+    for (const rule of ["---", "***", "___", "  ---  "]) {
+      expect(
+        citationMarkerIndices(`${tick}\n${rule}\nThe API uses TLS [1].\n${rule}\n${tick}`),
+      ).toEqual([1]);
+    }
+    expect(citationMarkerIndices(between("      - The API uses TLS [1]"))).toEqual([1]);
+    expect(citationMarkerIndices(`# Heading \` here\nThe API uses TLS [1] \` there`)).toEqual([1]);
+    const table = "| a ` | b |\n| --- | :-: |\n| TLS [1] | c ` |";
+    expect(citationMarkerIndices(table)).toEqual([1]);
+    expect(citationMarkerIndices("| a ` | TLS [1] | c ` |\n|---|---|---|")).toEqual([1]);
+  });
+
+  it("keeps a code span across lines the chat renderer joins into one paragraph", () => {
+    // Neither `1)` nor a setext underline starts a block there, and quoted lines form one paragraph.
+    expect(citationMarkerIndices("A ` tick\n1) item [1] ` end [2]")).toEqual([2]);
+    expect(citationMarkerIndices("A ` tick\n===\nitem [1] ` end [2]")).toEqual([2]);
+    expect(citationMarkerIndices("> A ` tick\n> item [1] ` end [2]")).toEqual([2]);
+    expect(citationMarkerIndices("> A ` tick\n>\n> item [1] ` end [2]")).toEqual([1, 2]);
+    // Past the renderer's quote nesting cap, the quoted lines form one text node, read as one
+    // paragraph; the cap also bounds the scan on hostile nesting.
+    const deep = "> ".repeat(17);
+    expect(citationMarkerIndices(`${deep}A \` tick\n${deep}\n${deep}[1] \` end [2]`)).toEqual([2]);
+    expect(citationMarkerIndices(`${"> ".repeat(50_000)}TLS [1]`)).toEqual([1]);
+  });
+
   it("runs an unclosed fence to the end of the text, like the Markdown renderer", () => {
     expect(citationMarkerIndices("Intro [1]\n```\nconst a = [2];\nstill code [3]")).toEqual([1]);
   });

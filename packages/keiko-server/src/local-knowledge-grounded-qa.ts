@@ -2336,7 +2336,9 @@ function countByIndex(indices: readonly number[]): ReadonlyMap<number, number> {
 // judge reads only the TLS claim, so the second [1] is unjudged although the index appears in a
 // judged claim (PR #3678 review, P1). An index is covered only when the claims the stage judges
 // (segmentNumericCitedClaims) name it at least as often as the answer uses it; anything less keeps
-// the caveat, failing closed.
+// the caveat, failing closed. A claim whose span carried bracketed prose the stripper removed covers
+// nothing: in `The API uses TLS [The repository enforces MFA] [1]` the judge reads only
+// `The API uses TLS` (PR #3678 review, P1).
 function weakCitationsJudged(result: ScopedGroundedResult): boolean {
   const weak = new Set(
     result.citations
@@ -2345,7 +2347,9 @@ function weakCitationsJudged(result: ScopedGroundedResult): boolean {
   );
   if (weak.size === 0) return true;
   const judged = countByIndex(
-    segmentNumericCitedClaims(result.answer).flatMap((claim) => claim.markers),
+    segmentNumericCitedClaims(result.answer)
+      .filter((claim) => claim.hidesProse !== true)
+      .flatMap((claim) => claim.markers),
   );
   const used = countByIndex(citationMarkerIndices(result.answer));
   return [...weak].every((index) => (judged.get(index) ?? 0) >= (used.get(index) ?? 0));

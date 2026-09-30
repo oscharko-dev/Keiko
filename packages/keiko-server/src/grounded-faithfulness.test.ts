@@ -636,13 +636,37 @@ describe("numeric citation entailment", () => {
 
   it("keeps missing and malformed markers out of semantic evidence", async () => {
     const claims = segmentNumericCitedClaims("Missing [9], malformed [x], and zero [0].");
-    expect(claims).toEqual([{ claimText: "Missing , malformed , and zero .", markers: [9] }]);
+    // The malformed `[x]` is no citation: the stripper removes text the judge never reads.
+    expect(claims).toEqual([
+      { claimText: "Missing , malformed , and zero .", markers: [9], hidesProse: true },
+    ]);
     const result = await reconcileNumericClaimEntailment(
       "Missing [9], malformed [x], and zero [0].",
       [{ marker: 1, excerptText: "unused" }],
       scriptedJudge(),
     );
     expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 0 });
+  });
+
+  // PR #3678 review (P1): the judge reads the stripped claim, so a claim whose brackets held prose
+  // says so; citation markers, path citations and grouped markers hide nothing.
+  it("flags a claim whose stripped brackets held prose the judge never reads", () => {
+    expect(
+      segmentNumericCitedClaims(
+        "TLS is used [1, 2]. TLS is used [src/tls.ts:4] [1]. TLS [The repository enforces MFA] [1]. See the [guide](docs/g.md) [2].",
+      ),
+    ).toEqual([
+      { claimText: "TLS is used .", markers: [1, 2] },
+      { claimText: "TLS is used .", markers: [1] },
+      { claimText: "TLS .", markers: [1], hidesProse: true },
+      { claimText: "See the (docs/g.md) .", markers: [2], hidesProse: true },
+    ]);
+  });
+
+  it("carries hidden prose into the claim a marker-only span supports", () => {
+    expect(
+      segmentNumericCitedClaims("The API uses TLS [1]. [The repository enforces MFA] [1]"),
+    ).toEqual([{ claimText: "The API uses TLS .", markers: [1], hidesProse: true }]);
   });
 
   it("segments a grouped marker into one claim citing every index", () => {

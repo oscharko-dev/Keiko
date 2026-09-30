@@ -2370,6 +2370,14 @@ function buildBufferedGatewayAssembly(
   return assemblyWithConversationImages(deps, request, modelId, baseAssembly);
 }
 
+// The per-attempt inputs of one buffered assembly: the turn's abort signal and correlation, and the
+// context-window attempt that decides whether a failure is retried with the adopted window.
+interface BufferedAssemblyAttempt {
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly attempt: ContextWindowAttempt;
+}
+
 async function prepareBufferedGatewayAssembly(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2379,12 +2387,11 @@ async function prepareBufferedGatewayAssembly(
     readonly executionAdmission: DesktopChatExecutionAdmission;
   },
   gatewayTurn: GatewayTurnSnapshot,
-  signal: AbortSignal,
-  correlationId: string | undefined,
-  attempt: ContextWindowAttempt,
+  run: BufferedAssemblyAttempt,
 ): Promise<GatewayPromptAssembly> {
   const { request, modelId } = prepared;
   const { admitted, executionAdmission } = admission;
+  const { signal, correlationId, attempt } = run;
   try {
     const executionRequest = await prepareDesktopChatPrompt(
       deps,
@@ -2442,20 +2449,17 @@ async function assembleAndCallBuffered(
     readonly executionAdmission: DesktopChatExecutionAdmission;
   },
   snapshot: GatewayTurnSnapshot,
-  abortSignal: AbortSignal,
-  correlationId: string | undefined,
-  attempt: ContextWindowAttempt,
+  run: BufferedAssemblyAttempt,
 ): Promise<{ assembly: GatewayPromptAssembly; response: NormalizedResponse } | RouteResult> {
   const { modelId } = prepared;
+  const { signal: abortSignal, correlationId } = run;
   const assembly = await prepareBufferedGatewayAssembly(
     deps,
     prepared,
     memory,
     admission,
     snapshot,
-    abortSignal,
-    correlationId,
-    attempt,
+    run,
   );
   const model = bufferedModelAtProviderBoundary(
     deps,
@@ -2491,16 +2495,11 @@ async function executeBufferedModelTurn(
     deps,
     { modelId, surface: "chat-buffered", correlationId },
     (attempt) =>
-      assembleAndCallBuffered(
-        deps,
-        prepared,
-        memory,
-        outcome,
-        snapshot,
-        abortSignal,
+      assembleAndCallBuffered(deps, prepared, memory, outcome, snapshot, {
+        signal: abortSignal,
         correlationId,
         attempt,
-      ),
+      }),
   );
   if (isRouteResult(called)) return called;
   const { assembly, response } = called;

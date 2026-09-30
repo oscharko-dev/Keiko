@@ -74,13 +74,13 @@ describe("reportedContextWindowTokens", () => {
   });
 
   it("reports nothing for an overflow that names no window or an implausible one", () => {
-    expect(reportedContextWindowTokens({ error: { code: "context_length_exceeded" } })).toBe(
-      undefined,
-    );
+    expect(
+      reportedContextWindowTokens({ error: { code: "context_length_exceeded" } }),
+    ).toBeUndefined();
     expect(
       reportedContextWindowTokens({ error: { message: "maximum context length is 100 tokens" } }),
-    ).toBe(undefined);
-    expect(reportedContextWindowTokens("not a payload")).toBe(undefined);
+    ).toBeUndefined();
+    expect(reportedContextWindowTokens("not a payload")).toBeUndefined();
   });
 
   // llama.cpp states the window as a numeric field of the error object, next to a message that names
@@ -98,11 +98,11 @@ describe("reportedContextWindowTokens", () => {
 
   it("bounds the n_ctx field like every other source of a window", () => {
     const named = (n_ctx: unknown): unknown => reportedContextWindowTokens({ error: { n_ctx } });
-    expect(named(511)).toBe(undefined);
-    expect(named(100_000_001)).toBe(undefined);
-    expect(named(16_384.5)).toBe(undefined);
-    expect(named(Number.MAX_SAFE_INTEGER + 2)).toBe(undefined);
-    expect(named("16384")).toBe(undefined);
+    expect(named(511)).toBeUndefined();
+    expect(named(100_000_001)).toBeUndefined();
+    expect(named(16_384.5)).toBeUndefined();
+    expect(named(Number.MAX_SAFE_INTEGER + 2)).toBeUndefined();
+    expect(named("16384")).toBeUndefined();
     expect(named(512)).toBe(512);
     expect(named(100_000_000)).toBe(100_000_000);
   });
@@ -112,7 +112,7 @@ describe("reportedContextWindowTokens", () => {
   it("answers a long digit run in bounded time", () => {
     const message = `context window exceeded: ${"7".repeat(64_000)}`;
     const started = performance.now();
-    expect(reportedContextWindowTokens({ error: { message } })).toBe(undefined);
+    expect(reportedContextWindowTokens({ error: { message } })).toBeUndefined();
     expect(performance.now() - started).toBeLessThan(200);
   });
 
@@ -208,7 +208,7 @@ describe("OpenAiAdapter overflow classification of hostile bodies", () => {
   it("classifies an overflow followed by a huge digit run without stalling", async () => {
     const { error, ms } = await failureOf(`context window exceeded: ${"7".repeat(64_000)}`);
     expect(error).toBeInstanceOf(ContextOverflowError);
-    expect((error as ContextOverflowError).reportedContextWindowTokens).toBe(undefined);
+    expect((error as ContextOverflowError).reportedContextWindowTokens).toBeUndefined();
     expect(ms).toBeLessThan(500);
   });
 

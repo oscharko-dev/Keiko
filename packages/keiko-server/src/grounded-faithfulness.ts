@@ -30,6 +30,7 @@ import {
   CITATION_FINDING_LIST_MAX,
   citationFindingTotalSuffix,
   citationMarkerIndices,
+  findCitationMarkerGroups,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
@@ -595,12 +596,30 @@ export function splitClaimSpans(text: string): readonly string[] {
   return spans;
 }
 
+// Every bracketed span the claim stripper removes, a citation or not.
+const CLAIM_BRACKET_RE = /[[［【][^\]］】\n]{1,200}[\]］】]/g;
+
 /** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
 export function stripInlineCitations(text: string): string {
   return text
-    .replace(/[[［【][^\]］】\n]{1,200}[\]］】]/g, " ")
+    .replace(CLAIM_BRACKET_RE, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+function isPathCitationBracket(span: string, match: RegExpMatchArray): boolean {
+  if (isMarkdownLink(span, match)) return false;
+  const inner = match[0].slice(1, -1);
+  return inner.split(",").every((part) => parseCitationToken(part.trim()) !== undefined);
+}
+
+// True when the stripper removes bracketed text that is not a citation marker: prose such as
+// `[The repository enforces MFA]` or a link label that the reader sees and the judge never reads.
+function hidesBracketedProse(span: string): boolean {
+  const markerStarts = new Set(findCitationMarkerGroups(span).map((group) => group.start));
+  return [...span.matchAll(CLAIM_BRACKET_RE)].some(
+    (match) => !markerStarts.has(match.index) && !isPathCitationBracket(span, match),
+  );
 }
 
 /** Segment an answer into the cited claims (spans that carry at least one inline citation). */
@@ -618,23 +637,29 @@ export function segmentCitedClaims(answerText: string): readonly CitedClaim[] {
 export interface NumericCitedClaim {
   readonly claimText: string;
   readonly markers: readonly number[];
+  /**
+   * Present when the claim's span(s) carried bracketed prose the stripper removed: the judge reads
+   * `claimText` only, so its verdict does not cover everything the reader sees (PR #3678 review).
+   */
+  readonly hidesProse?: true;
 }
 
 function appendNumericCitedClaim(
   claims: NumericCitedClaim[],
-  claimText: string,
-  markers: readonly number[],
+  claim: NumericCitedClaim,
   mergeWithPrevious: boolean,
 ): void {
   const previous = claims.at(-1);
-  if (mergeWithPrevious && previous?.claimText === claimText) {
+  if (mergeWithPrevious && previous?.claimText === claim.claimText) {
+    const hidesProse = previous.hidesProse === true || claim.hidesProse === true;
     claims[claims.length - 1] = {
-      claimText,
-      markers: [...new Set([...previous.markers, ...markers])],
+      claimText: claim.claimText,
+      markers: [...new Set([...previous.markers, ...claim.markers])],
+      ...(hidesProse ? { hidesProse } : {}),
     };
     return;
   }
-  claims.push({ claimText, markers });
+  claims.push(claim);
 }
 
 /** Segment user-visible `[n]` citations against the sentence each marker actually supports. */
@@ -647,7 +672,10 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
     if (markers.length > 0) {
       const supportedClaimText = claimText.length > 0 ? claimText : precedingClaimText;
       if (supportedClaimText !== undefined) {
-        appendNumericCitedClaim(claims, supportedClaimText, markers, claimText.length === 0);
+        const claim = hidesBracketedProse(span)
+          ? { claimText: supportedClaimText, markers, hidesProse: true as const }
+          : { claimText: supportedClaimText, markers };
+        appendNumericCitedClaim(claims, claim, claimText.length === 0);
       }
     }
     if (claimText.length > 0) precedingClaimText = claimText;

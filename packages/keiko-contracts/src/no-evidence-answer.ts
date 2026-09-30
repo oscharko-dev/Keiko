@@ -38,21 +38,80 @@ const STOCK_REFUSAL_PATTERNS: readonly RegExp[] = [
   /\bunzureichend\p{L}*\s+(?:informationen|angaben|belege)\b/iu,
 ];
 
+// `lead`, then at most `gap` further words, then one of `terms` (each a regex fragment). Every phrase
+// below shares this shape; the bounded gap keeps matching linear.
+function phrase(lead: string, gap: number, terms: readonly string[]): RegExp {
+  return new RegExp(
+    String.raw`\b${lead}\s+(?:\p{L}+\s+){0,${String(gap)}}(?:${terms.join("|")})\b`,
+    "iu",
+  );
+}
+
+// Any one of `terms` (each a regex fragment) as a whole word.
+function anyWord(terms: readonly string[]): RegExp {
+  return new RegExp(String.raw`\b(?:${terms.join("|")})\b`, "iu");
+}
+
 // Statements that INFORMATION is absent, phrased about what a text holds ("keine Angaben", "no
 // information"). They decline only together with a referent or a search outcome in the same
-// sentence. Each is bounded (`{0,n}`) so matching stays linear.
+// sentence.
 const INFORMATION_ABSENCE_PATTERNS: readonly RegExp[] = [
   // German: "keine (relevanten) Informationen/Angaben/Vorgaben/Aussage/...".
-  /\bkeine\s+(?:\p{L}+\s+){0,2}(?:informationen?|angaben?|vorgaben?|aussagen?|hinweise?|belege?|nachweise?|anhaltspunkte?|erkenntnisse|treffer|details)\b/iu,
+  phrase("keine", 2, [
+    "informationen?",
+    "angaben?",
+    "vorgaben?",
+    "aussagen?",
+    "hinweise?",
+    "belege?",
+    "nachweise?",
+    "anhaltspunkte?",
+    "erkenntnisse",
+    "treffer",
+    "details",
+  ]),
   // German: "nichts ... gefunden|erwähnt|angegeben".
-  /\bnichts\s+(?:\p{L}+\s+){0,3}(?:gefunden|erwähnt|angegeben|enthalten|beschrieben|dokumentiert)\b/iu,
+  phrase("nichts", 3, [
+    "gefunden",
+    "erwähnt",
+    "angegeben",
+    "enthalten",
+    "beschrieben",
+    "dokumentiert",
+  ]),
   // English: "no (relevant) information/evidence/mention/details ...".
-  /\bno\s+(?:\p{L}+\s+){0,2}(?:information|evidence|mentions?|references?|details|indication|guidance|specifications?)\b/iu,
+  phrase("no", 2, [
+    "information",
+    "evidence",
+    "mentions?",
+    "references?",
+    "details",
+    "indication",
+    "guidance",
+    "specifications?",
+  ]),
 ];
 
-// The outcome of a search: an absent-information noun next to it reports what the search found.
-const SEARCH_OUTCOME_PATTERN =
-  /\b(?:gefunden|finden|auffindbar|ermittel\p{L}*|vorhanden|verfügbar|found|find|located?|identified|available)\b|\bvor[.!?]*$/iu;
+// The outcome of a search: an absent-information noun next to it reports what the search found. A
+// sentence-final German "vor" closes "... liegen keine Angaben vor".
+const SEARCH_OUTCOME_WORD = anyWord([
+  "gefunden",
+  "finden",
+  "auffindbar",
+  String.raw`ermittel\p{L}*`,
+  "vorhanden",
+  "verfügbar",
+  "found",
+  "find",
+  "located?",
+  "identified",
+  "available",
+]);
+const SEARCH_OUTCOME_TRAILING_VOR = /\bvor[.!?]*$/iu;
+
+function namesSearchOutcome(sentence: string): boolean {
+  return SEARCH_OUTCOME_WORD.test(sentence) || SEARCH_OUTCOME_TRAILING_VOR.test(sentence);
+}
 
 // Negated verbs state a negative FACT about the subject as often as a refusal: "The API does not
 // provide authentication" is an answer (PR #3678 review). They count only when the text names the
@@ -60,33 +119,135 @@ const SEARCH_OUTCOME_PATTERN =
 const NEGATED_VERB_PATTERNS: readonly RegExp[] = [
   // German: "... ist/wird nicht enthalten|beschrieben|erwähnt|...", "lässt sich nicht entnehmen",
   // "geht nicht hervor", "kann ich nicht beantworten".
-  /\bnicht\s+(?:\p{L}+\s+){0,4}(?:enthalten|beschrieben|erwähnt|genannt|angegeben|dokumentiert|aufgeführt|abgedeckt|gefunden|finden|entnehmen|ableiten|hervor|beantworten|beantwortet)\b/iu,
+  phrase("nicht", 4, [
+    "enthalten",
+    "beschrieben",
+    "erwähnt",
+    "genannt",
+    "angegeben",
+    "dokumentiert",
+    "aufgeführt",
+    "abgedeckt",
+    "gefunden",
+    "finden",
+    "entnehmen",
+    "ableiten",
+    "hervor",
+    "beantworten",
+    "beantwortet",
+  ]),
   // German: "geht dazu nichts hervor", "steht dazu nichts", "sagen nichts über".
-  /\bnichts\s+(?:\p{L}+\s+){0,2}hervor\b/iu,
-  /\b(?:steht|stehen|sagt|sagen)\s+(?:\p{L}+\s+){0,4}nichts\b/iu,
+  phrase("nichts", 2, ["hervor"]),
+  phrase("(?:steht|stehen|sagt|sagen)", 4, ["nichts"]),
   // English: "not mentioned|specified|described|covered|documented|stated|found".
-  /\b(?:not|never)\s+(?:\p{L}+\s+){0,2}(?:mentioned|specified|described|covered|documented|stated|found)\b/iu,
+  phrase("(?:not|never)", 2, [
+    "mentioned",
+    "specified",
+    "described",
+    "covered",
+    "documented",
+    "stated",
+    "found",
+  ]),
   // English: "does not contain/include/mention/specify/provide/describe/say/address".
-  /\b(?:do|does)(?:\s+not|n[’']t)\s+(?:\p{L}+\s+){0,2}(?:contain|include|mention|specify|provide|describe|say|state|address|cover|discuss)\b/iu,
+  phrase(String.raw`(?:do|does)(?:\s+not|n[’']t)`, 2, [
+    "contain",
+    "include",
+    "mention",
+    "specify",
+    "provide",
+    "describe",
+    "say",
+    "state",
+    "address",
+    "cover",
+    "discuss",
+  ]),
   // English: "could not find", "cannot answer", "unable to determine".
-  /\b(?:(?:could|can)(?:\s+not|not|[’']t|n[’']t)|unable\s+to)\s+(?:\p{L}+\s+){0,2}(?:find|answer|determine|tell)\b/iu,
+  phrase(String.raw`(?:(?:could|can)(?:\s+not|not|[’']t|n[’']t)|unable\s+to)`, 2, [
+    "find",
+    "answer",
+    "determine",
+    "tell",
+  ]),
 ];
 
 // The evidence a refusal refers to: the documents, sources, excerpts, repository or context Keiko
 // retrieved. A plain "file" is not one: "Die Datei enthält keine Angaben zum Autor" is an answer.
-const EVIDENCE_REFERENT_PATTERN =
-  /\b(?:documents?|documentation|sources?|context|excerpts?|materials?|knowledge\s+base|provided|retrieved|repositor(?:y|ies)|code\s?base|folders?|dokument(?:e|en|s|ation)?|quellen?|unterlagen|kontext|auszüge?n?|bereitgestellt\p{L}*|wissensbasis|vorliegend\p{L}*|repositorys?|codebasis|ordnern?)\b/iu;
+const EVIDENCE_REFERENT_PATTERN = anyWord([
+  "documents?",
+  "documentation",
+  "sources?",
+  "context",
+  "excerpts?",
+  "materials?",
+  String.raw`knowledge\s+base`,
+  "provided",
+  "retrieved",
+  "repositor(?:y|ies)",
+  String.raw`code\s?base`,
+  "folders?",
+  "dokument(?:e|en|s|ation)?",
+  "quellen?",
+  "unterlagen",
+  "kontext",
+  "auszüge?n?",
+  String.raw`bereitgestellt\p{L}*`,
+  "wissensbasis",
+  String.raw`vorliegend\p{L}*`,
+  "repositorys?",
+  "codebasis",
+  "ordnern?",
+]);
 
 // An attribution names the evidence as the source of a statement, not as the place that lacks it:
 // "The API does not provide authentication according to the documentation." is a documented
 // negative fact (PR #3678 review). Attribution phrases are removed before the referent test.
-const ATTRIBUTION_PATTERNS: readonly RegExp[] = [
-  /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+(?:\p{L}+\s+){0,3}\p{L}+/giu,
-  /(?:\p{L}+\s+){1,3}zufolge\b/giu,
-];
+// A source word may carry a possessive, a version or a hyphen ("the project's documentation", "the
+// v2 documentation", "the end-user documentation"); stopping at those left the referent behind.
+const LEADING_ATTRIBUTION_PATTERN =
+  /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+(?:[\p{L}\p{N}’'-]+\s+){0,3}[\p{L}\p{N}’'-]+/giu;
+
+// "den bereitgestellten Dokumenten zufolge": up to three whitespace-separated letter runs before a
+// "zufolge" name the source; the earliest may end a token that starts with punctuation ("„den").
+// Read word by word, so no pattern backtracks over the words.
+const ZUFOLGE = /^zufolge\b/iu;
+const ZUFOLGE_MAX_WORDS = 3;
+const LETTER = /^\p{L}$/u;
+
+function trailingLetterCount(word: string): number {
+  const characters = Array.from(word);
+  let start = characters.length;
+  while (start > 0 && LETTER.test(characters[start - 1] ?? "")) start -= 1;
+  return characters.slice(start).join("").length;
+}
+
+// Removes the source words before a "zufolge" from `kept`; true when at least one was removed.
+function dropAttributedSource(kept: string[]): boolean {
+  for (let dropped = 0; dropped < ZUFOLGE_MAX_WORDS; dropped += 1) {
+    const word = kept.at(-1) ?? "";
+    const letters = trailingLetterCount(word);
+    if (letters === 0) return dropped > 0;
+    if (letters < word.length) {
+      kept[kept.length - 1] = word.slice(0, word.length - letters);
+      return true;
+    }
+    kept.pop();
+  }
+  return true;
+}
+
+function withoutTrailingAttributions(sentence: string): string {
+  const kept: string[] = [];
+  for (const word of sentence.split(/\s+/u)) {
+    const attributes = ZUFOLGE.test(word) && dropAttributedSource(kept);
+    kept.push(attributes ? word.replace(ZUFOLGE, "") : word);
+  }
+  return kept.join(" ");
+}
 
 function withoutAttributions(sentence: string): string {
-  return ATTRIBUTION_PATTERNS.reduce((text, pattern) => text.replace(pattern, " "), sentence);
+  return withoutTrailingAttributions(sentence.replace(LEADING_ATTRIBUTION_PATTERN, " "));
 }
 
 // A contrast after an absence statement turns it into a partial answer that still says something.
@@ -131,7 +292,7 @@ function isEvidenceAbsenceSentence(sentence: string): boolean {
   if (namesEvidence && NEGATED_VERB_PATTERNS.some((pattern) => pattern.test(sentence))) return true;
   return (
     INFORMATION_ABSENCE_PATTERNS.some((pattern) => pattern.test(sentence)) &&
-    (namesEvidence || SEARCH_OUTCOME_PATTERN.test(sentence))
+    (namesEvidence || namesSearchOutcome(sentence))
   );
 }
 

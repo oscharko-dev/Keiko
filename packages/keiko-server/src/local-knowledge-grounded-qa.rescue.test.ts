@@ -829,6 +829,12 @@ function firstLexicalSupport(answer: GroundedAnswer): "weak" | undefined {
   return answer.citations[0]?.lexicalSupport;
 }
 
+function lexicalSupports(answer: GroundedAnswer): readonly ("weak" | undefined)[] {
+  if (answer.groundingKind !== "local-knowledge")
+    throw new TypeError("expected a Knowledge Pod answer");
+  return answer.citations.map((citation) => citation.lexicalSupport);
+}
+
 describe("weakly supported citations", () => {
   // `judgeVerdict` configures a structured-output chat model, so the numeric entailment stage runs
   // and its judge answers every claim with that verdict.
@@ -958,6 +964,20 @@ describe("weakly supported citations", () => {
       "supported",
     );
 
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
+  // PR #3678 review (P1): equal marker totals do not prove the weak claim was judged. The stripper
+  // removes the bracketed MFA assertion, so the judge reads the checklist claim twice and supports
+  // both while the visible assertion goes unread.
+  it("keeps the caveat when a judged claim hides a bracketed assertion from the judge", async () => {
+    const answer = await askWith(
+      "The release checklist covers signing, notarization and upload [1]. The checklist covers signing [The repository enforces mandatory MFA and denies all anonymous requests] [1]",
+      "judged-hidden",
+      "supported",
+    );
+
+    expect(lexicalSupports(answer)).toEqual([undefined, "weak"]);
     expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
   });
 

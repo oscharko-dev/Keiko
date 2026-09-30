@@ -1056,10 +1056,10 @@ function markAssumedChatCapability(raw: unknown): unknown {
 
 // No declared output limit, or one that cannot fit inside the placeholder window.
 function placeholderOutputLimit(maxOutputTokens: unknown): boolean {
-  const declared = maxOutputTokens ?? 0;
-  return (
-    declared === 0 || (typeof declared === "number" && declared > PLACEHOLDER_CHAT_CONTEXT_WINDOW)
-  );
+  if (maxOutputTokens === undefined || maxOutputTokens === null || maxOutputTokens === 0) {
+    return true;
+  }
+  return typeof maxOutputTokens === "number" && maxOutputTokens > PLACEHOLDER_CHAT_CONTEXT_WINDOW;
 }
 
 export function markAssumedPlaceholderContextWindows(raw: unknown): unknown {

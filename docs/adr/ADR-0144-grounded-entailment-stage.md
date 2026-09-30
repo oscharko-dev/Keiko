@@ -158,8 +158,12 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   segmentation, the answer renderer and the copy stripper all use it; the
   private one-integer grammars that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
   markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
-  scanned, so `const a = [1, 2, 3];` cites nothing; an inline code span never reaches across a
-  blank line, a fence, a heading, a list item or a block quote. Outside code, every index of every
+  scanned, so `const a = [1, 2, 3];` cites nothing; an inline code span ends wherever the chat
+  renderer (`safe-markdown.ts`) ends an inline context: at every newline it does not join into one
+  paragraph (a blank line, a fence, a heading, a thematic break, a list item, a table row, a block
+  quote) and at every table cell pipe. Past the renderer's 16-level quote cap, which renders the
+  quoted body as one text node, the quoted lines read as one paragraph. A cross-check test holds
+  the grammar to the markers the renderer shows. Outside code, every index of every
   group is reconciled: a fabricated
   `[9, 10]` beside a real `[1]` dangles, because failing closed beats a quiet source attribution.
   The copy stripper removes only a grounded answer's groups whose every index names one of its
@@ -173,7 +177,8 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   claim, its verdict (`unsupported-claim`, or its own `entailment-unavailable` on failure) decides.
   When no judge is available, or the judge read fewer claims for that marker than the answer uses
   it (a bracketed claim leaves no text after the claim stripper, so a reused marker is no verdict
-  on it), the Knowledge Pod answer carries the fail-closed
+  on it), or a claim citing it carried bracketed prose the stripper removed (the judge never read
+  that prose, `NumericCitedClaim.hidesProse`), the Knowledge Pod answer carries the fail-closed
   `entailment-unavailable` caveat and the citation chip reads "unverified". A weakly supported
   citation is never presented as confirmed support (`withWeakCitationCaveat`).
 - **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
@@ -186,8 +191,9 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   evidence/information" statements are refusals unconditionally. A negated verb ("does not contain",
   "nicht erwähnt", "geht nicht hervor", "cannot answer") counts as a refusal only when its own
   sentence names the evidence it searched (documents, sources, context, repository); an
-  attribution such as "according to the documentation", plain or as inline Markdown, names a
-  source, not the place that lacks it. An
+  attribution such as "according to the documentation", plain or as inline Markdown, with a
+  possessive, version or compound source word ("the project's documentation"), names a source, not
+  the place that lacks it. An
   absent-information noun ("keine Angaben", "no details") also counts with a search outcome
   ("gefunden", "available", "liegen … vor") in that sentence. Otherwise "The API does not provide
   authentication." or "The API returns no details on errors." is a negative fact, not a refusal.

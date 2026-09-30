@@ -945,14 +945,18 @@ function errorSignal(payload: unknown): string {
 // llama.cpp names the class in `type` (`exceed_context_size_error`) and the window in `n_ctx`. The
 // exceed clause is bounded on one line: an open `.*` rescans the whole remainder from every
 // occurrence of "context".
-const CONTEXT_OVERFLOW_SIGNAL =
-  /context[_ -]?length[_ -]?exceeded|context window|context[^\n]{0,120}exceed|maximum context|too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len|available context size|exceed_context_size|max_new_tokens`? must be <=/;
+const CONTEXT_OVERFLOW_SIGNALS: readonly RegExp[] = [
+  /context[_ -]?length[_ -]?exceeded|context window|context[^\n]{0,120}exceed|maximum context/,
+  /too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len/,
+  /available context size|exceed_context_size|max_new_tokens`? must be <=/,
+];
 
 function isContextOverflow(status: number, payload: unknown): boolean {
   if (status !== 400 && status !== 413 && status !== 422) {
     return false;
   }
-  return CONTEXT_OVERFLOW_SIGNAL.test(errorSignal(payload));
+  const signal = errorSignal(payload);
+  return CONTEXT_OVERFLOW_SIGNALS.some((pattern) => pattern.test(signal));
 }
 
 // How providers state the deployment's TOTAL window in an overflow answer, first match wins:
@@ -1184,12 +1188,12 @@ function throwOnStreamedFailure(chunk: unknown, modelId: string, secrets: readon
 // rate limit, so an overflow, a rejected key or a malformed request is never retried as an upstream
 // failure and generated again (PR #3452 review). OpenAI and Azure name a failure in `code`, `type`
 // and `message`; only a proxy such as LiteLLM writes its HTTP status.
-const STREAMED_FAILURE_SIGNALS: readonly (readonly [RegExp, number])[] = [
-  [CONTEXT_OVERFLOW_SIGNAL, 400],
-  [/invalid[_ -]?api[_ -]?key|authentication/, 401],
-  [/permission/, 403],
-  [/rate[_ -]?limit|too many requests/, 429],
-  [/invalid[_ -]?request/, 400],
+const STREAMED_FAILURE_SIGNALS: readonly (readonly [readonly RegExp[], number])[] = [
+  [CONTEXT_OVERFLOW_SIGNALS, 400],
+  [[/invalid[_ -]?api[_ -]?key|authentication/], 401],
+  [[/permission/], 403],
+  [[/rate[_ -]?limit|too many requests/], 429],
+  [[/invalid[_ -]?request/], 400],
 ];
 
 // The status a failure frame reports: LiteLLM's `code` is the upstream HTTP status as a string. A
@@ -1199,7 +1203,11 @@ function streamedFailureStatus(chunk: unknown, error: Record<string, unknown>): 
   const code = typeof error.code === "number" ? error.code : Number(error.code);
   if (Number.isInteger(code) && code >= 400 && code <= 599) return code;
   const signal = errorSignal(chunk);
-  return STREAMED_FAILURE_SIGNALS.find(([pattern]) => pattern.test(signal))?.[1] ?? 502;
+  return (
+    STREAMED_FAILURE_SIGNALS.find(([patterns]) =>
+      patterns.some((pattern) => pattern.test(signal)),
+    )?.[1] ?? 502
+  );
 }
 
 function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {

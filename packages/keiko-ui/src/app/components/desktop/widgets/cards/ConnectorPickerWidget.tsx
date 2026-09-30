@@ -461,8 +461,8 @@ export function ConnectorPickerWidget({
         } else {
           setSetsFailed(true);
         }
-      } catch (caught) {
-        if (!cancelled) setError(loadFailure(caught));
+      } catch (error_) {
+        if (!cancelled) setError(loadFailure(error_));
       } finally {
         if (!cancelled) setLoading(false);
       }
