@@ -761,6 +761,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return {
       promptTokens: measured ? this.measuredPromptTokens : share.estimatedTokens,
       promptTokensMeasured: measured,
+      estimatedPromptTokens: share.estimatedTokens,
       instructionTokens: share.instructionTokens,
       sourceTokens: share.sourceTokens,
       sentReferenceCount: share.sentReferenceCount,

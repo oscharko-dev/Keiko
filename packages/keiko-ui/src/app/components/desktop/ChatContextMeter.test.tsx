@@ -102,10 +102,10 @@ function groundedStatus(): ChatContextStatusWire {
   };
 }
 
-function openGroundedPanel(): HTMLElement {
+function openGroundedPanel(status: ChatContextStatusWire = groundedStatus()): HTMLElement {
   render(
     <ChatContextMeter
-      status={groundedStatus()}
+      status={status}
       busy={false}
       compacting={false}
       error={false}
@@ -151,6 +151,28 @@ describe("Chat context window breakdown", () => {
     ).toBeInTheDocument();
     expect(within(panel).getByText("4,988 tokens until automatic compaction.")).toBeInTheDocument();
     expect(within(panel).getByText(/never summarized/u)).toBeInTheDocument();
+  });
+
+  it("states Keiko's estimate beside a differing provider measurement", () => {
+    const panel = openGroundedPanel({
+      ...groundedStatus(),
+      lastRequest: { promptTokens: 5_901, measured: true, estimatedTokens: 6_420 },
+    });
+    expect(
+      within(panel).getByText(
+        "Last request: 5,901 tokens (measured by the provider). Keiko conservatively estimated 6,420; the breakdown above uses that estimate.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("marks an unmeasured request size as an estimate", () => {
+    const panel = openGroundedPanel({
+      ...groundedStatus(),
+      lastRequest: { promptTokens: 6_420, measured: false },
+    });
+    expect(
+      within(panel).getByText("Last request: about 6,420 tokens (estimated)."),
+    ).toBeInTheDocument();
   });
 
   it("has no accessibility violations", async () => {

@@ -36,6 +36,8 @@ export const EN_MESSAGES = {
   "chat.context.referencesTrimmed":
     "Only {sent} of {available} references fit the model's context window. The most relevant were used.",
   "chat.context.lastRequestMeasured": "Last request: {tokens} tokens (measured by the provider).",
+  "chat.context.lastRequestMeasuredWithEstimate":
+    "Last request: {tokens} tokens (measured by the provider). Keiko conservatively estimated {estimated}; the breakdown above uses that estimate.",
   "chat.context.lastRequestEstimated": "Last request: about {tokens} tokens (estimated).",
   "chat.context.untilCompaction": "{tokens} tokens until automatic compaction.",
   "chat.context.sourcesPolicy":

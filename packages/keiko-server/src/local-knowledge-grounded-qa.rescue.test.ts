@@ -641,6 +641,91 @@ describe("local-knowledge answer-only memory boundary", () => {
   );
 });
 
+describe("grounded prompt context evidence", () => {
+  it("persists the provider-measured request size beside Keiko's own estimate", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Prompt Context Capsule",
+      capsuleId: "cap-prompt-context",
+      sourceId: "src-prompt-context",
+      text: "alpha is the grounded answer",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    const project = rescueStore.createProject(rescueTmp, "prompt-context-project");
+    const created = rescueStore.createChat(project.path, "Prompt context", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const fakeModel: ModelPort = {
+      call: (request) => {
+        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        return Promise.resolve({
+          modelId: "chat-model",
+          content: isQueryTransform ? '{"queries":["alpha"]}' : "Alpha is the grounded answer [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "prompt-context",
+            promptTokens: 321,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What is alpha?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const persisted = rescueStore
+      .listMessages(chat.id)
+      .find((message) => message.role === "assistant")?.groundedAnswer;
+    const promptContext = persisted?.promptContext;
+    expect(promptContext).toMatchObject({
+      promptTokens: 321,
+      promptTokensMeasured: true,
+      sentReferenceCount: 5,
+      availableReferenceCount: 5,
+    });
+    expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
+    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
+    expect(promptContext?.instructionTokens).toBeGreaterThan(0);
+  });
+});
+
 describe("redactText fallback — non-string redactor output strips unsafe chars instead of returning raw", () => {
   it("persists stripped (not raw) content when the redactor returns a non-string", async () => {
     // Arrange: seed a ready capsule so embedding + retrieval succeed and persistGroundedExchange

@@ -513,8 +513,18 @@ export interface ChatContextStatusWire {
         readonly availableReferenceCount: number;
       }
     | undefined;
-  /** The complete size of the chat's latest grounded request, provider-measured when reported. */
-  readonly lastRequest?: { readonly promptTokens: number; readonly measured: boolean } | undefined;
+  /**
+   * The complete size of the chat's latest grounded request, provider-measured when reported.
+   * `estimatedTokens` is Keiko's own admission estimate of that request — the unit every share in
+   * `segments` uses — present beside a measurement so the meter can state both.
+   */
+  readonly lastRequest?:
+    | {
+        readonly promptTokens: number;
+        readonly measured: boolean;
+        readonly estimatedTokens?: number | undefined;
+      }
+    | undefined;
   /**
    * The whole window broken down into its shares; the tokens sum to `contextWindowTokens`.
    * Absent from servers that predate the breakdown.
@@ -1593,6 +1603,8 @@ export interface HybridGroundedAnswer {
 export interface GroundedPromptContextWire {
   readonly promptTokens: number;
   readonly promptTokensMeasured: boolean;
+  /** Keiko's admission estimate of the same prompt; absent from answers that predate it. */
+  readonly estimatedPromptTokens?: number | undefined;
   /** Estimated tokens of the grounded system instructions of that prompt. */
   readonly instructionTokens: number;
   readonly sourceTokens: number;

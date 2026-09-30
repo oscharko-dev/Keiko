@@ -173,6 +173,24 @@ function ContextBreakdown({
   );
 }
 
+// A provider measurement differs from Keiko's admission estimate, the unit of every share above;
+// stating both keeps the breakdown and the measured request comparable.
+function lastRequestText(
+  t: I18nTranslate,
+  number: (value: number) => string,
+  request: NonNullable<ChatContextStatusWire["lastRequest"]>,
+): string {
+  const tokens = number(request.promptTokens);
+  if (!request.measured) return t("chat.context.lastRequestEstimated", { tokens });
+  if (request.estimatedTokens === undefined || request.estimatedTokens === request.promptTokens) {
+    return t("chat.context.lastRequestMeasured", { tokens });
+  }
+  return t("chat.context.lastRequestMeasuredWithEstimate", {
+    tokens,
+    estimated: number(request.estimatedTokens),
+  });
+}
+
 function ContextNotes({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
   const t = useTranslate();
   const locale = useLocale();
@@ -195,14 +213,7 @@ function ContextNotes({ status }: { readonly status: ChatContextStatusWire }): R
         </p>
       ) : null}
       {status.lastRequest === undefined ? null : (
-        <p className={styles.cmpHelp}>
-          {t(
-            status.lastRequest.measured
-              ? "chat.context.lastRequestMeasured"
-              : "chat.context.lastRequestEstimated",
-            { tokens: number(status.lastRequest.promptTokens) },
-          )}
-        </p>
+        <p className={styles.cmpHelp}>{lastRequestText(t, number, status.lastRequest)}</p>
       )}
       {until === undefined ? null : (
         <p className={styles.cmpHelp}>

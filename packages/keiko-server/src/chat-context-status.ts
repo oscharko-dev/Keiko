@@ -222,6 +222,9 @@ function groundedStatusFields(
     lastRequest: {
       promptTokens: lastPrompt.promptTokens,
       measured: lastPrompt.promptTokensMeasured,
+      ...(lastPrompt.promptTokensMeasured && lastPrompt.estimatedPromptTokens !== undefined
+        ? { estimatedTokens: lastPrompt.estimatedPromptTokens }
+        : {}),
     },
     ...(grounded
       ? {

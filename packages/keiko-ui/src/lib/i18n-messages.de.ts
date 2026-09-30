@@ -38,6 +38,8 @@ export const DE_MESSAGES = {
   "chat.context.referencesTrimmed":
     "Nur {sent} von {available} Referenzen passten ins Kontextfenster des Modells. Verwendet wurden die relevantesten.",
   "chat.context.lastRequestMeasured": "Letzte Anfrage: {tokens} Tokens (vom Anbieter gemessen).",
+  "chat.context.lastRequestMeasuredWithEstimate":
+    "Letzte Anfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hatte vorsichtig {estimated} geschätzt; die Aufteilung oben nutzt diese Schätzung.",
   "chat.context.lastRequestEstimated": "Letzte Anfrage: ungefähr {tokens} Tokens (geschätzt).",
   "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",
   "chat.context.sourcesPolicy":

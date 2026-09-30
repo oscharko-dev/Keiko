@@ -145,6 +145,7 @@ describe("grounded context status", () => {
         promptContext: {
           promptTokens: 5_901,
           promptTokensMeasured: true,
+          estimatedPromptTokens: 6_420,
           instructionTokens: 310,
           sourceTokens: 4_100,
           sentReferenceCount: 4,
@@ -161,7 +162,11 @@ describe("grounded context status", () => {
       sentReferenceCount: 4,
       availableReferenceCount: 16,
     });
-    expect(status.lastRequest).toEqual({ promptTokens: 5_901, measured: true });
+    expect(status.lastRequest).toEqual({
+      promptTokens: 5_901,
+      measured: true,
+      estimatedTokens: 6_420,
+    });
     const segments = status.segments ?? [];
     expect(segments.find((segment) => segment.id === "knowledge")).toEqual({
       id: "knowledge",
