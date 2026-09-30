@@ -76,3 +76,4 @@ describe("trusted support registry history generator", () => {
     }
   });
 });
+import { Buffer } from "node:buffer";

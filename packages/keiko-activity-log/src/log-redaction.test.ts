@@ -1314,6 +1314,16 @@ describe("code-owned client diagnostic notes (F29)", () => {
 });
 
 describe("production browser frame redaction", () => {
+  it("preserves persisted browser coordinates when validating received support evidence", () => {
+    const raw = { frames: ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"] };
+    const persisted = redactLogFields(raw);
+    if (persisted === undefined) throw new TypeError("missing reduced browser evidence");
+    expect(persisted.frames).toHaveLength(1);
+    expect(redactLogFields(persisted)).toEqual(persisted);
+    expect(areSupportLogFieldsSafe(persisted)).toBe(true);
+    expect(areSupportLogFieldsSafe(raw)).toBe(false);
+  });
+
   it("never persists an untrusted chunk basename even when it matches the wire grammar", () => {
     const basename = ["customer", "apikey", "1234"].join("");
     const frame = `dist/ui/static/_next/static/chunks/${basename}.js:1:2`;

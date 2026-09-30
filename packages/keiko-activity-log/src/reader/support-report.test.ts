@@ -38,13 +38,20 @@ const T0 = Date.UTC(2026, 8, 30, 12);
 const CORRELATION = "support-report-fixture-0001";
 let stateDir: string;
 
-function fixture(count = 1): { report: SupportReport; query: SupportQueryResult } {
+function fixture(
+  count = 1,
+  fields: Readonly<Record<string, unknown>> = {},
+): { report: SupportReport; query: SupportQueryResult } {
   const process = fixtureProcess(4242, "aabbccdd");
   writeFixtureSegment(
     stateDir,
     segmentIdentity(process, T0, 1),
     Array.from({ length: count }, (_, index) =>
-      fixtureLine(process, T0 + index, { op: "client.diagnostic", correlationId: CORRELATION }),
+      fixtureLine(process, T0 + index, {
+        op: "client.diagnostic",
+        correlationId: CORRELATION,
+        fields,
+      }),
     ),
   );
   const created = recordUserReportedIncident(stateDir, { nowMs: T0, correlationId: CORRELATION });
@@ -100,6 +107,24 @@ describe("canonical body-free offline report", () => {
     ]);
     expect(selected.selection.query).not.toHaveProperty("events");
     expect(selected.terminalFragment).toBe(false);
+  });
+
+  it("retains reduced browser frames while refusing raw chunk names in received evidence", () => {
+    const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
+    const { report, query } = fixture(1, { frames: [frame] });
+    const retained = eventsOf(report);
+    const persisted = JSON.parse(query.events[0]?.text ?? "null") as Record<string, unknown>;
+    expect(retained[0]?.record.frames).toEqual(persisted.frames);
+    expect(retained[0]?.record.frames).toHaveLength(1);
+    expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
+    const hostile = sealSupportReport(
+      report.incident,
+      report.selection,
+      encodeSupportReportEvidence(
+        retained.map((event) => ({ ...event, record: { ...event.record, frames: [frame] } })),
+      ),
+    );
+    expect(() => analyzeSupportReport(serializeSupportReport(hostile))).toThrow(SupportReportError);
   });
 
   it("does not bless unrelated evidence as an incident's complete closure", () => {

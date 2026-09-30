@@ -613,7 +613,10 @@ retain their exact build/release/platform classes and registry/schema/catalog di
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records and 12 JSON nesting levels. `--max-bytes`
 may lower the final-file ceiling but cannot raise it. These are separate limits: compression cannot
-hide unbounded decoded input. The production-record calibration in `support-report.test.ts`
+hide unbounded decoded input. Every real #3532 fault-injection scenario also passes its incident
+and selected closure through the production report builder and offline analyzer. These traces fit
+below 128 KiB without losing any selected record, and sufficient inputs remain complete. The
+production-record calibration in `support-report.test.ts`
 retains 2,000 diagnostic failure events plus process context below 128 KiB, with exact event-count
 and complete-reconstruction assertions, including an offline run under a 128 MiB Node heap. The 10 MiB ceiling leaves substantial headroom for less
 repetitive safe signals while fitting attachment policies that permit 10 MiB. Operators with a

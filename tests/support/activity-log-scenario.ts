@@ -30,18 +30,24 @@ import { expect } from "vitest";
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogOperationSchema,
+  supportIncidentPrivateProjection,
+  type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 // The default recorders: the source graph the scenario suites write and reset through
 // (`resetServerLogger`). See `ActivityLogScenarioRun.incidents`.
 import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
+  supportIncidentSegmentFiles,
 } from "@oscharko-dev/keiko-activity-log";
 import {
   analyzeLogText,
   type AnalyzeAllResult,
   type OpCluster,
   DEFAULT_SUPPORT_QUERY_LIMITS,
+  analyzeSupportReport,
+  buildSupportReport,
+  serializeSupportReport,
   type SupportQueryResult,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
@@ -49,6 +55,7 @@ import {
   resolveSupportSelection,
 } from "../../packages/keiko-cli/src/support-query-cli.js";
 import { readPersistedActivityLog } from "./activity-log-proof.js";
+import { resolveSupportIncident } from "../../packages/keiko-cli/src/support-incident.js";
 
 export interface ActivityLogScenarioRun {
   /** The temporary state directory the production writer persisted the scenario into. */
@@ -204,6 +211,8 @@ async function proveIncidentWindowCoversClosure(
     incidentResult.diagnosticSufficiency.reasons,
     `scenario ${scenario}: the incident's own selection is retained`,
   ).not.toContain("evidence-not-retained");
+  if (creation.record === undefined) expect.fail(`scenario ${scenario}: missing incident record`);
+  proveCanonicalScenarioReport(scenario, stateDir, creation.record, incidentResult);
 
   if (correlationId === undefined) {
     // A bare diagnostic op with no correlation of its own: there is no independent closure to
@@ -219,6 +228,37 @@ async function proveIncidentWindowCoversClosure(
     missing,
     `scenario ${scenario}: the pinned window contains every line of the failure's own registered causal closure`,
   ).toEqual([]);
+}
+
+// Calibrate #3534 against every real #3532 fault-injection trace, through the production incident
+// projection and selective query. Compaction must retain every selected event, including losses.
+function proveCanonicalScenarioReport(
+  scenario: string,
+  stateDir: string,
+  record: SupportIncidentRecord,
+  query: SupportQueryResult,
+): void {
+  const incident = supportIncidentPrivateProjection(
+    resolveSupportIncident(record, supportIncidentSegmentFiles(stateDir, record), stateDir),
+  );
+  const report = buildSupportReport(incident, query);
+  const text = serializeSupportReport(report);
+  const analyzed = analyzeSupportReport(text);
+  expect(report.evidence.recordCount, `scenario ${scenario}: lossless report closure`).toBe(
+    query.events.length,
+  );
+  expect(Buffer.byteLength(text), `scenario ${scenario}: calibrated report size`).toBeLessThan(
+    128 * 1024,
+  );
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  expect(analyzed.selection.reasons).toEqual(report.selection.reasons);
+  if (
+    incident.sufficiencyStatus === "complete" &&
+    query.diagnosticSufficiency.status === "complete"
+  )
+    expect(analyzed.selection.status, `scenario ${scenario}: complete report reconstruction`).toBe(
+      "complete",
+    );
 }
 
 /**
