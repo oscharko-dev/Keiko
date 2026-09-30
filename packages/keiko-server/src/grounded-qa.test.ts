@@ -969,14 +969,17 @@ describe("handleGroundedAsk", () => {
       const runtime = unreadyRuntimeGatewayConfig(config);
       const sharedDeps = deps(model, {}, { config, gatewayConfig: runtime });
 
-      const probe = vi.spyOn(readiness, "ensureOnDemandConversationReadiness");
+      const probe = vi.spyOn(readiness, "awaitInitializedConversationReadiness");
+      const newProbe = vi.spyOn(readiness, "ensureOnDemandConversationReadiness");
       const correlationId = "grounded-admission-request";
       const result = await handleGroundedAsk(
         { ...ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })), correlationId },
         sharedDeps,
       );
       expect(probe).toHaveBeenCalledWith(sharedDeps, CHAT_MODEL, correlationId);
+      expect(newProbe).not.toHaveBeenCalled();
       probe.mockRestore();
+      newProbe.mockRestore();
 
       expect(result).toEqual({
         status: 400,

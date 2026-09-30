@@ -78,7 +78,7 @@ afterEach(() => {
 
 describe("useEditorShortcutOverrides", () => {
   it("loads overrides and refreshes them from the shared settings stream", async () => {
-    const first = "1|quick-access.files|CtrlOrMeta+Shift+O";
+    const first = "1|workspace.commands|CtrlOrMeta+Shift+O";
     const second = "1|open-settings|CtrlOrMeta+,";
     api.fetchEditorSettings
       .mockResolvedValueOnce(snapshot([first]))

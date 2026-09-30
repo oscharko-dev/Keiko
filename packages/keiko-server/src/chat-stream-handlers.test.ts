@@ -1,4 +1,5 @@
 import * as promptBudget from "./chat-prompt-budget.js";
+import { initializeConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -1935,7 +1936,7 @@ describe("desktop chat SSE streaming handler", () => {
     expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
   });
 
-  it("verifies an unknown chat model before regenerating without exposing the original turn", async () => {
+  it("joins initialization before regenerating without exposing the original turn to its probe", async () => {
     const chatId = seedChat();
     seedMessage(chatId, "user", "private regeneration question");
     seedMessage(chatId, "assistant", "private regeneration answer");
@@ -1943,16 +1944,16 @@ describe("desktop chat SSE streaming handler", () => {
     if (assistant === undefined) throw new Error("missing assistant fixture");
     const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
     holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
-        {
-          headers: { "content-type": "application/json" },
-        },
-      ),
-    ) as typeof fetch;
+    const response = deferred<Response>();
+    const fetchImpl = vi.fn(() => response.promise);
     const activityEvents: ServerLogEvent[] = [];
-    const outcome = await handleRegenerateDesktopChat(
+    const handlerDeps = deps(streamingModel("replacement answer").model, {
+      gatewayConfig: holder,
+      gatewayReadinessFetch: fetchImpl,
+      activityLog: { write: (event): void => void activityEvents.push(event) },
+    });
+    initializeConfiguredConversationReadiness(handlerDeps, "corr-regeneration-initialization");
+    const pendingOutcome = handleRegenerateDesktopChat(
       {
         ...routeContext(
           makeReq({ chatId, projectPath: projectDir, assistantMessageId: assistant.id }),
@@ -1960,13 +1961,21 @@ describe("desktop chat SSE streaming handler", () => {
         ),
         correlationId: "corr-regeneration-on-demand-ready",
       },
-      deps(streamingModel("replacement answer").model, {
-        gatewayConfig: holder,
-        gatewayReadinessFetch: fetchImpl,
-        activityLog: { write: (event): void => void activityEvents.push(event) },
-      }),
+      handlerDeps,
     );
 
+    await vi.waitFor(() => {
+      expect(activityEvents).toContainEqual(
+        expect.objectContaining({ op: "gateway.readiness.automatic.joined" }),
+      );
+    });
+    response.resolve(
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const outcome = await pendingOutcome;
     expect(outcome.status).toBe(200);
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(holder.verifiedCapability(CHAT_MODEL)?.fields.conversationReady).toBe(true);
@@ -1978,15 +1987,24 @@ describe("desktop chat SSE streaming handler", () => {
     );
     // The model appears only as its digest on readiness lines (#3557 review).
     expect(started).toMatchObject({
-      correlationId: "corr-regeneration-on-demand-ready",
+      parentCorrelationId: "corr-regeneration-initialization",
+      correlationId: started?.correlationId,
       extra: { modelIdDigest: CHAT_MODEL_DIGEST, probeCount: 1 },
     });
     expect(completed).toMatchObject({
-      correlationId: "corr-regeneration-on-demand-ready",
+      correlationId: started?.correlationId,
+      parentCorrelationId: "corr-regeneration-initialization",
       extra: { modelIdDigest: CHAT_MODEL_DIGEST, overallStatus: "ready", probeCount: 1 },
     });
     expect(started?.extra).not.toHaveProperty("modelId");
     expect(completed?.extra).not.toHaveProperty("modelId");
+    expect(activityEvents).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.readiness.automatic.joined",
+        correlationId: "corr-regeneration-on-demand-ready",
+        parentCorrelationId: started?.correlationId,
+      }),
+    );
     expect(JSON.stringify(vi.mocked(fetchImpl).mock.calls)).not.toContain(
       "private regeneration question",
     );

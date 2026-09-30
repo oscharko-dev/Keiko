@@ -2,6 +2,7 @@ import type { MessageCatalog } from "./i18n-messages.en";
 
 export const DE_MESSAGES = {
   "chat.context.title": "Gesprächskontext",
+  "chat.context.heading": "Gesprächskontext {percent} %",
   "chat.context.label": "Gesprächskontext: ungefähr {percent}% belegt",
   "chat.context.used": "Geschätzt belegte Tokens",
   "chat.context.inputBudget": "Nutzbare Eingabe-Tokens",
@@ -24,10 +25,10 @@ export const DE_MESSAGES = {
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
+  "header.lockLayout": "Anordnung sperren",
+  "header.unlockLayout": "Anordnung entsperren",
   "header.splitFront": "Vordere Fenster teilen",
   "header.cascade": "Fenster stapeln",
-  "header.quickAccess": "Schnellzugriff",
-  "header.openQuickAccess": "Schnellzugriff öffnen",
   "rail.primaryNavigation": "Primäre Arbeitsbereichsnavigation",
   "rail.newChat": "Neuer Chat",
   "rail.codingHistory": "Coding History",
@@ -331,7 +332,7 @@ export const DE_MESSAGES = {
   "window.edge.bottom": "untere",
   "window.edge.left": "linke",
   // Issue: German locale coverage. Window-type display copy lives HERE, not as literals in
-  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the quick-access command list
+  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the workspace command list
   // and the window chrome all resolve it through `localizedWindowTitle`/`localizedWindowDesc`, so
   // one locale switch moves every surface instead of leaving an English name behind.
   "window.type.chat.title": "Chat",
@@ -441,12 +442,18 @@ export const DE_MESSAGES = {
   "chat.history.action.rename": "{title} umbenennen",
   "chat.history.action.delete": "{title} löschen",
   "chat.history.action.deletePermanent": "{title} endgültig löschen",
-  "chat.history.action.deleteConfirm": "Endgültiges Löschen von {title} bestätigen",
   "chat.history.action.save": "{title} speichern",
   "chat.history.action.cancel": "{title} abbrechen",
   "chat.history.action.restore": "{title} wiederherstellen",
   "chat.history.action.renameLabel": "Umbenennen",
   "chat.history.action.restoreLabel": "Wiederherstellen",
+  "chat.history.selection.all": "Alle auswählen",
+  "chat.history.selection.allDisplayed": "Alle angezeigten Chats auswählen",
+  "chat.history.selection.chat": "{title} auswählen",
+  "chat.history.selection.delete": "Auswahl löschen ({count})",
+  "chat.history.selection.deleting": "Wird gelöscht…",
+  "chat.history.selection.permanent":
+    "Löscht den Chat und seine gespeicherten Nachrichten endgültig.",
   "chat.history.tab.active": "Aktiv",
   "chat.history.tab.deleted": "Gelöscht",
   "window.type.resources.title": "Ressourcen",

@@ -6,8 +6,7 @@ export interface WorkspaceRootTarget {
   readonly label: string;
 }
 
-// Quick Access starts three governed searches per root. Four root workers therefore cap its
-// request fan-out at twelve in-flight calls, including at the 32-root manifest limit.
+// Keep cross-root workspace requests bounded, including at the 32-root manifest limit.
 export const WORKSPACE_ROOT_REQUEST_CONCURRENCY = 4 as const;
 
 export type WorkspaceRootRequestOutcome<T> =
@@ -88,14 +87,16 @@ async function runRootRequestWorker<T>(
   request: (target: WorkspaceRootTarget) => Promise<T>,
 ): Promise<readonly IndexedRootOutcome<T>[]> {
   const completed: IndexedRootOutcome<T>[] = [];
-  let next = takeNext();
-  while (next !== undefined) {
+  async function requestNext(): Promise<void> {
+    const next = takeNext();
+    if (next === undefined) return;
     completed.push({
       index: next.index,
       outcome: await requestWorkspaceRoot(next.target, request),
     });
-    next = takeNext();
+    await requestNext();
   }
+  await requestNext();
   return completed;
 }
 

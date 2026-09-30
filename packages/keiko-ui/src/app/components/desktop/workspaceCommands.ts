@@ -14,7 +14,7 @@ export interface Command {
   readonly run: () => void;
 }
 
-export const QUICK_ACCESS_CARD_TYPES: readonly WindowType[] = [
+export const WINDOW_LAUNCHER_TYPES: readonly WindowType[] = [
   "chat",
   "connector",
   "files",
@@ -23,7 +23,7 @@ export const QUICK_ACCESS_CARD_TYPES: readonly WindowType[] = [
   "docbrowser",
 ];
 
-export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
+export const COMMAND_TOOL_TYPES: readonly WindowType[] = [
   "chatHistory",
   "codingHistory",
   "memoria",
@@ -39,7 +39,7 @@ export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
   "integ",
   "governedGit",
   // Issue #2476 — Code task reachability. The Coding Workbench is a `singleton: true, tool: true`
-  // window, so it belongs on the palette's tool list (the idempotent `toggleTool` seam the Left Rail
+  // window, so it belongs on the command list (the idempotent `toggleTool` seam the Left Rail
   // already uses), NOT the card list (which mints a new-window config flow) and NOT `TYPE_ORDER`
   // (the launcher-grid order the palette does not source its commands from — the known wrong-list trap).
   "coding",
@@ -50,7 +50,7 @@ export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
   "relationships",
 ];
 
-export interface QuickAccessCommand {
+export interface PaletteCommand {
   readonly id: string;
   readonly label: string;
   readonly group: string;
@@ -58,7 +58,7 @@ export interface QuickAccessCommand {
   readonly run: () => void;
 }
 
-export type QuickAccessShortcutLabels = ReadonlyMap<string, string>;
+export type CommandShortcutLabels = ReadonlyMap<string, string>;
 
 export function commandIdsForEvidence(
   appCommands: readonly Command[],
@@ -70,13 +70,9 @@ export function commandIdsForEvidence(
   ];
 }
 
-export function paletteWindowOrder(): readonly WindowType[] {
-  return QUICK_ACCESS_CARD_TYPES;
-}
-
 export function appCommandWindowTypes(): {
   readonly cards: readonly WindowType[];
   readonly tools: readonly WindowType[];
 } {
-  return { cards: QUICK_ACCESS_CARD_TYPES, tools: QUICK_ACCESS_TOOL_TYPES };
+  return { cards: WINDOW_LAUNCHER_TYPES, tools: COMMAND_TOOL_TYPES };
 }

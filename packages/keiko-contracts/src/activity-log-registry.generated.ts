@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a7b148a2a84eb8c1514197509ef85a721b51692615bfcdb83470b4fccec158e9" as const;
+  "d3107a04dffe432326f7ddeb4f6791173d8d7d6c2139e6c8a5a014ae675d07f6" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2566,14 +2566,25 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "initialized",
           "input-limit",
           "code-ready",
+          "code-language-detected",
           "format-removed",
           "cursor-collision",
           "workspace-scroll-ready",
+          "workspace-layout-locked",
+          "workspace-layout-unlocked",
           "literal-input-preserved",
           "draft-resynchronized",
+          "equivalent-edit-ignored",
+          "stale-draft-echo-ignored",
           "non-text-paste-ignored",
           "text-copied",
         ],
+      },
+      focusIndicator: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["keyboard"],
       },
     },
     causal: "correlation",
@@ -3333,12 +3344,29 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "editor-widget-chunk",
           "files-widget-chunk",
           "chat-bind",
+          "command-palette",
+          "chat-history-deletion",
         ],
       },
       ordinal: {
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      requestedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      deletedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      failedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -3376,12 +3404,29 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "editor-widget-chunk",
           "files-widget-chunk",
           "chat-bind",
+          "command-palette",
+          "chat-history-deletion",
         ],
       },
       ordinal: {
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      requestedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      deletedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      failedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -12724,6 +12769,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      backgroundAttempt: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -32511,6 +32561,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "focusIndicator",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
           frameCauseEvidence: {
@@ -33350,10 +33406,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "deletedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "failedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "ordinal",
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "requestedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "stage",
@@ -33380,10 +33454,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "deletedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "failedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "ordinal",
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "requestedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "stage",
@@ -45738,6 +45830,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
+            {
+              name: "backgroundAttempt",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
             {
               name: "chatProbeTimeoutMs",
               type: "integer",

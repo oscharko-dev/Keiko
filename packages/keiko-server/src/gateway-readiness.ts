@@ -137,6 +137,7 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
     ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
+    backgroundAttempt: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -438,12 +439,18 @@ function logAutomaticReadinessStarted(
   modelId: string,
   probeCount: number,
   timeouts: ProbeTimeoutEvidence,
+  backgroundAttempt?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), ...timeouts, probeCount },
+      {
+        ...modelIdEvidence(modelId),
+        ...timeouts,
+        probeCount,
+        ...(backgroundAttempt === undefined ? {} : { backgroundAttempt }),
+      },
     ),
   );
 }
@@ -614,6 +621,7 @@ function logOnDemandProbeStarted(
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
   correlationId: string,
+  backgroundAttempt?: number,
 ): void {
   const selection = chooseProvider(holder.current(), modelId, ON_DEMAND_PROBE_OPTIONS);
   logAutomaticReadinessStarted(
@@ -629,6 +637,7 @@ function logOnDemandProbeStarted(
           ["chat"],
           ON_DEMAND_PROBE_OPTIONS,
         ),
+    backgroundAttempt,
   );
 }
 
@@ -1057,7 +1066,7 @@ function deltaContent(chunk: unknown): string {
   return textFromContent(firstDelta(chunk)?.content);
 }
 
-async function readProviderJson(response: Response): Promise<unknown> {
+function readProviderJson(response: Response): Promise<unknown> {
   return readJsonCapped(response, MAX_PROVIDER_RESPONSE_BYTES);
 }
 
@@ -1789,8 +1798,28 @@ function recordFailedReadinessObservation(
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
 ): void {
+  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration)) return;
   if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
   deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+}
+
+function preserveUnexecutedCapabilityObservation(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+): boolean {
+  if (executedCategoricalFeatureProbe(report.probes)) return false;
+  const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
+  if (previous === undefined || previous.generation !== observedGeneration) return false;
+  // A basic-chat outage does not contradict separately observed features. Keep their original
+  // timestamp and fail conversation admission explicitly, without widening any capability.
+  deps.gatewayConfig?.recordVerifiedCapability(
+    report.modelId,
+    { ...previous.fields, conversationReady: false },
+    previous.checkedAt,
+    observedGeneration,
+  );
+  return true;
 }
 
 function preserveVerifiedToolCallingObservation(
@@ -2152,14 +2181,269 @@ interface OnDemandReadinessProbe {
   readonly correlationId: string;
 }
 
-const onDemandReadinessProbes = new Map<string, OnDemandReadinessProbe>();
+const readinessProbesByConfig = new WeakMap<
+  NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  Map<string, OnDemandReadinessProbe>
+>();
+
+function readinessProbesFor(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+): Map<string, OnDemandReadinessProbe> {
+  let probes = readinessProbesByConfig.get(holder);
+  if (probes === undefined) {
+    probes = new Map();
+    readinessProbesByConfig.set(holder, probes);
+  }
+  return probes;
+}
+
+interface ConversationInitializationQueue {
+  active: number;
+  disposed: boolean;
+  readonly controller: AbortController;
+  initializedGeneration: number;
+  readonly pending: (() => Promise<void>)[];
+  readonly retries: Map<string, ReturnType<typeof setTimeout>>;
+  readonly retryable: Map<string, boolean>;
+}
+const conversationQueues = new WeakMap<
+  NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  ConversationInitializationQueue
+>();
+
+function conversationQueue(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+): ConversationInitializationQueue {
+  let queue = conversationQueues.get(holder);
+  if (queue === undefined) {
+    queue = {
+      active: 0,
+      disposed: false,
+      controller: new AbortController(),
+      initializedGeneration: -1,
+      pending: [],
+      retries: new Map(),
+      retryable: new Map(),
+    };
+    conversationQueues.set(holder, queue);
+  }
+  return queue;
+}
+
+function drainConversationQueue(queue: ConversationInitializationQueue): void {
+  while (queue.active < 2 && queue.pending.length > 0) {
+    const run = queue.pending.shift();
+    if (run === undefined) return;
+    queue.active++;
+    void run().finally(() => {
+      queue.active--;
+      drainConversationQueue(queue);
+    });
+  }
+}
+
+function enqueueConversationProbe(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string,
+  backgroundAttempt?: number,
+): Promise<void> {
+  const generation = holder.generation();
+  const queue = conversationQueue(holder);
+  return new Promise<void>((resolve, reject) => {
+    queue.pending.push(async (): Promise<void> => {
+      try {
+        if (!queue.disposed && holder.generation() === generation)
+          await runOnDemandReadinessProbe(
+            cancellableConversationProbeDeps(deps, queue.controller.signal),
+            holder,
+            modelId,
+            correlationId,
+            backgroundAttempt,
+          );
+        resolve();
+      } catch (error) {
+        emitServerDiagnostic(
+          deps.diagnostics,
+          serverDiagnosticFromError({
+            correlationId,
+            operation: "gateway.readiness",
+            source: "gateway-readiness.queue",
+            error,
+            summary: "A gateway readiness probe could not be completed.",
+            redact: (message): string => String(deps.redactor(message)),
+          }),
+        );
+        reject(error instanceof Error ? error : new TypeError("Readiness initialization failed"));
+      }
+    });
+    drainConversationQueue(queue);
+  });
+}
+
+function cancellableConversationProbeDeps(deps: UiHandlerDeps, signal: AbortSignal): UiHandlerDeps {
+  const fetch = deps.gatewayReadinessFetch ?? globalThis.fetch;
+  return {
+    ...deps,
+    gatewayReadinessFetch: (input, init): Promise<Response> =>
+      fetch(input, {
+        ...init,
+        signal: init?.signal == null ? signal : AbortSignal.any([signal, init.signal]),
+      }),
+  };
+}
+
+/** Stop graph-owned probes and wait for their final evidence before the Activity Log is sealed. */
+export async function stopConfiguredConversationReadiness(deps: UiHandlerDeps): Promise<void> {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return;
+  const queue = conversationQueue(holder);
+  queue.disposed = true;
+  queue.controller.abort();
+  for (const timer of queue.retries.values()) clearTimeout(timer);
+  queue.retries.clear();
+  drainConversationQueue(queue);
+  // Each probe reports its own failure; this barrier keeps those reports ahead of shutdown sealing.
+  await Promise.allSettled([...readinessProbesFor(holder).values()].map((probe) => probe.promise));
+}
+
+function initializationDeps(
+  deps: UiHandlerDeps,
+  parentCorrelationId: string | undefined,
+): UiHandlerDeps {
+  if (parentCorrelationId === undefined) return deps;
+  const sink = deps.activityLog ?? processServerLogSink();
+  return {
+    ...deps,
+    activityLog: {
+      write: (event): void => {
+        sink.write({ parentCorrelationId, ...event });
+      },
+    },
+  };
+}
+
+function monitorConversationInitialization(
+  deps: UiHandlerDeps,
+  modelId: string,
+  generation: number,
+  parentCorrelationId: string | undefined,
+  attempt: number,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder?.generation() !== generation || conversationQueue(holder).disposed) return;
+  const causalParent = parentCorrelationId ?? holder.initializationCorrelationId;
+  const probeCorrelationId = newCorrelationId();
+  const observedDeps = initializationDeps(deps, causalParent);
+  void ensureOnDemandConversationReadiness(observedDeps, modelId, probeCorrelationId, attempt)
+    .catch((error: unknown) => {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: probeCorrelationId,
+          parentCorrelationId: causalParent,
+          operation: "gateway.readiness",
+          source: "gateway-readiness.initialization",
+          error,
+          summary: "A gateway readiness probe could not be completed.",
+          redact: (message): string => String(deps.redactor(message)),
+        }),
+      );
+    })
+    .then(() => {
+      scheduleConversationRecovery(deps, modelId, generation, causalParent, attempt);
+    });
+}
+
+const MAX_CONVERSATION_RECOVERY_DELAY_MS = 5 * 60_000;
+
+function scheduleConversationRecovery(
+  deps: UiHandlerDeps,
+  modelId: string,
+  generation: number,
+  parentCorrelationId: string | undefined,
+  attempt: number,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return;
+  const queue = conversationQueue(holder);
+  if (
+    queue.disposed ||
+    holder.generation() !== generation ||
+    currentConversationReady(deps, modelId)
+  )
+    return;
+  if (queue.retryable.get(modelId) === false) return;
+  clearTimeout(queue.retries.get(modelId));
+  const retry = setTimeout(
+    () => {
+      queue.retries.delete(modelId);
+      monitorConversationInitialization(
+        deps,
+        modelId,
+        generation,
+        parentCorrelationId,
+        attempt + 1,
+      );
+    },
+    Math.min(
+      NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1),
+      MAX_CONVERSATION_RECOVERY_DELAY_MS,
+    ) + 1,
+  );
+  retry.unref();
+  queue.retries.set(modelId, retry);
+}
+
+/** Configuration-owned, rate-bounded background probes heal outages without per-question checks. */
+export function initializeConfiguredConversationReadiness(
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): void {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return;
+  const queue = conversationQueue(holder);
+  const generation = holder.generation();
+  if (queue.disposed || queue.initializedGeneration === generation) return;
+  for (const timer of queue.retries.values()) clearTimeout(timer);
+  queue.retries.clear();
+  queue.retryable.clear();
+  queue.initializedGeneration = generation;
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return;
+  for (const model of listConfiguredCapabilities(config)) {
+    if (model.kind === "chat")
+      monitorConversationInitialization(deps, model.id, generation, correlationId, 1);
+  }
+}
+
+/** Join an existing initialization, with no permission to initiate a provider probe. */
+export async function awaitInitializedConversationReadiness(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId?: string,
+): Promise<void> {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined || currentConversationReady(deps, modelId)) return;
+  const probe = readinessProbesFor(holder).get(`${String(holder.generation())}:${modelId}`);
+  if (probe === undefined) return;
+  logAutomaticReadinessJoined(
+    deps,
+    modelId,
+    correlationId ?? newCorrelationId(),
+    probe.correlationId,
+    holder.generation(),
+  );
+  await settledWithinBudget(probe.promise, CHAT_MODEL_WALK_BUDGET_MS);
+}
 
 // A failed probe must not pin the model for the whole configuration generation: a transient
 // gateway outage would brick every chat surface until a manual re-probe or restart (the
 // readiness twin of the 0.3.11 endless-indexing incident). It must not be re-probed on every
 // request either — each probe can burn the full provider timeout against a dead gateway. So a
 // current-generation non-ready observation answers the guard only within this window; after it,
-// the next conversation attempt re-probes and either heals or refreshes the pin.
+// configuration-owned background recovery re-probes and either heals or refreshes the pin.
 export const NOT_READY_REPROBE_COOLDOWN_MS = 30_000;
 
 function withinNotReadyCooldown(
@@ -2185,6 +2469,7 @@ export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
   correlationId?: string,
+  backgroundAttempt?: number,
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
@@ -2193,6 +2478,7 @@ export async function ensureOnDemandConversationReadiness(
   // The in-flight key carries the generation: a config replaced mid-probe must not hand the
   // NEW generation's caller the OLD generation's discarded report.
   const key = `${String(holder.generation())}:${modelId}`;
+  const onDemandReadinessProbes = readinessProbesFor(holder);
   const inFlight = onDemandReadinessProbes.get(key);
   if (inFlight !== undefined) {
     logAutomaticReadinessJoined(
@@ -2206,7 +2492,13 @@ export async function ensureOnDemandConversationReadiness(
     return;
   }
   const probeCorrelationId = correlationId ?? newCorrelationId();
-  const probe = runOnDemandReadinessProbe(deps, holder, modelId, probeCorrelationId).finally(() => {
+  const probe = enqueueConversationProbe(
+    deps,
+    holder,
+    modelId,
+    probeCorrelationId,
+    backgroundAttempt,
+  ).finally(() => {
     onDemandReadinessProbes.delete(key);
   });
   onDemandReadinessProbes.set(key, { promise: probe, correlationId: probeCorrelationId });
@@ -2225,7 +2517,7 @@ async function observeOnDemandProbe(
   deps: UiHandlerDeps,
   modelId: string,
   probeCorrelationId: string,
-): Promise<void> {
+): Promise<OnDemandProbeOutcome> {
   let outcome: OnDemandProbeOutcome = { overallStatus: "failed", inconclusiveProbes: 0 };
   try {
     const report = await runGatewayReadiness(
@@ -2240,6 +2532,7 @@ async function observeOnDemandProbe(
       };
     }
   } catch (error) {
+    outcome = { overallStatus: "failed", inconclusiveProbes: 1 };
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
@@ -2261,6 +2554,7 @@ async function observeOnDemandProbe(
       outcome.inconclusiveProbes,
     );
   }
+  return outcome;
 }
 
 async function runOnDemandReadinessProbe(
@@ -2268,11 +2562,15 @@ async function runOnDemandReadinessProbe(
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
   correlationId?: string,
+  backgroundAttempt?: number,
 ): Promise<void> {
   const generation = holder.generation();
   const probeCorrelationId = correlationId ?? newCorrelationId();
-  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId);
-  await observeOnDemandProbe(deps, modelId, probeCorrelationId);
+  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
+  const outcome = await observeOnDemandProbe(deps, modelId, probeCorrelationId);
+  if (holder.generation() === generation) {
+    conversationQueue(holder).retryable.set(modelId, outcome.inconclusiveProbes > 0);
+  }
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit
   // not-ready so retries hit the guard instead of the wire (the settings probe replaces it).
@@ -2336,17 +2634,44 @@ export async function ensureAnyConversationReadyChatModel(
   requestedModelId: string,
   correlationId?: string,
 ): Promise<void> {
+  await awaitConversationReadyCandidate(
+    deps,
+    requestedModelId,
+    ensureOnDemandConversationReadiness,
+    correlationId,
+  );
+}
+
+export async function awaitAnyInitializedConversationReadyChatModel(
+  deps: UiHandlerDeps,
+  requestedModelId: string,
+  correlationId?: string,
+): Promise<void> {
+  await awaitConversationReadyCandidate(
+    deps,
+    requestedModelId,
+    awaitInitializedConversationReadiness,
+    correlationId,
+  );
+}
+
+async function awaitConversationReadyCandidate(
+  deps: UiHandlerDeps,
+  requestedModelId: string,
+  awaitReadiness: typeof awaitInitializedConversationReadiness,
+  correlationId?: string,
+): Promise<void> {
   // The budget covers the REQUESTED model's probe too (review finding on the first cut):
   // computed after it, a hanging gateway burned the full provider timeout before the budget
   // even started. The interactive create never waits longer than the budget, full stop.
   const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
-  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId, correlationId);
+  const firstProbe = awaitReadiness(deps, requestedModelId, correlationId);
   if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
   if (currentConversationReady(deps, requestedModelId)) return;
   for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) return;
-    const probe = ensureOnDemandConversationReadiness(deps, capability.id, correlationId);
+    const probe = awaitReadiness(deps, capability.id, correlationId);
     if (!(await settledWithinBudget(probe, remainingMs))) return;
     if (currentConversationReady(deps, capability.id)) return;
   }

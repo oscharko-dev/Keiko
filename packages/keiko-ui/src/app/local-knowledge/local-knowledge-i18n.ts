@@ -86,7 +86,7 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     "Native dialogs are unavailable on this platform. Enter the path manually.",
   // #2906 round 3: "{count} selected item(s)" was wrong for count === 1 ("1 selected item(s)
   // ... were skipped" -- wrong article and wrong verb number). Branch on count like the
-  // established quickAccess.result.singular/.plural pair instead of a fake plural marker.
+  // established commandPalette.result.singular/.plural pair instead of a fake plural marker.
   "localKnowledge.nativeDialog.partialSelection.singular":
     "{count} selected item could not be added and was skipped.",
   "localKnowledge.nativeDialog.partialSelection.plural":

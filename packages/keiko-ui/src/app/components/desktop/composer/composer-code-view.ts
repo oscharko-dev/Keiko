@@ -9,6 +9,7 @@ import { clearComposerFormatting } from "./composer-format-commands";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import type { ComposerCodeEditor, ComposerCodeStage } from "./composer-code-runtime";
 import styles from "./MarkdownComposer.module.css";
+import { detectComposerCodeLanguage } from "./composer-code-language";
 
 const LANGUAGES = [
   "plaintext",
@@ -38,7 +39,9 @@ const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
 
 function languageFor(node: DocumentNode): string {
   const name = String(node.attrs.params).split(/\s/)[0] ?? "";
-  return LANGUAGE_ALIASES[name] ?? (name || "plaintext");
+  return (
+    LANGUAGE_ALIASES[name] ?? (name || detectComposerCodeLanguage(node.textContent) || "plaintext")
+  );
 }
 
 export class ComposerCodeView implements NodeView {
@@ -46,6 +49,7 @@ export class ComposerCodeView implements NodeView {
   private readonly host = document.createElement("div");
   private readonly fallback = document.createElement("textarea");
   private readonly notice = document.createElement("div");
+  private readonly languageSelect = document.createElement("select");
   private editor: ComposerCodeEditor | undefined;
   private disposed = false;
   private updating = false;
@@ -82,10 +86,15 @@ export class ComposerCodeView implements NodeView {
   private header(): HTMLElement {
     const header = document.createElement("div");
     header.className = styles.cmpCodeHeader ?? "";
-    const select = document.createElement("select");
+    const select = this.languageSelect;
     select.className = styles.cmpLanguage ?? "";
     select.setAttribute("aria-label", this.labels.language);
     const language = languageFor(this.node);
+    if (this.node.attrs.params === "" && language !== "plaintext") {
+      reportClientDiagnostic("Keiko composer code language detected.", {
+        composerActivity: "code-language-detected",
+      });
+    }
     for (const name of new Set([...LANGUAGES, language])) {
       select.add(new Option(name === "plaintext" ? this.labels.plainText : name, name));
     }
@@ -95,7 +104,7 @@ export class ComposerCodeView implements NodeView {
       if (pos !== undefined)
         this.view.dispatch(
           this.view.state.tr.setNodeMarkup(pos, undefined, {
-            params: select.value === "plaintext" ? "" : select.value,
+            params: select.value,
           }),
         );
     });
@@ -196,6 +205,12 @@ export class ComposerCodeView implements NodeView {
     const pos = this.getPos();
     if (pos === undefined || value === this.node.textContent) return;
     const tr = this.view.state.tr.insertText(value, pos + 1, pos + 1 + this.node.content.size);
+    const detected = this.node.attrs.params === "" ? detectComposerCodeLanguage(value) : undefined;
+    if (detected !== undefined && detected !== languageFor(this.node)) {
+      reportClientDiagnostic("Keiko composer code language detected.", {
+        composerActivity: "code-language-detected",
+      });
+    }
     tr.setSelection(TextSelection.create(tr.doc, pos + 1 + anchor, pos + 1 + head));
     this.view.dispatch(tr);
     this.update(this.node);
@@ -238,12 +253,23 @@ export class ComposerCodeView implements NodeView {
   }
 
   update(node: DocumentNode): boolean {
-    if (node.type.name !== "code_block" || node.attrs.params !== this.node.attrs.params)
-      return false;
+    if (node.type.name !== "code_block") return false;
+    const previousLanguage = languageFor(this.node);
     this.node = node;
     this.updating = true;
     this.fallback.value = node.textContent;
     this.editor?.update(node.textContent);
+    const language = languageFor(node);
+    this.languageSelect.value = language;
+    if (previousLanguage !== language) {
+      void this.editor?.setLanguage(language).catch((error: unknown) => {
+        reportClientDiagnostic("Keiko composer code language unavailable.", {
+          kind: "other",
+          errorEvidence: clientErrorEvidence(error),
+          composerCodeStage: "language",
+        });
+      });
+    }
     this.updating = false;
     return true;
   }

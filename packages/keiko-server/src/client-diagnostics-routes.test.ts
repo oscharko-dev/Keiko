@@ -131,6 +131,7 @@ describe("POST /api/diagnostics/client", () => {
             message: "PRIVATE_PROMPT_CANARY",
             clientTs: CLIENT_TS,
             composerActivity: "initialized",
+            composerFocusIndicator: "keyboard",
           }),
         ),
       );
@@ -146,7 +147,10 @@ describe("POST /api/diagnostics/client", () => {
       ),
     );
     const routine = sink.events.find((event) => event.op === "client.composer.activity");
-    expect(routine).toMatchObject({ level: "info", extra: { activity: "initialized" } });
+    expect(routine).toMatchObject({
+      level: "info",
+      extra: { activity: "initialized", focusIndicator: "keyboard" },
+    });
     expect(routine?.errorKind).toBeUndefined();
     expectActivityLogProof(
       "client.composer.activity.line",
@@ -161,6 +165,9 @@ describe("POST /api/diagnostics/client", () => {
   it.each([
     { composerActivity: "unsafe-content" },
     { composerActivity: "initialized", kind: "other" },
+    { composerActivity: "initialized", composerFocusIndicator: "hostile" },
+    { composerActivity: "text-copied", composerFocusIndicator: "keyboard" },
+    { composerFocusIndicator: "keyboard" },
     { composerCodeStage: "unsafe-content" },
   ])("rejects hostile or failure-masking Composer metadata: %j", async (metadata) => {
     const sink = captureServerLog();
@@ -169,6 +176,37 @@ describe("POST /api/diagnostics/client", () => {
     );
     expect(result.status).toBe(400);
     expect(sink.events.some((event) => event.op === "client.composer.activity")).toBe(false);
+  });
+
+  it("keeps routine voice stages out of the failure admission budget", async () => {
+    const sink = captureServerLog();
+    for (let index = 0; index < 30; index += 1) {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "PRIVATE_VOICE_CANARY",
+            clientTs: CLIENT_TS,
+            kind: "voice-dialogue",
+            voiceDialogueStage: "turn-submitted",
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+    }
+    const failure = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_FAILURE_CANARY",
+          clientTs: CLIENT_TS,
+          kind: "voice-dialogue",
+          voiceDialogueStage: "delivery-failed",
+        }),
+      ),
+    );
+    expect(failure.status).toBe(204);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(1);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_VOICE_CANARY");
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_FAILURE_CANARY");
   });
 
   // The FATAL-FLAW FIX (all three design-panel judges independently flagged it): the field is
@@ -1781,19 +1819,22 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   // #3557 review: both phases of one mounted stage carry the client-minted id, so they join.
-  it("logs both phases of a stage under the stage's own correlation id", async () => {
+  it.each([
+    ["chat bind", "chat-bind"],
+    ["command palette", "command-palette"],
+  ])("logs both phases of %s under the stage's own correlation id", async (stageId, logStage) => {
     const sink = captureServerLog();
     for (const body of [
       {
         kind: "stage",
-        stage: "chat bind",
+        stage: stageId,
         phase: "started",
         ordinal: 4,
         correlationId: "ui_stage-0004",
       },
       {
         kind: "stage",
-        stage: "chat bind",
+        stage: stageId,
         phase: "settled",
         ordinal: 4,
         durationMs: 12,
@@ -1808,6 +1849,45 @@ describe("POST /api/diagnostics/client", () => {
       ["client.stage.started", "ui_stage-0004"],
       ["client.stage.settled", "ui_stage-0004"],
     ]);
+    expect(stage.map((event) => event.extra?.stage)).toEqual([logStage, logStage]);
+  });
+
+  it("records the correlated deletion lifecycle with counts and no conversation content", async () => {
+    const sink = captureServerLog();
+    for (const report of [
+      { phase: "started", deletion: { requestedCount: 3, deletedCount: 0, failedCount: 0 } },
+      {
+        phase: "settled",
+        durationMs: 12,
+        deletion: { requestedCount: 3, deletedCount: 2, failedCount: 1 },
+      },
+    ]) {
+      const body = {
+        kind: "stage",
+        stage: "chat history deletion",
+        ordinal: 1,
+        correlationId: "ui_history-delete-0001",
+        ...report,
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    }
+    const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+    expect(events.map((event) => [event.op, event.correlationId, event.extra?.stage])).toEqual([
+      ["client.stage.started", "ui_history-delete-0001", "chat-history-deletion"],
+      ["client.stage.settled", "ui_history-delete-0001", "chat-history-deletion"],
+    ]);
+    expect(events.at(-1)?.extra).toEqual({
+      stage: "chat-history-deletion",
+      ordinal: 1,
+      requestedCount: 3,
+      deletedCount: 2,
+      failedCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(events.at(-1)?.durationMs).toBe(12);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expectCompleteGitTimeline(events);
   });
 
   // #3557 review: the stale-session repair outcome joins the denied request's timeline.

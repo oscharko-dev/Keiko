@@ -1,0 +1,4 @@
+.cmpLayoutLock[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--surface-accent-subtle);
+}

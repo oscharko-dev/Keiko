@@ -1,7 +1,7 @@
 # Dependency and Security Currency Closeout (#2296)
 
 Closeout evidence for epic [#2291](https://github.com/oscharko-dev/Keiko/issues/2291). The
-checkout-bound rows were refreshed on 2026-09-18 against the dependency-rollup branch based on
+checkout-bound rows were refreshed on 2026-09-30 against the release branch based on
 `dev`.
 
 This document supersedes the version claims in
@@ -38,8 +38,15 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 | Source                     | Result                                                                        |
 | -------------------------- | ----------------------------------------------------------------------------- |
 | `npm audit --json`         | 0 vulnerabilities across 1,025 resolved packages (124 prod, 878 dev, 147 opt) |
+| OSV Scanner 2.6.0          | 0 findings across the repository lockfiles                                    |
 | Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                   |
 | Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout       |
+
+The 2026-09-30 OSV scan found newly reported advisories in the previous lockfile. The patched
+resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.8, and `ip-address` 10.7.2.
+The two `brace-expansion` majors are pinned under their respective `minimatch` consumers so neither
+receives an incompatible major. `npm ci`, `npm audit`, and the exact OSV Scanner 2.6.0 scan pass
+with the updated lockfile.
 
 ### How this queue must be queried — and the trap in it
 
@@ -121,7 +128,7 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `fast-uri`                    | root                  | 3.1.7   | current        | Security patch for GHSA-58mr-gqgx-xq4g and GHSA-qw65-cvwx-89v3; exact OSV 2.6.0 lockfile scan passes. PR #3675.                                                                                                                                                                                              |
+| `fast-uri`                    | root                  | 3.1.8   | current        | Patch for GHSA-hrr3-gc8f-f4qj and earlier advisories; exact OSV 2.6.0 lockfile scan passes. PR #3676.                                                                                                                                                                                                        |
 | `undici`                      | root                  | 8.10.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-3wwx-pv8p-q78v; the separate 7.29.0 override remains scoped to other consumers. PR #3675.                                                                                                                                        |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                            |

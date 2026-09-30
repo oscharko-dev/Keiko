@@ -383,6 +383,23 @@ open" pattern expected by the issue without trusting the browser clock.
 parameters — no `:param` path segments on mutable resources. The route matcher in
 `src/ui/routes.ts` can match them exactly, just as it matches the existing twelve routes.
 
+### Chat History deletion refinement (owner decision, 2026-09-29)
+
+Chat History deletes a conversation permanently with one explicit Delete action. Active chats no
+longer need to be archived first or pass through repeated inline confirmations. The Deleted tab
+remains available to restore or purge legacy archived chats.
+
+Native checkboxes support selecting individual conversations or all conversations in the current
+filtered tab. A shared Delete selected action snapshots only those visible selections. Changing
+project, tab or search clears selection; hidden conversations cannot enter the operation. The UI
+reuses the existing project-scoped DELETE request and its matching irreversible-confirmation
+contract, with at most four requests in flight. Attachment custody cleanup, serialized chat turns,
+and server access validation remain enforced. Each successful response publishes the existing
+chat-deleted mutation. Failed deletions remain visible and selected for explicit retry; successful
+deletions are not retried. Keyboard selection supports Escape to clear and restores focus after
+rows disappear. The existing Activity Log records correlated start/settlement counts and durations,
+with no titles, paths, chat content or response bodies.
+
 ### D8 — Security posture
 
 **Parameterized statements only.** Every SQL statement in `src/ui/store/**` uses a

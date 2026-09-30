@@ -3155,6 +3155,36 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
 
 // uiux-fix F042 (C208) — per-bubble copy affordance for assistant messages.
 describe("ChatWindow message copy", () => {
+  it("preserves sent user code formatting without assistant apply actions or active HTML", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "user-code",
+            chatId: "chat-1",
+            role: "user",
+            content:
+              "Explain **this**:\n\n```javascript\nconst answer = 42;\n```\n\n<img src=x onerror=alert(1)>",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    const prompt = document.querySelector('article[data-role="user"]');
+    expect(prompt).toHaveTextContent("Explain **this**:");
+    expect(prompt?.querySelector("strong")).toBeNull();
+    expect(prompt?.querySelector("pre")).toHaveTextContent("const answer = 42;");
+    expect(prompt?.querySelector("img")).toBeNull();
+    expect(
+      within(prompt as HTMLElement).queryByRole("button", { name: /apply in editor/i }),
+    ).toBeNull();
+  });
   it("renders the live streaming assistant preview as safe markdown", (): void => {
     renderWindow(
       makeSession({
@@ -4382,4 +4412,31 @@ describe("ChatWindow assistant code apply (#2119)", () => {
     expect(screen.queryByRole("button", { name: "Apply to editor" })).toBeNull();
     expect(queueChatEditorApplyMock).not.toHaveBeenCalled();
   });
+});
+
+it("preserves literal user line breaks, indentation and path punctuation in the transcript", () => {
+  const content =
+    "Line one\nLine two\nC:\\temp\\[report]\\__tests__\\file.ts\nconst amount = 42;\n  run(amount);";
+  renderWindow(
+    makeSession({
+      activeChat: makeChat(),
+      messages: [
+        {
+          id: "literal-user",
+          chatId: "chat-1",
+          role: "user",
+          content,
+          timestamp: 1,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      ],
+    }),
+  );
+  const prompt = document.querySelector('article[data-role="user"] .chat-msg-content');
+  expect(prompt?.textContent).toBe(content);
+  expect(prompt?.querySelector("strong")).toBeNull();
 });

@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ChatContextMeter } from "./ChatContextMeter";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
@@ -76,6 +76,13 @@ function fixture(
 }
 
 describe("Chat context meter", () => {
+  it("shows a nonzero fractional estimate for a small occupied context", () => {
+    fixture(44);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Conversation context: approximately 0.4% used" }),
+    );
+    expect(screen.getByRole("heading", { name: "Conversation context 0.4%" })).toBeInTheDocument();
+  });
   it("renders the expanded panel outside the clipping chat canvas", () => {
     const { container } = fixture(8_000);
     fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
@@ -163,6 +170,36 @@ describe("Chat context request diagnostics", () => {
     contextApi.report.mockClear();
   });
 
+  it("refreshes a newly persisted user turn while the answer is pending without per-token requests", async () => {
+    const session = contextSession();
+    const view = render(<ChatContextMeterContainer session={session} />);
+    await screen.findByRole("button", { name: /approximately 80% used/ });
+    contextApi.fetch.mockResolvedValue(status(9_000));
+    const message = {
+      id: "persisted-user",
+      chatId: "chat-private-canary",
+      role: "user" as const,
+      content: "A long code question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+    view.rerender(
+      <ChatContextMeterContainer session={{ ...session, sending: true, messages: [message] }} />,
+    );
+    await screen.findByRole("button", { name: /approximately 90% used/ });
+    const requests = contextApi.fetch.mock.calls.length;
+    view.rerender(
+      <ChatContextMeterContainer
+        session={{ ...session, sending: true, messages: [{ ...message }] }}
+      />,
+    );
+    expect(contextApi.fetch).toHaveBeenCalledTimes(requests);
+  });
+
   it("reports a correlated status failure without its response body or chat identity", async () => {
     const error = new ApiError("INTERNAL", "Private response body canary", 503);
     error.correlationId = "corr-context-status-failure";
@@ -194,6 +231,48 @@ describe("Chat context request diagnostics", () => {
     expect(JSON.stringify(contextApi.report.mock.calls)).not.toContain("canary");
   });
 
+  it("runs manual compaction when a status refresh is still pending", async () => {
+    const session = contextSession();
+    const view = render(<ChatContextMeterContainer session={session} />);
+    await screen.findByRole("button", { name: /approximately 80% used/ });
+    let finishStatus!: (value: ChatContextStatusWire) => void;
+    contextApi.fetch.mockImplementationOnce(
+      () =>
+        new Promise<ChatContextStatusWire>((resolve) => {
+          finishStatus = resolve;
+        }),
+    );
+    view.rerender(
+      <ChatContextMeterContainer
+        session={{
+          ...session,
+          messages: [
+            {
+              id: "new-turn",
+              chatId: "chat-private-canary",
+              role: "user",
+              content: "A new turn",
+              timestamp: 1,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          ],
+        }}
+      />,
+    );
+    await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledTimes(2));
+    const pendingSignal = contextApi.fetch.mock.calls.at(-1)?.[3] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
+    await waitFor(() => expect(contextApi.compact).toHaveBeenCalledOnce());
+    expect(pendingSignal.aborted).toBe(true);
+    await act(async () => finishStatus(status(9_000)));
+    expect(screen.getByRole("button", { name: /approximately 10% used/ })).toBeInTheDocument();
+  });
+
   it("does not report a superseded or unmounted request as a failure", async () => {
     let reject: ((error: Error) => void) | undefined;
     contextApi.fetch.mockImplementation(
@@ -209,3 +288,38 @@ describe("Chat context request diagnostics", () => {
     expect(contextApi.report).not.toHaveBeenCalled();
   });
 });
+
+it("lets a slow pending status settle, then stops polling once the persisted context changes", async () => {
+  vi.useFakeTimers();
+  contextApi.fetch.mockReset().mockResolvedValueOnce(status(8_000));
+  const session = contextSession();
+  const view = render(<ChatContextMeterContainer session={session} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  let finish!: (value: ChatContextStatusWire) => void;
+  contextApi.fetch.mockImplementation(
+    () =>
+      new Promise<ChatContextStatusWire>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  view.rerender(<ChatContextMeterContainer session={{ ...session, sending: true }} />);
+  const signal = contextApi.fetch.mock.calls.at(-1)?.[3] as AbortSignal;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000);
+  });
+  expect(signal.aborted).toBe(false);
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    finish(status(9_000));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
+afterEach(() => vi.useRealTimers());

@@ -2547,6 +2547,26 @@ describe("delete helpers", () => {
     vi.unstubAllGlobals();
   });
 
+  it("joins bulk deletion to its caller correlation while retaining scoped irreversible confirmation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await deleteChat("chat-123", "/repo/project", "ui_history-delete-0001");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chats?id=chat-123",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          "X-Keiko-Correlation-Id": "ui_history-delete-0001",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          projectPath: "/repo/project",
+          confirmation: { chatId: "chat-123", irreversible: true },
+        }),
+      }),
+    );
+  });
+
   it("treats 204 DELETE responses as success", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);

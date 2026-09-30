@@ -7,6 +7,7 @@ const runtime = vi.hoisted(() => ({
   create: vi.fn(),
   theme: vi.fn(() => "keiko-dark"),
   tokens: vi.fn(() => ({})),
+  setModelLanguage: vi.fn(),
 }));
 const keys = {
   CtrlCmd: 256,
@@ -22,7 +23,7 @@ vi.mock("../widgets/cards/editorMonacoRuntime", () => ({
   ensureMonacoRuntime: (): { supported: boolean } => ({ supported: runtime.supported }),
   ensureMonacoLanguage: runtime.language,
   getMonacoNamespace: (): object => ({
-    editor: { create: runtime.create },
+    editor: { create: runtime.create, setModelLanguage: runtime.setModelLanguage },
     KeyMod: keys,
     KeyCode: keys,
   }),
@@ -68,6 +69,7 @@ class EditorDouble {
       column: offset + 1,
     }),
     dispose: vi.fn(),
+    isDisposed: vi.fn(() => false),
   };
   readonly selection = {
     getSelectionStart: (): { column: number } => ({ column: 3 }),
@@ -122,6 +124,32 @@ function hostElement(): HTMLElement {
 }
 
 describe("Composer shared Monaco runtime", () => {
+  it("changes language on the existing model and ignores stale or disposed updates", async () => {
+    const fake = editorDouble();
+    runtime.create.mockReturnValue(fake.instance);
+    const adapter = await mountComposerCode(hostElement(), testPort());
+    let release!: () => void;
+    runtime.language.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const stale = adapter.setLanguage("python");
+    await adapter.setLanguage("json");
+    release();
+    await stale;
+    expect(runtime.setModelLanguage).toHaveBeenCalledExactlyOnceWith(fake.model, "javascript");
+    expect(runtime.create).toHaveBeenCalledOnce();
+    expect(fake.model.setValue).not.toHaveBeenCalled();
+    fake.model.isDisposed.mockReturnValue(true);
+    await adapter.setLanguage("typescript");
+    expect(runtime.setModelLanguage).toHaveBeenCalledOnce();
+    fake.state.modelPresent = false;
+    await adapter.setLanguage("plaintext");
+    expect(runtime.setModelLanguage).toHaveBeenCalledOnce();
+    adapter.dispose();
+  });
   it("mounts locally with the shared theme and loads the JSON-compatible language before creating the editor", async () => {
     const fake = editorDouble();
     runtime.create.mockReturnValue(fake.instance);

@@ -48,6 +48,7 @@ function activationSpies(
 export function workspaceApiFixture(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   const activation = activationSpies(patch);
   return {
+    toggleLayoutLock: vi.fn(),
     add: vi.fn(() => null),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),

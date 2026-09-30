@@ -1,6 +1,5 @@
 /**
- * Host-level editor command registry feeding the unified quick-access palette
- * (`UnifiedQuickAccessPalette`, Epic #2090) with editor-scoped commands.
+ * Host-level editor command registry for the workspace command palette.
  *
  * Mirrors the editor-package command catalogue pattern (`packages/keiko-editor/src/commands.ts`:
  * a static command list plus a deterministic availability gate), but at the WORKSPACE/host level: each
@@ -54,8 +53,7 @@ export interface EditorPaletteCommand {
   readonly isAvailable?: (host: EditorPaletteHost) => boolean;
 }
 
-// Action commands shown in the command palette. Opening Quick-Open / the palette itself are chords +
-// the in-palette `>` toggle, not list entries, so every listed command runs an action and closes.
+// Every listed command runs an editor action and closes the command palette.
 export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   {
     id: "view.splitRight",
@@ -246,30 +244,4 @@ export function resolveVerificationTarget(activeFile: string | null): string | n
   const ext = activeFile.slice(dot);
   if (!VERIFICATION_CODE_EXTENSIONS.has(ext)) return null;
   return `${activeFile.slice(0, dot)}.test${ext}`;
-}
-
-/**
- * Case-insensitive subsequence fuzzy match, shared by Quick-Open (file paths) and the command palette
- * (titles). Returns a sortable score (LOWER is a better match) or `null` when `query` is not a
- * subsequence of `target`. Rewards contiguous runs, matches at the start or after a separator
- * (`/._- `), and an early first match — the heuristics VS Code's quick-open uses.
- */
-export function fuzzyScore(query: string, target: string): number | null {
-  if (query.length === 0) return target.length;
-  const q = query.toLowerCase();
-  const t = target.toLowerCase();
-  let score = 0;
-  let qi = 0;
-  let lastMatch = -1;
-  for (let ti = 0; ti < t.length && qi < q.length; ti += 1) {
-    if (t[ti] !== q[qi]) continue;
-    if (qi === 0) score += ti; // earlier first hit is better
-    if (lastMatch === ti - 1) score -= 3; // contiguous run bonus
-    const prev = ti === 0 ? "/" : t[ti - 1];
-    if (prev === "/" || prev === "." || prev === "_" || prev === "-" || prev === " ") score -= 2;
-    lastMatch = ti;
-    qi += 1;
-  }
-  if (qi < q.length) return null; // not a subsequence
-  return score + (target.length - lastMatch); // shorter tail after the last match is better
 }

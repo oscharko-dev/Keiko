@@ -54,10 +54,7 @@ import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import { EditorEmptyState } from "./EditorEmptyState";
 import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
-import {
-  useEditorQuickAccessTrigger,
-  type EditorQuickAccessTrigger,
-} from "../../EditorQuickAccessTriggerContext";
+import { useEditorShellActions, type EditorShellActions } from "../../EditorShellActionsContext";
 import {
   sameEditorOutlineSnapshot,
   type EditorOutlineRevealRequest,
@@ -251,10 +248,9 @@ export function editorShortcutCommandId(
 function dispatchEditorShortcut(
   commandId: string,
   host: EditorPaletteHost,
-  trigger: EditorQuickAccessTrigger | null,
+  trigger: EditorShellActions | null,
 ): boolean {
-  if (commandId === "quick-access.files") return dispatchQuickAccess(trigger, "files");
-  if (commandId === "quick-access.commands") return dispatchQuickAccess(trigger, "commands");
+  if (commandId === "workspace.commands") return dispatchCommands(trigger);
   if (commandId === "open-editor-settings") return dispatchOpenEditorSettings(trigger);
   if (commandId === "view.splitRight") host.splitActive("row");
   else if (commandId === "view.splitDown") host.splitActive("column");
@@ -268,19 +264,15 @@ function dispatchEditorShortcut(
   return true;
 }
 
-function dispatchOpenEditorSettings(trigger: EditorQuickAccessTrigger | null): boolean {
+function dispatchOpenEditorSettings(trigger: EditorShellActions | null): boolean {
   if (trigger === null) return false;
   trigger.openEditorSettings();
   return true;
 }
 
-function dispatchQuickAccess(
-  trigger: EditorQuickAccessTrigger | null,
-  mode: "files" | "commands",
-): boolean {
+function dispatchCommands(trigger: EditorShellActions | null): boolean {
   if (trigger === null) return false;
-  if (mode === "files") trigger.openFiles();
-  else trigger.openCommands();
+  trigger.openCommands();
   return true;
 }
 
@@ -1137,19 +1129,21 @@ export function EditorWidget({
   }, []);
 
   const closeOpenFile = useCallback(
-    async (paneId: string, path: string): Promise<boolean> =>
-      requestDirtyClose({
-        paneId,
-        files: [path],
-        reason: "tab-close",
-        apply: () => {
-          markDirty(paneId, path, false);
-          pushClosedTab(paneId, path);
-          commitLayout(
-            editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
-          );
-        },
-      }),
+    (paneId: string, path: string): Promise<boolean> =>
+      Promise.resolve(
+        requestDirtyClose({
+          paneId,
+          files: [path],
+          reason: "tab-close",
+          apply: () => {
+            markDirty(paneId, path, false);
+            pushClosedTab(paneId, path);
+            commitLayout(
+              editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
+            );
+          },
+        }),
+      ),
     [commitLayout, markDirty, pushClosedTab, requestDirtyClose],
   );
 
@@ -1840,9 +1834,9 @@ export function EditorWidget({
   const commandHostRef = useRef(commandHost);
   commandHostRef.current = commandHost;
   useRegisterEditorPaletteHost(windowId, commandHost);
-  const quickAccessTrigger = useEditorQuickAccessTrigger();
-  const quickAccessTriggerRef = useRef(quickAccessTrigger);
-  quickAccessTriggerRef.current = quickAccessTrigger;
+  const shellActions = useEditorShellActions();
+  const shellActionsRef = useRef(shellActions);
+  shellActionsRef.current = shellActions;
 
   // Container-level capturing keydown for editor-chrome chords (mirrors the on-mount save backstop,
   // but scoped to the whole editor so it also fires from the sidebar/tab strip). Only browser-safe
@@ -1856,7 +1850,7 @@ export function EditorWidget({
       const dispatched = dispatchEditorShortcut(
         commandId,
         commandHostRef.current,
-        quickAccessTriggerRef.current,
+        shellActionsRef.current,
       );
       if (dispatched) {
         event.preventDefault();

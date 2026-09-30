@@ -1,11 +1,15 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import { undo, redo } from "prosemirror-history";
 import { ComposerEditorController } from "./composer-editor-controller";
 import { MarkdownComposer } from "./MarkdownComposer";
-import { parseComposerMarkdown, serializeComposerMarkdown } from "./composer-markdown";
+import {
+  parseComposerMarkdown,
+  parseComposerText,
+  serializeComposerMarkdown,
+} from "./composer-markdown";
 import { composerEnterSubmits } from "./ComposerShell";
 import type { ComposerInputHandle, MarkdownComposerProps } from "./composer-editor-types";
 
@@ -79,6 +83,59 @@ function type(editor: ComposerEditorController, value: string): void {
 }
 
 describe("Markdown composer editing", () => {
+  it("does not publish an equivalent document replacement as a new draft", () => {
+    const { editor, config } = setup("An unchanged draft.");
+    const equivalent = parseComposerMarkdown("An unchanged draft.");
+    editor.view.dispatch(
+      editor.view.state.tr.replaceWith(0, editor.view.state.doc.content.size, equivalent.content),
+    );
+    expect(config.onChange).not.toHaveBeenCalled();
+  });
+  it("does not republish a DOM normalization with unchanged serialized text", () => {
+    const value = "`*literal*`";
+    const { editor, config } = setup(value);
+    const literal = parseComposerText(value);
+    expect(editor.view.state.doc.eq(literal)).toBe(false);
+    expect(serializeComposerMarkdown(literal)).toBe(value);
+    editor.view.dispatch(
+      editor.view.state.tr.replaceWith(0, editor.view.state.doc.content.size, literal.content),
+    );
+    expect(config.onChange).not.toHaveBeenCalled();
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "Keiko composer equivalent document update ignored.",
+      { composerActivity: "equivalent-edit-ignored" },
+    );
+  });
+  it("does not replace unchanged editor attributes after a controlled draft render", () => {
+    const { editor, config } = setup("a");
+    const setProps = vi.spyOn(editor.view, "setProps");
+    editor.update({ ...config, value: "a", onChange: vi.fn() });
+    expect(setProps).not.toHaveBeenCalled();
+  });
+  it("retains focus during language detection and the code input during a manual language change", () => {
+    setup("```\n\n```");
+    const input = screen.getByRole("textbox", { name: "Code" });
+    input.focus();
+    fireEvent.input(input, { target: { value: "export interface Probe { count: number; }" } });
+    expect(screen.getByRole("textbox", { name: "Code" })).toBe(input);
+    expect(input).toHaveFocus();
+    fireEvent.change(screen.getByRole("combobox", { name: "Code language" }), {
+      target: { value: "plaintext" },
+    });
+    expect(screen.getByRole("textbox", { name: "Code" })).toBe(input);
+  });
+  it("detects unlabelled TypeScript and preserves a manual plain-text choice", () => {
+    const { editor } = setup("```\nexport interface Probe { readonly count: number; }\n```");
+    const language = screen.getByRole("combobox", { name: "Code language" });
+    expect(language).toHaveValue("typescript");
+    fireEvent.change(language, { target: { value: "plaintext" } });
+    expect(screen.getByRole("combobox", { name: "Code language" })).toHaveValue("plaintext");
+    expect(serializeComposerMarkdown(editor.view.state.doc)).toContain("```plaintext");
+  });
+  it("describes keyboard help without adding a permanent instruction row to the input", () => {
+    const { editor } = setup();
+    expect(editor.view.dom).toHaveAttribute("aria-description", labels.hint);
+  });
   it("preserves unfenced plain clipboard text and every newline without Markdown rewriting", () => {
     const value =
       'C:\\temp\\[report]\\__tests__\\file.ts\nconst amount = 42;\n  run(amount);\n\n{"path":"C:\\\\temp","items":["*", "_"]}\n';
@@ -246,6 +303,7 @@ describe("Markdown composer editing", () => {
     setup();
     expect(diagnostics.report).toHaveBeenCalledWith("Keiko Markdown composer initialized.", {
       composerActivity: "initialized",
+      composerFocusIndicator: "keyboard",
     });
   });
 
@@ -456,5 +514,80 @@ describe("Markdown composer editing", () => {
     });
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveTextContent("Second");
     act(() => config.inputRef.current?.setSelectionRange(4, 4));
+  });
+  it("coalesces controlled draft updates and cancels them when the chat changes", async (): Promise<void> => {
+    const config = props();
+    const rendered = render(<MarkdownComposer {...config} />);
+    const first = config.inputRef.current;
+    if (!(first instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+    act(() => {
+      first.view.dispatch(first.view.state.tr.insertText("a"));
+      first.view.dispatch(first.view.state.tr.insertText("b"));
+    });
+    expect(config.onChange).not.toHaveBeenCalled();
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 25));
+    });
+    expect(config.onChange).toHaveBeenCalledExactlyOnceWith("ab", 2);
+    act(() => first.view.dispatch(first.view.state.tr.insertText("c")));
+    rendered.rerender(<MarkdownComposer {...config} documentKey="chat-2" />);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 25));
+    });
+    expect(config.onChange).toHaveBeenCalledTimes(1);
+  });
+  it("keeps newer native edits when React acknowledges an older published draft", async (): Promise<void> => {
+    const config = props();
+    const rendered = render(<MarkdownComposer {...config} />);
+    const editor = config.inputRef.current;
+    if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+    act(() => type(editor, "SE"));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 25));
+    });
+    expect(config.onChange).toHaveBeenLastCalledWith("SE", 2);
+    act(() => type(editor, "L"));
+    rendered.rerender(<MarkdownComposer {...config} value="SE" />);
+    expect(serializeComposerMarkdown(editor.view.state.doc)).toBe("SEL");
+  });
+  it("cancels a pending local publication when an external draft replaces it", async (): Promise<void> => {
+    const config = props();
+    const rendered = render(<MarkdownComposer {...config} />);
+    const editor = config.inputRef.current;
+    if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+    act(() => type(editor, "a"));
+    rendered.rerender(<MarkdownComposer {...config} value="external" />);
+    expect(serializeComposerMarkdown(editor.view.state.doc)).toBe("external");
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 25));
+    });
+    expect(config.onChange).not.toHaveBeenCalled();
+  });
+  it("passes live text to Enter handling before the deferred draft is published", () => {
+    const config = props();
+    let draftSeenByKeyDown = "";
+    let liveSeenByKeyDown = "";
+    function ControlledComposer(): ReactNode {
+      const [value, setValue] = useState("");
+      return (
+        <MarkdownComposer
+          {...config}
+          value={value}
+          onChange={(next): void => setValue(next)}
+          onKeyDown={(_event, live): void => {
+            draftSeenByKeyDown = value;
+            liveSeenByKeyDown = live;
+          }}
+        />
+      );
+    }
+    render(<ControlledComposer />);
+    const editor = config.inputRef.current;
+    if (!(editor instanceof ComposerEditorController)) throw new TypeError("Missing composer");
+    act(() => type(editor, "Immediate send"));
+    expect(draftSeenByKeyDown).toBe("");
+    fireEvent.keyDown(editor.view.dom, { key: "Enter" });
+    expect(draftSeenByKeyDown).toBe("Immediate send");
+    expect(liveSeenByKeyDown).toBe("Immediate send");
   });
 });

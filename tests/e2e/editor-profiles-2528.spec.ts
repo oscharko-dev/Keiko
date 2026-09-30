@@ -126,7 +126,7 @@ async function createConfiguredProfile(
       profileRef: created.profileRef,
       values: {
         fontSize: 18,
-        keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"],
+        keybindingOverrides: ["1|workspace.commands|CtrlOrMeta+Shift+O"],
       },
     },
     "issue-2528-configure-focus",

@@ -101,7 +101,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
  * The chat composer is the case this exists for: `isEditableTarget` above suppresses the whole
  * shell chord set inside any text field, which left Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and
  * Cmd/Ctrl+Shift+F dead in the product's primary input. The editor already had an explicit bypass
- * for exactly this shape (`EditorQuickAccessTriggerContext`, a capturing listener on the editor
+ * for exactly this shape (`EditorShellActionsContext`, a capturing listener on the editor
  * container); this is the same seam declared on the element, so the decision stays in the ONE place
  * that owns chord dispatch instead of growing a second per-surface listener.
  */

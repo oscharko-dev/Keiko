@@ -43,8 +43,20 @@ Every readiness run captures the runtime configuration generation before asynchr
 Late results for a superseded generation are dropped. Replacing configuration clears all field
 observations and the coarse verification state. Observations intentionally survive separate HTTP
 requests in the current process, but not a configuration replacement or process restart; after
-either event the operator must run readiness again. This prevents stale point-in-time evidence from
-becoming durable configuration truth.
+either event basic-chat verification starts during configuration initialization. Successful
+credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
+create, send, streaming send, regeneration, or grounded question may join an already running
+initialization, but must never initiate a provider readiness test. Failed initialization remains
+visible. Inconclusive transport or provider failures recover through configuration-owned background
+probes with exponential backoff capped at five minutes; retries continue at that capped rate until the
+provider recovers or the configuration changes. A conclusive unsupported-model rejection waits for a Settings
+change or explicit verification. Disposal aborts active requests, clears retries, and unsubscribes
+the configuration listener.
+At most two probes run concurrently per configuration holder, including across replacements;
+queued probes of superseded generations are discarded. Ready models are never rechecked per
+question. Settings-triggered background work carries a child correlation linked to the request
+that changed the configuration. Manual Settings checks remain available. This prevents stale point-in-time evidence from becoming
+durable configuration truth and removes an extra model request from interactive Chat traffic.
 
 ### D3 — Reconciliation is explicit and server-validated
 
@@ -95,8 +107,8 @@ judging every model as of the epoch and offering none (F76).
 - A failed persistence attempt leaves the generation-bound observation available for an identical
   retry; it can never cross a configuration replacement.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
-- Readiness must be rerun after restart or configuration replacement, which is intentional because
-  no current live observation exists then.
+- Basic-chat readiness runs at initialization after restart or configuration replacement and reuses
+  successful credential checks; interactive Chat never adds a readiness request.
 - A coding run admitted with a fresh tool-calling proof is not stranded when the proof ages out
   mid-run; a new run still needs a fresh proof.
 

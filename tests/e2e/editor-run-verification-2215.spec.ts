@@ -29,8 +29,8 @@ import {
 } from "./support/editorWorkspace.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
 
-// "ControlOrMeta", NOT `editorModifier`: `quick-access.commands` is a PRODUCT shortcut (the
-// UnifiedQuickAccessPalette shell component, i18n key `quickAccess.query.commands` — "Command
+// "ControlOrMeta", NOT `editorModifier`: `workspace.commands` is a PRODUCT shortcut (the
+// CommandPalette shell component, i18n key `commandPalette.query` — "Command
 // query" below), and the product resolves its modifier from `navigator.platform`
 // (useKeyboardShortcuts' detectPlatform). Playwright's device presets override the userAgent but
 // NOT navigator.platform, so on a Mac the page still reports "MacIntel" and the product waits for

@@ -1979,6 +1979,26 @@ function mostSevereProbeFailure(
   return worst;
 }
 
+async function runBoundedWorkers<T>(
+  items: readonly T[],
+  concurrency: number,
+  process: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  async function worker(): Promise<void> {
+    const index = next;
+    next += 1;
+    if (index >= items.length) return;
+    const item = items[index];
+    if (item !== undefined) await process(item, index);
+    // Yield before recursion so sparse input cannot grow the call stack.
+    await Promise.resolve();
+    await worker();
+  }
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
 async function passingCandidates(
   candidates: readonly string[],
   probe: (modelId: string) => Promise<void>,
@@ -1986,28 +2006,18 @@ async function passingCandidates(
   failures?: ProbeFailureEvidence[],
 ): Promise<readonly string[]> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (next < candidates.length) {
-      const index = next;
-      next += 1;
-      const modelId = candidates[index];
-      if (modelId === undefined) {
-        continue;
-      }
-      try {
-        await probe(modelId);
-        tested[index] = modelId;
-      } catch (error) {
-        // Probe rejection is the documented signal that this candidate is not
-        // chat-callable. We drop it silently so healthy peers still surface — capturing only
-        // the classification code/status as evidence for the all-rejected aggregate.
-        failures?.push({ code: setupErrorCode(error), httpStatus: setupHttpStatus(error) });
-      }
+  async function worker(modelId: string, index: number): Promise<void> {
+    try {
+      await probe(modelId);
+      tested[index] = modelId;
+    } catch (error) {
+      // Probe rejection is the documented signal that this candidate is not
+      // chat-callable. We drop it silently so healthy peers still surface — capturing only
+      // the classification code/status as evidence for the all-rejected aggregate.
+      failures?.push({ code: setupErrorCode(error), httpStatus: setupHttpStatus(error) });
     }
   }
-  const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  await runBoundedWorkers(candidates, concurrency, worker);
   return tested.filter((modelId): modelId is string => modelId !== undefined);
 }
 
@@ -2156,28 +2166,19 @@ export async function admitChatSmokeCandidates(
     skippedByDeadline: [],
   };
   const roundDeadlineAt = now() + CHAT_SMOKE_ROUND_DEADLINE_MS;
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (next < candidates.length) {
-      const index = next;
-      next += 1;
-      const modelId = candidates[index];
-      if (modelId === undefined) continue;
-      if (now() >= roundDeadlineAt) {
-        accumulators.unverifiedKept.push(modelId);
-        accumulators.skippedByDeadline.push(modelId);
-        continue;
-      }
-      try {
-        await probe(modelId);
-        tested[index] = modelId;
-      } catch (error) {
-        recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
-      }
+  await runBoundedWorkers(candidates, concurrency, async (modelId, index) => {
+    if (now() >= roundDeadlineAt) {
+      accumulators.unverifiedKept.push(modelId);
+      accumulators.skippedByDeadline.push(modelId);
+      return;
     }
-  }
-  const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    try {
+      await probe(modelId);
+      tested[index] = modelId;
+    } catch (error) {
+      recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
+    }
+  });
   return {
     tested: tested.filter((modelId): modelId is string => modelId !== undefined),
     ...accumulators,
@@ -2343,52 +2344,39 @@ async function setupToolCallingObservations(
 ): Promise<readonly GatewaySetupToolCallingObservation[]> {
   const checkedAt = new Date().toISOString();
   const observations = new Array<GatewaySetupToolCallingObservation>(testedModelIds.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (next < testedModelIds.length) {
-      const index = next;
-      next += 1;
-      const modelId = testedModelIds[index];
-      if (modelId === undefined) continue;
-      const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-      // A model without a provider stays unverified; that conclusion takes the same log line below
-      // as every probe result instead of being recorded silently.
-      const probeStatus =
-        provider === undefined
-          ? "unverified"
-          : await probeGatewayToolCalling(
-              config,
-              provider,
-              undefined,
-              (error) => {
-                reportSetupVerificationFailure(
-                  deps,
-                  error,
-                  correlationId,
-                  "gateway.setup.tool-calling-probe",
-                );
-              },
-              {
-                env: deps.env,
-                capability: findConfiguredCapability(config, modelId),
-                correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-              },
-            );
-      // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
-      // nothing about the model either way and must never be stored or logged as a verdict: the
-      // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
-      // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
-      const status = probeStatus === "transient" ? "unverified" : probeStatus;
-      observations[index] = {
-        modelId,
-        status,
-        checkedAt,
-      };
-      logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
-    }
-  }
-  const workerCount = Math.max(1, Math.min(SETUP_SMOKE_CONCURRENCY, testedModelIds.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  await runBoundedWorkers(testedModelIds, SETUP_SMOKE_CONCURRENCY, async (modelId, index) => {
+    const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+    // A model without a provider stays unverified; that conclusion takes the same log line below
+    // as every probe result instead of being recorded silently.
+    const probeStatus =
+      provider === undefined
+        ? "unverified"
+        : await probeGatewayToolCalling(
+            config,
+            provider,
+            undefined,
+            (error) => {
+              reportSetupVerificationFailure(
+                deps,
+                error,
+                correlationId,
+                "gateway.setup.tool-calling-probe",
+              );
+            },
+            {
+              env: deps.env,
+              capability: findConfiguredCapability(config, modelId),
+              correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+            },
+          );
+    // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
+    // nothing about the model either way and must never be stored or logged as a verdict: the
+    // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
+    // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
+    const status = probeStatus === "transient" ? "unverified" : probeStatus;
+    observations[index] = { modelId, status, checkedAt };
+    logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
+  });
   return observations;
 }
 
@@ -6243,7 +6231,15 @@ function finalizeVerifiedCandidate(
     deps,
     request.correlationId,
   );
-  gatewayConfig.set(verified.config, true);
+  gatewayConfig.set(verified.config, true, request.correlationId);
+  for (const modelId of verified.testedModelIds) {
+    gatewayConfig.recordVerifiedCapability(
+      modelId,
+      { conversationReady: true },
+      new Date().toISOString(),
+      gatewayConfig.generation(),
+    );
+  }
   logVoiceSetupResolution(verified.config, request.correlationId);
   recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
   return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds, {
@@ -6600,7 +6596,7 @@ function saveExistingConfigUpdate(
     linkLocalGatewayOverrideOptions(deps.env),
   );
   persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps, request.correlationId);
-  gatewayConfig.set(config, true);
+  gatewayConfig.set(config, true, request.correlationId);
   logVoiceSetupResolution(config, request.correlationId);
   recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(
@@ -7023,7 +7019,14 @@ function persistVerifiedCapabilityUpdate(
     // Continuing to route tool calls on the old in-memory proof would widen authority exactly when
     // the latest provider observation says it is no longer justified.
     if (!consumeObservation) {
-      applyVerifiedCapabilityUpdate(gatewayConfig, modelId, generation, updated, false);
+      applyVerifiedCapabilityUpdate(
+        gatewayConfig,
+        modelId,
+        generation,
+        updated,
+        false,
+        correlationId,
+      );
     }
     throw error;
   }
@@ -7033,6 +7036,7 @@ function persistVerifiedCapabilityUpdate(
     generation,
     updated,
     consumeObservation,
+    correlationId,
   );
 }
 
@@ -7042,6 +7046,7 @@ function applyVerifiedCapabilityUpdate(
   generation: number,
   updated: GatewayConfig,
   consumeObservation = true,
+  correlationId?: string,
 ): RouteResult {
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available
@@ -7069,7 +7074,7 @@ function applyVerifiedCapabilityUpdate(
   if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
-  gatewayConfig.set(updated, true);
+  gatewayConfig.set(updated, true, correlationId);
   for (const entry of observations) {
     gatewayConfig.recordVerifiedCapability(
       entry.modelId,

@@ -14,6 +14,7 @@
  */
 
 import Image from "next/image";
+import { flushSync } from "react-dom";
 import {
   memo,
   useCallback,
@@ -34,6 +35,7 @@ import {
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
@@ -615,8 +617,8 @@ function useRegisterPdfCitationPreviewTarget(
   ]);
 }
 
-// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text
-// for the user, otherwise safe markdown, plus the streaming caret. A streaming
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — both message roles use safe markdown
+// so sent Composer formatting remains visible, with assistant-only apply actions. A streaming
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
 function ChatBubbleContentArea({
@@ -649,29 +651,26 @@ function ChatBubbleContentArea({
       data-collapsed={!isUser && collapsed ? "true" : "false"}
       data-collapsible={canCollapse ? "true" : "false"}
     >
-      {isUser ? (
-        message.content
-      ) : (
-        // AC #1 / #2: assistant responses render as safe markdown.
-        // User messages remain plain text — no markdown interpretation.
+      {
         // Streaming assistant turns use the same safe renderer as persisted
         // answers; parser failures fall back to plain-text raw source for this bubble.
         // SM-1: wrapped in a per-message boundary so a parser/render defect
         // degrades this one bubble to plain text instead of crashing the view.
         <SafeMarkdownBoundary
           source={message.content}
+          literalUserInput={isUser}
           diagnosticCorrelationId={message.id}
           applyScopeId={`${message.chatId}:${message.id}`}
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
-          onApplyCodeBlock={onApplyCodeBlock}
+          onApplyCodeBlock={isUser ? undefined : onApplyCodeBlock}
           streaming={streaming}
           trailing={
             streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined
           }
         />
-      )}
+      }
     </div>
   );
 }
@@ -930,12 +929,14 @@ function ChatBubbleImpl({
   return (
     <article
       ref={bubbleRef}
-      className="chat-msg"
+      className={isUser ? `chat-msg ${styles.cmpUserMessage}` : "chat-msg"}
       data-role={message.role}
       data-layout={layout}
       tabIndex={isUser ? undefined : -1}
     >
-      <div className="chat-msg-bubble">
+      <div
+        className={isUser ? `chat-msg-bubble ${styles.cmpUserMessageBubble}` : "chat-msg-bubble"}
+      >
         {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
         {terminalTurnLabel === undefined ? null : (
           <output className={styles.turnEndState} style={NATIVE_BLOCK_STYLE}>
@@ -2488,6 +2489,7 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
 interface ComposerCoreProps {
   readonly ready: boolean;
   readonly placeholder: string;
+  readonly inputRef: RefObject<ComposerInputHandle | null>;
   readonly suspended?: boolean;
   readonly minimal?: boolean;
   readonly compact?: boolean;
@@ -2498,23 +2500,24 @@ interface ComposerCoreProps {
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — attachment intake: adds each dropped or
 // picked file via the session API and reports only the first rejection encountered, matching the
 // original loop's behavior (later rejections in the same batch don't overwrite the first).
-async function collectFirstAttachmentRejection(
+function collectFirstAttachmentRejection(
   files: readonly File[],
   addPendingAttachment: ChatSessionComposerApi["addPendingAttachment"],
 ): Promise<{
   readonly reason: AttachmentRejectionReason | undefined;
   readonly mime: string | undefined;
 }> {
-  let reason: AttachmentRejectionReason | undefined;
-  let mime: string | undefined;
-  for (const file of files) {
+  const initial: { reason: AttachmentRejectionReason | undefined; mime: string | undefined } = {
+    reason: undefined,
+    mime: undefined,
+  };
+  return files.reduce<Promise<typeof initial>>(async (previous, file) => {
+    const first = await previous;
     const result = await addPendingAttachment(file);
-    if (!result.ok && reason === undefined) {
-      reason = result.reason;
-      mime = file.type;
-    }
-  }
-  return { reason, mime };
+    return !result.ok && first.reason === undefined
+      ? { reason: result.reason, mime: file.type }
+      : first;
+  }, Promise.resolve(initial));
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the realtime voice session's chat context
@@ -3011,6 +3014,7 @@ function ComposerVoiceOverlay({
 function ComposerCoreImpl({
   ready,
   placeholder,
+  inputRef,
   suspended = false,
   minimal = false,
   compact = false,
@@ -3044,7 +3048,7 @@ function ComposerCoreImpl({
     activeProject,
     replaceChat,
   } = session;
-  const taRef = useRef<ComposerInputHandle>(null);
+  const taRef = inputRef;
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -3097,7 +3101,7 @@ function ComposerCoreImpl({
       setDraft(draft.trim().length === 0 ? text : `${draft.trimEnd()} ${text}`);
       taRef.current?.focus();
     },
-    [draft, setDraft],
+    [draft, setDraft, taRef],
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
@@ -3498,7 +3502,7 @@ function ComposerCoreImpl({
         setRepositoryPickingPath(null);
       }
     },
-    [activeChat, draft, replaceChat, repositoryMention, setDraft, t],
+    [activeChat, draft, replaceChat, repositoryMention, setDraft, t, taRef],
   );
 
   const removeRepositoryReference = useCallback(
@@ -3511,7 +3515,7 @@ function ComposerCoreImpl({
         taRef.current?.focus();
       });
     },
-    [draft, repositoryReferences, setDraft],
+    [draft, repositoryReferences, setDraft, taRef],
   );
 
   const handleDraftChange = useCallback(
@@ -3533,7 +3537,7 @@ function ComposerCoreImpl({
   );
 
   const handleDraftKeyDown = useCallback(
-    (event: ComposerKeyEvent): void => {
+    (event: ComposerKeyEvent, value: string): void => {
       if (repositoryPickerOpen) {
         const handled = handleRepositoryPickerKeyDown(event, {
           results: repositorySearch.results,
@@ -3546,7 +3550,9 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      if (composerEnterSubmits(event)) void sendMessage();
+      if (composerEnterSubmits(event)) {
+        void sendMessage({ text: value, clearDraftOnAdmission: true });
+      }
     },
     [
       insertRepositoryFileReference,
@@ -5508,7 +5514,8 @@ function ChatWindowComposerFooter({
   effectiveBarCompact,
   ready,
   loading,
-  sendMessage,
+  onSubmit,
+  inputRef,
   error,
   clearError,
   notice,
@@ -5526,7 +5533,8 @@ function ChatWindowComposerFooter({
   readonly effectiveBarCompact: boolean;
   readonly ready: boolean;
   readonly loading: boolean;
-  readonly sendMessage: () => Promise<void>;
+  readonly onSubmit: () => void;
+  readonly inputRef: RefObject<ComposerInputHandle | null>;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
   readonly notice: string | undefined;
@@ -5544,12 +5552,13 @@ function ChatWindowComposerFooter({
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {
               event.preventDefault();
-              void sendMessage();
+              onSubmit();
             }}
           >
             <ComposerCore
               ready={ready}
               placeholder={composerPlaceholder(visible.length, loading, t)}
+              inputRef={inputRef}
               suspended={suspended}
               minimal={effectiveMinimal}
               compact={effectiveCompact}
@@ -5602,6 +5611,7 @@ export function ChatWindow({
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
+  const composerInputRef = useRef<ComposerInputHandle>(null);
   const optionalT = useOptionalWidgetTranslate();
   const {
     messages,
@@ -5635,6 +5645,20 @@ export function ChatWindow({
     rejectMemoryCandidate,
     forgetMemoryAction,
   } = session;
+  const submitComposer = (): void => {
+    const live = composerInputRef.current?.currentMarkdown;
+    if (live === undefined) {
+      void sendMessage();
+      return;
+    }
+    if (live !== draft) {
+      flushSync(() => session.setDraft(live));
+      reportClientDiagnostic("Keiko composer submitted the current editor draft.", {
+        composerActivity: "literal-input-preserved",
+      });
+    }
+    void sendMessage({ text: live, clearDraftOnAdmission: true });
+  };
   const displayedError = presentChatSessionError(error, optionalT);
   const activeProjectRoot = activeProject?.path;
   const activeChatRoot = activeChat?.projectPath;
@@ -5861,7 +5885,8 @@ export function ChatWindow({
         effectiveBarCompact={effectiveBarCompact}
         ready={ready}
         loading={loading}
-        sendMessage={sendMessage}
+        onSubmit={submitComposer}
+        inputRef={composerInputRef}
         error={displayedError}
         clearError={session.clearError}
         notice={notice}

@@ -99,6 +99,16 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
 ] as const;
 export type ClientVoiceDialogueStage = (typeof CLIENT_VOICE_DIALOGUE_STAGES)[number];
 
+/** Shared failure classification for browser severity, rate admission and server persistence. */
+export const CLIENT_VOICE_DIALOGUE_FAILURE_STAGES: ReadonlySet<ClientVoiceDialogueStage> = new Set([
+  "preparation-failed",
+  "queue-unavailable",
+  "delivery-failed",
+  "delivery-cancelled",
+  "delivery-rejected",
+  "capture-renewal-failed",
+]);
+
 // Browser-side delivery loss the page counted since its previous accepted report (#3532). Each
 // value is a bounded non-negative count, never content: the pre-transport buffer evicting its
 // oldest record, the client-side POST throttle dropping a report, a POST that failed, and
@@ -369,11 +379,16 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "initialized",
   "input-limit",
   "code-ready",
+  "code-language-detected",
   "format-removed",
   "cursor-collision",
   "workspace-scroll-ready",
+  "workspace-layout-locked",
+  "workspace-layout-unlocked",
   "literal-input-preserved",
   "draft-resynchronized",
+  "equivalent-edit-ignored",
+  "stale-draft-echo-ignored",
   "non-text-paste-ignored",
   "text-copied",
 ] as const;
@@ -393,6 +408,11 @@ const COMPOSER_ACTIVITIES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_ACTIVI
 const COMPOSER_CODE_STAGES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_CODE_STAGES);
 
 function hasValidComposerContext(value: Record<string, unknown>): boolean {
+  if (
+    value.composerFocusIndicator !== undefined &&
+    (value.composerFocusIndicator !== "keyboard" || value.composerActivity !== "initialized")
+  )
+    return false;
   if (!isOptional(value.composerCodeStage, (stage) => COMPOSER_CODE_STAGES.has(stage)))
     return false;
   if (value.composerActivity === undefined) return true;
@@ -426,6 +446,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
@@ -669,6 +690,8 @@ export const CLIENT_STAGE_IDS = [
   "editor widget chunk",
   "files widget chunk",
   "chat bind",
+  "command palette",
+  "chat history deletion",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -684,6 +707,12 @@ export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
 // anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
 export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
 
+export interface ClientChatHistoryDeletionCounts {
+  readonly requestedCount: number;
+  readonly deletedCount: number;
+  readonly failedCount: number;
+}
+
 // One correlation id per mounted stage (#3557 review): `started` and `settled` carry the same id, so
 // the pair joins in the log even when another tab reuses the same stage and ordinal.
 export interface ClientStageStartedIngestRequest {
@@ -692,6 +721,7 @@ export interface ClientStageStartedIngestRequest {
   readonly phase: "started";
   readonly ordinal: number;
   readonly correlationId?: string | undefined;
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
 }
 
 export interface ClientStageSettledIngestRequest {
@@ -701,6 +731,7 @@ export interface ClientStageSettledIngestRequest {
   readonly ordinal: number;
   readonly durationMs: number;
   readonly correlationId?: string | undefined;
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -715,7 +746,26 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "ordinal",
   "durationMs",
   "correlationId",
+  "deletion",
 ]);
+
+const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "requestedCount",
+  "deletedCount",
+  "failedCount",
+]);
+
+function hasValidStageDeletion(value: Record<string, unknown>): boolean {
+  if (value.stage !== "chat history deletion") return value.deletion === undefined;
+  const counts = value.deletion;
+  if (!isRecord(counts)) return false;
+  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  if (!isBoundedPositiveInteger(counts.requestedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isBoundedNonNegativeInteger(counts.deletedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (value.phase === "started") return counts.deletedCount === 0 && counts.failedCount === 0;
+  return counts.deletedCount + counts.failedCount === counts.requestedCount;
+}
 
 function isClientStageId(value: unknown): value is ClientStageId {
   return typeof value === "string" && CLIENT_STAGE_ID_SET.has(value);
@@ -745,6 +795,7 @@ export function isClientStageIngestRequest(value: unknown): value is ClientStage
   if (!isClientStageId(value.stage)) return false;
   if (!isBoundedPositiveInteger(value.ordinal, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
+  if (!hasValidStageDeletion(value)) return false;
   if (value.phase === "started") return value.durationMs === undefined;
   if (value.phase === "settled") {
     return isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX);

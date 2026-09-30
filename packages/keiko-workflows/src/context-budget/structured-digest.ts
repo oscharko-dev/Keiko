@@ -10,6 +10,7 @@ import {
   containsAbsolutePath,
 } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { redact } from "@oscharko-dev/keiko-security";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 import type { CompactionDigest } from "./compaction-helpers.js";
 
@@ -243,8 +244,13 @@ function safeFileRefs(
 ): readonly { readonly path: string; readonly line?: number; readonly summary: string }[] {
   const refs: { readonly path: string; readonly line?: number; readonly summary: string }[] = [];
   for (const match of line.matchAll(FILE_REF_PATTERN)) {
-    const path = match[1];
-    if (path === undefined || !SAFE_RELATIVE_PATH.test(path) || path.includes("..")) {
+    const matched = match[1];
+    const path = matched?.startsWith("./") ? matched.slice(2) : matched;
+    if (
+      path === undefined ||
+      !SAFE_RELATIVE_PATH.test(path) ||
+      !isValidScopePath(path, { mustBeRelative: true })
+    ) {
       continue;
     }
     const startLine = match[2] === undefined ? undefined : Number.parseInt(match[2], 10);

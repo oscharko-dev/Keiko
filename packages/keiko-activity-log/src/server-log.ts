@@ -146,7 +146,10 @@ import {
 import type { ServerLogEnv, ServerLogLevel, ServerLogThreshold } from "./log-level.js";
 import { redactLogFields, redactLogLabel } from "./log-redaction.js";
 import { keikoStackFrames } from "./stack-frames.js";
-import { observeSupportIncidentTrigger } from "./support-incident.js";
+import {
+  drainSupportIncidentCandidates,
+  observeSupportIncidentTrigger,
+} from "./support-incident.js";
 
 export {
   ACTIVITY_LOG_PIN_QUOTA_BYTES_ENV,
@@ -3248,6 +3251,9 @@ export interface FileServerLogSinkOptions {
 // The registry entries themselves are KEPT so a sink created after a shutdown shares the same
 // per-directory state (segment index, pressure, failure memory) instead of building a second one.
 export function closeFileServerLogSinks(): void {
+  // Candidate creation is deferred outside the write path, but its evidence belongs in the
+  // closing process's final segment. Otherwise the exit flush reopens a segment after sealing.
+  drainSupportIncidentCandidates();
   for (const active of activeLogs.values()) closeActiveLog(active);
 }
 

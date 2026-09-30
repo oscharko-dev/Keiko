@@ -416,6 +416,29 @@ describe("composer context status and manual maintenance", () => {
     expect(readChatContextStatus(deps, chatId, "fixture")).toEqual(after);
   });
 
+  it("compacts code discussions containing current-directory imports without an internal failure", () => {
+    const { deps, chatId } = fixture(
+      16,
+      "Inspect `./src/probe.ts` and `./tests/probe.test.ts`. " +
+        "We review the implementation together. ".repeat(40),
+    );
+    const original = deps.store.listMessages(chatId);
+    const before = readChatContextStatus(deps, chatId, "fixture");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const after = compactChatContext(deps, chatId, "fixture", "corr-code-context-compaction");
+    expect(after.estimatedInputTokens).toBeLessThan(before.estimatedInputTokens);
+    expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(deps.store.listMessages(chatId)).toEqual(original);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "chat.context.management",
+        correlationId: "corr-code-context-compaction",
+      }),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("probe.ts");
+  });
+
   it("uses a manual checkpoint on the next request and re-expands for a larger window", () => {
     const { deps, chatId } = fixture();
     compactChatContext(deps, chatId, "fixture", "corr-manual-context");

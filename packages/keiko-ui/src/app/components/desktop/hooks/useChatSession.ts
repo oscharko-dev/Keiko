@@ -811,6 +811,9 @@ interface SendMessageOptions {
   // When present, this text is sent instead of the current draft. Trimmed and empty-guarded identically
   // to the draft path. The user's independent typed draft is preserved across a spoken turn.
   readonly text?: string;
+  // An immediate typed send supplies the editor's live text before React acknowledges the draft.
+  // Spoken turns continue to preserve any independently typed draft.
+  readonly clearDraftOnAdmission?: true;
   // Internal admission/result acknowledgement for the canonical Voice Twin handoff. Ordinary typed
   // callers retain the historical Promise<void> surface; Voice uses the terminal outcome so a blocked
   // send cannot silently consume a final transcript or arm speech for an unrelated later answer.
@@ -3995,7 +3998,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // Synchronously commit to "queued" so a re-entrant call in the same tick
       // hits the isInFlight guard above (AC#2).
       updateSendStatus("queued");
-      if (options?.text === undefined) {
+      if (options?.text === undefined || options.clearDraftOnAdmission === true) {
         setDraft("");
       }
       setError(undefined);

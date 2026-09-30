@@ -1471,7 +1471,7 @@ jobs:
     name: ui
     needs: verified-tree
     if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
       attestations: write

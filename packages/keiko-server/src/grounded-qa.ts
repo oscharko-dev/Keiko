@@ -173,7 +173,7 @@ import {
 } from "./grounded-citation-projection.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
-import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import {
   captureConversationReadinessAdmission,
   mappedConversationReadinessError,
@@ -2037,14 +2037,10 @@ async function admitGroundedModel(
     };
   }
   const modelId = resolvedModelId;
-  // Restart gap (customer field incident, 0.3.11): grounded asks were the only conversation
-  // entry point WITHOUT the on-demand readiness ensure. The observation store is process-local
-  // by design, so after every restart the first pod question answered 400 "not ready" until an
-  // ungrounded send or a manual settings probe happened to record an observation. Probe on
-  // demand exactly like the create/send paths; injected deterministic answer ports skip the
-  // probe as they skip the wire.
+  // Join configuration-owned initialization after restart or replacement. Grounded questions
+  // never start provider probes; injected deterministic answer ports skip this await.
   if (!allowInjectedModelSeam) {
-    await ensureOnDemandConversationReadiness(deps, modelId, prepared.correlationId);
+    await awaitInitializedConversationReadiness(deps, modelId, prepared.correlationId);
   }
   const readinessAdmission = captureConversationReadinessAdmission(deps, modelId);
   return "status" in readinessAdmission
@@ -2078,7 +2074,7 @@ function compactGroundedCurrentPrompt(
     signal: prepared.signal,
     correlationId: prepared.correlationId,
     redact: (value) => redactedString(deps.redactor, value),
-    call: async (request, signal) => {
+    call: (request, signal) => {
       const model = resolveGroundedAnswerModel(deps, modelId, groundedReadinessAdmission(prepared));
       if (isRouteResult(model))
         throw new ProviderError("The prompt compaction model is unavailable.", model.status);

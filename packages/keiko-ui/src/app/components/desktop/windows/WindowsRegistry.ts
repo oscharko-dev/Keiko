@@ -182,7 +182,7 @@ type ConfigFieldType = "text" | "select" | "textarea" | "perm" | "directory";
 
 /**
  * Issue: German locale coverage. A launcher field carries MESSAGE KEYS, never display copy — the
- * three surfaces that render these fields (window launcher, New Window dialog, quick-access
+ * three surfaces that render these fields (window launcher, New Window dialog, command
  * commands) all read this one table, so an English literal here reached the user untranslated no
  * matter which locale was selected. `def` stays a raw string for machine defaults (`""`, an enum
  * member such as `"empty"`, a provider name); `defKey` is for the one case where the default is
@@ -988,7 +988,7 @@ export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll()
 
 /**
  * The ONE place a window type turns into display copy. Every shell surface that shows a window's
- * name (launcher grid, New Window dialog, quick-access commands, window chrome, footer, inspector)
+ * name (launcher grid, New Window dialog, workspace commands, window chrome, footer, inspector)
  * routes through these four helpers, so a locale switch moves all of them together instead of
  * leaving the English literal that used to live in `WIN_TYPES[type].title`.
  */

@@ -1,4 +1,8 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import {
+  initializeConfiguredConversationReadiness,
+  stopConfiguredConversationReadiness,
+} from "./gateway-readiness.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
 // only the static-serving + CSP + port fields; the JSON/SSE handlers additionally need the resolved
 // gateway config (for the config inspector and for building a ModelPort), an evidence store, a live
@@ -503,12 +507,13 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 ) => QualityIntelligenceReviewPrincipal;
 
 export interface RuntimeGatewayConfig {
+  readonly subscribe?: (listener: (correlationId?: string) => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
-  set(config: GatewayConfig | undefined, present: boolean): void;
+  set(config: GatewayConfig | undefined, present: boolean, correlationId?: string): void;
   /** Monotonic config generation; bumped by every set(). Probes capture it before running. */
   generation(): number;
   /**
@@ -1398,6 +1403,41 @@ function resolveConfiguredEgress(
   }
 }
 
+function gatewayConfigListeners(): {
+  subscribe: (listener: (correlationId?: string) => void) => () => void;
+  notify: (correlationId?: string) => void;
+} {
+  const listeners = new Set<(correlationId?: string) => void>();
+  return {
+    subscribe(listener): () => void {
+      listeners.add(listener);
+      return (): void => {
+        listeners.delete(listener);
+      };
+    },
+    notify(correlationId): void {
+      const snapshot = new Set(listeners);
+      for (const listener of snapshot) {
+        try {
+          listener(correlationId);
+        } catch (error) {
+          emitServerDiagnostic(
+            undefined,
+            serverDiagnosticFromError({
+              correlationId: correlationId ?? newCorrelationId(),
+              operation: "gateway.readiness",
+              source: "gateway-config.subscriber",
+              error,
+              summary: "A gateway readiness probe could not be completed.",
+              redact: (message): string => message,
+            }),
+          );
+        }
+      }
+    },
+  };
+}
+
 function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
@@ -1416,19 +1456,22 @@ function createRuntimeGatewayConfig(
   // stale generation is dropped, so a slow probe of the PREVIOUS config can never stamp the
   // replacement config with an outcome nobody measured against it (#2847 review).
   let generation = 0;
+  const listeners = gatewayConfigListeners();
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
     spendBudget: gatewaySpendBudgetForEnv(env),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
-    set(next: GatewayConfig | undefined, nextPresent: boolean): void {
+    set(next: GatewayConfig | undefined, nextPresent: boolean, correlationId?: string): void {
       config = next;
       present = nextPresent;
       verification = UNVERIFIED_GATEWAY;
       verifiedCapabilities.clear();
       generation += 1;
+      listeners.notify(correlationId);
     },
+    subscribe: listeners.subscribe,
     generation: (): number => generation,
     verification: (): GatewayVerificationState => verification,
     recordVerification(state: GatewayVerificationState, observedGeneration?: number): void {
@@ -1437,19 +1480,27 @@ function createRuntimeGatewayConfig(
     },
     verifiedCapability: (modelId): VerifiedModelCapabilityObservation | undefined =>
       verifiedCapabilities.get(modelId),
-    recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
-      if (observedGeneration !== undefined && observedGeneration !== generation) return;
-      verifiedCapabilities.set(modelId, {
-        modelId,
-        generation,
-        checkedAt,
-        fields: { ...fields },
-      });
-    },
+    recordVerifiedCapability: gatewayCapabilityRecorder(verifiedCapabilities, () => generation),
     clearVerifiedCapability: (modelId, observedGeneration): boolean => {
       if (observedGeneration !== undefined && observedGeneration !== generation) return false;
       return verifiedCapabilities.delete(modelId);
     },
+  };
+}
+
+function gatewayCapabilityRecorder(
+  observations: Map<string, VerifiedModelCapabilityObservation>,
+  generation: () => number,
+): RuntimeGatewayConfig["recordVerifiedCapability"] {
+  return (modelId, fields, checkedAt, observedGeneration): void => {
+    const currentGeneration = generation();
+    if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
+    observations.set(modelId, {
+      modelId,
+      generation: currentGeneration,
+      checkedAt,
+      fields: { ...fields },
+    });
   };
 }
 
@@ -1498,7 +1549,7 @@ export function currentConversationReady(
  * "unknown" into "not ready" told the UI after every restart that no model was usable until a
  * manual probe plus reload (customer field incident, 0.3.11). Admission guards keep using the
  * strict boolean `currentConversationReady` — unknown never admits, it only defers to the
- * on-demand probe at the conversation entry points.
+ * configuration-initialization probe already running before conversation admission.
  */
 export function currentConversationReadinessObservation(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
@@ -4457,7 +4508,26 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
-  return deps;
+  return installConversationReadinessInitialization(deps);
+}
+
+function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
+  initializeConfiguredConversationReadiness(deps);
+  const unsubscribe = deps.gatewayConfig?.subscribe?.((correlationId) => {
+    // Setup stamps its successful credential checks synchronously after replacement. Reuse
+    // those observations before deciding which models still need startup verification.
+    queueMicrotask(() => {
+      initializeConfiguredConversationReadiness(deps, correlationId ?? newCorrelationId());
+    });
+  });
+  return {
+    ...deps,
+    dispose: async (): Promise<void> => {
+      unsubscribe?.();
+      await stopConfiguredConversationReadiness(deps);
+      await deps.dispose?.();
+    },
+  };
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {
@@ -5138,13 +5208,14 @@ function teardownFaultDescription(error: unknown): RuntimeShutdownCleanup {
 // `disposeRuntimeServicesRecorded` records the fault and every failed step (owner review).
 async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]): Promise<void> {
   const failures: unknown[] = [];
-  for (const step of steps) {
+  await steps.reduce<Promise<void>>(async (previous, step) => {
+    await previous;
     try {
       await step();
     } catch (error) {
       failures.push(error);
     }
-  }
+  }, Promise.resolve());
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new TeardownFaults(failures, "runtime-teardown-faulted");
 }

@@ -1,18 +1,18 @@
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import { availablePaletteCommands, type EditorPaletteHost } from "./widgets/cards/editorCommands";
-import type { Command, QuickAccessCommand, QuickAccessShortcutLabels } from "./quickAccessRegistry";
+import type { Command, PaletteCommand, CommandShortcutLabels } from "./workspaceCommands";
 
 // `translate` is REQUIRED, not optional. It used to be optional with an English literal fallback for
-// the two group names below, which is exactly how the quick-access palette stayed English for a user
+// the two group names below, which is exactly how the command palette stayed English for a user
 // who selected Deutsch: nothing failed, the fallback just rendered. A required translate makes the
 // locale a compile-time obligation of every caller.
-export function buildUnifiedQuickAccessCommands(
+export function buildPaletteCommands(
   appCommands: readonly Command[],
   editorHost: EditorPaletteHost | null,
   translate: (key: MessageKey) => string,
-  shortcutLabels?: QuickAccessShortcutLabels,
-): readonly QuickAccessCommand[] {
-  const out: QuickAccessCommand[] = appCommands.map((command) => ({
+  shortcutLabels?: CommandShortcutLabels,
+): readonly PaletteCommand[] {
+  const out: PaletteCommand[] = appCommands.map((command) => ({
     id: command.id,
     label: command.label,
     group: command.group ?? translate("command.group.commands"),
@@ -33,9 +33,9 @@ export function buildUnifiedQuickAccessCommands(
   return dedupeCommands(out);
 }
 
-function dedupeCommands(commands: readonly QuickAccessCommand[]): readonly QuickAccessCommand[] {
+function dedupeCommands(commands: readonly PaletteCommand[]): readonly PaletteCommand[] {
   const seen = new Set<string>();
-  const out: QuickAccessCommand[] = [];
+  const out: PaletteCommand[] = [];
   for (const command of commands) {
     if (seen.has(command.id)) continue;
     seen.add(command.id);

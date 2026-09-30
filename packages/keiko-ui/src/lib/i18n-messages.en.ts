@@ -1,5 +1,6 @@
 export const EN_MESSAGES = {
   "chat.context.title": "Conversation context",
+  "chat.context.heading": "Conversation context {percent}%",
   "chat.context.label": "Conversation context: approximately {percent}% used",
   "chat.context.used": "Estimated tokens used",
   "chat.context.inputBudget": "Usable input tokens",
@@ -23,10 +24,10 @@ export const EN_MESSAGES = {
   "app.skipToContent": "Skip to content",
   "app.workspaceHeading": "Keiko workspace",
   "header.tileAll": "Tile all windows",
+  "header.lockLayout": "Lock layout",
+  "header.unlockLayout": "Unlock layout",
   "header.splitFront": "Split front windows",
   "header.cascade": "Cascade windows",
-  "header.quickAccess": "Quick access",
-  "header.openQuickAccess": "Open quick access",
   "rail.primaryNavigation": "Primary workspace navigation",
   "rail.newChat": "New chat",
   "rail.codingHistory": "Coding History",
@@ -315,7 +316,7 @@ export const EN_MESSAGES = {
   "window.edge.bottom": "bottom",
   "window.edge.left": "left",
   // Issue: German locale coverage. Window-type display copy lives HERE, not as literals in
-  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the quick-access command list
+  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the workspace command list
   // and the window chrome all resolve it through `localizedWindowTitle`/`localizedWindowDesc`, so
   // one locale switch moves every surface instead of leaving an English name behind.
   "window.type.chat.title": "Chat",
@@ -424,7 +425,6 @@ export const EN_MESSAGES = {
   "chat.history.action.rename": "Rename {title}",
   "chat.history.action.delete": "Delete {title}",
   "chat.history.action.deletePermanent": "Delete {title} permanently",
-  "chat.history.action.deleteConfirm": "Confirm permanent delete of {title}",
   "chat.history.action.save": "Save {title}",
   "chat.history.action.cancel": "Cancel {title}",
   "chat.history.action.restore": "Restore {title}",
@@ -434,6 +434,12 @@ export const EN_MESSAGES = {
   // German text printed anywhere on the button (WCAG 2.5.3 Label in Name).
   "chat.history.action.renameLabel": "Rename",
   "chat.history.action.restoreLabel": "Restore",
+  "chat.history.selection.all": "Select all",
+  "chat.history.selection.allDisplayed": "Select all displayed chats",
+  "chat.history.selection.chat": "Select {title}",
+  "chat.history.selection.delete": "Delete selected ({count})",
+  "chat.history.selection.deleting": "Deleting…",
+  "chat.history.selection.permanent": "Permanently deletes the chat and its stored messages.",
   "chat.history.tab.active": "Active",
   "chat.history.tab.deleted": "Deleted",
   "window.type.resources.title": "Resources",

@@ -23,7 +23,7 @@ import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
-import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
   ConversationMemoryActionWire,
@@ -259,13 +259,13 @@ async function persistStreamedTurn(
   };
 }
 
-async function resolveMemory(
+function resolveMemory(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
 ): Promise<ConversationMemoryResultWire> {
   return memoryContext === undefined
-    ? emptyMemoryResult(false)
+    ? Promise.resolve(emptyMemoryResult(false))
     : buildMemoryResult(request, deps, memoryContext);
 }
 
@@ -881,9 +881,8 @@ async function runDesktopChatStream(
   if (activeGitChangeScope(start.parsed.chat) !== undefined) {
     return runGitChangeDescriptionStream(ctx, deps, start, controller);
   }
-  // Fresh-install gap: verify the target model on demand before the sync readiness guards,
-  // mirroring the create and buffered entries.
-  await ensureOnDemandConversationReadiness(
+  // Reuse configuration initialization before admission; streaming never initiates a probe.
+  await awaitInitializedConversationReadiness(
     deps,
     start.parsed.request.modelId ?? start.parsed.chat.selectedModel,
     ctx.correlationId,

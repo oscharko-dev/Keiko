@@ -304,8 +304,8 @@ vi.mock("./Workspace", () => ({
   },
 }));
 
-vi.mock("./modals/UnifiedQuickAccessPalette", () => ({
-  DesktopQuickAccessPalette: (): ReactNode => <div data-testid="quick-access-palette" />,
+vi.mock("./modals/CommandPalette", () => ({
+  DesktopCommandPalette: (): ReactNode => <div data-testid="command-palette" />,
 }));
 
 vi.mock("./modals/GatewaySetupDialog", (): { readonly GatewaySetupDialog: () => ReactNode } => {
@@ -431,6 +431,7 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
+    toggleLayoutLock: vi.fn(),
     currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
     ...patch,
   };
@@ -445,6 +446,7 @@ function workspaceResult(
     wins,
     winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
+    layoutLocked: false,
     palOpen: false,
     setPalOpen: vi.fn(),
     conns,
@@ -1790,30 +1792,30 @@ describe("AppShell grounding connections", () => {
 
   it("does not open the command palette from the Cmd/Ctrl+K shell shortcut in this release", async () => {
     await renderMounted();
-    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
     });
-    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true }));
     });
-    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
-  it("opens unified quick access from the Cmd/Ctrl+P shell shortcut", async () => {
+  it("opens workspace commands from the Cmd/Ctrl+Shift+P shell shortcut", async () => {
     await renderMounted();
-    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
       { readonly dispatch?: (commandId: string) => void } | undefined;
     await act(async () => {
-      keyboardProps?.dispatch?.("quick-access.files");
+      keyboardProps?.dispatch?.("workspace.commands");
     });
 
-    expect(screen.getByTestId("quick-access-palette")).toBeInTheDocument();
+    expect(screen.getByTestId("command-palette")).toBeInTheDocument();
   });
 
   it("keeps shell shortcuts inert while a governed modal owns interaction", async () => {
@@ -1826,10 +1828,10 @@ describe("AppShell grounding connections", () => {
     document.documentElement.dataset.keikoModalOpen = "true";
 
     await act(async () => {
-      dispatch("quick-access.files");
+      dispatch("workspace.commands");
     });
 
-    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
     delete document.documentElement.dataset.keikoModalOpen;
   });
 

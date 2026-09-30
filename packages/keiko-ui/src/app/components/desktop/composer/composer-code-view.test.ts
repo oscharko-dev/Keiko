@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { ComposerCodeView } from "./composer-code-view";
-import { parseComposerMarkdown } from "./composer-markdown";
+import { serializeComposerMarkdown, parseComposerDraft } from "./composer-markdown";
 import { CLIENT_COMPOSER_CODE_STAGES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ComposerCodeEditor, ComposerCodePort } from "./composer-code-runtime";
 import styles from "./MarkdownComposer.module.css";
@@ -34,15 +34,21 @@ afterEach(() => {
 });
 
 function editorAdapter(): ComposerCodeEditor {
-  return { update: vi.fn(), select: vi.fn(), focus: vi.fn(), dispose: vi.fn() };
+  return {
+    update: vi.fn(),
+    setLanguage: vi.fn().mockResolvedValue(undefined),
+    select: vi.fn(),
+    focus: vi.fn(),
+    dispose: vi.fn(),
+  };
 }
 
-function setup(): EditorView {
+function setup(source = "```typescript\nconst x = 1;\n```\n\nNext"): EditorView {
   const host = document.createElement("div");
   document.body.append(host);
   const view = new EditorView(host, {
     state: EditorState.create({
-      doc: parseComposerMarkdown("```typescript\nconst x = 1;\n```\n\nNext"),
+      doc: parseComposerDraft(source),
     }),
     nodeViews: {
       code_block: (node, outer, getPos): ComposerCodeView =>
@@ -159,4 +165,25 @@ describe("composer code runtime lifecycle", () => {
     expect(view.state.selection.from).toBe(1);
     expect(view.state.selection.to).toBe(6);
   });
+});
+
+it.each([
+  ["export function add(", "export function add(a: number): number {", "typescript"],
+  ["# comment", "# comment\ndef probe():", "python"],
+])("revises provisional language as a snippet is typed: %s", (prefix, complete, language) => {
+  const view = setup("```\n\n```\n\nNext");
+  const textarea = view.dom.querySelector("textarea")!;
+  fireEvent.input(textarea, { target: { value: prefix } });
+  fireEvent.input(textarea, { target: { value: complete } });
+  expect(view.dom.querySelector("select")?.value).toBe(language);
+  expect(serializeComposerMarkdown(view.state.doc)).toContain("```" + language + "\n");
+  fireEvent.change(view.dom.querySelector("select")!, { target: { value: "plaintext" } });
+  fireEvent.input(textarea, { target: { value: complete + "\nnext" } });
+  expect(view.dom.querySelector("select")?.value).toBe("plaintext");
+});
+
+it("sends the detected language of an untouched restored code draft", () => {
+  const view = setup("```\nexport interface Probe { count: number; }\n```\n\nNext");
+  expect(view.dom.querySelector("select")?.value).toBe("typescript");
+  expect(serializeComposerMarkdown(view.state.doc)).toContain("```typescript\n");
 });

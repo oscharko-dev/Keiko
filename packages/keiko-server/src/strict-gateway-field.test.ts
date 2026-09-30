@@ -12,7 +12,9 @@ import type { RouteContext } from "./routes.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
+  awaitAnyInitializedConversationReadyChatModel,
   codingWorkbenchProbesSettledForTests,
+  initializeConfiguredConversationReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
@@ -393,7 +395,7 @@ describe("strict LiteLLM field twin", () => {
         }),
         deps,
       );
-      // Warm dotsocr answers the probe: the explicit create succeeds and VERIFIES it.
+      // Credential verification already established that warm dotsocr can answer.
       expect(explicit.status).toBe(201);
       const defaulted = await handleCreateDesktopChat(
         ctx("POST", { projectPath: fixture.projectDir, title: "Standard danach" }),
@@ -408,7 +410,7 @@ describe("strict LiteLLM field twin", () => {
     }
   });
 
-  it("walks to the warm OCR model when every declared chat model is down — preference, not a gate", async () => {
+  it("selects the initialized warm OCR fallback after configuration reload without chat probes", async () => {
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true }, behavior);
@@ -420,6 +422,13 @@ describe("strict LiteLLM field twin", () => {
       // The declared chat model goes down AFTER setup; the OCR model stays warm. The walk must
       // still land a working conversation — the rank de-prioritizes dotsocr but never bans it.
       behavior.emptyChatModels.add("qwen-chat");
+      deps.gatewayConfig?.set(deps.gatewayConfig.current(), true);
+      initializeConfiguredConversationReadiness(deps, "corr-field-reload");
+      await awaitAnyInitializedConversationReadyChatModel(deps, "qwen-chat", "corr-field-join");
+      expect(deps.gatewayConfig?.verifiedCapability("qwen-chat")?.fields.conversationReady).toBe(
+        false,
+      );
+      const mark = log.chatModels.length;
       const chat = await handleCreateDesktopChat(
         ctx("POST", { projectPath: fixture.projectDir, title: "Notbetrieb" }),
         deps,
@@ -427,13 +436,14 @@ describe("strict LiteLLM field twin", () => {
       expect(chat.status).toBe(201);
       const body = chat.body as { readonly chat: { readonly selectedModel?: string } };
       expect(body.chat.selectedModel).toBe("dotsocr");
+      expect(log.chatModels).toHaveLength(mark);
     } finally {
       await deps?.dispose?.();
       await closeServer(gateway);
     }
   });
 
-  it("probes ONLY the requested model for an explicit create — no sibling walk latency", async () => {
+  it("rejects an explicitly requested unready model without starting a probe or walking siblings", async () => {
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true }, behavior);
@@ -443,11 +453,18 @@ describe("strict LiteLLM field twin", () => {
       const fixture = await setUpFieldGateway(port, fieldTmpDir());
       deps = fixture.deps;
       behavior.emptyChatModels.add("dotsocr");
-      behavior.emptyChatModels.add("qwen-chat");
+      deps.gatewayConfig?.set(deps.gatewayConfig.current(), true);
+      initializeConfiguredConversationReadiness(deps, "corr-field-explicit-reload");
+      await awaitAnyInitializedConversationReadyChatModel(
+        deps,
+        "qwen-chat",
+        "corr-field-explicit-join",
+      );
+      expect(deps.gatewayConfig?.verifiedCapability("dotsocr")?.fields.conversationReady).toBe(
+        false,
+      );
       const mark = log.chatModels.length;
-      // Explicitly requesting the cold OCR model: the admission validates THAT model alone, so
-      // probing its siblings could never change the 400 — it would only add their probe
-      // latency to an already-decided answer (0.3.12 adversarial-review finding).
+      // Explicit selection never falls back to the ready sibling and never initiates a probe.
       const chat = await handleCreateDesktopChat(
         ctx("POST", {
           projectPath: fixture.projectDir,
@@ -457,7 +474,7 @@ describe("strict LiteLLM field twin", () => {
         deps,
       );
       expect(chat.status).toBe(400);
-      expect(probesSince(log, mark, "dotsocr")).toBeGreaterThan(0);
+      expect(probesSince(log, mark, "dotsocr")).toBe(0);
       expect(probesSince(log, mark, "qwen-chat")).toBe(0);
     } finally {
       await deps?.dispose?.();
@@ -508,8 +525,7 @@ describe("strict LiteLLM field twin", () => {
       );
       expect(setup.status).toBe(200);
 
-      // 2. Open a chat IMMEDIATELY — no manual readiness click. The on-demand probe must
-      // verify the model inline instead of rejecting the fresh install.
+      // 2. Open a chat immediately using the credential check, with no additional probe.
       const chat = await handleCreateDesktopChat(
         ctx("POST", { projectPath: projectDir, title: "Erster Chat" }),
         deps,

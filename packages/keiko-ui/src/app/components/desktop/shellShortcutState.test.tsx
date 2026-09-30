@@ -1,8 +1,8 @@
-import { buildUnifiedQuickAccessCommands } from "./quickAccessCommands";
+import { buildPaletteCommands } from "./paletteCommands";
 // Epic #518 / Issue #527 + 0.3.0 release audit — the shell's LIVE keyboard state.
 //
 // `resolveShellShortcutState` produces the two things AppShell consumes: the binding table it feeds
-// to `useKeyboardShortcuts`, and the chord-label map the quick-access palette renders. The
+// to `useKeyboardShortcuts`, and the chord-label map the command palette renders. The
 // reserved-chord and conflict pins live here (relocated from shell-undo-bindings.test.ts, where they
 // guarded a hardcoded copy nothing read) so they guard the table the product actually dispatches.
 //
@@ -34,7 +34,7 @@ import {
   detectShortcutConflicts,
   useKeyboardShortcuts,
 } from "./hooks/useKeyboardShortcuts";
-import type { Command } from "./quickAccessRegistry";
+import type { Command } from "./workspaceCommands";
 import { EDITOR_PALETTE_COMMANDS, type EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { translate } from "@/lib/i18n";
 
@@ -50,8 +50,7 @@ const GLOBAL_SHELL_COMMAND_IDS = [
   "redo",
   "focus-status",
   "focus-workspace-search",
-  "quick-access.files",
-  "quick-access.commands",
+  "workspace.commands",
   "open-editor-settings",
 ] as const;
 
@@ -110,7 +109,7 @@ function ShellShortcutHost({ overrides }: { readonly overrides: readonly string[
 }
 
 describe("shellShortcutState — the live shell binding table", () => {
-  it("claims undo, redo, footer-status, workspace search, and quick-access chords", () => {
+  it("claims undo, redo, footer-status, workspace search, and command-palette chords", () => {
     const ids = resolveShellShortcutState([]).bindings.map((binding) => binding.commandId);
 
     expect(ids).toEqual([...GLOBAL_SHELL_COMMAND_IDS]);
@@ -125,8 +124,8 @@ describe("shellShortcutState — the live shell binding table", () => {
     expect(map.get("redo")).toEqual({ key: "z", mod: ["cmd", "shift"] });
     expect(map.get("focus-status")).toEqual({ key: "s", mod: ["alt"] });
     expect(map.get("focus-workspace-search")).toEqual({ key: "f", mod: ["cmd", "shift"] });
-    expect(map.get("quick-access.files")).toEqual({ key: "p", mod: ["cmd"] });
-    expect(map.get("quick-access.commands")).toEqual({ key: "p", mod: ["cmd", "shift"] });
+    expect([...map.values()]).not.toContainEqual({ key: "p", mod: ["cmd"] });
+    expect(map.get("workspace.commands")).toEqual({ key: "p", mod: ["cmd", "shift"] });
     expect(map.get("open-editor-settings")).toEqual({ key: ",", mod: ["cmd"] });
   });
 
@@ -153,10 +152,10 @@ describe("shellShortcutState — the live shell binding table", () => {
   // The reserved/conflict contract must hold for a REBOUND table too — the input a hardcoded copy
   // of the table could never exercise.
   it("resolves a user override into the dispatched chord, still reserved-free and conflict-free", () => {
-    const state = resolveShellShortcutState(["1|quick-access.files|CtrlOrMeta+Shift+O"]);
+    const state = resolveShellShortcutState(["1|workspace.commands|CtrlOrMeta+Shift+O"]);
 
     expect(state.bindings).toContainEqual({
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       chord: { key: "o", mod: ["cmd", "shift"] },
     });
     expect(detectReservedBindings(state.bindings)).toEqual([]);
@@ -169,13 +168,13 @@ describe("shellShortcutState — the live shell binding table", () => {
 
 describe("shellShortcutState — persisted override validation", () => {
   it("resolves global bindings and labels from editor setting overrides", () => {
-    const state = resolveShellShortcutState(["1|quick-access.files|CtrlOrMeta+Shift+O"]);
+    const state = resolveShellShortcutState(["1|workspace.commands|CtrlOrMeta+Shift+O"]);
 
     expect(state.bindings).toContainEqual({
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       chord: { key: "o", mod: ["cmd", "shift"] },
     });
-    expect(state.labels.get("quick-access.files")).toMatch(/O$/u);
+    expect(state.labels.get("workspace.commands")).toMatch(/O$/u);
   });
 
   it("labels every global shell command by default", () => {
@@ -185,19 +184,19 @@ describe("shellShortcutState — persisted override validation", () => {
       expect(state.labels.has(commandId)).toBe(true);
     }
     expect(state.bindings).toContainEqual({
-      commandId: "quick-access.files",
-      chord: { key: "p", mod: ["cmd"] },
+      commandId: "workspace.commands",
+      chord: { key: "p", mod: ["cmd", "shift"] },
     });
   });
 
   it("applies validated global overrides and ignores editor-only override records", () => {
     const state = resolveShellShortcutState([
-      "1|quick-access.files|CtrlOrMeta+Shift+O",
+      "1|workspace.commands|CtrlOrMeta+Shift+O",
       "1|view.splitRight|CtrlOrMeta+Alt+\\",
     ]);
 
     expect(state.bindings).toContainEqual({
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       chord: { key: "o", mod: ["cmd", "shift"] },
     });
     expect(state.bindings.map((entry) => entry.commandId)).not.toContain("view.splitRight");
@@ -207,8 +206,8 @@ describe("shellShortcutState — persisted override validation", () => {
     const state = resolveShellShortcutState(["not-a-valid-override"]);
 
     expect(state.bindings).toContainEqual({
-      commandId: "quick-access.files",
-      chord: { key: "p", mod: ["cmd"] },
+      commandId: "workspace.commands",
+      chord: { key: "p", mod: ["cmd", "shift"] },
     });
   });
 
@@ -255,7 +254,7 @@ describe("shellShortcutState — persisted override validation", () => {
   });
 
   it("keeps the shell rendering for a valid override", () => {
-    render(<ShellShortcutHost overrides={["1|quick-access.files|CtrlOrMeta+Shift+O"]} />);
+    render(<ShellShortcutHost overrides={["1|workspace.commands|CtrlOrMeta+Shift+O"]} />);
 
     expect(screen.getByText("shell rendered")).toBeTruthy();
   });
@@ -369,8 +368,8 @@ describe("shellShortcutState — the chord vocabulary the matcher can express", 
   it.each([
     "1|undo|Ctrl+Meta+T",
     "1|undo|Ctrl+Meta+Alt+T",
-    "1|undo|Ctrl+Meta+P",
-    "1|quick-access.files|Meta+Ctrl+O",
+    "1|undo|Ctrl+Meta+Shift+P",
+    "1|workspace.commands|Meta+Ctrl+O",
     "1|focus-status|ctrl+meta+j",
   ])("never dispatches a chord carrying both ctrl and cmd (%s)", (override) => {
     const ambiguous = resolveShellShortcutState([override]).bindings.filter(
@@ -388,16 +387,16 @@ describe("shellShortcutState — a refused override never disarms its victim", (
     );
   }
 
-  it("keeps quick-access.files on Cmd/Ctrl+P when a colliding override claims it", () => {
-    const chord = { key: "p", ctrlKey: true };
+  it("keeps workspace.commands on Cmd/Ctrl+Shift+P when a colliding override claims it", () => {
+    const chord = { key: "p", ctrlKey: true, shiftKey: true };
     const stock = pressThroughShell({ overrides: [], platform: "other", chord });
     const attacked = pressThroughShell({
-      overrides: ["1|undo|Meta+P", "1|quick-access.files|Meta+Shift+F"],
+      overrides: ["1|undo|Meta+Shift+P", "1|workspace.commands|Meta+Shift+F"],
       platform: "other",
       chord,
     });
 
-    expect(stock.dispatched).toEqual(["quick-access.files"]);
+    expect(stock.dispatched).toEqual(["workspace.commands"]);
     expect(attacked).toEqual(stock);
   });
 
@@ -405,45 +404,45 @@ describe("shellShortcutState — a refused override never disarms its victim", (
     const stock = stockChords();
     const attacked = new Map(
       resolveShellShortcutState([
-        "1|undo|Meta+P",
-        "1|quick-access.files|Meta+Shift+F",
+        "1|undo|Meta+Shift+P",
+        "1|workspace.commands|Meta+Shift+F",
       ]).bindings.map((binding) => [binding.commandId, binding.chord]),
     );
 
-    expect(attacked.get("quick-access.files")).toEqual(stock.get("quick-access.files"));
+    expect(attacked.get("workspace.commands")).toEqual(stock.get("workspace.commands"));
     expect(attacked.get("undo")).toEqual(stock.get("undo"));
   });
 
-  it.each(["1|undo|Ctrl+Meta+P", "1|undo|Ctrl+P"])(
+  it.each(["1|undo|Ctrl+Meta+Shift+P", "1|undo|Ctrl+Shift+P"])(
     "never advertises a chord the command can no longer receive (%s)",
     (override) => {
       const state = resolveShellShortcutState([override]);
       const outcome = pressThroughShell({
         overrides: [override],
         platform: "other",
-        chord: { key: "p", ctrlKey: true },
+        chord: { key: "p", ctrlKey: true, shiftKey: true },
       });
 
-      expect(outcome.dispatched).toEqual(["quick-access.files"]);
-      expect(state.labels.get("quick-access.files")).toBe(
-        resolveShellShortcutState([]).labels.get("quick-access.files"),
+      expect(outcome.dispatched).toEqual(["workspace.commands"]);
+      expect(state.labels.get("workspace.commands")).toBe(
+        resolveShellShortcutState([]).labels.get("workspace.commands"),
       );
     },
   );
 
   // The reporter's own regression case for the reserved-chord refusal.
-  it("falls quick-access.files back to Cmd+P when its override is browser-reserved", () => {
-    const state = resolveShellShortcutState(["1|quick-access.files|CtrlOrMeta+W"]);
+  it("falls workspace.commands back to Cmd+Shift+P when its override is browser-reserved", () => {
+    const state = resolveShellShortcutState(["1|workspace.commands|CtrlOrMeta+W"]);
 
     expect(state.bindings).toContainEqual({
-      commandId: "quick-access.files",
-      chord: { key: "p", mod: ["cmd"] },
+      commandId: "workspace.commands",
+      chord: { key: "p", mod: ["cmd", "shift"] },
     });
   });
 
   it("mounts the shell with that reserved-override table without throwing", () => {
     expect(() =>
-      render(<ShellShortcutHost overrides={["1|quick-access.files|CtrlOrMeta+W"]} />),
+      render(<ShellShortcutHost overrides={["1|workspace.commands|CtrlOrMeta+W"]} />),
     ).not.toThrow();
   });
 });
@@ -451,7 +450,7 @@ describe("shellShortcutState — a refused override never disarms its victim", (
 // A refused override must not be a silent failure (AGENTS.md §7) — but `resolveShellShortcutState`
 // runs on every shell mount AND every settings change, so an unbounded warn would be its own defect.
 describe("shellShortcutState — a refusal is reported, not swallowed", () => {
-  const RESERVED_OVERRIDE = "1|quick-access.files|CtrlOrMeta+W";
+  const RESERVED_OVERRIDE = "1|workspace.commands|CtrlOrMeta+W";
 
   function warnSpy(): MockInstance<typeof console.warn> {
     return vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -494,7 +493,7 @@ describe("shellShortcutState — a refusal is reported, not swallowed", () => {
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       resolveShellShortcutState([]);
-      resolveShellShortcutState(["1|quick-access.files|CtrlOrMeta+Shift+O"]);
+      resolveShellShortcutState(["1|workspace.commands|CtrlOrMeta+Shift+O"]);
     }
 
     expect(warn).not.toHaveBeenCalled();
@@ -584,15 +583,15 @@ describe("shellShortcutState — a refusal is reported, not swallowed", () => {
 
     const message = warnedMessages(warn).join("\n");
     expect(message).toContain("setting=RESERVED_KEYBINDING");
-    expect(message).not.toContain("quick-access.files");
+    expect(message).not.toContain("workspace.commands");
   });
 });
 
 describe("shellShortcutState — palette chord labels", () => {
   it("labels the global commands from the live bindings", () => {
     expect(
-      resolveShellShortcutState(["1|quick-access.files|CtrlOrMeta+Shift+O"]).labels.get(
-        "quick-access.files",
+      resolveShellShortcutState(["1|workspace.commands|CtrlOrMeta+Shift+O"]).labels.get(
+        "workspace.commands",
       ),
     ).toMatch(/O$/u);
   });
@@ -628,7 +627,7 @@ describe("shellShortcutState — palette chord labels", () => {
     )?.keybinding;
     const state = resolveShellShortcutState(["1|tab.next|CtrlOrMeta+Shift+ArrowRight"]);
 
-    const row = buildUnifiedQuickAccessCommands(
+    const row = buildPaletteCommands(
       [appCommand("theme")],
       paletteHost(),
       enTranslate,

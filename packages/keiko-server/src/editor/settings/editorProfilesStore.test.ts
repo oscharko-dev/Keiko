@@ -41,7 +41,7 @@ function focusProfile(): WorkspaceProfileManifest {
       schemaVersion: EDITOR_M11_SETTINGS_SCHEMA_VERSION,
       profileRef,
       revision: 1,
-      values: { fontSize: 16, keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] },
+      values: { fontSize: 16, keybindingOverrides: ["1|workspace.commands|CtrlOrMeta+Shift+O"] },
     },
   };
 }

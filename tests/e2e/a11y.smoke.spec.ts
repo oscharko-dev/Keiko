@@ -196,7 +196,7 @@ const openChatWindow: SurfaceOpener = async (page, request, theme) => {
 
 const openCommandPalette: SurfaceOpener = async (page, _request, theme) => {
   await shellReady(page, theme);
-  // The product's own shortcut for `quick-access.commands` (CtrlOrMeta+Shift+P) — no test-only hook.
+  // The product's own shortcut for `workspace.commands` (CtrlOrMeta+Shift+P) — no test-only hook.
   //
   // "ControlOrMeta" is CORRECT here and must NOT be swapped for `editorModifier`, even though that
   // helper is the right answer for Monaco chords elsewhere in this suite. The two read different
@@ -209,7 +209,7 @@ const openCommandPalette: SurfaceOpener = async (page, _request, theme) => {
   //     exactly that.
   // Using `editorModifier` here sends Control to a product waiting for Meta: the palette never
   // opens. Verified by running it both ways on this macOS host — shorthand passes, helper fails.
-  const palette = page.getByRole("dialog", { name: "Quick access" });
+  const palette = page.getByRole("dialog", { name: "Commands" });
   // Retried, because a chord is FIRE-AND-FORGET: `shellReady` proves the shell rendered, not that
   // `useKeyboardShortcuts` has attached its window listener, and a keydown that arrives in that gap
   // is silently discarded — there is nothing to await and nothing to fail on. One press then left
