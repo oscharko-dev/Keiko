@@ -3,6 +3,10 @@
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  CITATION_FINDING_LIST_MAX,
+  citationFindingTotalSuffix,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { I18N_STORAGE_KEY, I18nProvider, resetLoadedMessageCatalogs } from "@/lib/i18n";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
@@ -1521,6 +1525,40 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     const warning = container.querySelector(".grounded-uncertainty[role='alert']");
     expect(warning?.textContent).toContain("3 unsupported citations");
     expect(warning?.textContent).not.toContain("2 unsupported citations");
+  });
+
+  // PR #3678 review: the server lists at most eight findings per marker; the count must be the
+  // stated total, not the listed items, and one claims marker can stand for several claims.
+  it("counts the stated total of a marker that lists only part of its findings", () => {
+    const listed = Array.from({ length: CITATION_FINDING_LIST_MAX }, (_, i) => i + 5);
+    const a = localKnowledgeAnswer();
+    const { container } = render(
+      <GroundedAnswer
+        answer={{
+          ...a,
+          uncertainty: [
+            {
+              kind: "unsupported-citation",
+              claim:
+                "The answer cited evidence markers not present in the retrieved evidence: " +
+                `${listed.map((index) => `[${String(index)}]`).join(", ")}` +
+                `${citationFindingTotalSuffix(12)}. Treat the affected claims as unverified.`,
+            },
+            {
+              kind: "unsupported-claim",
+              claim:
+                "The answer made claims that the cited sources do not appear to support: [1], [2]" +
+                `${citationFindingTotalSuffix(3)}. Treat those statements as unverified.`,
+            },
+          ],
+        }}
+        busy={false}
+      />,
+    );
+
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent).toContain("12 unsupported citations");
+    expect(warning?.textContent).toContain("3 unsupported claims");
   });
 
   it("does not call an answer without any marker an unsupported citation", () => {

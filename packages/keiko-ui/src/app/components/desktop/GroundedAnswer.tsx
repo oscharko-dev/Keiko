@@ -9,7 +9,10 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { citationMarkerIndices } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import {
+  citationFindingTotal,
+  citationMarkerIndices,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
@@ -896,7 +899,10 @@ function uncertaintyLineText(marker: GroundedUncertainty, t: I18nTranslate): str
   // Keep WHICH markers dangle: the indices are already visible in the answer text, so naming them
   // discloses nothing new and lets the reader find them.
   const named = citationMarkerIndices(marker.claim).map((index) => `[${String(index)}]`);
-  return named.length === 0 ? detail : `${detail} ${named.join(", ")}`;
+  // A marker that lists only part of its dangling indices says so instead of implying it is all.
+  const unlisted = (citationFindingTotal(marker.claim) ?? named.length) > named.length;
+  if (named.length === 0) return detail;
+  return `${detail} ${named.join(", ")}${unlisted ? ", …" : ""}`;
 }
 
 function UncertaintyLine({
@@ -1108,20 +1114,32 @@ function rerankerDegradationNote(
   return t("grounded.warning.rerankerUnavailable");
 }
 
-// The distinct out-of-evidence citation indices the answer used. One server marker names EVERY
-// dangling index of the answer ("...evidence markers not present in the retrieved evidence: [7], [9]"),
+// The out-of-evidence citations the answer used. One server marker stands for EVERY dangling
+// citation of the answer ("...evidence markers not present in the retrieved evidence: [7], [9]"),
 // so counting marker objects reported "1 unsupported citation" for an answer with five bad markers.
-// A marker whose text names no numeric index (a `[path:line]` reference) still counts as one.
+// A marker that lists only part of its findings states their total (`citationFindingTotal`, PR
+// #3678 review); otherwise its distinct named indices count, and a marker naming no numeric index
+// (a `[path:line]` reference) counts as one.
 function unsupportedCitationCount(markers: readonly GroundedUncertainty[]): number {
   const indices = new Set<number>();
-  let unindexed = 0;
+  let counted = 0;
   for (const marker of markers) {
     if (marker.kind !== "unsupported-citation") continue;
+    const total = citationFindingTotal(marker.claim);
     const named = citationMarkerIndices(marker.claim);
-    if (named.length === 0) unindexed += 1;
-    for (const index of named) indices.add(index);
+    if (total !== undefined) counted += total;
+    else if (named.length === 0) counted += 1;
+    else for (const index of named) indices.add(index);
   }
-  return indices.size + unindexed;
+  return indices.size + counted;
+}
+
+// One `unsupported-claim` marker stands for every unentailed claim of the answer and states their
+// total when there is more than one.
+function unsupportedClaimCount(markers: readonly GroundedUncertainty[]): number {
+  return markers
+    .filter((marker) => marker.kind === "unsupported-claim")
+    .reduce((sum, marker) => sum + (citationFindingTotal(marker.claim) ?? 1), 0);
 }
 
 function countedWarning(
@@ -1156,7 +1174,7 @@ function citationWarnings(markers: readonly GroundedUncertainty[], t: I18nTransl
     warnings.push(t("grounded.detail.uncitedAnswer"));
   }
   // Knowledge M1.2 (#2563): a citation that was in the pack but does not SUPPORT its claim.
-  const unsupportedClaims = markers.filter((m) => m.kind === "unsupported-claim").length;
+  const unsupportedClaims = unsupportedClaimCount(markers);
   if (unsupportedClaims > 0) {
     warnings.push(
       countedWarning(

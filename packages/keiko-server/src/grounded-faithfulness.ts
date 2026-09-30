@@ -27,6 +27,8 @@ import type {
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  CITATION_FINDING_LIST_MAX,
+  citationFindingTotalSuffix,
   citationMarkerIndices,
   findCitationMarkerGroups,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
@@ -379,14 +381,14 @@ export function unsupportedCitationMarker(
   if (unsupported.length === 0) {
     return undefined;
   }
-  const paths = [...new Set(unsupported.map((c) => c.scopePath))].slice(0, 8);
+  const allPaths = [...new Set(unsupported.map((c) => c.scopePath))];
+  const paths = allPaths.slice(0, CITATION_FINDING_LIST_MAX);
   return {
     kind: "unsupported-citation",
     claim:
       `The answer cited ${paths.length === 1 ? "a source" : "sources"} not present in the ` +
-      `retrieved evidence: ${paths.join(", ")}. Treat ${
-        paths.length === 1 ? "that claim" : "those claims"
-      } as unverified.`,
+      `retrieved evidence: ${paths.join(", ")}${citationFindingTotalSuffix(allPaths.length)}. ` +
+      `Treat ${paths.length === 1 ? "that claim" : "those claims"} as unverified.`,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -398,15 +400,16 @@ export function unsupportedNumericCitationMarker(
   nowMs: number,
 ): UncertaintyMarker | undefined {
   if (unsupportedMarkers.length === 0) return undefined;
-  const markers = [...new Set(unsupportedMarkers)]
-    .slice(0, 8)
+  const distinct = [...new Set(unsupportedMarkers)];
+  const markers = distinct
+    .slice(0, CITATION_FINDING_LIST_MAX)
     .map((marker) => `[${String(marker)}]`);
   return {
     kind: "unsupported-citation",
     claim:
       `The answer cited ${markers.length === 1 ? "an evidence marker" : "evidence markers"} ` +
-      `not present in the retrieved evidence: ${markers.join(", ")}. Treat the affected ` +
-      "claims as unverified.",
+      `not present in the retrieved evidence: ${markers.join(", ")}` +
+      `${citationFindingTotalSuffix(distinct.length)}. Treat the affected claims as unverified.`,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -948,14 +951,18 @@ export function unsupportedClaimMarker(
   if (unentailed.length === 0) {
     return undefined;
   }
-  const paths = [...new Set(unentailed.flatMap((c) => c.citedPaths))].slice(0, 8);
+  const paths = [...new Set(unentailed.flatMap((c) => c.citedPaths))].slice(
+    0,
+    CITATION_FINDING_LIST_MAX,
+  );
   const single = unentailed.length === 1;
   return {
     kind: "unsupported-claim",
     claim:
       `The answer made ${single ? "a claim" : "claims"} that the cited ` +
       `${paths.length === 1 ? "source does" : "sources do"} not appear to support: ` +
-      `${paths.join(", ")}. Treat ${single ? "that statement" : "those statements"} as unverified.`,
+      `${paths.join(", ")}${citationFindingTotalSuffix(unentailed.length)}. ` +
+      `Treat ${single ? "that statement" : "those statements"} as unverified.`,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };

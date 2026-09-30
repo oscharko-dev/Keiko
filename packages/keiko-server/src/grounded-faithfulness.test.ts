@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  CITATION_FINDING_LIST_MAX,
+  citationFindingTotal,
+  citationMarkerIndices,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import type {
   ConnectedContextPack,
@@ -404,6 +409,23 @@ describe("numeric citation reconciliation", () => {
     expect([...attachedMarkers]).toEqual([1, 2]);
     expect([...numeric.citedMarkers]).toEqual([1, 2]);
     expect(numeric.unsupportedMarkers).toEqual([7, 8, 9]);
+  });
+
+  it("states the total of dangling markers and unentailed claims beyond the listed ones", () => {
+    const dangling = Array.from({ length: 12 }, (_, index) => index + 5);
+    const numeric = unsupportedNumericCitationMarker(dangling, NOW);
+    const claims = unsupportedClaimMarker(
+      [{ citedPaths: ["[1]"] }, { citedPaths: ["[1]"] }, { citedPaths: ["[2]"] }],
+      NOW,
+    );
+
+    // The claim lists at most CITATION_FINDING_LIST_MAX by name and states the total the UI counts.
+    expect(citationMarkerIndices(numeric?.claim ?? "")).toHaveLength(CITATION_FINDING_LIST_MAX);
+    expect(citationFindingTotal(numeric?.claim ?? "")).toBe(12);
+    expect(citationFindingTotal(claims?.claim ?? "")).toBe(3);
+    expect(citationFindingTotal(unsupportedNumericCitationMarker([9], NOW)?.claim ?? "")).toBe(
+      undefined,
+    );
   });
 
   it("does not report a grouped bracket that names no reference as a dangling citation", () => {

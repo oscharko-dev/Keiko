@@ -237,3 +237,29 @@ export function findCitationMarkerGroups(text: string): readonly CitationMarkerG
 export function citationMarkerIndices(text: string): readonly number[] {
   return findCitationMarkerGroups(text).flatMap((group) => group.indices);
 }
+
+// ─── Aggregated citation findings ─────────────────────────────────────────────
+//
+// The server folds every dangling citation (or every unentailed claim) of one answer into ONE
+// uncertainty marker whose claim lists at most CITATION_FINDING_LIST_MAX of them. The UI counts the
+// findings from that claim, so a count read from the listed items alone capped at 8, and a claim
+// naming paths or claims (no numeric index) counted as one (PR #3678 review). A marker that stands
+// for more than one finding therefore carries its total in a fixed suffix, written and read only
+// here.
+
+/** The most findings one aggregated marker's claim lists by name. */
+export const CITATION_FINDING_LIST_MAX = 8;
+
+const CITATION_FINDING_TOTAL_PATTERN = / \((\d{1,7}) in total\)/u;
+
+/** The claim suffix stating how many findings a marker stands for; empty for a single finding. */
+export function citationFindingTotalSuffix(total: number): string {
+  return Number.isSafeInteger(total) && total > 1 ? ` (${String(total)} in total)` : "";
+}
+
+/** The total a marker claim states through `citationFindingTotalSuffix`, if it states one. */
+export function citationFindingTotal(claim: string): number | undefined {
+  const match = CITATION_FINDING_TOTAL_PATTERN.exec(claim);
+  const total = match?.[1] === undefined ? Number.NaN : Number.parseInt(match[1], 10);
+  return Number.isSafeInteger(total) && total > 1 ? total : undefined;
+}
