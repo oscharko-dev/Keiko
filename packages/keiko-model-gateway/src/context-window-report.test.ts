@@ -23,7 +23,7 @@ import { join } from "node:path";
 const PROVIDER: ModelProviderConfig = {
   modelId: "gemma-4-31b-it",
   baseUrl: "https://litellm.example/v1",
-  apiKey: ["example-test-token-", "1234567890abcd"].join(""),
+  apiKey: "fake-test-key",
   timeoutMs: 30_000,
   maxRetries: 0,
   retryBaseDelayMs: 1,

@@ -80,3 +80,14 @@ regexTarget = "line"
 regexes = [
   '''const TEST_WS_KEY = "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 §1\.2 example Sec-WebSocket-Key\.''',
 ]
+
+[[allowlists]]
+description = "PR #3678: a synthetic provider key assembled from two fragments in the history of the context-window report test (commit ede5dc259). The generic-api-key rule reads the `apiKey:` line as a key. No credential was involved, and the fixture now uses the low-entropy literal `fake-test-key`, so the squash-merged tree carries no key-shaped value. Scoped by content, not by commit, so it holds for any history shape: only that exact fixture line in that one file is exempt, and every other finding in the file remains enforced."
+condition = "AND"
+paths = [
+  '''packages/keiko-model-gateway/src/context-window-report\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''apiKey: \["example-test-token-", "1234567890abcd"\]\.join\(""\),''',
+]
