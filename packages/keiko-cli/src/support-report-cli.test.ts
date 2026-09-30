@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -15,7 +16,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
-import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  analyzeSupportReport,
+  parseSupportReport,
+  serializeSupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import {
   fixtureLine,
   fixtureProcess,
@@ -28,6 +33,7 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../../../tests/support/activity-log-scenario.js";
+import { resealSupportReportWithParentFanOut } from "../../../tests/support/support-report-fixtures.js";
 import type { CliIo } from "./runner.js";
 import { runSupportCli } from "./support.js";
 import { publishSupportReportFile, readSupportReportFile } from "./support-export.js";
@@ -133,6 +139,35 @@ async function analyze(
   return { code, ...result };
 }
 
+function analyzeBuiltCli(): { code: number; output: string[]; errors: string[] } {
+  const cliUrl = new URL("../dist/support.js", import.meta.url).href;
+  const program = `
+    import { runSupportCli } from ${JSON.stringify(cliUrl)};
+    const output = [], errors = [];
+    const code = await runSupportCli(["analyze", process.argv[1], "--json"], {
+      out: (text) => output.push(text), err: (text) => errors.push(text),
+    }, {}, { cwd: process.argv[2], controlActivityStateDir: process.argv[3] });
+    process.stdout.write(JSON.stringify({ code, output, errors }));
+  `;
+  return JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--max-old-space-size=128",
+        "--experimental-sqlite",
+        "--disable-warning=ExperimentalWarning",
+        "--input-type=module",
+        "-e",
+        program,
+        path,
+        root,
+        controlStateDir,
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    ),
+  ) as { code: number; output: string[]; errors: string[] };
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-support-report-cli-"));
   stateDir = join(root, "state");
@@ -211,6 +246,27 @@ describe("support report CLI and private publication", () => {
       expectedOps: ["support.report.started", "support.report.failed"],
     });
     expect(trace.failureClasses).toContain("support-report");
+  });
+
+  it("emits only a body-free failure for amplified timelines in the built CLI under a 128 MiB heap", async () => {
+    await exportReport();
+    const report = parseSupportReport(readSupportReportFile(path));
+    const hostile = resealSupportReportWithParentFanOut(report);
+    writeFileSync(path, serializeSupportReport(hostile), { mode: 0o600 });
+    const result = analyzeBuiltCli();
+    expect(result.code).toBe(1);
+    expect(result.output).toEqual([]);
+    expect(result.errors.join("\n")).toContain("report-budget-exceeded");
+    const raw = readPersistedActivityLog(controlStateDir);
+    const [line] = persistedActivityLogLines(raw, "support.report.failed");
+    expect(
+      expectActivityLogProof("support.report.failed.report-lifecycle", line ?? ""),
+    ).toMatchObject({
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(persistedActivityLogLines(raw, "support.report.completed")).toEqual([]);
   });
 
   it("uses the closed default filename and owner-private output directory", async () => {

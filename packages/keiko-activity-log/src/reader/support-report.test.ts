@@ -21,11 +21,6 @@ import {
   writeFixtureSegment,
 } from "../../../../tests/support/activity-log-segments.js";
 import { analyzeLogText } from "./support-analyze.js";
-import {
-  expectActivityLogProof,
-  persistedActivityLogLines,
-  readPersistedActivityLog,
-} from "../../../../tests/support/activity-log-proof.js";
 import { selectedLogContent } from "./support-selective-export.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQueryResult } from "./support-query.js";
 import {
@@ -83,51 +78,6 @@ function fixture(
     { trigger: "export" },
   );
   return { report: buildSupportReport(incident, query), query };
-}
-
-function assertRejectedAtCli(report: SupportReport): void {
-  const path = join(stateDir, "received.json");
-  const controlStateDir = join(stateDir, "control");
-  writeFileSync(path, serializeSupportReport(report), { mode: 0o600 });
-  const cliUrl = new URL("../../../keiko-cli/dist/support.js", import.meta.url).href;
-  const program = `
-    import { runSupportCli } from ${JSON.stringify(cliUrl)};
-    const output = [], errors = [];
-    const code = await runSupportCli(["analyze", process.argv[1], "--json"], {
-      out: (text) => output.push(text), err: (text) => errors.push(text),
-    }, {}, { cwd: process.argv[2], controlActivityStateDir: process.argv[3] });
-    process.stdout.write(JSON.stringify({ code, output, errors }));
-  `;
-  const { code, output, errors } = JSON.parse(
-    execFileSync(
-      process.execPath,
-      [
-        "--max-old-space-size=128",
-        "--experimental-sqlite",
-        "--disable-warning=ExperimentalWarning",
-        "--input-type=module",
-        "-e",
-        program,
-        path,
-        stateDir,
-        controlStateDir,
-      ],
-      { encoding: "utf8", timeout: 15_000 },
-    ),
-  ) as { code: number; output: string[]; errors: string[] };
-  expect(code).toBe(1);
-  expect(output).toEqual([]);
-  expect(errors.join("\n")).toContain("report-budget-exceeded");
-  const raw = readPersistedActivityLog(controlStateDir);
-  const [line] = persistedActivityLogLines(raw, "support.report.failed");
-  expect(
-    expectActivityLogProof("support.report.failed.report-lifecycle", line ?? ""),
-  ).toMatchObject({
-    errorKind: "validation-failed",
-    completeness: "complete",
-    loss: "none",
-  });
-  expect(persistedActivityLogLines(raw, "support.report.completed")).toEqual([]);
 }
 
 describe("canonical body-free offline report", () => {
@@ -229,7 +179,6 @@ describe("canonical body-free offline report", () => {
         maxTimelineBytes: Number.MAX_SAFE_INTEGER,
       }),
     ).toThrow("report-budget-exceeded");
-    assertRejectedAtCli(hostile);
   });
 
   it("keeps the selective reader projection at its owning public entry point", () => {
