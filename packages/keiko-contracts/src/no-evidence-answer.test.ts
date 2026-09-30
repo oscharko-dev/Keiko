@@ -21,6 +21,23 @@ describe("isNoEvidenceAnswerText", () => {
     "Keine Evidenz im ausgewaehlten Wissensumfang gefunden.",
     "Nicht genug Belege vorhanden.",
     "  In den Dokumenten\n\nwurden keine Hinweise gefunden.  ",
+    // Further natural refusals (PR #3678 review).
+    "Die bereitgestellten Dokumente machen keine Aussage zur Java-Version.",
+    "Aus den Dokumenten geht nicht hervor, welche Java-Version verwendet wird.",
+    "Aus den Unterlagen geht dazu nichts hervor.",
+    "In den Unterlagen steht dazu nichts.",
+    "Die Quellen sagen nichts über die Java-Version.",
+    "Das kann ich anhand der bereitgestellten Dokumente nicht beantworten.",
+    "Den Dokumenten lässt sich die Java-Version nicht entnehmen.",
+    "Es liegen keine Informationen zur Java-Version vor.",
+    "Es liegen nicht genügend Informationen vor.",
+    "Das Repository enthält keine Angaben zur Java-Version.",
+    "The provided documents do not say which Java version is used.",
+    "I cannot answer this based on the provided context.",
+    "There is not enough information to answer this.",
+    "No information is available on this topic.",
+    "The codebase does not mention the Java version.",
+    "I couldn’t find the Java version in the retrieved excerpts.",
   ])("recognises the refusal %j", (answer) => {
     expect(isNoEvidenceAnswerText(answer)).toBe(true);
   });
@@ -47,6 +64,15 @@ describe("isNoEvidenceAnswerText", () => {
     // The evidence word belongs to an independent sentence, not to the negation.
     "The API does not provide authentication. Documentation is public.",
     "Die API bietet keine Authentifizierung an. Die Dokumentation ist öffentlich.",
+    // An absent-information noun about the subject, with no evidence referent or search outcome.
+    "The API returns no details on errors.",
+    "The function returns no information about the caller.",
+    "Die Fehlermeldung enthält keine Details.",
+    "Es gibt keine Hinweise auf Datenverlust im Betrieb.",
+    "Die Datei enthält keine Angaben zum Autor.",
+    // A failed search or answer by the subject, not by Keiko over its evidence.
+    "Maven could not find the dependency.",
+    "The server cannot answer requests while it restarts.",
   ])("does not treat %j as a refusal", (answer) => {
     expect(isNoEvidenceAnswerText(answer)).toBe(false);
   });

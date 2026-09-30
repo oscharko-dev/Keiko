@@ -174,9 +174,13 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
 - **`uncited-answer` is a third additive kind.** An answer with source-backed claims and no supported
   marker used to reuse `unsupported-citation`, which the UI reads as "references sources that were not
   in the retrieved evidence" — false for a merely uncited answer. A refusal (one shared detector,
-  `runtime/no-evidence-answer`) makes no claim and carries neither kind. A negated verb ("does not
-  contain", "nicht erwähnt") counts as a refusal only when the text names the evidence it searched.
-  Otherwise "The API does not provide authentication." is a negative fact, not a refusal.
+  `runtime/no-evidence-answer`) makes no claim and carries neither kind. Only explicit "not enough
+  evidence/information" statements are refusals unconditionally. A negated verb ("does not contain",
+  "nicht erwähnt", "geht nicht hervor", "cannot answer") counts as a refusal only when its own
+  sentence names the evidence it searched (documents, sources, context, repository). An
+  absent-information noun ("keine Angaben", "no details") also counts with a search outcome
+  ("gefunden", "available", "liegen … vor") in that sentence. Otherwise "The API does not provide
+  authentication." or "The API returns no details on errors." is a negative fact, not a refusal.
 - **The judge is sized per evidence item.** `maxExcerptChars` bounds each cited item, a numeric
   evidence block gets a framing allowance for its `[n] label` header and code fence, and one claim may
   cite up to `ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM` distinct items. Before this, the rendered block
