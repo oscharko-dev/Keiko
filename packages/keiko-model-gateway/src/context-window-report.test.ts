@@ -13,6 +13,7 @@ import {
   loadConfigFromFile,
   markAssumedPlaceholderContextWindows,
   parseModelCapability,
+  toolCallingConfigurationFingerprint,
 } from "./config.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -176,7 +177,12 @@ describe("Gateway context-window report hook", () => {
       }),
     ).rejects.toBeInstanceOf(ContextOverflowError);
     expect(reports).toEqual([
-      { modelId: PROVIDER.modelId, contextWindowTokens: 32_768, correlationId: "corr-overflow" },
+      {
+        modelId: PROVIDER.modelId,
+        contextWindowTokens: 32_768,
+        correlationId: "corr-overflow",
+        deploymentFingerprint: toolCallingConfigurationFingerprint(PROVIDER),
+      },
     ]);
   });
 

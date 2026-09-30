@@ -35,6 +35,7 @@ import {
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
+import { toolCallingConfigurationFingerprint } from "./config.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
@@ -109,6 +110,12 @@ export interface ContextWindowReport {
   readonly modelId: string;
   readonly contextWindowTokens: number;
   readonly correlationId: string;
+  /**
+   * The deployment that stated the window (`toolCallingConfigurationFingerprint` of the provider
+   * the call used). A host adopts the window only while its configuration still routes the model
+   * to that deployment: a late answer must never rewrite a replacement's window.
+   */
+  readonly deploymentFingerprint?: string | undefined;
 }
 
 // A gateway call plus the caller's log context.
@@ -1180,6 +1187,7 @@ export class Gateway {
       modelId: route.provider.modelId,
       contextWindowTokens,
       correlationId: ids.correlationId,
+      deploymentFingerprint: toolCallingConfigurationFingerprint(route.provider),
     });
   }
 

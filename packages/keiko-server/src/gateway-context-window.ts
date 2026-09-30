@@ -53,7 +53,7 @@ const CONTEXT_WINDOW_ADOPTION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["adopted", "unchanged", "not-chat", "unconfigured"],
+      values: ["adopted", "unchanged", "not-chat", "unconfigured", "stale-deployment"],
     },
     contextWindow: { type: "integer", dataClass: "count", required: true },
     previousContextWindow: { type: "integer", dataClass: "count", required: false },
@@ -136,7 +136,7 @@ function logAdoption(
   modelId: string,
   contextWindow: number,
   source: ContextWindowSource,
-  outcome: AdoptedContextWindowOutcome,
+  outcome: AdoptedContextWindowOutcome | { readonly state: "stale-deployment" },
   correlation: { readonly correlationId: string; readonly parentCorrelationId?: string },
 ): void {
   getServerLogger().info(
@@ -187,12 +187,14 @@ export function adoptReportedContextWindow(
     ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
   };
   try {
-    const outcome = persistAdoptedContextWindow(
-      deps,
-      report.modelId,
-      report.contextWindowTokens,
-      report.correlationId,
-    );
+    const outcome = reportFromCurrentDeployment(deps, report)
+      ? persistAdoptedContextWindow(
+          deps,
+          report.modelId,
+          report.contextWindowTokens,
+          report.correlationId,
+        )
+      : { state: "stale-deployment" as const };
     logAdoption(report.modelId, report.contextWindowTokens, source, outcome, correlation);
   } catch (error) {
     emitServerDiagnostic(
@@ -207,6 +209,17 @@ export function adoptReportedContextWindow(
       }),
     );
   }
+}
+
+// A report is adopted only while the configuration still routes the model to the deployment that
+// stated it. A probe or call started before setup replaced the endpoint must never write its late
+// answer onto the replacement (PR #3678 review).
+function reportFromCurrentDeployment(deps: UiHandlerDeps, report: ContextWindowReport): boolean {
+  if (report.deploymentFingerprint === undefined) return true;
+  const config = currentGatewayConfig(deps);
+  return (
+    config !== undefined && deploymentKey(config, report.modelId) === report.deploymentFingerprint
+  );
 }
 
 // One attempt per deployment identity per runtime configuration holder: a provider that states no
@@ -278,8 +291,12 @@ async function probeContextWindow(
     });
     logProbe(modelId, outcome, probe);
     if (outcome.status === "reported") {
-      const { contextWindowTokens } = outcome;
-      const report = { modelId, contextWindowTokens, correlationId: probe.correlationId };
+      const report = {
+        modelId,
+        contextWindowTokens: outcome.contextWindowTokens,
+        correlationId: probe.correlationId,
+        deploymentFingerprint: toolCallingConfigurationFingerprint(provider),
+      };
       adoptReportedContextWindow(deps, report, "window-probe", probe.parentCorrelationId);
     }
   } catch (error) {

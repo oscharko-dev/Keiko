@@ -194,6 +194,55 @@ describe("context-window probe", () => {
   });
 });
 
+describe("deployment-bound adoption", () => {
+  // PR #3678 review: a probe answer that arrives after setup replaced the deployment behind the
+  // alias must not rewrite the replacement's window.
+  it("ignores a late window statement of a deployment the alias no longer routes to", async () => {
+    const sink = capture();
+    let answer!: (response: Response) => void;
+    const fetchImpl = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    void discoverAssumedContextWindow(deps, MODEL, "corr-stale");
+    await vi.waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: MODEL,
+            baseUrl: "https://replacement.example.invalid/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 5_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 1,
+          },
+        ],
+        capabilities: [{ ...createDefaultChatCapability(MODEL), contextWindow: 131_072 }],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      }),
+      true,
+    );
+    answer(rejection("max_tokens=1000000000 cannot be greater than max_model_len=8192."));
+    await contextWindowProbesSettledForTests(deps);
+    expect(stored(deps)?.contextWindow).toBe(131_072);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        extra: expect.objectContaining({
+          state: "stale-deployment",
+          contextWindow: 8_192,
+        }) as unknown,
+      }),
+    );
+  });
+});
+
 describe("provider-reported window adoption", () => {
   it("replaces even a declared window in either direction with the provider's statement", () => {
     const sink = capture();
