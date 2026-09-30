@@ -10,7 +10,7 @@ export const EN_MESSAGES = {
   "chat.context.saved": "{tokens} tokens saved across {count} summarized messages.",
   "chat.context.unavailable": "Context estimate unavailable",
   "chat.context.estimate":
-    "Estimated conversation history. Drafts, attachments and retrieved sources add context when you send.",
+    "Estimated for the next request; knowledge chats include the latest question's source share. Your draft and attachments are added when you send.",
   "chat.context.automatic":
     "Keiko compacts automatically at 90% of usable input capacity before sending the next request.",
   "chat.context.retained":
@@ -20,6 +20,26 @@ export const EN_MESSAGES = {
   "chat.context.compact": "Compact context now",
   "chat.context.compacting": "Compacting context…",
   "chat.context.wait": "Available after the current response finishes.",
+  "chat.context.total": "{used} of {window} context window tokens",
+  "chat.context.breakdown": "Context window breakdown",
+  "chat.context.segment.system": "System instructions",
+  "chat.context.segment.summary": "Summary of earlier messages",
+  "chat.context.segment.messages": "Messages",
+  "chat.context.segment.knowledge": "Knowledge sources",
+  "chat.context.segment.free": "Free space",
+  "chat.context.segment.compactionBuffer": "Compaction buffer",
+  "chat.context.count.messages": "{count} messages",
+  "chat.context.count.messages.one": "1 message",
+  "chat.context.count.summary": "{count} messages summarized",
+  "chat.context.count.summary.one": "1 message summarized",
+  "chat.context.count.references": "{sent} of {available} references sent",
+  "chat.context.referencesTrimmed":
+    "Only {sent} of {available} references fit the model's context window. The most relevant were used.",
+  "chat.context.lastRequestMeasured": "Last request: {tokens} tokens (measured by the provider).",
+  "chat.context.lastRequestEstimated": "Last request: about {tokens} tokens (estimated).",
+  "chat.context.untilCompaction": "{tokens} tokens until automatic compaction.",
+  "chat.context.sourcesPolicy":
+    "Knowledge sources are retrieved fresh for every question and never summarized. Compaction only condenses the conversation, which gets at most a third of the input for knowledge questions.",
   "chat.context.windowAssumed":
     "The gateway declares no context window for this model. Keiko plans with the assumed value and adopts the real window automatically as soon as the provider states it.",
   "chat.context.pending":

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,6 +74,88 @@ function fixture(
     compact,
   };
 }
+
+// Field report 1.1.13: a grounded chat's meter showed one number although retrieved sources filled
+// most of each request. The panel now draws the whole window as ordered shares.
+function groundedStatus(): ChatContextStatusWire {
+  return {
+    ...status(8_000),
+    contextWindowTokens: 16_384,
+    inputBudgetTokens: 11_776,
+    reservedOutputTokens: 4_096,
+    safetyMarginTokens: 512,
+    estimatedInputTokens: 5_610,
+    compaction: undefined,
+    knowledgeSources: { tokens: 4_100, sentReferenceCount: 4, availableReferenceCount: 16 },
+    lastRequest: { promptTokens: 5_901, measured: true },
+    autoCompactionAtTokens: 10_598,
+    segments: [
+      { id: "system", tokens: 310 },
+      { id: "summary", tokens: 0, count: 0 },
+      { id: "messages", tokens: 1_200, count: 4 },
+      { id: "knowledge", tokens: 4_100, count: 4 },
+      { id: "free", tokens: 4_988 },
+      { id: "compaction-buffer", tokens: 1_178 },
+      { id: "output-reserve", tokens: 4_096 },
+      { id: "safety-margin", tokens: 512 },
+    ],
+  };
+}
+
+function openGroundedPanel(): HTMLElement {
+  render(
+    <ChatContextMeter
+      status={groundedStatus()}
+      busy={false}
+      compacting={false}
+      error={false}
+      onCompact={vi.fn()}
+      onRetry={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+  return screen.getByRole("region", { name: "Conversation context" });
+}
+
+describe("Chat context window breakdown", () => {
+  it("lists every non-empty share of the window with its tokens and share", () => {
+    const panel = openGroundedPanel();
+    const legend = within(panel).getByRole("list", { name: "Context window breakdown" });
+    const rows = within(legend).getAllByRole("listitem");
+    expect(rows.map((row) => row.getAttribute("data-segment"))).toEqual([
+      "system",
+      "messages",
+      "knowledge",
+      "free",
+      "compaction-buffer",
+      "output-reserve",
+      "safety-margin",
+    ]);
+    expect(within(panel).getByText("5,610 of 16,384 context window tokens")).toBeInTheDocument();
+    const knowledge = rows.find((row) => row.getAttribute("data-segment") === "knowledge");
+    expect(knowledge).toHaveTextContent("Knowledge sources");
+    expect(knowledge).toHaveTextContent("4 of 16 references sent");
+    expect(knowledge).toHaveTextContent("4,100");
+    expect(knowledge).toHaveTextContent("25 %");
+  });
+
+  it("warns when references were left out and states the measured request size", () => {
+    const panel = openGroundedPanel();
+    expect(within(panel).getByRole("note")).toHaveTextContent(
+      "Only 4 of 16 references fit the model's context window. The most relevant were used.",
+    );
+    expect(
+      within(panel).getByText("Last request: 5,901 tokens (measured by the provider)."),
+    ).toBeInTheDocument();
+    expect(within(panel).getByText("4,988 tokens until automatic compaction.")).toBeInTheDocument();
+    expect(within(panel).getByText(/never summarized/u)).toBeInTheDocument();
+  });
+
+  it("has no accessibility violations", async () => {
+    const panel = openGroundedPanel();
+    expect(await axe(panel)).toHaveNoViolations();
+  });
+});
 
 describe("Chat context meter", () => {
   it("shows a nonzero fractional estimate for a small occupied context", () => {

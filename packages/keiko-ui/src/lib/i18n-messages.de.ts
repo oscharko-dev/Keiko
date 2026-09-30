@@ -12,7 +12,7 @@ export const DE_MESSAGES = {
   "chat.context.saved": "{tokens} Tokens bei {count} zusammengefassten Nachrichten eingespart.",
   "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
   "chat.context.estimate":
-    "Geschätzter Gesprächsverlauf. Entwurf, Anhänge und abgerufene Quellen kommen beim Senden hinzu.",
+    "Geschätzt für die nächste Anfrage, bei Wissens-Chats mit dem Quellenanteil der letzten Frage. Entwurf und Anhänge kommen beim Senden hinzu.",
   "chat.context.automatic":
     "Keiko kompaktiert ab 90% der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
   "chat.context.retained":
@@ -22,6 +22,26 @@ export const DE_MESSAGES = {
   "chat.context.compact": "Kontext jetzt kompaktieren",
   "chat.context.compacting": "Kontext wird kompaktiert…",
   "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
+  "chat.context.total": "{used} von {window} Tokens des Kontextfensters",
+  "chat.context.breakdown": "Aufteilung des Kontextfensters",
+  "chat.context.segment.system": "System-Anweisungen",
+  "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
+  "chat.context.segment.messages": "Nachrichten",
+  "chat.context.segment.knowledge": "Quellen (Wissen)",
+  "chat.context.segment.free": "Frei",
+  "chat.context.segment.compactionBuffer": "Kompaktierungspuffer",
+  "chat.context.count.messages": "{count} Nachrichten",
+  "chat.context.count.messages.one": "1 Nachricht",
+  "chat.context.count.summary": "{count} Nachrichten zusammengefasst",
+  "chat.context.count.summary.one": "1 Nachricht zusammengefasst",
+  "chat.context.count.references": "{sent} von {available} Referenzen gesendet",
+  "chat.context.referencesTrimmed":
+    "Nur {sent} von {available} Referenzen passten ins Kontextfenster des Modells. Verwendet wurden die relevantesten.",
+  "chat.context.lastRequestMeasured": "Letzte Anfrage: {tokens} Tokens (vom Anbieter gemessen).",
+  "chat.context.lastRequestEstimated": "Letzte Anfrage: ungefähr {tokens} Tokens (geschätzt).",
+  "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",
+  "chat.context.sourcesPolicy":
+    "Quellen werden für jede Frage frisch abgerufen und nie zusammengefasst. Kompaktiert wird nur der Gesprächsverlauf; er erhält bei Wissensfragen höchstens ein Drittel der Eingabe.",
   "chat.context.windowAssumed":
     "Das Gateway meldet für dieses Modell kein Kontextfenster. Keiko plant mit dem angenommenen Wert und übernimmt das tatsächliche Fenster automatisch, sobald der Anbieter es meldet.",
   "chat.context.pending":
