@@ -2927,6 +2927,7 @@ export type {
   maxUtf8BytesForTokenBudget,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  effectiveContextWindow,
   partitionContextPreservedFacts,
 } from "./context-engineering.js";
 export type { ContextPreservedFactPartition } from "./context-engineering.js";
