@@ -16,6 +16,10 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ContextOverflowError, ProviderError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
@@ -87,6 +91,10 @@ function fixture(
   return { deps, configPath: holder.storagePath };
 }
 
+function persistedLine(sink: ReturnType<typeof createBufferedServerLogSink>, op: string): string {
+  return formatActivityLogProofLine(sink.events.find((event) => event.op === op) ?? {});
+}
+
 function stored(deps: UiHandlerDeps): ModelCapability | undefined {
   const config = deps.gatewayConfig?.current();
   return config === undefined ? undefined : findConfiguredCapability(config, MODEL);
@@ -108,6 +116,14 @@ describe("startup context-window probe", () => {
     expect(stored(deps)?.contextWindow).toBe(65_536);
     expect(stored(deps)).not.toHaveProperty("contextWindowAssumed");
     expect(deps.gatewayConfig?.generation()).toBe(generation);
+    expectActivityLogProof(
+      "gateway.context-window.probe.line",
+      persistedLine(sink, "gateway.context-window.probe"),
+    );
+    expectActivityLogProof(
+      "gateway.context-window.adoption.line",
+      persistedLine(sink, "gateway.context-window.adoption"),
+    );
     const persisted = readFileSync(configPath, "utf8");
     expect(persisted).toContain('"contextWindow": 65536');
     expect(persisted).not.toContain("contextWindowAssumed");
@@ -240,6 +256,10 @@ describe("withAdoptedContextWindowRetry", () => {
     );
     expect(result).toBe("answer");
     expect(planned).toEqual([4_096, 8_192]);
+    expectActivityLogProof(
+      "gateway.context-window.retry.line",
+      persistedLine(sink, "gateway.context-window.retry"),
+    );
     expect(sink.events).toContainEqual(
       expect.objectContaining({
         op: "gateway.context-window.retry",

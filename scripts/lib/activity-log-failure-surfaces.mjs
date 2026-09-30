@@ -118,6 +118,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "chat-continuity-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "gateway-setup", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-discovery-log", surface: "model-gateway" },
+  { owner: "keiko-server", emitterPrefix: "gateway-context-window", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-spend-budget", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gitChangeChatContext", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitChangeRoutes", surface: "editor-delivery" },

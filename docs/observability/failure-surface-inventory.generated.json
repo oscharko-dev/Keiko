@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d3107a04dffe432326f7ddeb4f6791173d8d7d6c2139e6c8a5a014ae675d07f6"
+    "catalogDigest": "436a1a3e4cf5a5b1bcd2b073f1c09480582f031232cd5b58f467e2498a6c4ac9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 482,
-    "proofCount": 490,
-    "resolvedProofCount": 490,
-    "failureClassCount": 326,
+    "operationCount": 487,
+    "proofCount": 495,
+    "resolvedProofCount": 495,
+    "failureClassCount": 329,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -178,6 +178,9 @@
         "gateway.circuit.opened",
         "gateway.circuit.rejected",
         "gateway.config.resolved",
+        "gateway.context-window.adoption",
+        "gateway.context-window.probe",
+        "gateway.context-window.retry",
         "gateway.discovery.alias-intersection",
         "gateway.instance.bound",
         "gateway.instance.reset",
@@ -196,6 +199,7 @@
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
         "gateway.readiness.started",
+        "gateway.reranker.setup.resolved",
         "gateway.retry.budget-exhausted",
         "gateway.retry.exhausted",
         "gateway.retry.scheduled",
@@ -431,6 +435,7 @@
         "memory.embedding.invalidation-failed",
         "memory.embedding.store-rejected",
         "repository.fingerprint-diff.completed",
+        "search.citations.reconciled",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
         "search.connected-context.failed",
@@ -782,11 +787,13 @@
     "gateway-chat-provider-call": ["model-gateway.dependency-failure"],
     "gateway-circuit-breaker": ["model-gateway.rejection"],
     "gateway-configuration": ["model-gateway.dependency-failure"],
+    "gateway-context-window-adoption": ["model-gateway.dependency-failure"],
     "gateway-egress": ["model-gateway.dependency-failure"],
     "gateway-http-fetch": ["model-gateway.dependency-failure"],
     "gateway-instance-lifecycle": ["model-gateway.dependency-failure"],
     "gateway-instance-unavailable": ["model-gateway.dependency-failure"],
     "gateway-readiness": ["model-gateway.dependency-failure"],
+    "gateway-reranker-configuration": ["model-gateway.dependency-failure"],
     "gateway-retry": ["model-gateway.dependency-failure"],
     "gateway-route-rejection": ["model-gateway.rejection"],
     "gateway-spend-ceiling": ["model-gateway.dependency-failure"],
@@ -861,6 +868,7 @@
     "indexing-prologue": ["memory-knowledge.dependency-failure"],
     "indexing-route": ["memory-knowledge.rejection"],
     "install-mode-probe-failed": ["ui.dependency-failure"],
+    "knowledge-citation-reconciliation": ["memory-knowledge.dependency-failure"],
     "knowledge-store-corruption": ["memory-knowledge.dependency-failure"],
     "knowledge-store-encryption": ["memory-knowledge.rejection"],
     "knowledge-store-reopen": ["memory-knowledge.dependency-failure"],
@@ -1542,7 +1550,17 @@
     "gateway.config.resolved.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
+    "gateway.context-window.adoption.line": [
+      "packages/keiko-server/src/gateway-context-window.test.ts"
+    ],
+    "gateway.context-window.probe.line": [
+      "packages/keiko-server/src/gateway-context-window.test.ts"
+    ],
+    "gateway.context-window.retry.line": [
+      "packages/keiko-server/src/gateway-context-window.test.ts"
+    ],
     "gateway.discovery.alias-intersection.line": [
+      "packages/keiko-server/src/gateway-discovery-roles.test.ts",
       "packages/keiko-server/src/gateway-setup.test.ts"
     ],
     "gateway.instance.bound.line": ["packages/keiko-server/src/gateway-instance-cache.test.ts"],
@@ -1588,6 +1606,9 @@
     ],
     "gateway.readiness.completed.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
+    "gateway.reranker.setup.resolved.line": [
+      "packages/keiko-server/src/gateway-discovery-roles.test.ts"
+    ],
     "gateway.retry.budget-exhausted.emitted-line": [
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
@@ -2032,6 +2053,7 @@
     "runtime.confinement.unavailable.emitted-line": [
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],
+    "search.citations.reconciled.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
     "search.connected-context.completed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
     ],

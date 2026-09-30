@@ -3588,6 +3588,43 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "gateway-context-window-adoption",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [
+        "gateway.context-window.adoption",
+        "gateway.context-window.probe",
+        "gateway.context-window.retry",
+      ],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: [
+      "gateway.context-window.adoption",
+      "gateway.context-window.probe",
+      "gateway.context-window.retry",
+    ],
+    requiredLossOperations: [],
+    requiredProofOperations: [
+      "gateway.context-window.adoption",
+      "gateway.context-window.probe",
+      "gateway.context-window.retry",
+    ],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [
+      "gateway.context-window.adoption",
+      "gateway.context-window.probe",
+      "gateway.context-window.retry",
+    ],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "gateway-egress",
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {

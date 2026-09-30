@@ -64,7 +64,7 @@ const CONTEXT_WINDOW_ADOPTION = defineActivityLogOperation({
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
-  failureClasses: ["gateway-context-admission"],
+  failureClasses: ["gateway-context-window-adoption"],
   proofIds: ["gateway.context-window.adoption.line"],
   releaseImpact: "patch",
 });
@@ -92,7 +92,7 @@ const CONTEXT_WINDOW_PROBE = defineActivityLogOperation({
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
-  failureClasses: ["gateway-context-admission"],
+  failureClasses: ["gateway-context-window-adoption"],
   proofIds: ["gateway.context-window.probe.line"],
   releaseImpact: "patch",
 });
@@ -120,7 +120,7 @@ const CONTEXT_WINDOW_RETRY = defineActivityLogOperation({
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
-  failureClasses: ["gateway-context-admission"],
+  failureClasses: ["gateway-context-window-adoption"],
   proofIds: ["gateway.context-window.retry.line"],
   releaseImpact: "patch",
 });
