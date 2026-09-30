@@ -192,6 +192,22 @@ lane status such as `searched`, `identity-incompatible`, `embedding-failed`, or
 `no-vectors`. Lane ids are opaque and do not expose provider endpoints, source paths, raw
 queries, vectors, or scores.
 
+## Keiko's own assessment
+
+A Knowledge Pod answer cites what the pod's sources say. A question about Keiko's own view, such as
+"Which Java version do you suggest?" after the documents set none, gets a source-backed part and
+then Keiko's own assessment. The chat shows the assessment apart from the cited text under the label
+"Keiko's own assessment · not from the sources". The assessment is never cited or treated as
+evidence (ADR-0144). The operator sets the policy in `keiko.config.json`:
+
+```json
+{ "groundedAnswers": { "ownAssessment": "disabled" } }
+```
+
+`allowed` is the default. `disabled` keeps answers to the sources only. Any other value fails the
+configuration load. The Activity Log records each answer's outcome on `search.answer.assessed`
+(sizes only, never the text).
+
 ## Model-use policy
 
 Knowledge Pods carry an additive `modelUsePolicy` contract that resolves to a

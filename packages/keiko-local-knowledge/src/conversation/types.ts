@@ -24,6 +24,7 @@
 
 import type { CitationReference, RetrievalReference } from "@oscharko-dev/keiko-contracts";
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 
 import type { LocalKnowledgeGroundedContextPack } from "../retrieval/context-pack-assembler.js";
 import type {
@@ -47,6 +48,11 @@ export interface ConversationGroundedQuery {
   // Explicit BFF admission: governed personal context is available for generation even when
   // source retrieval returns no references. It never participates in retrieval or reranking.
   readonly answerOnlyContextAvailable?: boolean | undefined;
+  // Whether the answer may carry Keiko's own, labelled assessment beside the source-backed part
+  // (keiko-contracts `grounded-assessment`, ADR-0144). Absent means disabled: sources only. When
+  // allowed, a question with no retrieved evidence still reaches the model, which may then answer
+  // with its assessment alone.
+  readonly ownAssessment?: OwnAssessmentPolicy | undefined;
   readonly topK?: number;
   readonly minScore?: number;
   readonly strategy?: RetrievalQuery["strategy"];
@@ -74,6 +80,12 @@ export interface ConversationGroundedAnswer {
   // How many of `references` the answer prompt carried. A generator that fits its prompt to the
   // model's window may send fewer than were retrieved; absent means all of them were sent.
   readonly promptReferenceCount?: number | undefined;
+  // Keiko's own assessment, split off the model's answer; `answer` holds only the source-backed
+  // part, so citations, repair and refusal detection never read the assessment.
+  readonly ownAssessment?: string | undefined;
+  // The policy disabled the assessment, yet the model wrote an assessment block: its tags were
+  // dropped and its words kept as source-backed text, held to every citation rule.
+  readonly ownAssessmentNeutralized?: true | undefined;
 }
 
 // A `[n]` marker the answer text uses, paired with the citation it points at. `marker`

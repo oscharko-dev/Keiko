@@ -568,6 +568,9 @@ prompts. `client.answer.copied` records each chat answer copy (`copied` or `fail
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
 removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
 for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
+`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
+assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
+(`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
 
 ### Rule 2 — when you debug, the log is your primary source
 

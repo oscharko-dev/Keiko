@@ -288,6 +288,29 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/branding must be an object/);
   });
 
+  // PR #3678 (ADR-0144): the operator's policy for Keiko's own assessment in grounded answers.
+  it("parses the grounded-answer policy and leaves it absent by default", () => {
+    const raw = validRaw() as Record<string, unknown>;
+    expect(parseGatewayConfig(raw).groundedAnswers).toBeUndefined();
+    for (const ownAssessment of ["allowed", "disabled"] as const) {
+      expect(
+        parseGatewayConfig({ ...raw, groundedAnswers: { ownAssessment } }).groundedAnswers,
+      ).toEqual({ ownAssessment });
+    }
+    expect(parseGatewayConfig({ ...raw, groundedAnswers: {} }).groundedAnswers).toEqual({});
+  });
+
+  it("fails the load on an invalid grounded-answer policy instead of allowing it", () => {
+    const raw = validRaw() as Record<string, unknown>;
+    for (const groundedAnswers of [
+      "disabled",
+      { ownAssessment: "sometimes" },
+      { ownAssessment: true },
+    ]) {
+      expect(() => parseGatewayConfig({ ...raw, groundedAnswers })).toThrow(ConfigInvalidError);
+    }
+  });
+
   it("parses an optional self-hosted LiteLLM reranker block", () => {
     const config = parseGatewayConfig({
       ...(validRaw() as Record<string, unknown>),

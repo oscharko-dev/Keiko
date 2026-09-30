@@ -50,6 +50,10 @@ import type {
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
 import { citationMarkerIndices } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import {
+  composeOwnAssessment,
+  OWN_ASSESSMENT_PROMPT_RULE,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { classifyDocumentationTarget } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
 import {
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
@@ -81,6 +85,7 @@ import {
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
+  currentOwnAssessmentPolicy,
   currentRedactionSecrets,
 } from "./deps.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
@@ -112,6 +117,7 @@ import {
 } from "./grounded-faithfulness.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import {
+  logAnswerAssessment,
   logCitationReconciliation,
   logCitationSupport,
   type CitationSupportCaveat,
@@ -658,6 +664,11 @@ function renderConnectorEvidence(
 
 // The count of the references this prompt actually shows: a window-fitted prompt carries fewer than
 // retrieval found, and telling the model the retrieved total invites markers beyond the ones sent.
+function localKnowledgeRepairInstruction(assessmentAllowed: boolean): string {
+  const scope = assessmentAllowed ? "outside the <assessment> block " : "";
+  return `The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence ${scope}must include at least one matching [n] marker from the supplied citations. Do not invent citations.`;
+}
+
 function localKnowledgePromptSummary(input: AnswerGeneratorInput): string {
   return (
     `Indexed knowledge scope: ${String(input.pack.scope.capsuleCount)} capsule(s), ` +
@@ -676,17 +687,15 @@ function buildLocalKnowledgeMessages(
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
 } {
   const rendered = buildReferenceLines(input, store, redactExcerpt, limits);
+  const assessmentAllowed = input.query.ownAssessment === "allowed";
   const repairInstruction =
-    input.citationRepair === true
-      ? [
-          "",
-          "The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence must include at least one matching [n] marker from the supplied citations. Do not invent citations.",
-        ]
-      : [];
+    input.citationRepair === true ? ["", localKnowledgeRepairInstruction(assessmentAllowed)] : [];
   const messages = [
     {
       role: "system",
-      content: LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
+      content: assessmentAllowed
+        ? `${LOCAL_KNOWLEDGE_SYSTEM_PROMPT} ${OWN_ASSESSMENT_PROMPT_RULE}`
+        : LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
     },
     {
       role: "user",
@@ -1072,6 +1081,7 @@ function localKnowledgeQuery(
       ? {}
       : { answerQuestion: redactText(deps, input.answerContent) }),
     ...(input.answerOnlyContextAvailable === true ? { answerOnlyContextAvailable: true } : {}),
+    ownAssessment: currentOwnAssessmentPolicy(deps),
     topK: LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
     ...(chat.localKnowledgeScope?.kind === "capsule"
       ? { capsuleId: chat.localKnowledgeScope.capsuleId }
@@ -1165,7 +1175,9 @@ export function enforcedNoEvidenceReason(
   if (result.answerOnlyContextUsed === true) return undefined;
   if (result.noEvidence) return result.reason ?? "no-evidence";
   const answer = result.answer.trim();
-  if (answer.length === 0) return "empty-answer";
+  // Keiko's assessment alone backs nothing with the sources: no evidence, not an empty answer.
+  if (answer.length === 0)
+    return result.ownAssessment === undefined ? "empty-answer" : "no-evidence";
   return isNoEvidenceAnswer(answer) ? "no-evidence" : undefined;
 }
 
@@ -2259,7 +2271,17 @@ function attachGroundedAnswerWithPreviewCitations(
   deps.store.attachGroundedAnswer(assistantMessageId, answer, previewCitations);
 }
 
+// An answer with Keiko's own assessment keeps the model's words: its source-backed part (a short
+// "the documents do not say" included) and then the canonical assessment block. The generic notice
+// would only repeat what the answer already says; without retrieved evidence the block stands
+// alone. The source-backed part stays held to every citation rule; the UI labels the block.
 function scopedAssistantContent(result: ScopedGroundedResult, input: AskInput): string {
+  if (result.ownAssessment !== undefined) {
+    return composeOwnAssessment(
+      result.noEvidence ? "" : result.answer.trim(),
+      result.ownAssessment,
+    );
+  }
   const noEvidenceReason = enforcedNoEvidenceReason(result);
   return noEvidenceReason === undefined
     ? result.answer.trim()
@@ -2473,6 +2495,25 @@ function buildPersistedScopedAnswer(input: {
   });
 }
 
+// The answer's body-free evidence: how its markers reconciled, and whether it carried Keiko's own
+// assessment under the operator's policy (ADR-0144).
+function logScopedAnswerEvidence(
+  result: ScopedGroundedResult,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): void {
+  logScopedCitationReconciliation(result, correlationId);
+  logAnswerAssessment(
+    {
+      policy: currentOwnAssessmentPolicy(deps),
+      sourceBacked: result.noEvidence ? "" : result.answer,
+      assessment: result.ownAssessment,
+      neutralized: result.ownAssessmentNeutralized === true,
+    },
+    correlationId,
+  );
+}
+
 // Body-free counts of how this answer's inline markers reconciled against the retrieved references
 // (attached, grouped, dangling, weak-overlap), so a defect of that class can be rebuilt from the log.
 function logScopedCitationReconciliation(
@@ -2523,7 +2564,7 @@ async function persistScopedGroundedAnswer(
   if (result.references.length > 0)
     emitAnswerContextAudit(auditSink, env.store, result, occurredAt);
   const assistantContent = scopedAssistantContent(result, input);
-  logScopedCitationReconciliation(result, context.correlationId);
+  logScopedAnswerEvidence(result, deps, context.correlationId);
   const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
   const limits = currentGroundingLimits(deps);

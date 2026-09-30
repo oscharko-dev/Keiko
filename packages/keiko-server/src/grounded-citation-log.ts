@@ -184,3 +184,78 @@ export function logCitationSupport(
     ),
   );
 }
+
+// Whether a Knowledge Pod answer carried Keiko's own, labelled assessment (ADR-0144), under which
+// operator policy, and how much of the answer it was — sizes only, never the text:
+//   none            — no assessment block;
+//   assessment      — a source-backed part and an assessment;
+//   assessment-only — the assessment alone (nothing backed by the sources, e.g. no evidence);
+//   neutralized     — the policy disabled it, so a block the model wrote became source-backed text.
+export type AnswerAssessmentOutcome = "none" | "assessment" | "assessment-only" | "neutralized";
+
+const SEARCH_ANSWER_ASSESSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.answer.assessed",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-citation-log.logAnswerAssessment",
+  fields: {
+    policy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["allowed", "disabled"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "assessment", "assessment-only", "neutralized"],
+    },
+    sourceBackedChars: { type: "integer", dataClass: "count", required: true },
+    assessmentChars: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["knowledge-citation-reconciliation"],
+  proofIds: ["search.answer.assessed.line"],
+  releaseImpact: "patch",
+});
+
+export interface AnswerAssessmentEvidence {
+  readonly policy: "allowed" | "disabled";
+  readonly sourceBacked: string;
+  readonly assessment: string | undefined;
+  readonly neutralized: boolean;
+}
+
+function assessmentOutcome(evidence: AnswerAssessmentEvidence): AnswerAssessmentOutcome {
+  if (evidence.neutralized) return "neutralized";
+  if (evidence.assessment === undefined) return "none";
+  return evidence.sourceBacked.trim().length === 0 ? "assessment-only" : "assessment";
+}
+
+/** Emit the assessment line for one Knowledge Pod answer. */
+export function logAnswerAssessment(
+  evidence: AnswerAssessmentEvidence,
+  correlationId: string | undefined,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      SEARCH_ANSWER_ASSESSED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        policy: evidence.policy,
+        outcome: assessmentOutcome(evidence),
+        sourceBackedChars: evidence.sourceBacked.trim().length,
+        assessmentChars: evidence.assessment?.length ?? 0,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}

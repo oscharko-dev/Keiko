@@ -3825,6 +3825,78 @@ describe("ChatWindow message copy", () => {
     }
   });
 
+  // ADR-0144: Keiko's own assessment is shown apart from the cited answer under a visible label,
+  // never linked as evidence, and copied as plain words without its tags.
+  it("shows Keiko's own assessment as a labelled note and copies it without tags", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const content =
+      "The documents set no Java version [1].\n\n<assessment>\nMy own assessment: use Java 21.\n</assessment>";
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer(content, 1),
+          },
+        ],
+      }),
+    );
+
+    const note = await screen.findByRole("note", { name: /own assessment/i });
+    expect(note).toHaveTextContent("My own assessment: use Java 21.");
+    expect(note).toHaveTextContent(/not from the sources/i);
+    expect(screen.queryByText(/<assessment>/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "The documents set no Java version.\n\nMy own assessment: use Java 21.",
+      );
+    });
+
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  it("leaves an ordinary answer that mentions the tag untouched", () => {
+    const content = "Write <assessment> in your prompt.";
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    expect(screen.queryByRole("note", { name: /own assessment/i })).toBeNull();
+    expect(screen.getByText(/in your prompt/)).toBeInTheDocument();
+  });
+
   // PR #3678 review: every copy leaves body-free evidence — outcome, grounded flag and the marker
   // groups removed and kept — and a failed copy its error kind; never the copied text.
   it("reports each copy's outcome and marker counts without the copied text", async () => {
@@ -4034,6 +4106,26 @@ describe("ChatWindow message copy", () => {
         groundedAnswer: copyTestGroundedAnswer(answer, 1),
       }),
     ).toBe("repositoryParityStatus is defined in [src/repository-parity.ts:2].");
+  });
+
+  it("reads Keiko's own assessment aloud as plain words after the cited answer", () => {
+    const content =
+      "The documents set no Java version [1].\n\n<assessment>\nMy own assessment: use Java 21.\n</assessment>";
+    expect(
+      speakableAnswerText({
+        id: "m5",
+        chatId: "chat-1",
+        role: "assistant",
+        timestamp: 5,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+        content,
+        groundedAnswer: copyTestGroundedAnswer(content, 1),
+      }),
+    ).toBe("The documents set no Java version.\n\nMy own assessment: use Java 21.");
   });
 
   it("describes the read-aloud preparation by the same rule, body-free", () => {

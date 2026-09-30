@@ -1,5 +1,9 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 import {
+  DEFAULT_OWN_ASSESSMENT_POLICY,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import {
   initializeConfiguredConversationReadiness,
   stopConfiguredConversationReadiness,
 } from "./gateway-readiness.js";
@@ -1783,6 +1787,14 @@ const ENV_GROUNDING_OVERRIDES: Partial<GroundingLimits> = ((): Partial<Grounding
 export function currentGroundingLimits(deps: UiHandlerDeps): GroundingLimits {
   const fileGrounding = currentGatewayConfig(deps)?.grounding;
   return resolveGroundingLimits({ ...fileGrounding, ...ENV_GROUNDING_OVERRIDES });
+}
+
+// Whether a grounded answer may carry Keiko's own, labelled assessment (ADR-0144): the operator's
+// `groundedAnswers.ownAssessment`, else the default. Re-read per call like the grounding limits.
+export function currentOwnAssessmentPolicy(deps: UiHandlerDeps): OwnAssessmentPolicy {
+  return (
+    currentGatewayConfig(deps)?.groundedAnswers?.ownAssessment ?? DEFAULT_OWN_ASSESSMENT_POLICY
+  );
 }
 
 // Re-export GroundingLimits so callers (read-handlers, store-handlers) only need one import.

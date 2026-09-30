@@ -1176,6 +1176,16 @@ export function rawConfigFromCurrent(
     ...(config.grounding === undefined ? {} : { grounding: config.grounding }),
     ...(config.reranker === undefined ? {} : { reranker: config.reranker }),
     ...(figmaAccessToken === undefined ? {} : { figma: { accessToken: figmaAccessToken } }),
+    ...operatorPolicyBlocks(config),
+  };
+}
+
+// Operator-declared blocks no setup step produces: they survive every rebuild verbatim, so a
+// capability update never drops the grounded-answer policy or the PR branding (PR #3678).
+function operatorPolicyBlocks(config: GatewayConfig | undefined): Record<string, unknown> {
+  return {
+    ...(config?.groundedAnswers === undefined ? {} : { groundedAnswers: config.groundedAnswers }),
+    ...(config?.branding === undefined ? {} : { branding: config.branding }),
   };
 }
 
@@ -5360,6 +5370,7 @@ function finalRawConfigForSetup(
     ...(input.figmaAccessToken === undefined
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
+    ...operatorPolicyBlocks(input.current),
   };
   // Verbatim restoration reads the DURABLE stored view: restored values are what the FILE
   // holds, so a transient per-model env override neither hides a sharing relationship nor gets

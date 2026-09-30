@@ -43,6 +43,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { OWN_ASSESSMENT_PROMPT_RULE } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import {
   applyReferenceRerankResults,
   buildKnowledgePodRetrievalActivity,
@@ -829,6 +830,12 @@ function firstLexicalSupport(answer: GroundedAnswer): "weak" | undefined {
   return answer.citations[0]?.lexicalSupport;
 }
 
+interface AskOptions {
+  readonly groundedAnswers?: { readonly ownAssessment?: "allowed" | "disabled" };
+  // Receives the system prompt of every answer-generation call.
+  readonly systemPrompts?: string[];
+}
+
 function lexicalSupports(answer: GroundedAnswer): readonly ("weak" | undefined)[] {
   if (answer.groundingKind !== "local-knowledge")
     throw new TypeError("expected a Knowledge Pod answer");
@@ -843,6 +850,7 @@ describe("weakly supported citations", () => {
     capsuleSuffix: string,
     judgeVerdict?: "supported" | "unsupported",
     correlationId?: string,
+    options: AskOptions = {},
   ): Promise<GroundedAnswer> {
     const embeddingModelId = "text-embedding-3-small";
     const knowledgeStore = openKnowledgeStore({
@@ -867,6 +875,8 @@ describe("weakly supported citations", () => {
       call: (request) => {
         const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
         const isJudge = judgeVerdict !== undefined && request.responseFormat !== undefined;
+        if (!isQueryTransform && !isJudge)
+          options.systemPrompts?.push(request.messages[0]?.content ?? "");
         const reply = isQueryTransform ? '{"queries":["release"]}' : answerText;
         return Promise.resolve({
           modelId: "chat-model",
@@ -896,6 +906,9 @@ describe("weakly supported citations", () => {
           },
           embeddingCapability(embeddingModelId),
         ],
+        ...(options.groundedAnswers === undefined
+          ? {}
+          : { groundedAnswers: options.groundedAnswers }),
       },
       configPresent: true,
       evidenceStore: {
@@ -1028,6 +1041,77 @@ describe("weakly supported citations", () => {
 
       const settled = sink.events.find((event) => event.op === "search.citations.support-settled");
       expect(settled?.extra).toMatchObject({ supportCaveat: "none", hiddenProseClaimCount: 0 });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // PR #3678 (ADR-0144): Keiko's own, labelled assessment beside the source-backed part.
+  it("lets the model add its own assessment by default and not when the operator disables it", async () => {
+    const allowedPrompts: string[] = [];
+    const disabledPrompts: string[] = [];
+    const answer = "The release checklist covers signing, notarization and upload [1].";
+    await askWith(answer, "assess-prompt-a", undefined, undefined, {
+      systemPrompts: allowedPrompts,
+    });
+    await askWith(answer, "assess-prompt-b", undefined, undefined, {
+      groundedAnswers: { ownAssessment: "disabled" },
+      systemPrompts: disabledPrompts,
+    });
+
+    expect(allowedPrompts.length).toBeGreaterThan(0);
+    expect(allowedPrompts.every((prompt) => prompt.includes(OWN_ASSESSMENT_PROMPT_RULE))).toBe(
+      true,
+    );
+    expect(disabledPrompts.length).toBeGreaterThan(0);
+    expect(disabledPrompts.some((prompt) => prompt.includes("<assessment>"))).toBe(false);
+  });
+
+  it("stores Keiko's assessment beside the model's own no-evidence statement", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The documents do not specify a Java version.\n\n<assessment>My own assessment, not from the sources: use Java 21.</assessment>",
+        "assess-content",
+        undefined,
+        "corr-own-assessment",
+      );
+
+      expect(answer.content).toBe(
+        "The documents do not specify a Java version.\n\n<assessment>\nMy own assessment, not from the sources: use Java 21.\n</assessment>",
+      );
+      expect(answer.groundingKind === "local-knowledge" && answer.noEvidence).toBe(true);
+      const line = sink.events.find((event) => event.op === "search.answer.assessed");
+      expect(line?.correlationId).toBe("corr-own-assessment");
+      expect(line?.extra).toMatchObject({
+        policy: "allowed",
+        outcome: "assessment",
+        sourceBackedChars: 44,
+        assessmentChars: 53,
+      });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("keeps a disabled assessment's words as source-backed text", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload [1]. <assessment>Use Java 21.</assessment>",
+        "assess-disabled",
+        undefined,
+        undefined,
+        { groundedAnswers: { ownAssessment: "disabled" } },
+      );
+
+      expect(answer.content).toBe(
+        "The release checklist covers signing, notarization and upload [1]. Use Java 21.",
+      );
+      const line = sink.events.find((event) => event.op === "search.answer.assessed");
+      expect(line?.extra).toMatchObject({ policy: "disabled", outcome: "neutralized" });
     } finally {
       resetServerLogger();
     }

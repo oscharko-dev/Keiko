@@ -214,6 +214,46 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   degraded to `entailment-unavailable`. A single item longer than its cap still degrades (never judged
   against a partial excerpt). The stage's default cap follows the operator's grounding excerpt limit.
 
+## Amendment (2026-09-30) — Keiko's own, labelled assessment
+
+A sources-only answer could not answer a question about Keiko's own view. For "Which Java version
+do you suggest?" after the documents set none, it could only repeat that the documents say nothing.
+A chat with Knowledge Pods attached must still be a conversation partner.
+
+- **Two parts, one boundary.** When the operator allows it, the Knowledge Pod prompt adds one short
+  rule (`OWN_ASSESSMENT_PROMPT_RULE`, keiko-contracts `runtime/grounded-assessment`). Whatever the
+  excerpts do not back (a recommendation, an opinion, general knowledge, small talk) goes after the
+  source-backed part inside one `<assessment>` block. The block opens by saying it is Keiko's own
+  assessment and carries no `[n]` markers. A plain text tag works with every model family,
+  open-weight models included, and needs no structured-output support.
+- **Only the source-backed part is checked.** The runner splits the block off right after
+  generation (`splitOwnAssessment`), so the following steps see only the text outside it:
+  - citation attachment and citation repair (an answer that is only the assessment is not
+    repaired);
+  - refusal detection and the entailment judge.
+
+  The assessment is never cited, judged or reported as evidence.
+- **The answer keeps the model's words.** The stored answer is the source-backed part followed by
+  the canonical block (`composeOwnAssessment`). With an assessment, Keiko does not replace the
+  model's own "the documents do not say" sentence with the generic no-evidence notice; the answer
+  still carries `noEvidence`. When retrieval finds nothing, the model is still asked, and the
+  assessment stands alone.
+- **The UI labels it.** The chat shows the block apart from the cited text as a note labelled
+  "Keiko's own assessment · not from the sources" / "Eigene Einschätzung von Keiko · nicht aus den
+  Quellen". Copying and reading aloud keep its words and drop the tags. Only grounded answers are
+  parsed, so an ordinary answer that mentions the tag is shown as written.
+- **The operator decides.** `groundedAnswers.ownAssessment` in `keiko.config.json` is `allowed` by
+  default and may be `disabled` to keep answers to the sources only.
+  - A value outside `allowed` / `disabled` fails the configuration load; it is never read as the
+    permissive default. The block survives setup saves.
+  - When the policy is disabled, the prompt carries no rule. A block the model writes anyway loses
+    its tags, and its words are held to every citation rule as source-backed text.
+- **Evidence.** `search.answer.assessed` records the policy, the outcome (`none`, `assessment`,
+  `assessment-only`, `neutralized`) and the character sizes of both parts per Knowledge Pod answer,
+  never the text.
+- **Scope.** The rule applies to the single-scope Knowledge Pod path. The folder, multi-source and
+  hybrid prompts keep their own evidence rules.
+
 ## Related
 
 ADR-0019 (gateway isolation + contracts leaf rule), ADR-0036 (rank-only RRF — untouched; the stage

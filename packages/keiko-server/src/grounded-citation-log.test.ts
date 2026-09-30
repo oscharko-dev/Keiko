@@ -13,6 +13,7 @@ import {
 } from "../../../tests/support/buffered-server-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
+  logAnswerAssessment,
   logCitationReconciliation,
   logCitationSupport,
   summarizeCitationReconciliation,
@@ -149,6 +150,62 @@ describe("logCitationReconciliation", () => {
       completeness: "complete",
       loss: "none",
     });
+  });
+
+  // ADR-0144: whether the answer carried Keiko's own assessment, under which policy — sizes only.
+  it("resolves the search.answer.assessed Activity Log proof body-free", () => {
+    const sink = capture();
+
+    logAnswerAssessment(
+      {
+        policy: "allowed",
+        sourceBacked: "The documents set no Java version.",
+        assessment: "My own assessment: Java 21.",
+        neutralized: false,
+      },
+      "answer-assessed-proof-0001",
+    );
+    logAnswerAssessment(
+      { policy: "allowed", sourceBacked: "  ", assessment: "Hello!", neutralized: false },
+      "answer-assessed-proof-0002",
+    );
+    logAnswerAssessment(
+      {
+        policy: "disabled",
+        sourceBacked: "Fact [1]. Mine.",
+        assessment: undefined,
+        neutralized: true,
+      },
+      "answer-assessed-proof-0003",
+    );
+    logAnswerAssessment(
+      { policy: "allowed", sourceBacked: "Fact [1].", assessment: undefined, neutralized: false },
+      "answer-assessed-proof-0004",
+    );
+
+    const lines = sink.events.filter((event) => event.op === "search.answer.assessed");
+    const record = expectActivityLogProof(
+      "search.answer.assessed.line",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "answer-assessed-proof-0001",
+      policy: "allowed",
+      outcome: "assessment",
+      sourceBackedChars: 34,
+      assessmentChars: 27,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines.map((line) => line.extra?.outcome)).toEqual([
+      "assessment",
+      "assessment-only",
+      "neutralized",
+      "none",
+    ]);
+    const serialized = sink.lines().join("\n");
+    expect(serialized).not.toContain("Java 21");
+    expect(serialized).not.toContain("Hello!");
   });
 
   it("falls back to the sanctioned unknown correlation id", () => {

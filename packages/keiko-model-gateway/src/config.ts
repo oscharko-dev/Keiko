@@ -26,6 +26,10 @@ import {
   isVoiceCapability,
   modelSupportsSpeechOutput,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  OWN_ASSESSMENT_POLICIES,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
 import { validatedPrDescriptionLogoUrl } from "./prDescription/render.js";
@@ -36,6 +40,7 @@ import type {
   FigmaConnectorConfig,
   GatewayBrandingConfig,
   GatewayConfig,
+  GroundedAnswersConfig,
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
@@ -1967,6 +1972,26 @@ function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefin
 // decided once, downstream, by `resolvePrDescriptionBrandingFromConfig` reusing
 // `validatedPrDescriptionLogoUrl` — never restated here, and never rejected at load time, because
 // a bad branding value must degrade to Keiko's text-only attribution, not break config loading.
+const OWN_ASSESSMENT_POLICY_SET: ReadonlySet<string> = new Set(OWN_ASSESSMENT_POLICIES);
+
+// A governance setting: an explicit value outside the closed vocabulary fails the load, it is never
+// read as the permissive default.
+function parseGroundedAnswersConfig(raw: unknown): GroundedAnswersConfig | undefined {
+  if (!isRecord(raw) || raw.groundedAnswers === undefined) {
+    return undefined;
+  }
+  const block = raw.groundedAnswers;
+  if (!isRecord(block)) {
+    throw new ConfigInvalidError("groundedAnswers must be an object");
+  }
+  const policy = block.ownAssessment;
+  if (policy === undefined) return {};
+  if (typeof policy !== "string" || !OWN_ASSESSMENT_POLICY_SET.has(policy)) {
+    throw new ConfigInvalidError('groundedAnswers.ownAssessment must be "allowed" or "disabled"');
+  }
+  return { ownAssessment: policy as OwnAssessmentPolicy };
+}
+
 function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undefined {
   if (!isRecord(raw) || raw.branding === undefined) {
     return undefined;
@@ -2202,6 +2227,7 @@ function buildGatewayConfig(
   const reranker = parseRerankerConfig(raw, env, egress, options);
   const figma = parseFigmaConnectorConfig(raw);
   const branding = parseGatewayBrandingConfig(raw);
+  const groundedAnswers = parseGroundedAnswersConfig(raw);
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
@@ -2211,6 +2237,7 @@ function buildGatewayConfig(
     ...(egress !== undefined ? { egress } : {}),
     ...(figma !== undefined ? { figma } : {}),
     ...(branding !== undefined ? { branding } : {}),
+    ...(groundedAnswers !== undefined ? { groundedAnswers } : {}),
   };
 }
 

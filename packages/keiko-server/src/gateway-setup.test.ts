@@ -6478,6 +6478,46 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // PR #3678: a setup rebuild produces providers and capabilities only; the operator's grounded-
+  // answer policy and PR branding must survive it verbatim, never fall back to the defaults.
+  it("keeps the grounded-answer policy and the branding through a preserve-mode rebuild", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-policy-blocks-");
+    const evidenceDir = await tempDir("keiko-gw-ev-policy-blocks-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "example-chat", baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        groundedAnswers: { ownAssessment: "disabled" },
+        branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.groundedAnswers).toEqual({ ownAssessment: "disabled" });
+    expect(currentGatewayConfig(deps)?.branding).toEqual({
+      logoUrl: "https://assets.example.invalid/keiko.svg",
+    });
+    deps.store.close();
+  });
+
   it("restores stored OCR providers verbatim through preserve-mode rebuilds", async () => {
     // Review finding on #3031 (P1): the rebuild only re-derives chat and embedding providers, so
     // a stored ocr-vision provider was chat-probed and silently dropped (or reclassified) by an
@@ -11053,6 +11093,20 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
     const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
 
     expect(reloaded.reranker).toEqual(config.reranker);
+  });
+
+  // PR #3678: operator policy blocks no setup step produces survive a setup save verbatim.
+  it("preserves the grounded-answer policy and the PR branding on reload", () => {
+    const config = parseGatewayConfig({
+      ...voiceRaw,
+      groundedAnswers: { ownAssessment: "disabled" },
+      branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
+    });
+
+    const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+
+    expect(reloaded.groundedAnswers).toEqual({ ownAssessment: "disabled" });
+    expect(reloaded.branding).toEqual({ logoUrl: "https://assets.example.invalid/keiko.svg" });
   });
 
   it("preserves an explicit output-token parameter override on reload", () => {

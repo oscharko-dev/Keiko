@@ -1198,6 +1198,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.pending":
     "Der gespeicherte Verlauf ({before} Tokens) wird beim nächsten Senden automatisch auf etwa {after} Tokens kompaktiert.",
   "grounded.reviewBadge": "Bitte prüfen",
+  "grounded.ownAssessment.label": "Eigene Einschätzung von Keiko · nicht aus den Quellen",
   "grounded.citation.unverified": "nicht bestätigt",
   "grounded.partialCoverage": "Teilweise abgedeckt",
   "grounded.loading": "Verbundene Quellen werden durchsucht und Keiko wird gefragt…",

@@ -547,6 +547,10 @@
       "types": "./dist/native-file-dialog.d.ts",
       "import": "./dist/native-file-dialog.js"
     },
+    "./runtime/grounded-assessment": {
+      "types": "./dist/grounded-assessment.d.ts",
+      "import": "./dist/grounded-assessment.js"
+    },
     "./runtime/no-evidence-answer": {
       "types": "./dist/no-evidence-answer.d.ts",
       "import": "./dist/no-evidence-answer.js"

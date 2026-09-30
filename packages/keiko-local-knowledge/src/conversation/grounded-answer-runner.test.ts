@@ -440,6 +440,90 @@ describe("runGroundedAnswer — no-evidence short-circuit", () => {
   });
 });
 
+// PR #3678 (ADR-0144): Keiko's own, labelled assessment beside the source-backed part.
+describe("runGroundedAnswer — own assessment", () => {
+  it("splits an allowed assessment off and holds only the source part to citations", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-assess-a" });
+    const generator = fakeGenerator(
+      "Found evidence [1].\n\n<assessment>My own assessment: use Java 21.</assessment>",
+    );
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      {
+        conversationId: "conv-assess-a",
+        capsuleId: seeded.capsuleId,
+        text: "alpha",
+        ownAssessment: "allowed",
+      },
+    );
+
+    expect(result.answer).toBe("Found evidence [1].");
+    expect(result.ownAssessment).toBe("My own assessment: use Java 21.");
+    expect(result.citations.map((citation) => citation.index)).toEqual([1]);
+    expect(result.noEvidence).toBe(false);
+  });
+
+  it("does not repair citations for an answer that is Keiko's assessment alone", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-assess-b" });
+    const generator = fakeGenerator("<assessment>My own assessment: Java 21.</assessment>");
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      {
+        conversationId: "conv-assess-b",
+        capsuleId: seeded.capsuleId,
+        text: "alpha",
+        ownAssessment: "allowed",
+      },
+    );
+
+    expect(generator.calls).toHaveLength(1);
+    expect(result.answer).toBe("");
+    expect(result.ownAssessment).toBe("My own assessment: Java 21.");
+  });
+
+  it("keeps a disabled assessment's words as source-backed text and says so", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-assess-c" });
+    const generator = fakeGenerator("Found evidence [1]. <assessment>Use Java 21.</assessment>");
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-assess-c", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(result.answer).toBe("Found evidence [1]. Use Java 21.");
+    expect(result.ownAssessment).toBeUndefined();
+    expect(result.ownAssessmentNeutralized).toBe(true);
+  });
+
+  it("asks the model without evidence only when the assessment is allowed", async () => {
+    const { store } = getFixture();
+    const allowed = fakeGenerator("<assessment>Hello! How can I help?</assessment>");
+    const disabled = fakeGenerator("should not be called");
+    const query = { conversationId: "conv-assess-d", text: "Hello" };
+    const withAssessment = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: allowed },
+      { ...query, ownAssessment: "allowed" },
+    );
+    const withoutAssessment = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: disabled },
+      query,
+    );
+
+    expect(allowed.calls).toHaveLength(1);
+    expect(withAssessment).toMatchObject({
+      answer: "",
+      ownAssessment: "Hello! How can I help?",
+      noEvidence: true,
+      references: [],
+    });
+    expect(withAssessment.answerOnlyContextUsed).toBeUndefined();
+    expect(disabled.calls).toHaveLength(0);
+    expect(withoutAssessment.noEvidence).toBe(true);
+  });
+});
+
 describe("runGroundedAnswer — generator rejection propagation", () => {
   it("rejects with the same error when the generator rejects", async () => {
     // RED: without this test the propagation path was untested. GREEN: runGroundedAnswer

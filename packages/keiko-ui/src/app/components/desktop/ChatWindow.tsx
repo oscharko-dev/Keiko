@@ -40,6 +40,7 @@ import {
   findCitationMarkerGroups,
   type CitationMarkerGroup,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import { ownAssessmentPlainText } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import type {
   ClientDiagnosticAnswerCopy,
   ClientDiagnosticAnswerSpeech,
@@ -64,6 +65,7 @@ import {
   NATIVE_LIST_KEEP_PADDING_STYLE,
   NATIVE_LIST_STYLE,
 } from "./native-element-styles";
+import dynamic from "next/dynamic";
 import {
   SafeMarkdownBoundary,
   type AssistantCodeBlockApply,
@@ -499,8 +501,30 @@ export function copyableMessageText(content: string, citationCeiling = 0): strin
  * spoken as the answer wrote it.
  */
 export function speakableAnswerText(message: ChatMessage): string {
-  return stripCitationMarkers(message.content, groundedCitationCeiling(message.groundedAnswer));
+  return stripCitationMarkers(
+    answerReadingText(message),
+    groundedCitationCeiling(message.groundedAnswer),
+  );
 }
+
+// A grounded answer stores Keiko's own assessment as a tagged block after its source-backed part
+// (ADR-0144, the server writes the canonical lowercase tag); every other message is shown exactly
+// as written, a literal tag included.
+function carriesOwnAssessment(message: ChatMessage): boolean {
+  return message.groundedAnswer !== undefined && message.content.includes("<assessment>");
+}
+
+/** The answer as reading text for copying and speech: a grounded answer's assessment tags go. */
+export function answerReadingText(message: ChatMessage): string {
+  return carriesOwnAssessment(message) ? ownAssessmentPlainText(message.content) : message.content;
+}
+
+// Only an answer with Keiko's own assessment needs the split renderer and its labelled note; they
+// load in their own chunk so the initial desktop paint stays under initialPageChunkGzipBytesCeiling.
+const AssessedAnswerBody = dynamic(
+  () => import("./OwnAssessment").then((mod) => mod.AssessedAnswerBody),
+  { ssr: false, loading: () => null },
+);
 
 /**
  * The body-free evidence of `speakableAnswerText` by the same rule: whether the answer is grounded
@@ -508,7 +532,7 @@ export function speakableAnswerText(message: ChatMessage): string {
  */
 export function speechPreparationEvidence(message: ChatMessage): ClientDiagnosticAnswerSpeech {
   const ceiling = groundedCitationCeiling(message.groundedAnswer);
-  const groups = findCitationMarkerGroups(message.content);
+  const groups = findCitationMarkerGroups(answerReadingText(message));
   const stripped = groups.filter((group) => citesWithin(group, ceiling)).length;
   return {
     grounded: message.groundedAnswer !== undefined,
@@ -752,18 +776,7 @@ function useRegisterPdfCitationPreviewTarget(
 // so sent Composer formatting remains visible, with assistant-only apply actions. A streaming
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
-function ChatBubbleContentArea({
-  message,
-  isUser,
-  streaming,
-  contentId,
-  collapsed,
-  canCollapse,
-  repositoryRoots,
-  openRepositoryReference,
-  citationPreview,
-  onApplyCodeBlock,
-}: {
+type ChatBubbleContentProps = {
   readonly message: ChatMessage;
   readonly isUser: boolean;
   readonly streaming: boolean;
@@ -774,7 +787,44 @@ function ChatBubbleContentArea({
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
-}): ReactNode {
+};
+
+// Streaming assistant turns use the same safe renderer as persisted answers; parser failures fall
+// back to plain-text raw source for this bubble. SM-1: wrapped in a per-message boundary so a
+// parser/render defect degrades this one bubble to plain text instead of crashing the view.
+function ChatBubbleMarkdown(props: ChatBubbleContentProps): ReactNode {
+  const { message, isUser, streaming } = props;
+  if (carriesOwnAssessment(message)) {
+    return (
+      <AssessedAnswerBody
+        content={message.content}
+        messageId={message.id}
+        chatId={message.chatId}
+        repositoryRoots={props.repositoryRoots}
+        openRepositoryReference={props.openRepositoryReference}
+        citationPreview={props.citationPreview}
+        onApplyCodeBlock={props.onApplyCodeBlock}
+      />
+    );
+  }
+  return (
+    <SafeMarkdownBoundary
+      source={message.content}
+      literalUserInput={isUser}
+      diagnosticCorrelationId={message.id}
+      applyScopeId={`${message.chatId}:${message.id}`}
+      repositoryRoots={props.repositoryRoots}
+      openRepositoryReference={props.openRepositoryReference}
+      citationPreview={props.citationPreview}
+      onApplyCodeBlock={isUser ? undefined : props.onApplyCodeBlock}
+      streaming={streaming}
+      trailing={streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined}
+    />
+  );
+}
+
+function ChatBubbleContentArea(props: ChatBubbleContentProps): ReactNode {
+  const { isUser, contentId, collapsed, canCollapse } = props;
   return (
     <div
       id={isUser ? undefined : contentId}
@@ -782,26 +832,7 @@ function ChatBubbleContentArea({
       data-collapsed={!isUser && collapsed ? "true" : "false"}
       data-collapsible={canCollapse ? "true" : "false"}
     >
-      {
-        // Streaming assistant turns use the same safe renderer as persisted
-        // answers; parser failures fall back to plain-text raw source for this bubble.
-        // SM-1: wrapped in a per-message boundary so a parser/render defect
-        // degrades this one bubble to plain text instead of crashing the view.
-        <SafeMarkdownBoundary
-          source={message.content}
-          literalUserInput={isUser}
-          diagnosticCorrelationId={message.id}
-          applyScopeId={`${message.chatId}:${message.id}`}
-          repositoryRoots={repositoryRoots}
-          openRepositoryReference={openRepositoryReference}
-          citationPreview={citationPreview}
-          onApplyCodeBlock={isUser ? undefined : onApplyCodeBlock}
-          streaming={streaming}
-          trailing={
-            streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined
-          }
-        />
-      }
+      <ChatBubbleMarkdown {...props} />
     </div>
   );
 }
@@ -921,7 +952,7 @@ function ChatBubbleFooterActions({
         />
       ) : null}
       <MessageCopyButton
-        content={message.content}
+        content={answerReadingText(message)}
         citationCeiling={groundedCitationCeiling(message.groundedAnswer)}
         grounded={message.groundedAnswer !== undefined}
       />

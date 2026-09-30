@@ -100,6 +100,9 @@ prompts. `client.answer.copied` records each chat answer copy (`copied` or `fail
 its error kind and frames), whether the answer was grounded, and how many marker groups the copy
 removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
 for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
+`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
+assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
+(`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`

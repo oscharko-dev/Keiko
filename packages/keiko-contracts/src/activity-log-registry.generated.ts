@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e6fd2fca633591542a4d24cd697820e23f01660ad68e156072843afcdf854861" as const;
+  "155a9ff1752339aa450af8a45e70ff8737c4f294b11673ec0bf83ee39303dd7b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -23800,6 +23800,54 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "capability",
     failureClasses: ["runtime-confinement-unavailable"],
     proofIds: ["runtime.confinement.unavailable.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "search.answer.assessed",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "grounded-citation-log.logAnswerAssessment",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      policy: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["allowed", "disabled"],
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["none", "assessment", "assessment-only", "neutralized"],
+      },
+      sourceBackedChars: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      assessmentChars: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["knowledge-citation-reconciliation"],
+    proofIds: ["search.answer.assessed.line"],
     releaseImpact: "patch",
   },
   {
@@ -55403,11 +55451,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleOperations: {
         start: [],
         state: [],
-        end: ["search.citations.reconciled", "search.citations.support-settled"],
+        end: [
+          "search.answer.assessed",
+          "search.citations.reconciled",
+          "search.citations.support-settled",
+        ],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "search.answer.assessed",
+          mode: "correlation",
+        },
         {
           op: "search.citations.reconciled",
           mode: "correlation",
@@ -55418,9 +55474,55 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["search.citations.reconciled", "search.citations.support-settled"],
+      resourceSignals: [
+        "search.answer.assessed",
+        "search.citations.reconciled",
+        "search.citations.support-settled",
+      ],
       replayReferences: [],
       operations: [
+        {
+          op: "search.answer.assessed",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "assessmentChars",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "policy",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "sourceBackedChars",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["search.answer.assessed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "search.citations.reconciled",
           owner: "keiko-server",
@@ -66786,6 +66888,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "runtime.confinement.failed": "tools-workflows",
     "runtime.confinement.spawned": "tools-workflows",
     "runtime.confinement.unavailable": "tools-workflows",
+    "search.answer.assessed": "memory-knowledge",
     "search.citations.reconciled": "memory-knowledge",
     "search.citations.support-settled": "memory-knowledge",
     "search.connected-context.completed": "memory-knowledge",
