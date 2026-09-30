@@ -2356,7 +2356,7 @@ function monitorConversationInitialization(
     });
 }
 
-const MAX_CONVERSATION_RECOVERY_DELAY_MS = 60 * 60_000;
+const MAX_CONVERSATION_RECOVERY_DELAY_MS = 5 * 60_000;
 
 function scheduleConversationRecovery(
   deps: UiHandlerDeps,

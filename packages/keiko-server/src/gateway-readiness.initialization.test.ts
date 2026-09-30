@@ -109,7 +109,7 @@ it("disposal cancels recovery timers and ignores subsequent configuration change
   expect(fetch).toHaveBeenCalledTimes(calls);
 });
 
-it("bounds recovery traffic during a long outage and heals when the provider returns", async () => {
+it("bounds recovery traffic during a long outage and heals within five minutes", async () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
   const deps = composition();
@@ -139,10 +139,10 @@ it("bounds recovery traffic during a long outage and heals when the provider ret
   expect(fetch).toHaveBeenCalledTimes(4);
   await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
   expect(fetch.mock.calls.length).toBeGreaterThan(4);
-  expect(fetch.mock.calls.length).toBeLessThanOrEqual(15);
+  expect(fetch.mock.calls.length).toBeLessThanOrEqual(60);
   available = true;
   const callsBeforeRecovery = fetch.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
   expect(fetch.mock.calls.length).toBeGreaterThan(callsBeforeRecovery);
   expect(deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady).toBe(true);
   const callsAfterRecovery = fetch.mock.calls.length;
