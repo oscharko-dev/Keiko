@@ -32,7 +32,7 @@ export const NO_EVIDENCE_ANSWER_MAX_CHARS = 240;
 // length and marker guards): no answer about a subject is phrased this way.
 const STOCK_REFUSAL_PATTERNS: readonly RegExp[] = [
   /\bno\s+evidence\s+(?:found|available|in|within)\b/iu,
-  /\b(?:insufficient|not\s+enough)\s+(?:evidence|information)\b/iu,
+  /(?:\binsufficient|\bnot\s+(?:have\s+)?enough|n[’']t\s+have\s+enough)\s+(?:evidence|information)\b/iu,
   /\bkeine\s+(?:evidenz|belege)\b/iu,
   /\bnicht\s+(?:genug|genügend|ausreichend\p{L}*)\s+(?:evidenz|belege|hinweise|informationen|angaben)\b/iu,
   /\bunzureichend\p{L}*\s+(?:informationen|angaben|belege)\b/iu,

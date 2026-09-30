@@ -38,6 +38,19 @@ describe("isNoEvidenceAnswerText", () => {
     "No information is available on this topic.",
     "The codebase does not mention the Java version.",
     "I couldn’t find the Java version in the retrieved excerpts.",
+    // The audit's exact probes.
+    "Die Dokumente sagen dazu nichts.",
+    "In den Dokumenten steht dazu nichts.",
+    "The documents do not say anything about this.",
+    "I do not have enough information to answer.",
+    "I don't have enough information about this.",
+    "There is insufficient information to answer the question.",
+    "Nicht genügend Informationen vorhanden.",
+    "Ich kann diese Frage anhand der bereitgestellten Dokumente nicht beantworten.",
+    "Das geht aus den Unterlagen nicht hervor.",
+    "Die Quellen enthalten dazu keine Aussage.",
+    "Unable to answer from the provided sources.",
+    "The repository does not contain any Kafka usage.",
   ])("recognises the refusal %j", (answer) => {
     expect(isNoEvidenceAnswerText(answer)).toBe(true);
   });
@@ -73,6 +86,12 @@ describe("isNoEvidenceAnswerText", () => {
     // A failed search or answer by the subject, not by Keiko over its evidence.
     "Maven could not find the dependency.",
     "The server cannot answer requests while it restarts.",
+    // The audit's exact false-positive probes.
+    "Für diesen Endpunkt sind keine Angaben zum Benutzer erforderlich.",
+    "The endpoint requires no details about the user.",
+    "The library has no reference to global state.",
+    "Es gibt keine Hinweise auf Sicherheitslücken in Version 2.",
+    "The result contains no information about the user's password.",
   ])("does not treat %j as a refusal", (answer) => {
     expect(isNoEvidenceAnswerText(answer)).toBe(false);
   });
