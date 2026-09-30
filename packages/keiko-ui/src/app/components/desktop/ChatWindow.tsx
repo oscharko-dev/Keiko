@@ -488,13 +488,15 @@ export function copyableMessageText(content: string, citationCeiling = 0): strin
 }
 
 /**
- * The text read aloud for an assistant answer: its grounded citation markers removed by the same
- * rule as the copy (every index names one of the answer's references), so `[1, 7, 8]` of a grounded
- * answer is never spoken while an ordinary answer's `[1, 2]` stays content. The synthesis route sees
- * only text and cannot tell the two apart (PR #3678 review).
+ * The text read aloud for an assistant answer: the answer itself with its grounded citation markers
+ * removed by the same rule as the copy (every index names one of the answer's references), so
+ * `[1, 7, 8]` of a grounded answer is never spoken while an ordinary answer's `[1, 2]` stays content.
+ * The synthesis route sees only text and cannot tell the two apart (PR #3678 review). Only the
+ * markers go: the copy's repository-evidence tidy-up is no speech rule, so a bracketed path is
+ * spoken as the answer wrote it.
  */
 export function speakableAnswerText(message: ChatMessage): string {
-  return copyableMessageText(message.content, groundedCitationCeiling(message.groundedAnswer));
+  return stripCitationMarkers(message.content, groundedCitationCeiling(message.groundedAnswer));
 }
 
 // The copy's body-free evidence (PR #3678 review): whether it succeeded, whether the answer was

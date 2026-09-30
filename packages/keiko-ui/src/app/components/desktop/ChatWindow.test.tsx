@@ -4013,6 +4013,28 @@ describe("ChatWindow message copy", () => {
     expect(speakableAnswerText({ ...base, content: ordinary })).toBe(ordinary);
   });
 
+  // The voice parity smoke: speech is the visible answer without its numeric markers, so a
+  // bracketed repository path stays spoken exactly as the answer wrote it. The copy's evidence
+  // tidy-up is no speech rule.
+  it("reads a grounded answer's bracketed repository path aloud unchanged", () => {
+    const answer = "repositoryParityStatus is defined in [src/repository-parity.ts:2] [1].";
+    expect(
+      speakableAnswerText({
+        id: "m3",
+        chatId: "chat-1",
+        role: "assistant",
+        timestamp: 3,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+        content: answer,
+        groundedAnswer: copyTestGroundedAnswer(answer, 1),
+      }),
+    ).toBe("repositoryParityStatus is defined in [src/repository-parity.ts:2].");
+  });
+
   it("keeps brackets that name no reference of the grounded answer", () => {
     // Beyond the references ([80, 443]), partly beyond ([2, 9]) and index 0 are content.
     expect(copyableMessageText("Ports [80, 443] and [2, 9] and [0], per [1, 2].", 3)).toBe(

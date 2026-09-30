@@ -167,9 +167,10 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   group is reconciled: a fabricated
   `[9, 10]` beside a real `[1]` dangles, because failing closed beats a quiet source attribution.
   The copy stripper removes only a grounded answer's groups whose every index names one of its
-  references and leaves an ordinary answer's brackets untouched. Read-aloud text is stripped by
-  the same rule in the UI before synthesis (`speakableAnswerText`); the synthesis route sees only
-  text, so it keeps grouped brackets as content.
+  references and leaves an ordinary answer's brackets untouched. Read-aloud text is the answer with
+  its markers stripped by the same rule in the UI before synthesis (`speakableAnswerText`); the
+  copy's repository-evidence tidy-up is not applied, so a bracketed path is spoken as written. The
+  synthesis route sees only text, so it keeps grouped brackets as content.
 - **Token overlap is a soft signal, never a filter — and never a confirmation.**
   `attachCitationsToAnswer` keeps every in-range marker attached so the reader can open its source.
   A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the
