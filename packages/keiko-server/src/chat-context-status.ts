@@ -31,7 +31,10 @@ import {
   type ConversationShare,
 } from "./chat-context-breakdown.js";
 import { hasGroundingScope } from "./chat-grounding.js";
-import { groundedHistoryLaneTokens } from "./grounded-conversation-continuity.js";
+import {
+  groundedConversationLaneProfile,
+  groundedHistoryLaneTokens,
+} from "./grounded-conversation-continuity.js";
 
 function checkpointForProfile(
   deps: UiHandlerDeps,
@@ -247,8 +250,12 @@ export function readChatContextStatus(
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
   const counted = countHistory(deps, chatId, profile, checkpoint);
-  const pending = pendingCompaction(deps, chatId, profile, counted, correlationId);
   const grounded = groundedShare(deps, chatId, profile, counted.latestPromptContext);
+  // A grounded question compacts the conversation inside its own lane, not against the whole
+  // window, so the projection uses the lane the send path uses (PR #3678 review).
+  const conversationProfile =
+    grounded === undefined ? profile : groundedConversationLaneProfile(profile);
+  const pending = pendingCompaction(deps, chatId, conversationProfile, counted, correlationId);
   const breakdown = contextBreakdown({
     profile,
     conversation: pending?.conversation ?? storedConversation(counted, checkpoint),

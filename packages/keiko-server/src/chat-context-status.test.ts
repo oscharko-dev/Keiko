@@ -182,6 +182,38 @@ describe("grounded context status", () => {
     expect(status.estimatedInputTokens).toBeGreaterThanOrEqual(4_100);
   });
 
+  // PR #3678 review: the grounded send path compacts the conversation inside its lane (at most a
+  // third of the input budget). The meter must show that projection — a summary and fewer verbatim
+  // messages — instead of clipping the raw history's token total.
+  it("projects a grounded chat's history against its conversation lane", () => {
+    const seeded = fixture(10, "Wir besprechen die Kontoführung im Detail. ".repeat(40));
+    const deps = {
+      ...seeded.deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 16_384,
+        reservedOutputTokens: 4_096,
+        safetyMarginTokens: 512,
+      }),
+    };
+    deps.store.updateChat(seeded.chatId, {
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "capsule-1" as KnowledgeCapsuleId, connectedAtMs: 1 },
+      ],
+    });
+    const status = readChatContextStatus(deps, seeded.chatId, "fixture");
+    expect(status.pendingCompaction?.tokensBefore).toBeGreaterThan(status.inputBudgetTokens / 3);
+    expect(status.pendingCompaction?.messagesCompacted).toBeGreaterThan(0);
+    const segments = status.segments ?? [];
+    const summary = segments.find((segment) => segment.id === "summary");
+    const messages = segments.find((segment) => segment.id === "messages");
+    expect(summary?.count).toBeGreaterThan(0);
+    expect(summary?.tokens).toBeGreaterThan(0);
+    expect(messages?.count).toBeLessThan(20);
+    expect((summary?.tokens ?? 0) + (messages?.tokens ?? 0)).toBeLessThanOrEqual(
+      Math.floor(status.inputBudgetTokens / 3),
+    );
+  });
+
   it("keeps a model-only chat free of a source share", () => {
     const { deps, chatId } = fixture(2);
     const status = readChatContextStatus(deps, chatId, "fixture");

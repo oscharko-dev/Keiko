@@ -135,14 +135,20 @@ export function groundedHistoryLaneTokens(modelProfile: ContextProfile): number 
   return Math.max(512, Math.min(8_000, Math.floor(modelProfile.effectiveInputBudget / 3)));
 }
 
-function continuityProfile(deps: UiHandlerDeps, modelId: string): ContextProfile {
-  const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
+/** The profile a grounded question compacts its conversation lane against; the meter projects it. */
+export function groundedConversationLaneProfile(modelProfile: ContextProfile): ContextProfile {
   return deriveContextProfile({
     maxInputTokens: groundedHistoryLaneTokens(modelProfile),
     reservedOutputTokens: 0,
     safetyMarginTokens: 0,
     tokenAccounting: modelProfile.tokenAccounting,
   });
+}
+
+function continuityProfile(deps: UiHandlerDeps, modelId: string): ContextProfile {
+  return groundedConversationLaneProfile(
+    currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+  );
 }
 
 function renderContinuityMessages(
