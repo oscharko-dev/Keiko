@@ -37,6 +37,7 @@ import type {
   LocalKnowledgeGroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
+  ContextProfile,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgePodRetrievalActivity,
@@ -81,7 +82,8 @@ import {
   currentRedactionSecrets,
 } from "./deps.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
-import { fitKnowledgePrompt, knowledgePromptShare } from "./knowledge-prompt-window.js";
+import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
+import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -647,10 +649,12 @@ function renderConnectorEvidence(
   };
 }
 
+// The count of the references this prompt actually shows: a window-fitted prompt carries fewer than
+// retrieval found, and telling the model the retrieved total invites markers beyond the ones sent.
 function localKnowledgePromptSummary(input: AnswerGeneratorInput): string {
   return (
     `Indexed knowledge scope: ${String(input.pack.scope.capsuleCount)} capsule(s), ` +
-    `${String(input.pack.counts.totalReferences)} retrieved reference(s).`
+    `${String(input.references.length)} retrieved reference(s).`
   );
 }
 
@@ -698,18 +702,15 @@ interface AnswerGeneratorContext {
   readonly correlationId: string | undefined;
 }
 
-interface RenderedPromptShare {
-  readonly estimatedTokens: number;
-  readonly sourceTokens: number;
-  readonly instructionTokens: number;
-  readonly sentReferenceCount: number;
-  readonly availableReferenceCount: number;
+interface SentKnowledgePrompt {
+  readonly prompt: SentGroundedPrompt;
+  readonly profile: ContextProfile | undefined;
 }
 
 class StoreBackedAnswerGenerator implements AnswerGenerator {
   private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
   private sentReferences: readonly RetrievalReference[] = [];
-  private renderedShare: RenderedPromptShare | undefined;
+  private sent: SentKnowledgePrompt | undefined;
   private measuredPromptTokens = 0;
 
   public constructor(
@@ -761,18 +762,9 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
 
   /** Counts of the last request this generator sent; undefined before the first call. */
   public promptContext(): GroundedPromptContextWire | undefined {
-    const share = this.renderedShare;
-    if (share === undefined) return undefined;
-    const measured = this.measuredPromptTokens > 0;
-    return {
-      promptTokens: measured ? this.measuredPromptTokens : share.estimatedTokens,
-      promptTokensMeasured: measured,
-      estimatedPromptTokens: share.estimatedTokens,
-      instructionTokens: share.instructionTokens,
-      sourceTokens: share.sourceTokens,
-      sentReferenceCount: share.sentReferenceCount,
-      availableReferenceCount: share.availableReferenceCount,
-    };
+    const { sent } = this;
+    if (sent === undefined) return undefined;
+    return sentPromptContext(sent.prompt, this.measuredPromptTokens, sent.profile);
   }
 
   private callWithinWindow(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
@@ -792,10 +784,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     });
     this.renderedNumericEvidence = fitted.prompt.numericEvidence;
     this.sentReferences = input.references.slice(0, fitted.referenceCount);
-    this.renderedShare = {
-      ...knowledgePromptShare(fitted.prompt, render(0), profile?.tokenAccounting),
-      sentReferenceCount: fitted.referenceCount,
-      availableReferenceCount: input.references.length,
+    this.sent = {
+      prompt: {
+        messages: fitted.prompt.messages,
+        withoutSources: render(0).messages,
+        sentReferenceCount: fitted.referenceCount,
+        availableReferenceCount: available,
+      },
+      profile,
     };
     this.measuredPromptTokens = 0;
     return this.model.call(
@@ -1271,7 +1267,8 @@ function buildLocalKnowledgeContextPack(
     sourceCount: result.pack.scope.sourceCount,
     citationCount: citations.length,
     referenceBudget: limits.maxPromptReferences,
-    referencesUsed: result.references.length,
+    // The references the answer prompt carried, not the retrieved total (a fitted prompt sends fewer).
+    referencesUsed: result.promptReferenceCount ?? result.references.length,
     indexLifecycle: buildLocalKnowledgeIndexLifecycle(selected.capsules),
     ...(result.reranker === undefined ? {} : { reranker: result.reranker }),
   };
@@ -2375,7 +2372,7 @@ function logScopedCitationReconciliation(
   logCitationReconciliation(
     {
       answer: result.answer,
-      referenceCount: result.references.length,
+      referenceCount: result.promptReferenceCount ?? result.references.length,
       attachedIndices: result.citations.map((entry) => entry.index),
       weakOverlapCount: result.weakCitationCount ?? 0,
       refusal: enforcedNoEvidenceReason(result) !== undefined,

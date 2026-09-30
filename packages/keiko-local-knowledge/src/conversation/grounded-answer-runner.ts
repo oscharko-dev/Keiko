@@ -209,6 +209,9 @@ export async function runGroundedAnswer(
   };
 
   const attached = await generateGroundedAnswerText(deps, answerInput);
-  const answer = buildGroundedAnswer(attached, references, pack, retrieval, rerankerDiagnostics);
+  const built = buildGroundedAnswer(attached, references, pack, retrieval, rerankerDiagnostics);
+  const sentCount = promptReferencesOf(deps, references).length;
+  const answer =
+    sentCount < references.length ? { ...built, promptReferenceCount: sentCount } : built;
   return answerOnly ? { ...answer, noEvidence: true, answerOnlyContextUsed: true } : answer;
 }

@@ -726,6 +726,101 @@ describe("grounded prompt context evidence", () => {
   });
 });
 
+// PR #3678 review: a model window too small for every retrieved reference trims the prompt. The
+// prompt then names only the references it carries, and the answer and its evidence report the
+// fitted count — never the retrieved total the model did not see.
+describe("window-fitted Knowledge Pod prompt", () => {
+  it("reports the fitted reference count to the model, the evidence panel and the meter", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Kontoführung",
+      capsuleId: "cap-fitted-window",
+      sourceId: "src-fitted-window",
+      text: Array.from(
+        { length: 40 },
+        (_, index) => `Abschnitt ${String(index)}: alpha beta ${"Kontoführung Regel ".repeat(30)}`,
+      ).join(" "),
+      chunkingOptions: { maxTokens: 120, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    const project = rescueStore.createProject(rescueTmp, "fitted-window");
+    const created = rescueStore.createChat(project.path, "Fitted window", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const answerPrompts: string[] = [];
+    const fakeModel: ModelPort = {
+      call: (request) => {
+        const prompt = request.messages.map((message) => message.content).join("\n");
+        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        if (!isQueryTransform) answerPrompts.push(prompt);
+        return Promise.resolve({
+          modelId: "chat-model",
+          content: isQueryTransform ? '{"queries":["alpha"]}' : "Die Regel steht in [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "fitted-window",
+            promptTokens: 0,
+            completionTokens: 8,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          { ...chatCapability("chat-model"), contextWindow: 3_000, maxOutputTokens: 512 },
+          embeddingCapability(embeddingModelId),
+        ],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+    };
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "Was sagt die Regel zu alpha?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    const context = answer.promptContext;
+    if (context === undefined) throw new Error("expected a prompt context");
+    expect(context.sentReferenceCount).toBeGreaterThan(0);
+    expect(context.sentReferenceCount).toBeLessThan(context.availableReferenceCount);
+    expect(answer.contextPack.referencesUsed).toBe(context.sentReferenceCount);
+    expect(answerPrompts.at(-1)).toContain(
+      `${String(context.sentReferenceCount)} retrieved reference(s)`,
+    );
+  });
+});
+
 // PR #3678 review (the SOC2 pin): an in-range marker whose claim shares no wording with its excerpt
 // stays attached for navigation, but the answer must not present it as confirmed support.
 describe("weakly supported citations", () => {

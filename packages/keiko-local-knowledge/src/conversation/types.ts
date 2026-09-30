@@ -71,6 +71,9 @@ export interface ConversationGroundedAnswer {
   // How many attached citations had weak lexical overlap with their excerpt (see
   // `ConversationCitationReference.lexicalSupport`). Absent when zero; a count for diagnostics.
   readonly weakCitationCount?: number | undefined;
+  // How many of `references` the answer prompt carried. A generator that fits its prompt to the
+  // model's window may send fewer than were retrieved; absent means all of them were sent.
+  readonly promptReferenceCount?: number | undefined;
 }
 
 // A `[n]` marker the answer text uses, paired with the citation it points at. `marker`

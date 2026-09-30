@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
@@ -66,6 +67,14 @@ describe("fitKnowledgePrompt", () => {
     expect(fitted.referenceCount).toBeGreaterThan(0);
     expect(fitted.referenceCount).toBeLessThan(16);
     expect(fitted.prompt).toEqual(render(fitted.referenceCount));
+    // The largest fitting count (PR #3678 review): one more reference would not fit.
+    const window = profile(3_072);
+    const tokens = (count: number): number =>
+      countGatewayPromptTokens(render(count), window.tokenAccounting, {
+        contextWindow: window.maxInputTokens,
+      });
+    expect(tokens(fitted.referenceCount)).toBeLessThanOrEqual(window.effectiveInputBudget);
+    expect(tokens(fitted.referenceCount + 1)).toBeGreaterThan(window.effectiveInputBudget);
     const line = formatActivityLogProofLine(sink.events[0] ?? {});
     const record = expectActivityLogProof("search.prompt.window-fitted.line", line);
     expect(record).toMatchObject({
