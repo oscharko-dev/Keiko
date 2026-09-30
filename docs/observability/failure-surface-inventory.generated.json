@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e7415aaab615953bf9092788e0763ffb6c4fe1da02f4970ef2e99f67157ce434"
+    "catalogDigest": "0bc70aee55e61bc17dd0fb90505e0db34b544b2e3d3bec60e85d07e2f166bf0e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 487,
-    "proofCount": 495,
-    "resolvedProofCount": 495,
-    "failureClassCount": 329,
+    "operationCount": 488,
+    "proofCount": 496,
+    "resolvedProofCount": 496,
+    "failureClassCount": 330,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -442,6 +442,7 @@
         "search.connected-context.started",
         "search.index-invalidated-for-capsule",
         "search.native-runtime-resolved",
+        "search.prompt.window-fitted",
         "search.rerank.completed",
         "store.encryption-checkpoint-degraded",
         "store.encryption-migrated"
@@ -868,6 +869,7 @@
     "indexing-prologue": ["memory-knowledge.dependency-failure"],
     "indexing-route": ["memory-knowledge.rejection"],
     "install-mode-probe-failed": ["ui.dependency-failure"],
+    "knowledge-prompt-window": ["memory-knowledge.dependency-failure"],
     "knowledge-citation-reconciliation": ["memory-knowledge.dependency-failure"],
     "knowledge-store-corruption": ["memory-knowledge.dependency-failure"],
     "knowledge-store-encryption": ["memory-knowledge.rejection"],
@@ -2071,6 +2073,9 @@
     ],
     "search.native-runtime-resolved.state": [
       "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-resolved-logging.test.ts"
+    ],
+    "search.prompt.window-fitted.line": [
+      "packages/keiko-server/src/knowledge-prompt-window.test.ts"
     ],
     "search.rerank.completed.line": ["packages/keiko-server/src/grounded-rerank-facade.test.ts"],
     "security.fs.atomic-rename-failed.attempts": [

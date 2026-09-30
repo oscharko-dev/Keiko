@@ -65,6 +65,7 @@ import {
   findConfiguredCapability,
   requestOpenAIEmbedding,
   type GatewayConfig,
+  type NormalizedResponse,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
@@ -72,7 +73,14 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentGroundingLimits,
+  currentRedactionSecrets,
+} from "./deps.js";
+import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -683,8 +691,14 @@ function buildLocalKnowledgeMessages(
   return { messages, numericEvidence: rendered.numericEvidence };
 }
 
+interface AnswerGeneratorContext {
+  readonly deps: UiHandlerDeps;
+  readonly correlationId: string | undefined;
+}
+
 class StoreBackedAnswerGenerator implements AnswerGenerator {
   private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
+  private sentReferences: readonly RetrievalReference[] = [];
 
   public constructor(
     private readonly model: ModelPort,
@@ -693,29 +707,19 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
     private readonly redactExcerpt: (value: string) => string,
     private readonly limits: ReturnType<typeof currentGroundingLimits>,
-    private readonly correlationId: string | undefined,
+    private readonly context: AnswerGeneratorContext,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
-    const rendered = buildLocalKnowledgeMessages(
-      input.query.answerQuestion ?? input.query.text,
-      input,
-      this.store,
-      this.redactExcerpt,
-      this.limits,
-    );
-    this.renderedNumericEvidence = rendered.numericEvidence;
-    const response = await this.model.call(
-      {
-        modelId: this.modelId,
-        messages: rendered.messages,
-        stream: false,
-        logContext: { correlationId: this.correlationId },
-      },
-      input.signal ?? new AbortController().signal,
+    // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
+    // window, the retry fits the references into it (gateway-context-window.ts).
+    const response = await withAdoptedContextWindowRetry(
+      this.context.deps,
+      { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
+      () => this.callWithinWindow(input),
     );
     const occurredAt = Date.now();
-    for (const usage of summariseReferenceUsage(input.references)) {
+    for (const usage of summariseReferenceUsage(this.sentReferences)) {
       if (!capsuleAllowsEvidencePersistence(getCapsule(this.store, usage.capsuleId))) continue;
       this.auditSink.emit({
         kind: "model-context-sent",
@@ -723,7 +727,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         sourceIds: usage.sourceIds,
         chunkIds: usage.chunkIds,
         referenceCount: usage.referenceCount,
-        citationCount: input.references.length,
+        citationCount: this.sentReferences.length,
         modelId: this.modelId,
         occurredAt,
       });
@@ -735,6 +739,35 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
 
   public numericEntailmentEvidence(): readonly NumericEntailmentEvidence[] {
     return this.renderedNumericEvidence;
+  }
+
+  private callWithinWindow(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
+    const available = Math.min(input.references.length, this.limits.maxPromptReferences);
+    const render = (count: number): ReturnType<typeof buildLocalKnowledgeMessages> =>
+      buildLocalKnowledgeMessages(
+        input.query.answerQuestion ?? input.query.text,
+        { ...input, references: input.references.slice(0, count) },
+        this.store,
+        this.redactExcerpt,
+        this.limits,
+      );
+    const fitted = fitKnowledgePrompt(
+      available,
+      render,
+      currentContextProfileForModel(this.context.deps, this.modelId),
+      this.context.correlationId,
+    );
+    this.renderedNumericEvidence = fitted.prompt.numericEvidence;
+    this.sentReferences = input.references.slice(0, fitted.referenceCount);
+    return this.model.call(
+      {
+        modelId: this.modelId,
+        messages: fitted.prompt.messages,
+        stream: false,
+        logContext: { correlationId: this.context.correlationId },
+      },
+      input.signal ?? new AbortController().signal,
+    );
   }
 }
 
@@ -2367,7 +2400,7 @@ function createScopedAnswerGenerator(
     createSqliteAuditSink(env.store),
     (value: string): string => redactText(deps, value),
     limits,
-    correlationId,
+    { deps, correlationId },
   );
 }
 

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e7415aaab615953bf9092788e0763ffb6c4fe1da02f4970ef2e99f67157ce434" as const;
+  "0bc70aee55e61bc17dd0fb90505e0db34b544b2e3d3bec60e85d07e2f166bf0e" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -24446,6 +24446,53 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "search.prompt.window-fitted",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "knowledge-prompt-window.logPromptWindowFit",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["trimmed", "refused"],
+      },
+      referenceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      sentReferenceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      inputBudget: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["knowledge-prompt-window"],
+    proofIds: ["search.prompt.window-fitted.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "search.rerank.completed",
     category: "search",
     owner: "keiko-server",
@@ -29721,8 +29768,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 329,
-  completeClassCount: 329,
+  supportedClassCount: 330,
+  completeClassCount: 330,
   completeness: "complete",
   classes: [
     {
@@ -54704,6 +54751,74 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "knowledge-prompt-window",
+      requirementContract: "knowledge-prompt-window",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["search.prompt.window-fitted"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "search.prompt.window-fitted",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["search.prompt.window-fitted"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "search.prompt.window-fitted",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "inputBudget",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "referenceCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "sentReferenceCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["search.prompt.window-fitted.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "knowledge-store-corruption",
       requirementContract: "knowledge-store-corruption",
       productSurfaces: ["keiko-local-knowledge"],
@@ -65904,6 +66019,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "search.connected-context.started": "memory-knowledge",
     "search.index-invalidated-for-capsule": "memory-knowledge",
     "search.native-runtime-resolved": "memory-knowledge",
+    "search.prompt.window-fitted": "memory-knowledge",
     "search.rerank.completed": "memory-knowledge",
     "security.fs.atomic-rename-failed": "runtime-packages",
     "security.fs.atomic-rename-retried": "runtime-packages",
