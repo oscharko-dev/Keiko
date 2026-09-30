@@ -2297,7 +2297,7 @@ async function appendLocalKnowledgeNumericEntailment(
     },
     context.signal,
   );
-  if (stage === undefined) return answer;
+  if (stage === undefined) return withWeakCitationCaveat(answer, result);
   const markers = await stage.evaluateNumeric(result.answer, numericEvidence, Date.now());
   if (context.signal.aborted) {
     throw new CancelledError("grounded request cancelled");
@@ -2313,10 +2313,11 @@ async function appendLocalKnowledgeNumericEntailment(
 }
 
 // Weak lexical overlap is not a verdict. An in-range marker stays attached so the reader can open
-// its source, yet nothing confirmed that the source supports the claim: the lexical check failed
-// and the numeric judge reads no other claim. The answer therefore carries the fail-closed
-// "support could not be verified" caveat instead of presenting the citation as confirmed support
-// (PR #3678 review; the unrelated-evidence pins in citation-attacher.test.ts).
+// its source. When no entailment judge is available, nothing confirmed that the source supports
+// the claim, so the answer carries the fail-closed "support could not be verified" caveat instead
+// of presenting the citation as confirmed support (PR #3678 review; the unrelated-evidence pins in
+// citation-attacher.test.ts). When the judge ran, it read every cited claim against its excerpt and
+// its verdict (or its own unavailable marker) replaces the caveat.
 function withWeakCitationCaveat(
   answer: GroundedAnswer,
   result: ScopedGroundedResult,
@@ -2421,16 +2422,13 @@ async function persistScopedGroundedAnswer(
     sourceLookup,
     deps,
   });
-  const entailed = withWeakCitationCaveat(
-    await appendLocalKnowledgeNumericEntailment(
-      answer,
-      result,
-      numericEvidence,
-      selected,
-      context,
-      deps,
-    ),
+  const entailed = await appendLocalKnowledgeNumericEntailment(
+    answer,
     result,
+    numericEvidence,
+    selected,
+    context,
+    deps,
   );
   const { promptContext } = persistedInput;
   const finalAnswer = promptContext === undefined ? entailed : { ...entailed, promptContext };

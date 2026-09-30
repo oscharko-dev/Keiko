@@ -824,7 +824,13 @@ describe("window-fitted Knowledge Pod prompt", () => {
 // PR #3678 review (the SOC2 pin): an in-range marker whose claim shares no wording with its excerpt
 // stays attached for navigation, but the answer must not present it as confirmed support.
 describe("weakly supported citations", () => {
-  async function askWith(answerText: string, capsuleSuffix: string): Promise<GroundedAnswer> {
+  // `judgeVerdict` configures a structured-output chat model, so the numeric entailment stage runs
+  // and its judge answers every claim with that verdict.
+  async function askWith(
+    answerText: string,
+    capsuleSuffix: string,
+    judgeVerdict?: "supported" | "unsupported",
+  ): Promise<GroundedAnswer> {
     const embeddingModelId = "text-embedding-3-small";
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
@@ -847,9 +853,11 @@ describe("weakly supported citations", () => {
     const fakeModel: ModelPort = {
       call: (request) => {
         const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        const isJudge = judgeVerdict !== undefined && request.responseFormat !== undefined;
+        const reply = isQueryTransform ? '{"queries":["release"]}' : answerText;
         return Promise.resolve({
           modelId: "chat-model",
-          content: isQueryTransform ? '{"queries":["release"]}' : answerText,
+          content: isJudge ? JSON.stringify({ verdict: judgeVerdict }) : reply,
           finishReason: "stop" as const,
           toolCalls: [],
           structuredOutput: null,
@@ -868,7 +876,13 @@ describe("weakly supported citations", () => {
       config: {
         providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+        capabilities: [
+          {
+            ...chatCapability("chat-model"),
+            ...(judgeVerdict === undefined ? {} : { supportsResponseFormat: true }),
+          },
+          embeddingCapability(embeddingModelId),
+        ],
       },
       configPresent: true,
       evidenceStore: {
@@ -899,6 +913,23 @@ describe("weakly supported citations", () => {
     const answer = await askWith("The SOC2 control requires quarterly access reviews [1].", "soc2");
     expect(answer.citations).toHaveLength(1);
     expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
+  it("leaves the verdict to the entailment judge when it ran", async () => {
+    // The judge read the weak claim against its excerpt: its verdict replaces the caveat.
+    const supported = await askWith(
+      "The SOC2 control requires quarterly access reviews [1].",
+      "judged-supported",
+      "supported",
+    );
+    const unsupported = await askWith(
+      "The SOC2 control requires quarterly access reviews [1].",
+      "judged-unsupported",
+      "unsupported",
+    );
+
+    expect(supported.uncertainty.map((marker) => marker.kind)).toEqual([]);
+    expect(unsupported.uncertainty.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
   });
 
   it("adds no caveat when the claim shares its wording with the cited excerpt", async () => {

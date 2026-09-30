@@ -164,10 +164,11 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
 - **Token overlap is a soft signal, never a filter — and never a confirmation.**
   `attachCitationsToAnswer` keeps every in-range marker attached so the reader can open its source.
   A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the
-  `search.citations.reconciled` activity line. The numeric judge reads only numeric claims, so the
-  Knowledge Pod answer that carries a weak citation also carries the fail-closed
-  `entailment-unavailable` caveat. A weakly supported citation is never presented as confirmed
-  support (`withWeakCitationCaveat`).
+  `search.citations.reconciled` activity line. When the numeric judge runs, it reads every cited
+  claim against its excerpt, and its verdict (`unsupported-claim`, or its own
+  `entailment-unavailable` on failure) decides. When no judge is available, a Knowledge Pod answer
+  that carries a weak citation carries the fail-closed `entailment-unavailable` caveat instead. A
+  weakly supported citation is never presented as confirmed support (`withWeakCitationCaveat`).
 - **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
   highest-ranked references under their original numbers. The generator reports the references it
   sent (`AnswerGenerator.promptReferences`), and a marker beyond them is out of range, never attached.
