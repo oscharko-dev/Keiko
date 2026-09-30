@@ -735,6 +735,12 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.contextPack.kind).toBe("hybrid");
     expect(answer.contextPack.folderSourceCount).toBe(1);
     expect(answer.contextPack.connectorSourceCount).toBe(1);
+    // PR #3678 review: the hybrid prompt's candidate share reaches the meter.
+    const { promptContext } = result.body as GroundedAnswer;
+    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
+    expect(promptContext?.sentReferenceCount).toBe(
+      answer.citations.length + answer.knowledgeCitations.length,
+    );
     expect(answer.evidenceRunId).toBe(evidenceRunIds[0]);
     expect(answer.evidenceRunIds).toEqual(evidenceRunIds);
 

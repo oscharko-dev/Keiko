@@ -35,6 +35,7 @@ import {
   type GroundedAnswerContextSummary,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
+  type GroundedPromptContextWire,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -94,6 +95,7 @@ import {
   mappedWorkspaceError,
   modelInputPromptByteLimit,
   packBudgetSummary,
+  packsPromptContext,
   promptByteLength,
   registerGroundedTurn,
   redactString,
@@ -917,7 +919,21 @@ function assembleMultiSourceAnswer(
     omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
     contextPack: withMergedAssistantUsage(mergedSummary, assistant),
+    ...(modelInvoked ? { promptContext: mergedPromptContext(ctx, sources, assistant) } : {}),
   };
+}
+
+function mergedPromptContext(
+  ctx: MultiSourceAskInput,
+  sources: readonly RetrievedSource[],
+  assistant: GroundedAnswerResult,
+): GroundedPromptContextWire {
+  return packsPromptContext(
+    sources.map((src) => src.pack),
+    assistant.usage.promptTokens,
+    ctx.deps.redactor,
+    ctx.contextProfile,
+  );
 }
 
 // Folds the answer's model-token usage into the merged multi-source context-pack summary.

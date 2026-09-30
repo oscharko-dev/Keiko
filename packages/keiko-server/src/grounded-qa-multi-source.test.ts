@@ -1023,6 +1023,10 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.contextPack.usage.searchCalls).toBe(baseSummary.usage.searchCalls * 2);
     expect(answer.contextPack.budget.filesReadMax).toBe(baseSummary.budget.filesReadMax * 2);
     expect(answer.uncertainty).toHaveLength(2);
+    // PR #3678 review: the merged prompt's excerpt share reaches the meter.
+    const promptContext = (result.body as GroundedAnswer).promptContext;
+    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
+    expect(promptContext?.sentReferenceCount).toBeGreaterThan(0);
   });
 
   it("fails closed when an unqualified path exists in more than one source", async () => {

@@ -47,8 +47,10 @@ import {
   buildGroundedAnswerContextPackSummary,
   type ChatConnectedScope,
   type ChatLocalKnowledgeScope,
+  type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
+  type GroundedPromptContextWire,
   type GroundedRerankerDiagnostics,
   type GroundedUncertainty,
   type HybridGroundedAnswer,
@@ -92,6 +94,7 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { renderedSourcePromptContext } from "./grounded-prompt-context.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   normalizeGroundedAnswerPayload,
@@ -1650,7 +1653,27 @@ interface AssembleHybridAnswerInput {
   readonly sourceEvidenceAvailable?: boolean;
 }
 
-function assembleHybridAnswer(input: AssembleHybridAnswerInput): HybridGroundedAnswer {
+// The context meter's view of a hybrid prompt: the candidate blocks exactly as rendered, the hybrid
+// instructions and the provider-measured prompt (grounded-prompt-context.ts).
+function hybridPromptContext(
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  assistant: GroundedAnswerResult,
+  profile: UiHandlerDeps["contextProfile"],
+): GroundedPromptContextWire {
+  return renderedSourcePromptContext(
+    {
+      sourceText: selected.map(renderHybridCandidateBlock).join("\n\n"),
+      instructions: HYBRID_SYSTEM_PROMPT,
+      referenceCount: selected.length,
+      measuredPromptTokens: assistant.usage.promptTokens,
+    },
+    profile?.tokenAccounting,
+  );
+}
+
+function assembleHybridAnswer(
+  input: AssembleHybridAnswerInput,
+): HybridGroundedAnswer & Pick<GroundedAnswer, "promptContext"> {
   const {
     ctx,
     sources,
@@ -1694,6 +1717,16 @@ function assembleHybridAnswer(input: AssembleHybridAnswerInput): HybridGroundedA
       knowledgeCitationCount: projection.knowledgeCitations.length,
       reranker,
     }),
+    ...hybridPromptContextField(input),
+  };
+}
+
+function hybridPromptContextField(
+  input: AssembleHybridAnswerInput,
+): Pick<GroundedAnswer, "promptContext"> {
+  if (input.sourceEvidenceAvailable === false) return {};
+  return {
+    promptContext: hybridPromptContext(input.selected, input.assistant, input.ctx.contextProfile),
   };
 }
 

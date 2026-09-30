@@ -1,4 +1,5 @@
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import { renderedSourcePromptContext } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 import { logChatResponseMessage } from "./chat-activity.js";
 import {
@@ -61,7 +62,9 @@ import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ConversationMemoryResultWire,
   type GroundedAnswer,
+  type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
+  type GroundedPromptContextWire,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
@@ -978,6 +981,29 @@ function buildRawGroundedGatewayMessages(
   ];
 }
 
+// The context meter's view of a folder prompt: the rendered evidence lines and the grounded
+// instructions, plus the provider-measured prompt (grounded-prompt-context.ts).
+export function packsPromptContext(
+  packs: readonly ConnectedContextPack[],
+  measuredPromptTokens: number,
+  redactor: Redactor,
+  profile: UiHandlerDeps["contextProfile"],
+): GroundedPromptContextWire {
+  return renderedSourcePromptContext(
+    {
+      sourceText: packs.flatMap((pack) => evidenceLines(pack, redactor)).join("\n"),
+      instructions: GROUNDED_SYSTEM_PROMPT,
+      referenceCount: packs.reduce(
+        (total, pack) =>
+          total + pack.files.reduce((count, file) => count + file.excerpts.length, 0),
+        0,
+      ),
+      measuredPromptTokens,
+    },
+    profile?.tokenAccounting,
+  );
+}
+
 export function buildGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
@@ -1529,6 +1555,20 @@ function registerSingleGroundedTurn(
   );
 }
 
+function folderPromptContext(
+  workerCtx: AskWorkerCtx,
+  output: OrchestratorOutput,
+  modelInvoked: boolean,
+  contextPack: GroundedAnswerContextPackSummary,
+): Pick<GroundedAnswer, "promptContext"> {
+  if (!modelInvoked) return {};
+  const measured = contextPack.usage.modelInputTokens;
+  const { redactor } = workerCtx.deps;
+  return {
+    promptContext: packsPromptContext([output.pack], measured, redactor, workerCtx.contextProfile),
+  };
+}
+
 // Persists the exchange, projects citations/uncertainty, and assembles the wire answer for a
 // single-source folder ask. Split out of runAsk to keep both under the LOC bound.
 function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
@@ -1570,6 +1610,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     omittedCount: output.pack.omitted.length,
     elapsedMs: output.elapsedMs,
     contextPack,
+    ...folderPromptContext(workerCtx, output, modelInvoked, contextPack),
   };
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {

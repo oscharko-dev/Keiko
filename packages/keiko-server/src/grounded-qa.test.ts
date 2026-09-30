@@ -2405,6 +2405,11 @@ describe("handleGroundedAsk", () => {
     expect(answer.content).toBe("Grounded answer [src/foo.ts:1-3]");
     expect(answer.contextPack.usage.modelInputTokens).toBe(41);
     expect(answer.contextPack.usage.modelOutputTokens).toBe(7);
+    // PR #3678 review: a folder answer reports the prompt share of its excerpts to the meter.
+    const promptContext = (result.body as GroundedAnswer).promptContext;
+    expect(promptContext).toMatchObject({ promptTokens: 41, promptTokensMeasured: true });
+    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
+    expect(promptContext?.sentReferenceCount).toBeGreaterThan(0);
     const assistant = store
       .listMessages(chatId)
       .find((message) => message.id === answer.assistantMessageId);
