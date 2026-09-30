@@ -1,4 +1,9 @@
-import { ACTIVITY_LOG_ERROR_KINDS } from "../../packages/keiko-contracts/dist/observability.js";
+import {
+  ACTIVITY_LOG_ERROR_KINDS,
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  DIAGNOSTIC_SUFFICIENCY_REASONS,
+  diagnosticSufficiencyStatus,
+} from "../../packages/keiko-contracts/dist/observability.js";
 
 // The release failure report is printed to public CI logs. Only reviewed closed values may cross
 // that boundary; a future producer that changes its vocabulary is redacted until reviewed here.
@@ -32,6 +37,8 @@ const FAILURE_CODES = new Set([
   "turn-rejected",
 ]);
 const ERROR_KINDS = new Set(ACTIVITY_LOG_ERROR_KINDS);
+const REGISTERED_OPERATIONS = new Set(ACTIVITY_LOG_OPERATION_REGISTRY.map(({ op }) => op));
+const SUFFICIENCY_REASONS = new Set(DIAGNOSTIC_SUFFICIENCY_REASONS);
 const OUTCOMES = new Set(["accepted", "cancelled", "failed", "output-limit"]);
 const PUBLICATION_REASONS = new Set([
   "published",
@@ -252,4 +259,114 @@ export function linkedFailureEvidence(lines, runId) {
       line.frames.some((frame) => typeof frame === "string" && frame.includes("/dist/")),
   );
   return diagnostic === undefined ? undefined : { turnFailure, diagnostic };
+}
+
+function reportSufficiency(value) {
+  if (
+    !Array.isArray(value?.reasons) ||
+    !value.reasons.every((reason) => SUFFICIENCY_REASONS.has(reason)) ||
+    value.status !== diagnosticSufficiencyStatus(value.reasons)
+  )
+    throw new TypeError("support report has contradictory sufficiency");
+  return { status: value.status, reasons: value.reasons };
+}
+
+function reconstructedLine(report, correlationId, op) {
+  return report.analysis.timelines
+    .find((timeline) => timeline.correlationId === correlationId)
+    ?.lines.find((line) => line.op === op);
+}
+
+function reconstructedDiagnostic(report, evidence, runId) {
+  const diagnostic = reconstructedLine(
+    report,
+    evidence.diagnostic.correlationId,
+    "server.diagnostic.failure",
+  );
+  if (
+    diagnostic?.parentCorrelationId !== runId ||
+    diagnostic.errorKind !== evidence.diagnostic.errorKind ||
+    !ERROR_KINDS.has(diagnostic.errorKind) ||
+    !diagnostic.frames?.some((frame) => frame.includes("/dist/"))
+  )
+    throw new Error("support report lost the linked typed diagnostic or installed failure site");
+  if (
+    JSON.stringify(diagnostic.frames) !== JSON.stringify(evidence.diagnostic.frames) ||
+    JSON.stringify(diagnostic.causeChain) !== JSON.stringify(evidence.diagnostic.causeChain)
+  )
+    throw new Error("support report changed the safe failure frame or cause chain");
+  return diagnostic;
+}
+
+function reconstructedFailure(report, evidence, runId) {
+  const failure = reconstructedLine(report, runId, "coding-sidecar.gateway.turn-failed");
+  if (
+    failure?.extra?.failureCode !== evidence.turnFailure.failureCode ||
+    !FAILURE_CODES.has(failure.extra.failureCode) ||
+    failure.extra.runId !== runId
+  )
+    throw new Error("support report lost the typed run failure");
+  return failure;
+}
+
+function reconstructedSeed(report, runId) {
+  const seed = report.seed;
+  if (
+    seed?.correlationId !== runId ||
+    seed.sourceArtifact.sha256 !== report.sourceArtifactDigest ||
+    seed.sourceArtifact.lineCount !== report.analysis.evidence.supportedLineCount ||
+    !seed.timeline.some((line) => line.op === "coding-sidecar.gateway.turn-failed") ||
+    !seed.stackFrames?.some((frame) => frame.includes("/dist/")) ||
+    !seed.warnings?.some((warning) => warning.includes("no prompt/response body"))
+  )
+    throw new Error("support report lacks bound deterministic reproduction preparation");
+  reportSufficiency(seed.sufficiency);
+  return seed;
+}
+
+function assertReportEnvelope(report) {
+  if (
+    report.kind !== "keiko.support.report-analysis" ||
+    report.schemaVersion !== 1 ||
+    report.authenticity !== "unknown" ||
+    !/^[a-f0-9]{64}$/u.test(report.reportDigest) ||
+    !/^[a-f0-9]{64}$/u.test(report.sourceArtifactDigest)
+  )
+    throw new TypeError("support report lacks the validated versioned machine envelope");
+}
+
+function partialReportOperations(report) {
+  const partial = report.analysis.timelines.flatMap((timeline) =>
+    timeline.lines.filter(
+      (line) => line.extra?.completeness === "partial" || line.extra?.completeness === "unknown",
+    ),
+  );
+  return [...new Set(partial.map(({ op }) => (REGISTERED_OPERATIONS.has(op) ? op : "[redacted]")))];
+}
+
+/** Called on the installed CLI's validated machine view; emits only closed values and counts. */
+export function customerShapeSupportReportEvidence(report, evidence, runId, bytes, forbidden) {
+  assertReportEnvelope(report);
+  const serialized = JSON.stringify(report);
+  if (forbidden.some((value) => value.length > 0 && serialized.includes(value)))
+    throw new Error("support report analysis retained prohibited synthetic content");
+  const selection = reportSufficiency(report.selection);
+  const sufficiency = reportSufficiency(report.analysis.sufficiency);
+  const diagnostic = reconstructedDiagnostic(report, evidence, runId);
+  const failure = reconstructedFailure(report, evidence, runId);
+  const seed = reconstructedSeed(report, runId);
+  return {
+    selection,
+    sufficiency,
+    partialOperations: partialReportOperations(report),
+    reportBytes: bytes,
+    recordCount: report.analysis.evidence.supportedLineCount,
+    errorKind: diagnostic.errorKind,
+    failureCode: failure.extra.failureCode,
+    frameCount: diagnostic.frames.length,
+    causeCount: diagnostic.causeChain?.length ?? 0,
+    seedLineCount: seed.timeline.length,
+    gatewayAttemptCount: seed.gatewayScript?.attempts.length ?? 0,
+    seedWarningCount: seed.warnings.length,
+  };
 }

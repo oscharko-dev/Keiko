@@ -28,6 +28,7 @@ import {
   completedToolRoundTripEvidence,
   customerShapeFailureSummary,
   customerShapeRequestEvidence,
+  customerShapeSupportReportEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
@@ -180,7 +181,7 @@ function exportFailureReport(project, stateDir, runId, bin) {
   return join(directory, reports[0]);
 }
 
-function assertAnalyzableFailure(project, stateDir, lines, runId) {
+function assertAnalyzableFailure(project, stateDir, lines, runId, forbidden) {
   // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
   // turn event is suppressed; the closed publication reason explains that outcome. The browser
   // assertion above separately proves that the failure itself reached the Workbench.
@@ -194,30 +195,26 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
     [bin, "support", "analyze", bundle, "--correlation-id", diagnostic.correlationId, "--json"],
     { cwd: project },
   );
-  const report = JSON.parse(analyzed);
-  if (
-    !JSON.stringify(
-      report.analysis.timelines.find(
-        (timeline) => timeline.correlationId === diagnostic.correlationId,
-      )?.lines,
-    ).includes('"server.diagnostic.failure"')
-  ) {
-    throw new Error("support analyze omitted the failed turn's correlated diagnostic");
-  }
   const analyzedRun = run(
     process.execPath,
     [bin, "support", "analyze", bundle, "--correlation-id", runId, "--json"],
     { cwd: project },
   );
-  if (
-    !JSON.stringify(
-      JSON.parse(analyzedRun).analysis.timelines.find(
-        (timeline) => timeline.correlationId === runId,
-      )?.lines,
-    ).includes('"coding-sidecar.gateway.turn-failed"')
-  ) {
-    throw new Error("support analyze omitted the run's turn failure projection");
-  }
+  if (analyzedRun !== analyzed)
+    throw new Error("support report reconstruction is nondeterministic");
+  const content = readFileSync(bundle);
+  if (forbidden.some((value) => value.length > 0 && content.includes(value)))
+    throw new Error("support report retained prohibited synthetic content");
+  const summary = customerShapeSupportReportEvidence(
+    JSON.parse(analyzedRun),
+    evidence,
+    runId,
+    content.length,
+    forbidden,
+  );
+  process.stdout.write(`customer-shape support reconstruction: ${JSON.stringify(summary)}\n`);
+  if (summary.selection.status !== "complete" || summary.sufficiency.status !== "complete")
+    throw new Error("supported installed failure did not reconstruct completely from its report");
 }
 
 async function awaitProjectedTurnFailure(stateDir, runId) {
@@ -442,6 +439,19 @@ function assertToolRoundTrip(twin, firstRequest) {
   }
 }
 
+function forbiddenReportValues(project, stateDir, configPath, twin) {
+  return [
+    CUSTOMER_SHAPE_API_KEY,
+    CUSTOMER_SHAPE_REPLY,
+    "Synthetic partial reply.",
+    "Reply briefly to confirm that the Workbench is ready.",
+    project,
+    stateDir,
+    configPath,
+    twin.baseUrl,
+  ];
+}
+
 async function qualifyInstalled(
   project,
   stateDir,
@@ -475,7 +485,14 @@ async function qualifyInstalled(
     const lines = activityLines(stateDir);
     assertGatewayEvidence(twin, firstRequest, lines, runId, phase);
     if (expectToolCall) assertToolRoundTrip(twin, firstRequest);
-    if (expectFailure) assertAnalyzableFailure(project, stateDir, lines, runId);
+    if (expectFailure)
+      assertAnalyzableFailure(
+        project,
+        stateDir,
+        lines,
+        runId,
+        forbiddenReportValues(project, stateDir, configPath, twin),
+      );
   } catch (error) {
     reportQualificationFailure(stateDir, twin, firstRequest, phase);
     throw error;

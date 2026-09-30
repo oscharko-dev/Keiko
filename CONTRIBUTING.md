@@ -31,6 +31,10 @@ event store, analyzer, or incident subsystem. Register every operation through t
 APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in
 `docs/observability/op-catalog.generated.json` is generated from those canonical declarations and
 emitters. Its typed registry is authoritative; the legacy literal scan is migration input only.
+Adapters rebind events with `withActivityLogCorrelation` or `withActivityLogParentCorrelation`,
+preserving producer-owned ids and the non-enumerable registration/rejection markers. Test the
+forwarded event through the real registered formatter: a buffer alone cannot detect a marker
+lost by an object spread.
 
 Each registration owns exact fields, bounds, data classes and vocabularies, causal and lifecycle
 semantics, analyzer projection, failure classes, proof ids, and release impact. Unknown or dynamic

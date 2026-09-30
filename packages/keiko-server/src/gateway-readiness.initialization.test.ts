@@ -11,6 +11,8 @@ import {
 } from "./gateway-readiness.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { formatActivityLogProofLine } from "../../../tests/support/activity-log-proof.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 const compositions: UiHandlerDeps[] = [];
 const directories: string[] = [];
@@ -56,6 +58,19 @@ function configure(deps: UiHandlerDeps, correlationId: string): void {
   );
 }
 
+function assertRegisteredProbeEvents(events: readonly ServerLogEvent[]): void {
+  for (const op of [
+    "gateway.readiness.automatic.started",
+    "gateway.readiness.automatic.completed",
+    "http.gateway.fetch.started",
+    "http.gateway.fetch.completed",
+  ]) {
+    const event = events.find((item) => item.op === op);
+    if (event === undefined) throw new TypeError(`missing readiness evidence: ${op}`);
+    expect(() => formatActivityLogProofLine(event)).not.toThrow();
+  }
+}
+
 it("isolates throwing subscribers and retains the configuration request's causal correlation", async () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -86,6 +101,7 @@ it("isolates throwing subscribers and retains the configuration request's causal
   const started = sink.events.find((event) => event.op === "gateway.readiness.automatic.started");
   expect(started?.parentCorrelationId).toBe("corr-config-subscription");
   expect(started?.correlationId).not.toBe(deps.gatewayConfig?.initializationCorrelationId);
+  assertRegisteredProbeEvents(sink.events);
   expect(JSON.stringify(sink.events)).not.toContain("private subscriber detail");
 });
 

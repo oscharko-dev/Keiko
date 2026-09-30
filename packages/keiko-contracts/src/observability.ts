@@ -999,8 +999,23 @@ export function withActivityLogCorrelation<Event extends object>(
   event: Event,
   correlationId: string,
 ): Event & { readonly correlationId: string } {
+  return withActivityLogEnvelope(event, { correlationId });
+}
+
+/** Adds a causal parent without losing registration or fail-closed rejection provenance. */
+export function withActivityLogParentCorrelation<Event extends object>(
+  event: Event,
+  parentCorrelationId: string,
+): Event & { readonly parentCorrelationId: string } {
+  return withActivityLogEnvelope(event, { parentCorrelationId });
+}
+
+function withActivityLogEnvelope<Event extends object, Envelope extends object>(
+  event: Event,
+  envelope: Envelope,
+): Event & Envelope {
   const rebound = attachActivityLogEventRegistration(
-    { ...event, correlationId },
+    { ...event, ...envelope },
     activityLogEventRegistration(event),
   );
   const rejection = activityLogEventRejection(event);

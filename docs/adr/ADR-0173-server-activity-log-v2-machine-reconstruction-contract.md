@@ -471,6 +471,14 @@ through it, and so does the Quality Intelligence capsule store. `cli.audit.*` is
 like every other operation. Before this, those lines were unregistered plain objects that the
 production sink refused.
 
+Adapters preserve the event's non-enumerable registration and rejection markers when adding
+correlation context. `withActivityLogCorrelation` and `withActivityLogParentCorrelation` share one
+copying implementation; producer-owned ids remain authoritative. A plain spread is not a valid
+forwarding operation. Readiness initialization forwards both its own lifecycle events and nested
+HTTP transport events through this path. Its regression validates the forwarded events with the
+real registered formatter, and the installed Workbench journey requires complete exported and
+analyzed failure evidence, including bound seed data and safe failure-site frames.
+
 **The port pattern for a new package (BYOA #482).** A package that performs work follows five rules:
 
 1. It declares its own `<Package>LogSink { write(event) }` port.

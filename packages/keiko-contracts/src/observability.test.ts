@@ -15,6 +15,7 @@ import {
   validateActivityLogOperationFields,
   validateRegisteredActivityLogEvent,
   withActivityLogCorrelation,
+  withActivityLogParentCorrelation,
   type ActivityLogFieldContract,
   type ActivityLogOperationRegistration,
 } from "./observability.js";
@@ -614,6 +615,29 @@ describe("canonical Activity Log event validation", () => {
 
     expect(activityLogEventRegistration(rebound)).toBeUndefined();
     expect(Object.getOwnPropertySymbols(rebound)).toEqual([]);
+  });
+
+  it("adds a parent without replacing the operation correlation or registration", () => {
+    const source = withActivityLogCorrelation(chatRequestDispatchEvent({}), "req-00000001");
+    const rebound = withActivityLogParentCorrelation(source, "parent-00000001");
+    expect(rebound).not.toBe(source);
+    expect(rebound.parentCorrelationId).toBe("parent-00000001");
+    expect(rebound.correlationId).toBe(source.correlationId);
+    expect(Reflect.get(source, "parentCorrelationId")).toBeUndefined();
+    expect(validateRegisteredActivityLogEvent(rebound)).toBe(activityLogEventRegistration(source));
+  });
+
+  it("preserves rejection provenance and never registers unknown events when adding a parent", () => {
+    const rejected = withActivityLogParentCorrelation(
+      chatRequestDispatchEvent({ modelId: "/etc/passwd" }),
+      "parent-00000001",
+    );
+    expect(() => validateRegisteredActivityLogEvent(rejected)).toThrow(
+      new ActivityLogEventValidationError("invalid-field-vocabulary"),
+    );
+    const unknown = withActivityLogParentCorrelation({ op: "unregistered.fixture" }, "parent-id");
+    expect(activityLogEventRegistration(unknown)).toBeUndefined();
+    expect(Object.getOwnPropertySymbols(unknown)).toEqual([]);
   });
 
   it.each([
